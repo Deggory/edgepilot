@@ -120,10 +120,10 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 
 | 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
 |---|---:|---|---|
-| `torque_lat_accel_factor` | 2.8 | m/s^2 / 0.5~5.0 | 정규화 토크 1.0이 내는 횡가속도다(openpilot `latAccelFactor`). 선행·비례·적분 토크가 모두 이 값으로 나뉜다. 2.8은 torqued 실측(2.65~2.95)이다. 이전 4.44는 SR 16.8의 과대 피드백과 짝을 이뤄 맞았고, SR 14.9로 고친 뒤 커브 언더스티어(좌커브 곡률비 0.86, 바깥 0.3 m)로 드러났다. 2026-09-23 실차에서 2.78로 바꿔 좌·우커브가 중앙(−0.07/−0.03 m)으로 돌아왔다. |
+| `torque_lat_accel_factor` | 2.75 | m/s^2 / 0.5~5.0 | 정규화 토크 1.0이 내는 횡가속도다(openpilot `latAccelFactor`). 선행·비례·적분 토크가 모두 이 값으로 나뉜다. 2.8은 torqued 실측(2.65~2.95)이다. 이전 4.44는 SR 16.8의 과대 피드백과 짝을 이뤄 맞았고, SR 14.9로 고친 뒤 커브 언더스티어(좌커브 곡률비 0.86, 바깥 0.3 m)로 드러났다. 2026-09-23 실차에서 2.78로 바꿔 좌·우커브가 중앙(−0.07/−0.03 m)으로 돌아왔다. |
 | `torque_kp` | 0.8 | gain / 0~10 | 횡가속도 오차의 비례 이득이다(openpilot `KP`). 속도별 이득 곡선 `KP_INTERP` [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]의 마지막 점(30 m/s 이상)이다. 나머지 점은 상류 고정값이라 저속 이득은 이 값으로 바뀌지 않는다. 이전 2.0은 v0.11 포팅 이후 튜닝된 적이 없는 상속값이었다. 2026-09-20 실차에서 확인했다. |
 | `torque_ki` | 0.15 | gain / 0~2 | 횡가속도 오차의 적분 이득이다(openpilot `KI`, 상류 기본값). 이전 raw 표기에선 0.33(상류의 2.2배)이 드러나지 않았다. 2026-09-24 실차에서 0.15로 바꿔 좌커브 곡률비 0.90→0.96(n≈17), 직선 흔들림은 그대로였다. |
-| `torque_friction` | 0.1 | 정규화 토크 / 0~0.3 | 조향계 마찰을 넘기 위해 오차 방향으로 더하는 토크다(openpilot `friction`, 상류도 토크 공간에 더한다). RK K7과 같은 0.1이다. |
+| `torque_friction` | 0.083 | 정규화 토크 / 0~0.3 | 조향계 마찰을 넘기 위해 오차 방향으로 더하는 토크다(openpilot `friction`, 상류도 토크 공간에 더한다). RK K7과 같은 0.1이다. |
 | `torque_use_angle` | true | bool | `true`면 조향각 기반 실제 곡률을 사용한다. `false`면 유효한 ESP yaw-rate가 필요하며 두 값을 속도에 따라 혼합한다. |
 | `torque_output_sign` | -1 | 부호 / -1 또는 1 | 토크 출력 방향이다. K7 YG HEV에서는 -1을 사용한다. 잘못 바꾸면 반대 방향으로 조향할 수 있다. |
 
@@ -131,11 +131,11 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 
 | 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
 |---|---:|---|---|
-| `steer_ratio` | 16.8 | ratio / 8~25 | 핸들 조향각과 전륜 조향각의 비율이다. RK의 KIA K7 HEV 차량값과 동일하다. |
-| `tire_stiffness_factor` | 1.0 | 배율 / 0.2~2.0 | 기준 타이어 횡강성에 적용하는 차량별 보정 계수다. RK K7의 기본 배율과 동일하다. |
+| `steer_ratio` | 14.72 | ratio / 8~25 | 핸들 조향각과 전륜 조향각의 비율이다. RK의 KIA K7 HEV 차량값과 동일하다. |
+| `tire_stiffness_factor` | 0.83 | 배율 / 0.2~2.0 | 기준 타이어 횡강성에 적용하는 차량별 보정 계수다. RK K7의 기본 배율과 동일하다. |
 | `steer_actuator_delay` | 0.34 | second / 0.01~1.0 | 조향 액추에이터 지연이다. **두 곳에 쓰인다.** `lag_adjusted_desired_curvature`는 이 값만큼 MPC 경로를 앞에서 읽어 커브 진입을 선행하고, 토크 컨트롤러의 요청 버퍼는 이 값만큼 **지난** 목표를 지금 측정과 비교한다. 그래서 키우면 선행은 늘지만 피드백이 낡아진다. 곡률이 빠르게 조여질 때 차가 이미 낡은 목표를 넘어서 있으면 오차 부호가 뒤집혀 커브 한복판에서 토크가 빠진다 — 0.46에서 조여지는 커브 69건 중 36%가 0.4초 안에 요청 토크가 30% 아래로 주저앉았고, 0.34에서는 14%였다(쌍 비교 McNemar p=0.0015). 상류 현대 기본값은 0.1(일부 0.2)이다. |
-| `angle_offset_deg` | -1.6 | degree / -10~10 | 조향각 센서의 직진 오프셋이다. 실제 곡률 추정 전에 센서 각도에서 뺀다. paramsd 학습 평균(2026-09-21~23 주행, −1.5~−1.6°)을 넣었다. 이전 −0.7°는 0.9° 차이로 곡률 약 4e-4를 틀려, 좌커브는 덜 돌고 우커브는 더 도는 것처럼 보이게 했다. |
-| `torque_lat_accel_offset` | 0.0 | m/s^2 / -1.0~1.0 | 장착 롤 오차 등이 만드는 상수 횡가속 편향을 feed-forward에서 뺀다(openpilot latAccelOffset). 값은 `tools/control/fit_lateral_params.py fit`으로 주행 로그에서 실측한다. 양수 = 차가 오른쪽으로 쏠릴 때 키우는 방향(+y=오른쪽 관례, openpilot 문서와 반대 어휘). fit 출력을 그대로 넣는다. |
+| `angle_offset_deg` | -1.57 | degree / -10~10 | 조향각 센서의 직진 오프셋이다. 실제 곡률 추정 전에 센서 각도에서 뺀다. paramsd 학습 평균(2026-09-21~23 주행, −1.5~−1.6°)을 넣었다. 이전 −0.7°는 0.9° 차이로 곡률 약 4e-4를 틀려, 좌커브는 덜 돌고 우커브는 더 도는 것처럼 보이게 했다. |
+| `torque_lat_accel_offset` | -0.06 | m/s^2 / -1.0~1.0 | 장착 롤 오차 등이 만드는 상수 횡가속 편향을 feed-forward에서 뺀다(openpilot latAccelOffset). 값은 `tools/control/fit_lateral_params.py fit`으로 주행 로그에서 실측한다. 양수 = 차가 오른쪽으로 쏠릴 때 키우는 방향(+y=오른쪽 관례, openpilot 문서와 반대 어휘). fit 출력을 그대로 넣는다. |
 | `live_bank_compensation` | true | bool | ESP12 실측으로 추정한 도로 편경사(2초 필터)를 feed-forward에서 실시간 보정한다. 센서로 보이는 편향(크라운·영점)은 bank가 흡수하므로, `torque_lat_accel_offset`은 센서에 안 보이는 토크 경로/기계 편향 전용 트림으로만 쓴다. 정적 roll 항목은 이것으로 대체되어 없앴다. |
 | `use_live_vehicle_params` | true | bool | openpilot paramsd처럼 주행 중 학습한 조향비·타이어 강성·조향각 영점(합계)·도로 롤을 쓴다. 켜면 실제 곡률 계산이 `steer_ratio`·`angle_offset_deg` 대신 학습값을 쓰고, 롤은 실제 곡률·feed-forward(−roll·g)·곡률 횡가속 한계에 들어가며 `live_bank_compensation`을 대신한다. 학습값이 무효가 되면(영점·롤 한계 초과 등, 캘리브 완료 후) `paramsd_invalid`로 해제한다. 끄면 계산·기록만 한다. 학습 상태는 `live_parameters.json`(1분마다)에 남고 다음 시동에 이어진다. 웹 편집기에서는 `실시간 학습` 탭에서만 켜고 끈다. |
 | `use_live_torque_params` | true | bool | openpilot torqued처럼 토크→횡가속 배율(latAccelFactor)·편향·마찰을 학습해 토크 컨트롤러에 쓴다. 배율은 `torque_lat_accel_factor`(기본 2.8)의 ±30%, 마찰은 `torque_friction`의 ±50% 안이다. 켜면 `torque_lat_accel_offset`은 학습 편향으로 바뀐다. 버킷이 다 차기 전(`cal_perc` < 100)에는 사전값 그대로다. 점과 필터는 `live_torque_parameters.bin`(12초마다)에 남는다. 웹 편집기에서는 `실시간 학습` 탭에서만 켜고 끈다. |
