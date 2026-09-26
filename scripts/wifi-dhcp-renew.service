@@ -8,6 +8,8 @@ BindsTo=wifi.service
 StartLimitIntervalSec=0
 
 [Service]
+# 순정 이미지 종료가 이미 느리므로(기본 90초 대기 서비스가 여럿) 이 서비스는 오래 붙잡지 않는다.
+TimeoutStopSec=5
 # 소켓이 생길 때까지(최대 60초) 기다린 뒤 붙는다.
 ExecStartPre=/bin/sh -c 'for i in $(seq 60); do [ -S /var/run/wpa_supplicant/wlan0 ] && exit 0; sleep 1; done; exit 1'
 # 순정 이미지는 AIC8800 드라이버 디버그 레벨이 1039(TRACE/DEBUG)라 초당 5줄 넘게 커널 로그를

@@ -1,4 +1,4 @@
-# MaixCAM2 × openpilot
+# edgepilot · MaixCAM2
 
 <p align="center">
   <strong>openpilot perception and lateral control, native on a Sipeed MaixCAM2 (AX630C)</strong><br>
@@ -9,9 +9,13 @@
 | --- | --- | --- | --- | --- |
 | Sipeed MaixCAM2 (AX630C, 1 GB) | KIA K7 YG HEV | openpilot master supercombo (Pulsar2 axmodel) | lateral (LKAS torque) | C++17 split processes |
 
-This is the `ax630` branch: a port of the Kendryte K230 runtime to the
-MaixCAM2. The control stack, Panda/CAN protocol, parameter server, and recording
-format are carried over unchanged; the camera, display, model, and build are
+edgepilot runs openpilot's driving model and lateral control on small embedded
+boards. This `main` branch targets the MaixCAM2; the [`k230`](../../tree/k230)
+branch keeps the original Kendryte K230 port with the same code layout and
+names. The project started as the K230 runtime (the legacy
+[supercombo_k230](https://github.com/cwal1220/supercombo_k230) repository), and
+this branch ports it to the MaixCAM2. The control stack, Panda/CAN protocol,
+parameter server, and recording format are carried over unchanged; the camera, display, model, and build are
 new. The K230 nncase/kmodel pipeline, VGLite warp, and MVX recorder are not part
 of this branch; the piezo alert melodies now play on the board speaker.
 

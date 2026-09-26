@@ -141,3 +141,8 @@ instead of the 18 x 9 target. The intrinsics do not depend on the pattern size.
 - **Distortion:** `k1 -0.0090 k2 +0.0135 p1 -0.0010 p2 +0.0002 k3 -0.0210`. The
   pinhole-only warp ignores it, which costs 2.6 px on average and 19.7 px at worst
   (in the image corners).
+- **Distortion inside the model inputs:** almost all of that error is in the
+  image corners, which the model does not use. Inside the input windows the
+  error is 0.09 px mean and 0.5 px max for the road model, and 0.18 / 1.0 px
+  for the wide model (model pixels), so the GDC `LDC_PERSPECTIVE` mode is not
+  worth enabling yet.

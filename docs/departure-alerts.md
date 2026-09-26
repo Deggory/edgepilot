@@ -40,9 +40,9 @@ Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정�
 `engage`만 한 번 알린다. 허가가 끝내 오지 않거나 Panda 회복 뒤 다른 정적 조건이
 남아 있으면 그때 `UNABLE`로 거부한다.
 
-K230의 피에조 환경 변수(`EDGEPILOT_PIEZO_BUZZER`, `EDGEPILOT_PIEZO_PIN`)는 없어졌고, 대신
+K230의 피에조 환경 변수(`K230_PIEZO_BUZZER`, `K230_PIEZO_PIN`)는 없어졌고, 대신
 `EDGEPILOT_ALERT_SOUND=0`(끄기), `EDGEPILOT_ALERT_VOLUME`(0~100, 기본 70), `EDGEPILOT_ALERT_PCM`
-(ALSA 장치, 기본 `plughw:0,1`), `EDGEPILOT_ALERT_LEAD_MS`(앞 무음, 기본 250)를 쓴다.
+(ALSA 장치, 기본 `plughw:0,1`)를 쓴다.
 
 ## 판단 근거
 

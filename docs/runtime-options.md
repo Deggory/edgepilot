@@ -11,7 +11,7 @@ true.
 - `EDGEPILOT_MODEL=/path/to/supercombo.axmodel`
   - overrides the model selected by `manager.py` (default
     `models/supercombo.axmodel` in the install directory). A command-line
-    argument wins over it. This replaces the K230 `EDGEPILOT_KMODEL`.
+    argument wins over it. This replaces the K230 `K230_KMODEL`.
 - `EDGEPILOT_STOP_LAUNCHER=0`
   - leaves the stock `launcher.service` and `/maixapp/apps/` running. The
     default stops them, since they hold the camera and NPU.
@@ -49,6 +49,11 @@ true.
 
 ## Camera and input warp
 
+- `EDGEPILOT_AI_ISP=0|1`
+  - turns the AX630C AI-ISP (NPU denoise) off or on in `camerad`, and makes
+    `manager.py` pick the matching model (`supercombo_npu1.axmodel` when on).
+    The default follows `/boot/configs` `maix_npu_ai_isp`, which also decides
+    whether the NPU boots split.
 - `EDGEPILOT_MAX_SHUTTER_US=N`
   - caps the auto-exposure shutter in `camerad` (default `33333`, the
     30 fps frame time, so the 20 fps sensor does not add motion blur). `0`
@@ -82,7 +87,7 @@ true.
     [diagnostics](diagnostics.md#model-swap-verification).
 
 `recordd` reads `EDGEPILOT_RECORD_ROOT` (default `recordings` under the install
-directory) and `EDGEPILOT_RECORD_STAGING`; `EDGEPILOT_RECORD_CODEC` (the K230 V4L2 device)
+directory) and `EDGEPILOT_RECORD_STAGING`; `K230_RECORD_CODEC` (the K230 V4L2 device)
 is gone. `params/recording.json` `enabled` toggles recording.
 
 ## Panda
@@ -144,6 +149,10 @@ is gone. `params/recording.json` `enabled` toggles recording.
   - directory the editor reads factory defaults from. The default is
     `params.defaults/` under the runtime working directory; the upload script
     fills it from the repository's `params/`.
+- `EDGEPILOT_LEARNER_STATE_PATH=/dev/shm/...`
+  - shared-memory file the editor reads the live learner state from (default
+    `/dev/shm/edgepilot_learner_state`, written by `controlsd`). Tests point it
+    at a temporary file.
 
 `overlayd` turns the backlight on at start (`pwmchip0/pwm3`, level from
 `maix_backlight_value` in `/boot/configs` and `disp_max_backlight` in
@@ -169,7 +178,7 @@ signal_changed, unavailable.
 
 Departure alerts and engage refusals are also shown on the HUD, and every alert
 is written as a `overlayd: alert=...` log line. The K230
-`EDGEPILOT_PIEZO_BUZZER` and `EDGEPILOT_PIEZO_PIN` are gone. Which events alert
+`K230_PIEZO_BUZZER` and `K230_PIEZO_PIN` are gone. Which events alert
 is described in [Departure alerts](departure-alerts.md).
 
 ## Parameter files

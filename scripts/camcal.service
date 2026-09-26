@@ -9,6 +9,8 @@ After=rc-local.service edgepilot.service launcher.service
 Conflicts=edgepilot.service launcher.service
 
 [Service]
+# 순정 이미지 종료가 이미 느리므로(기본 90초 대기 서비스가 여럿) 이 서비스는 오래 붙잡지 않는다.
+TimeoutStopSec=5
 EnvironmentFile=-/etc/environment
 WorkingDirectory=@DEST@
 ExecStart=@DEST@/camcal
