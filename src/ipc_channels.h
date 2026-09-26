@@ -33,10 +33,10 @@ private:
     size_t size_ = 0;
 };
 
-class K230LatestChannel {
+class LatestChannel {
 public:
-    K230LatestChannel() = default;
-    ~K230LatestChannel();
+    LatestChannel() = default;
+    ~LatestChannel();
 
     bool open(const char *name, size_t payload_capacity, bool create);
     void close();
@@ -48,42 +48,42 @@ public:
 private:
     std::string name_;
     ShmRegion region_;
-    K230IpcHeader *header_ = nullptr;
+    IpcHeader *header_ = nullptr;
     uint8_t *payload_ = nullptr;
 };
 
-class K230CanQueue {
+class CanQueue {
 public:
-    K230CanQueue() = default;
-    ~K230CanQueue();
+    CanQueue() = default;
+    ~CanQueue();
 
-    bool open(const char *name, unsigned slot_count = kK230CanQueueSlots,
+    bool open(const char *name, unsigned slot_count = kCanQueueSlots,
               bool create = true);
     void close();
     void reset();
-    bool push(const K230CanBatch &batch);
-    bool pop(K230CanBatch *batch);
+    bool push(const CanBatch &batch);
+    bool pop(CanBatch *batch);
     uint64_t depth() const;
     bool valid() const { return header_ != nullptr; }
 
 private:
     std::string name_;
     ShmRegion region_;
-    K230CanQueueHeader *header_ = nullptr;
-    K230CanBatch *slots_ = nullptr;
+    CanQueueHeader *header_ = nullptr;
+    CanBatch *slots_ = nullptr;
 };
 
 /* 카메라 프레임 링. shm에는 헤더만 있고, 슬롯 픽셀은 생산자(camerad)가 잡은 CMM
  * 블록에 있다(헤더에 물리 주소). 카메라·GDC·IVPS가 물리 주소로 직접 읽고 쓰며, 각
  * 슬롯의 seqlock(slot_seq, 쓰는 중이면 홀수)이 덮어쓰기를 알린다. */
-class K230FrameRing {
+class FrameRing {
 public:
-    K230FrameRing() = default;
-    ~K230FrameRing();
+    FrameRing() = default;
+    ~FrameRing();
 
     // create면 헤더를 새로 초기화한다(생산자). 아니면 생산자가 만든 링에 붙는다.
-    bool open(bool create, unsigned width = kK230AiWidth, unsigned height = kK230AiHeight,
-              unsigned slots = kK230FrameSlots);
+    bool open(bool create, unsigned width = kAiWidth, unsigned height = kAiHeight,
+              unsigned slots = kFrameSlots);
     void close();
     /* CPU로 읽을 때: attach_slot으로 붙인 슬롯 매핑에서 seqlock으로 복사한다. */
     bool copy_slot(unsigned index, uint64_t frame_id, uint8_t *destination,
@@ -107,8 +107,8 @@ public:
 
 private:
     ShmRegion region_;
-    K230FrameRingHeader *header_ = nullptr;
-    uint8_t *slot_virt_[kK230FrameSlots] = {};
+    FrameRingHeader *header_ = nullptr;
+    uint8_t *slot_virt_[kFrameSlots] = {};
 };
 
 #endif

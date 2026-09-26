@@ -14,7 +14,7 @@ exact files from the board (see [Build and deploy](build-and-deploy.md)).
 | OS | Ubuntu 22.04 arm64 |
 | AX runtime | `/opt/lib` (`libax_engine`, `libax_sys`, `libax_ivps`, ...) |
 | Camera/display library | `/usr/lib/libmaixcam_lib.so.1.2.5` |
-| Install directory | `/root/sc_run` |
+| Install directory | `/root/edgepilot` |
 
 ## SSH
 
@@ -30,13 +30,13 @@ argument when the address differs.
 
 ## Parameter server packages
 
-`k230_param_server.py` needs FastAPI and uvicorn:
+`param_server.py` needs FastAPI and uvicorn:
 
 ```sh
-python3 -m pip install -r /root/sc_run/requirements-param-server.txt
+python3 -m pip install -r /root/edgepilot/requirements-param-server.txt
 ```
 
-`k230_pandad` links `libusb-1.0`; install `libusb-1.0-0` on the board if it is
+`pandad` links `libusb-1.0`; install `libusb-1.0-0` on the board if it is
 missing.
 
 ## Things to avoid on this board
@@ -63,8 +63,8 @@ missing.
 ## Stock launcher
 
 The stock UI (`launcher.service`) and the apps it starts from `/maixapp/apps/`
-use about 30% CPU and hold the camera and NPU. `k230_manager.py` stops both
-before starting the runtime unless `K230_STOP_LAUNCHER=0`. It does not restart
+use about 30% CPU and hold the camera and NPU. `manager.py` stops both
+before starting the runtime unless `EDGEPILOT_STOP_LAUNCHER=0`. It does not restart
 them on exit; `systemctl start launcher.service` brings the stock UI back.
 
 ## Physical mounting

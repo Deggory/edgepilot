@@ -56,83 +56,83 @@ void ShmRegion::close()
     size_ = 0;
 }
 
-/* ---- K230FrameRing ---- */
+/* ---- FrameRing ---- */
 
-K230FrameRing::~K230FrameRing()
+FrameRing::~FrameRing()
 {
     close();
 }
 
-bool K230FrameRing::open(bool create, unsigned width, unsigned height, unsigned slots)
+bool FrameRing::open(bool create, unsigned width, unsigned height, unsigned slots)
 {
     close();
-    if (width == 0 || height == 0 || slots == 0 || slots > kK230FrameSlots)
+    if (width == 0 || height == 0 || slots == 0 || slots > kFrameSlots)
         return false;
 
-    if (!region_.open(kK230RoadAiFrameRing, create)) return false;
-    if (create && !region_.resize(sizeof(K230FrameRingHeader))) {
+    if (!region_.open(kRoadAiFrameRing, create)) return false;
+    if (create && !region_.resize(sizeof(FrameRingHeader))) {
         std::perror("ipc: ftruncate frame ring");
         close();
         return false;
     }
     size_t size = 0;
-    if (!region_.file_size(&size) || size < sizeof(K230FrameRingHeader) ||
-        !region_.map(sizeof(K230FrameRingHeader))) {
+    if (!region_.file_size(&size) || size < sizeof(FrameRingHeader) ||
+        !region_.map(sizeof(FrameRingHeader))) {
         close();
         return false;
     }
 
-    header_ = static_cast<K230FrameRingHeader *>(region_.data());
+    header_ = static_cast<FrameRingHeader *>(region_.data());
     if (create) {
         /* 이전 실행의 seq·frame_id·물리 주소가 남아 있으면 소비자가 없는 슬롯을
          * 유효하다고 읽으므로, 만들 때마다 전부 초기화한다. 물리 주소는 생산자가
          * 슬롯 CMM을 잡은 뒤 set_slot_phys로 채운다. */
-        header_->magic = kK230FrameRingMagic;
-        header_->version = kK230FrameRingVersion;
+        header_->magic = kFrameRingMagic;
+        header_->version = kFrameRingVersion;
         header_->slot_count = slots;
         header_->width = width;
         header_->height = height;
         header_->frame_bytes = static_cast<uint32_t>(width * height * 3 / 2);
         header_->reserved0 = 0;
         header_->reserved1 = 0;
-        for (unsigned index = 0; index < kK230FrameSlots; ++index) {
+        for (unsigned index = 0; index < kFrameSlots; ++index) {
             header_->slot_seq[index].store(0, std::memory_order_relaxed);
             header_->slot_frame_id[index].store(UINT64_MAX, std::memory_order_relaxed);
             header_->slot_phys[index] = 0;
         }
         std::atomic_thread_fence(std::memory_order_release);
     }
-    const bool valid = header_->magic == kK230FrameRingMagic &&
-        header_->version == kK230FrameRingVersion &&
-        header_->slot_count > 0 && header_->slot_count <= kK230FrameSlots &&
+    const bool valid = header_->magic == kFrameRingMagic &&
+        header_->version == kFrameRingVersion &&
+        header_->slot_count > 0 && header_->slot_count <= kFrameSlots &&
         header_->frame_bytes > 0;
     if (!valid) close();
     return valid;
 }
 
-void K230FrameRing::close()
+void FrameRing::close()
 {
     region_.close();
     header_ = nullptr;
     for (auto &virt : slot_virt_) virt = nullptr;
 }
 
-uint64_t K230FrameRing::slot_phys(unsigned index) const
+uint64_t FrameRing::slot_phys(unsigned index) const
 {
-    return header_ && index < kK230FrameSlots ? header_->slot_phys[index] : 0;
+    return header_ && index < kFrameSlots ? header_->slot_phys[index] : 0;
 }
 
-void K230FrameRing::set_slot_phys(unsigned index, uint64_t phys)
+void FrameRing::set_slot_phys(unsigned index, uint64_t phys)
 {
-    if (header_ && index < kK230FrameSlots) header_->slot_phys[index] = phys;
+    if (header_ && index < kFrameSlots) header_->slot_phys[index] = phys;
 }
 
-void K230FrameRing::attach_slot(unsigned index, uint8_t *virt)
+void FrameRing::attach_slot(unsigned index, uint8_t *virt)
 {
-    if (index < kK230FrameSlots) slot_virt_[index] = virt;
+    if (index < kFrameSlots) slot_virt_[index] = virt;
 }
 
-void K230FrameRing::begin_write(unsigned index)
+void FrameRing::begin_write(unsigned index)
 {
     std::atomic<uint64_t> &sequence = header_->slot_seq[index];
     uint64_t next = sequence.load(std::memory_order_relaxed);
@@ -141,14 +141,14 @@ void K230FrameRing::begin_write(unsigned index)
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
-void K230FrameRing::end_write(unsigned index, uint64_t frame_id)
+void FrameRing::end_write(unsigned index, uint64_t frame_id)
 {
     std::atomic<uint64_t> &sequence = header_->slot_seq[index];
     header_->slot_frame_id[index].store(frame_id, std::memory_order_release);
     sequence.store(sequence.load(std::memory_order_relaxed) + 1, std::memory_order_release);
 }
 
-bool K230FrameRing::read_begin(unsigned index, uint64_t frame_id, uint64_t *seq) const
+bool FrameRing::read_begin(unsigned index, uint64_t frame_id, uint64_t *seq) const
 {
     if (!header_ || index >= header_->slot_count) return false;
     const uint64_t before = header_->slot_seq[index].load(std::memory_order_acquire);
@@ -158,7 +158,7 @@ bool K230FrameRing::read_begin(unsigned index, uint64_t frame_id, uint64_t *seq)
     return true;
 }
 
-bool K230FrameRing::read_still_valid(unsigned index, uint64_t frame_id, uint64_t seq) const
+bool FrameRing::read_still_valid(unsigned index, uint64_t frame_id, uint64_t seq) const
 {
     return header_->slot_seq[index].load(std::memory_order_acquire) == seq &&
            header_->slot_frame_id[index].load(std::memory_order_acquire) == frame_id;
@@ -169,7 +169,7 @@ namespace {
 /* seqlock 재시도 껍데기. copy는 슬롯이 안정적일 때만 호출되고, 복사 도중
  * 생산자가 슬롯을 덮었으면 결과를 버리고 다시 시도한다. */
 template <typename Copy>
-bool copy_slot_guarded(const K230FrameRingHeader &header, unsigned index,
+bool copy_slot_guarded(const FrameRingHeader &header, unsigned index,
                        uint64_t frame_id, const uint8_t *source, Copy copy)
 {
     constexpr unsigned kCopyAttempts = 8;
@@ -198,7 +198,7 @@ bool copy_slot_guarded(const K230FrameRingHeader &header, unsigned index,
 
 }  // namespace
 
-bool K230FrameRing::copy_slot(unsigned index, uint64_t frame_id,
+bool FrameRing::copy_slot(unsigned index, uint64_t frame_id,
                               uint8_t *destination, size_t size) const
 {
     if (!header_ || !destination || index >= header_->slot_count ||
@@ -212,18 +212,18 @@ bool K230FrameRing::copy_slot(unsigned index, uint64_t frame_id,
                              });
 }
 
-K230LatestChannel::~K230LatestChannel()
+LatestChannel::~LatestChannel()
 {
     close();
 }
 
-bool K230LatestChannel::open(const char *name, size_t payload_capacity, bool create)
+bool LatestChannel::open(const char *name, size_t payload_capacity, bool create)
 {
     close();
     name_ = name ? name : "";
     if (!region_.open(name_.c_str(), create)) return false;
 
-    const size_t map_size = sizeof(K230IpcHeader) + payload_capacity;
+    const size_t map_size = sizeof(IpcHeader) + payload_capacity;
     if (create) {
         if (!region_.resize(map_size)) {
             std::perror("ipc: ftruncate ipc channel");
@@ -248,13 +248,13 @@ bool K230LatestChannel::open(const char *name, size_t payload_capacity, bool cre
         return false;
     }
 
-    header_ = static_cast<K230IpcHeader *>(region_.data());
-    payload_ = reinterpret_cast<uint8_t *>(header_) + sizeof(K230IpcHeader);
-    if (create && (header_->magic != kK230IpcMagic ||
-                   header_->version != kK230IpcVersion ||
+    header_ = static_cast<IpcHeader *>(region_.data());
+    payload_ = reinterpret_cast<uint8_t *>(header_) + sizeof(IpcHeader);
+    if (create && (header_->magic != kIpcMagic ||
+                   header_->version != kIpcVersion ||
                    header_->payload_capacity != payload_capacity)) {
-        header_->magic = kK230IpcMagic;
-        header_->version = kK230IpcVersion;
+        header_->magic = kIpcMagic;
+        header_->version = kIpcVersion;
         header_->payload_capacity = static_cast<uint32_t>(payload_capacity);
         header_->reserved0 = 0;
         header_->seq.store(0, std::memory_order_release);
@@ -263,19 +263,19 @@ bool K230LatestChannel::open(const char *name, size_t payload_capacity, bool cre
         header_->reserved1 = 0;
         std::memset(payload_, 0, payload_capacity);
     }
-    return header_->magic == kK230IpcMagic &&
-        header_->version == kK230IpcVersion &&
+    return header_->magic == kIpcMagic &&
+        header_->version == kIpcVersion &&
         header_->payload_capacity >= payload_capacity;
 }
 
-void K230LatestChannel::close()
+void LatestChannel::close()
 {
     region_.close();
     header_ = nullptr;
     payload_ = nullptr;
 }
 
-bool K230LatestChannel::publish(const void *payload, size_t payload_size)
+bool LatestChannel::publish(const void *payload, size_t payload_size)
 {
     if (!header_ || !payload || payload_size > header_->payload_capacity) return false;
 
@@ -284,12 +284,12 @@ bool K230LatestChannel::publish(const void *payload, size_t payload_size)
     header_->seq.store(seq + 1, std::memory_order_release);
     std::memcpy(payload_, payload, payload_size);
     header_->payload_size.store(static_cast<uint32_t>(payload_size), std::memory_order_release);
-    header_->timestamp_ns.store(k230_now_ns(), std::memory_order_release);
+    header_->timestamp_ns.store(monotonic_now_ns(), std::memory_order_release);
     header_->seq.store(seq + 2, std::memory_order_release);
     return true;
 }
 
-bool K230LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) const
+bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) const
 {
     if (!header_ || !payload) return false;
     for (int attempt = 0; attempt < 4; ++attempt) {
@@ -307,10 +307,10 @@ bool K230LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *s
     return false;
 }
 
-bool K230LatestChannel::read_new(uint64_t *last_seq, void *payload,
+bool LatestChannel::read_new(uint64_t *last_seq, void *payload,
                                  size_t payload_capacity, int timeout_ms) const
 {
-    const uint64_t start = k230_now_ns();
+    const uint64_t start = monotonic_now_ns();
     const uint64_t timeout_ns = timeout_ms < 0
         ? UINT64_MAX
         : static_cast<uint64_t>(timeout_ms) * 1000000ULL;
@@ -321,7 +321,7 @@ bool K230LatestChannel::read_new(uint64_t *last_seq, void *payload,
             return true;
         }
         if (timeout_ms == 0) return false;
-        if (timeout_ms > 0 && k230_now_ns() - start >= timeout_ns) return false;
+        if (timeout_ms > 0 && monotonic_now_ns() - start >= timeout_ns) return false;
         usleep(1000);
     }
 }
@@ -329,17 +329,17 @@ bool K230LatestChannel::read_new(uint64_t *last_seq, void *payload,
 namespace {
 
 size_t queue_map_size(unsigned slot_count) {
-    return sizeof(K230CanQueueHeader) +
-        static_cast<size_t>(slot_count) * sizeof(K230CanBatch);
+    return sizeof(CanQueueHeader) +
+        static_cast<size_t>(slot_count) * sizeof(CanBatch);
 }
 
 }  // namespace
 
-K230CanQueue::~K230CanQueue() {
+CanQueue::~CanQueue() {
     close();
 }
 
-bool K230CanQueue::open(const char *name, unsigned slot_count, bool create) {
+bool CanQueue::open(const char *name, unsigned slot_count, bool create) {
     close();
     if (!name || name[0] == '\0' || slot_count == 0) return false;
 
@@ -380,22 +380,22 @@ bool K230CanQueue::open(const char *name, unsigned slot_count, bool create) {
     }
 
     void *map = region_.data();
-    header_ = static_cast<K230CanQueueHeader *>(map);
-    slots_ = reinterpret_cast<K230CanBatch *>(
-        reinterpret_cast<uint8_t *>(map) + sizeof(K230CanQueueHeader));
-    if (create && (header_->magic != kK230CanQueueMagic ||
-                   header_->version != kK230CanQueueVersion ||
+    header_ = static_cast<CanQueueHeader *>(map);
+    slots_ = reinterpret_cast<CanBatch *>(
+        reinterpret_cast<uint8_t *>(map) + sizeof(CanQueueHeader));
+    if (create && (header_->magic != kCanQueueMagic ||
+                   header_->version != kCanQueueVersion ||
                    header_->slot_count != slot_count)) {
         std::memset(map, 0, region_.size());
-        header_->magic = kK230CanQueueMagic;
-        header_->version = kK230CanQueueVersion;
+        header_->magic = kCanQueueMagic;
+        header_->version = kCanQueueVersion;
         header_->slot_count = slot_count;
         header_->write_seq.store(0, std::memory_order_release);
         header_->read_seq.store(0, std::memory_order_release);
     }
 
-    if (header_->magic != kK230CanQueueMagic ||
-        header_->version != kK230CanQueueVersion ||
+    if (header_->magic != kCanQueueMagic ||
+        header_->version != kCanQueueVersion ||
         header_->slot_count != slot_count) {
         std::fprintf(stderr,
                      "ipc: CAN queue header mismatch name=%s magic=0x%x version=%u slots=%u\n",
@@ -407,22 +407,22 @@ bool K230CanQueue::open(const char *name, unsigned slot_count, bool create) {
     return true;
 }
 
-void K230CanQueue::close() {
+void CanQueue::close() {
     region_.close();
     header_ = nullptr;
     slots_ = nullptr;
 }
 
-void K230CanQueue::reset() {
+void CanQueue::reset() {
     if (!header_) return;
     header_->read_seq.store(0, std::memory_order_release);
     header_->write_seq.store(0, std::memory_order_release);
     for (unsigned i = 0; i < header_->slot_count; ++i) {
-        slots_[i] = K230CanBatch{};
+        slots_[i] = CanBatch{};
     }
 }
 
-bool K230CanQueue::push(const K230CanBatch &batch) {
+bool CanQueue::push(const CanBatch &batch) {
     if (!header_ || !slots_) return false;
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_relaxed);
     const uint64_t read_seq = header_->read_seq.load(std::memory_order_acquire);
@@ -433,7 +433,7 @@ bool K230CanQueue::push(const K230CanBatch &batch) {
     return true;
 }
 
-bool K230CanQueue::pop(K230CanBatch *batch) {
+bool CanQueue::pop(CanBatch *batch) {
     if (!header_ || !slots_ || !batch) return false;
     const uint64_t read_seq = header_->read_seq.load(std::memory_order_relaxed);
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_acquire);
@@ -447,7 +447,7 @@ bool K230CanQueue::pop(K230CanBatch *batch) {
     return true;
 }
 
-uint64_t K230CanQueue::depth() const {
+uint64_t CanQueue::depth() const {
     if (!header_) return 0;
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_acquire);
     const uint64_t read_seq = header_->read_seq.load(std::memory_order_acquire);

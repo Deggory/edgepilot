@@ -2,7 +2,7 @@
 #define SYSTEM_MONITOR_H
 
 /* /proc CPU/메모리/저장소, Canaan 온도 레지스터, 네트워크 상태를 읽어
- * OverlayHudState에 채운다. k230_overlayd가 1 Hz로 호출한다. */
+ * OverlayHudState에 채운다. overlayd가 1 Hz로 호출한다. */
 
 #include "overlay_state.h"
 

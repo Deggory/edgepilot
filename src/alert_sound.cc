@@ -85,16 +85,16 @@ bool write_all(int fd, const int16_t *data, size_t samples)
 
 } // namespace
 
-AlertSound::AlertSound() : pcm_(env_string("K230_ALERT_PCM", "plughw:0,1"))
+AlertSound::AlertSound() : pcm_(env_string("EDGEPILOT_ALERT_PCM", "plughw:0,1"))
 {
-    if (!env_flag("K230_ALERT_SOUND", true)) return;
+    if (!env_flag("EDGEPILOT_ALERT_SOUND", true)) return;
     if (access("/usr/bin/aplay", X_OK) != 0) {
         std::fprintf(stderr, "alert sound: /usr/bin/aplay not found, sounds off\n");
         return;
     }
     // aplay가 죽어 파이프가 끊겨도 프로세스가 SIGPIPE로 끝나지 않게 한다(write가 EPIPE를 돌려준다).
     signal(SIGPIPE, SIG_IGN);
-    const double gain = std::clamp(env_float("K230_ALERT_VOLUME", 70.0f), 0.0f, 100.0f) / 100.0 * 0.6;
+    const double gain = std::clamp(env_float("EDGEPILOT_ALERT_VOLUME", 70.0f), 0.0f, 100.0f) / 100.0 * 0.6;
     for (const auto &melody : kMelodies) clips_.push_back(render(melody, gain));
     enabled_ = true;
     thread_ = std::thread(&AlertSound::loop, this);

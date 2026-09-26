@@ -4,17 +4,17 @@
 
 ## Runtime
 
-- `k230_pandad` owns Panda USB through `libusb` and publishes CAN batches to
-  the ordered `/dev/shm/k230_can` shared-memory ring queue.
-- `k230_controlsd` runs the standalone K7 controller at 100 Hz and publishes
-  generated CAN batches to the ordered `/dev/shm/k230_sendcan` ring queue.
-- `k230_pandad` is the final TX gate. `K230_PANDA_TX=0` is the default and
+- `pandad` owns Panda USB through `libusb` and publishes CAN batches to
+  the ordered `/dev/shm/edgepilot_can` shared-memory ring queue.
+- `controlsd` runs the standalone K7 controller at 100 Hz and publishes
+  generated CAN batches to the ordered `/dev/shm/edgepilot_sendcan` ring queue.
+- `pandad` is the final TX gate. `EDGEPILOT_PANDA_TX=0` is the default and
   prevents every generated frame from reaching USB.
 - No openpilot checkout or Python DBC extension is required on the board.
 
 The CAN queues have 64 slots, reject new batches instead of overwriting older
 ones when full, and are drained in sequence order. Producer startup resets its
-own queue generation, and `k230_pandad` drops TX batches older than 100 ms.
+own queue generation, and `pandad` drops TX batches older than 100 ms.
 The one-second daemon logs expose queue depth, full/stale counts, Panda CAN
 errors, blocked frames, heartbeat status, USB retries, and malformed RX batches.
 
@@ -37,7 +37,7 @@ Runtime parameters live in `params/`; see [params/README.md](../params/README.md
 
 The MaixCAM2 has a single USB-C port, which carries the Panda in host mode, so
 the board needs power from another source; this wiring is not finished yet.
-Until it is, the manager starts `k230_pandad` only with `K230_ENABLE_PANDA=1`.
+Until it is, the manager starts `pandad` only with `EDGEPILOT_ENABLE_PANDA=1`.
 With it set, the manager switches the port to host
 (`/sys/class/usb_role/8000000.dwc3-role-switch/role`) before starting the
 processes and restores the previous role on exit.
@@ -46,7 +46,7 @@ processes and restores the previous role on exit.
 
 Build and upload as in [Build and deploy](build-and-deploy.md). The build
 container installs `libusb-1.0-0-dev`; the board needs the `libusb-1.0` runtime
-library for `k230_pandad`.
+library for `pandad`.
 
 ## Offline Validation
 
@@ -55,8 +55,8 @@ is ported) to a `K230CAN1` fixture and replay it through the controller (see
 [gtest/README.md](../gtest/README.md) for why a parked chunk fails):
 
 ```sh
-python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.k230can
-./build-host/bin/gtest_control_replay drive.k230can
+python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.can
+./build-host/bin/gtest_control_replay drive.can
 ```
 
 The 60.001 second K7 YG HEV fixture contains 43,273 CAN records. The expected
@@ -68,11 +68,11 @@ openpilot reference.
 ## Shadow Run
 
 ```sh
-K230_ENABLE_PANDA=1 \
-K230_ENABLE_CONTROL=1 \
-K230_PANDA_TX=0 \
-K230_PANDA_SAFETY=nooutput \
-python3 /root/sc_run/k230_manager.py
+EDGEPILOT_ENABLE_PANDA=1 \
+EDGEPILOT_ENABLE_CONTROL=1 \
+EDGEPILOT_PANDA_TX=0 \
+EDGEPILOT_PANDA_SAFETY=nooutput \
+python3 /root/edgepilot/manager.py
 ```
 
 Use `hyundaiCommunity` only after the connected vehicle fingerprint and Panda
@@ -84,14 +84,14 @@ vehicle report `mdpsBus=1`, `sasBus=1`, and `hyundaiCommunity:0`.
 Vehicle transmission requires every explicit setting below:
 
 ```sh
-K230_ENABLE_PANDA=1
-K230_ENABLE_CONTROL=1
-K230_PANDA_TX=1
-K230_PANDA_SAFETY=hyundaiCommunity
-K230_PANDA_ENGAGED=1
+EDGEPILOT_ENABLE_PANDA=1
+EDGEPILOT_ENABLE_CONTROL=1
+EDGEPILOT_PANDA_TX=1
+EDGEPILOT_PANDA_SAFETY=hyundaiCommunity
+EDGEPILOT_PANDA_ENGAGED=1
 ```
 
-Keep `K230_FORCE_ENGAGED=0` in a vehicle. Engagement must come from the
+Keep `EDGEPILOT_FORCE_ENGAGED=0` in a vehicle. Engagement must come from the
 vehicle SET/CANCEL button state. Before any closed-course TX test, verify Panda
 USB RX, ignition, safety mode/param, `controls_allowed`, CAN freshness, checksum
 counters, and zero blocked/error counts in shadow mode.

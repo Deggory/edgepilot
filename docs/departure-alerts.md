@@ -4,7 +4,7 @@
 
 ## 동작
 
-`k230_controlsd`가 정차 중 두 종류의 이벤트를 판단한다.
+`controlsd`가 정차 중 두 종류의 이벤트를 판단한다.
 
 - 선행 차량 출발: 모델의 vision lead 거리가 기준보다 0.5 m 이상 증가하고
   상대속도가 0.5 m/s를 넘는 상태가 0.3초 유지되면 알린다.
@@ -21,9 +21,10 @@
 
 K230에서 passive piezo로 내던 알람은 MaixCAM2 보드 스피커로 낸다(`src/alert_sound.cc`).
 멜로디(음높이·길이)는 K230 부저와 같고, 음색은 사인파에 약한 배음을 섞었다.
-`k230_overlayd`가 시작할 때 알림별 WAV를 `/tmp/k230_alert_sounds/`에 만들어 두고
-`aplay`로 재생하며, 앰프가 켜지는 동안 첫 음이 잘리지 않도록 앞에 250 ms 무음을 둔다.
-모든 알림은 로그 줄(`k230_overlayd: alert=<이름>`)로도 남고, 화면에는 출발 알림과
+`overlayd`가 시작할 때 `aplay` 하나를 띄워 두고 소리 스레드가 평소엔 무음을, 알림이 오면
+멜로디를 흘려 넣는다. 알림 순간에 프로세스를 띄우지 않으므로 화면 루프가 멈추지 않고,
+앰프가 계속 켜져 있어 첫 음이 잘리지 않는다(지연 0.1초 안쪽).
+모든 알림은 로그 줄(`overlayd: alert=<이름>`)로도 남고, 화면에는 출발 알림과
 engage 거부 토스트가 뜬다. 알림은 다음 상태 전이에 울린다.
 
 - `signal_changed`: 선행 차량 출발 또는 신호 변경
@@ -39,9 +40,9 @@ Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정�
 `engage`만 한 번 알린다. 허가가 끝내 오지 않거나 Panda 회복 뒤 다른 정적 조건이
 남아 있으면 그때 `UNABLE`로 거부한다.
 
-K230의 피에조 환경 변수(`K230_PIEZO_BUZZER`, `K230_PIEZO_PIN`)는 없어졌고, 대신
-`K230_ALERT_SOUND=0`(끄기), `K230_ALERT_VOLUME`(0~100, 기본 70), `K230_ALERT_PCM`
-(ALSA 장치, 기본 `plughw:0,1`), `K230_ALERT_LEAD_MS`(앞 무음, 기본 250)를 쓴다.
+K230의 피에조 환경 변수(`EDGEPILOT_PIEZO_BUZZER`, `EDGEPILOT_PIEZO_PIN`)는 없어졌고, 대신
+`EDGEPILOT_ALERT_SOUND=0`(끄기), `EDGEPILOT_ALERT_VOLUME`(0~100, 기본 70), `EDGEPILOT_ALERT_PCM`
+(ALSA 장치, 기본 `plughw:0,1`), `EDGEPILOT_ALERT_LEAD_MS`(앞 무음, 기본 250)를 쓴다.
 
 ## 판단 근거
 

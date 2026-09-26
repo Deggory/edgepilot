@@ -12,17 +12,17 @@ their options, and how to build them are listed in
 `hud_snapshot` renders the overlay renderer off-line for the idle / standby /
 drive / busy / depart / fault scenarios, writes each frame as a `K230ARGB` file
 and prints draw timings. `--maixcam2` draws the native 640x480 layout that
-`k230_overlayd` puts on VO layer 1; without it the tool draws the K230 `480x800`
+`overlayd` puts on VO layer 1; without it the tool draws the K230 `480x800`
 portrait frame (`--landscape` for `800x480`). It links OpenCV like
-`k230_overlayd`, so build it where OpenCV is found: a host with OpenCV, or the
-container build with `-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`.
+`overlayd`, so build it where OpenCV is found: a host with OpenCV, or the
+container build with `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`.
 
 ```sh
 ./hud_snapshot --maixcam2 --assets assets/ui --out /tmp/hud
 ```
 
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
-`K230ModelState` / `K230ControlState` pair instead of the synthetic scene;
+`ModelState` / `ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
 pair, plus the matching camera frame, from a K230 `recordd` route.
 `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]` turns K230-size
@@ -31,7 +31,7 @@ the K230 panel showed it; it does not accept 640x480 frames yet.
 
 ## NV12 replay
 
-`k230_modeld` can run headless from a recorded route: replay mode reads an
+`modeld` can run headless from a recorded route: replay mode reads an
 `SCNV12R1` file instead of the camera ring and feeds the same GDC warp as live
 capture, so it validates model execution and online calibration from stored
 segments. It needs the NPU, so it runs on the board. The recordings available
@@ -40,13 +40,13 @@ today come from the K230 camera, so pass its intrinsics.
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
 python3 tools/model/make_replay.py --route recordings/<route> --out /tmp/replay_nv12 --frames 120
-scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.117:/root/sc_run/
+scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.117:/root/edgepilot/
 
-# board (stop the manager first, or at least k230_modeld)
-cd /root/sc_run
-SUPERCOMBO_REPLAY_NV12=/root/sc_run/replay.scnv12 \
-SUPERCOMBO_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
-  ./k230_modeld models/supercombo.axmodel
+# board (stop the manager first, or at least modeld)
+cd /root/edgepilot
+EDGEPILOT_REPLAY_NV12=/root/edgepilot/replay.scnv12 \
+EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
+  ./modeld models/supercombo.axmodel
 ```
 
 ## Model swap verification
@@ -57,18 +57,18 @@ with the raw outputs dumped:
 
 ```sh
 # board: same frames through the runtime, dumping raw outputs
-SUPERCOMBO_REPLAY_NV12=/root/verify/replay.scnv12 \
-SUPERCOMBO_RAW_DUMP=/root/verify/board_raw.bin \
-SUPERCOMBO_CALIB_AUTO=0 \
-SUPERCOMBO_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
-  ./k230_modeld models/<candidate>.axmodel
+EDGEPILOT_REPLAY_NV12=/root/verify/replay.scnv12 \
+EDGEPILOT_RAW_DUMP=/root/verify/board_raw.bin \
+EDGEPILOT_CALIB_AUTO=0 \
+EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
+  ./modeld models/<candidate>.axmodel
 ```
 
 `board_raw.bin` is an `SCODMP1` file of 2576-float frames. Compare it against a
 host reference on the slices that drive control (plan lateral offset, lane
 positions) rather than on the raw vector, and check that the hidden-state slice
 evolves smoothly — a dead temporal buffer still produces plausible single-frame
-output. With `SUPERCOMBO_CALIB_AUTO=0`, the host reference must use the rpy the
+output. With `EDGEPILOT_CALIB_AUTO=0`, the host reference must use the rpy the
 board restored from `params/calibration.json`, because the calibration service
 feeds the input warp on every frame.
 

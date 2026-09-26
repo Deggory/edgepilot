@@ -1,7 +1,7 @@
 # 진단 도구
 
 런타임 경로 밖에 두는 분석·재생·벤치 도구다. 기본 빌드에는 들어가지 않고
-`SUPERCOMBO_BUILD_DIAGNOSTICS=ON`일 때 [`CMakeLists.txt`](CMakeLists.txt)가 만든다.
+`EDGEPILOT_BUILD_DIAGNOSTICS=ON`일 때 [`CMakeLists.txt`](CMakeLists.txt)가 만든다.
 단위 테스트는 [`../gtest/`](../gtest/README.md)에 있다.
 
 ## 빌드
@@ -11,15 +11,15 @@
 ```sh
 cmake -S . -B build-host \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSUPERCOMBO_BUILD_RUNTIME=OFF \
-  -DSUPERCOMBO_BUILD_DIAGNOSTICS=ON
+  -DEDGEPILOT_BUILD_RUNTIME=OFF \
+  -DEDGEPILOT_BUILD_DIAGNOSTICS=ON
 cmake --build build-host --target replay_closed_loop -j2
 ```
 
 보드용으로는 `tools/docker_ax630/`의 컨테이너에서 `build-ax630/`을 구성할 때
-`-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`을 더하면 같은 도구가 `build-ax630/bin`에 생긴다
+`-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`을 더하면 같은 도구가 `build-ax630/bin`에 생긴다
 (`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는 없다. `hud_snapshot`은
-`k230_overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
+`overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
 
 ## 도구
 
@@ -31,7 +31,7 @@ cmake --build build-host --target replay_closed_loop -j2
 | `replay_planner` | `[--laneless] <out.csv> <events.bin...>` | 녹화한 `ModelState`/`ControlState`로 `LateralPlanner`를 다시 돌려 요구 곡률을 CSV로 쓴다 |
 | `replay_lateral_learners` | `[옵션] <events.bin...>` | paramsd·torqued 학습기를 녹화에 돌려 학습값을 출력한다 |
 | `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
-| `hud_snapshot` | `[--assets DIR] [--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--landscape \| --maixcam2]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `K230ARGB` 프레임으로 그리고 그리기 시간을 출력한다. `--maixcam2`는 `k230_overlayd`와 같은 640x480 네이티브 배치, 기본은 K230의 480x800 |
+| `hud_snapshot` | `[--assets DIR] [--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--landscape \| --maixcam2]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `K230ARGB` 프레임으로 그리고 그리기 시간을 출력한다. `--maixcam2`는 `overlayd`와 같은 640x480 네이티브 배치, 기본은 K230의 480x800 |
 
 재생 도구의 입력은 녹화(`events/*.bin`)다. MaixCAM2에는 아직 녹화기가 없어서 지금은 K230에서
 녹화한 주행을 쓴다.

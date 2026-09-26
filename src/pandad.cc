@@ -39,9 +39,9 @@ uint16_t parse_safety_model(const char *name, uint16_t *default_param)
     return kPandaSafetyNoOutput;
 }
 
-K230CanBatch rx_can_batch(const std::vector<PandaCanFrame> &frames)
+CanBatch rx_can_batch(const std::vector<PandaCanFrame> &frames)
 {
-    return k230_make_can_batch(frames, [](K230CanFrame *dst, const PandaCanFrame &src) {
+    return make_can_batch(frames, [](IpcCanFrame *dst, const PandaCanFrame &src) {
         dst->address = src.address;
         dst->src = src.bus;
         dst->data_len = src.data_len;
@@ -50,14 +50,14 @@ K230CanBatch rx_can_batch(const std::vector<PandaCanFrame> &frames)
     });
 }
 
-std::vector<PandaCanFrame> frames_from_batch(const K230CanBatch &batch)
+std::vector<PandaCanFrame> frames_from_batch(const CanBatch &batch)
 {
     std::vector<PandaCanFrame> frames;
     if (!batch.valid) return frames;
-    const uint32_t count = std::min<uint32_t>(batch.count, kK230CanBatchMaxFrames);
+    const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
     frames.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
-        const K230CanFrame &src = batch.frames[i];
+        const IpcCanFrame &src = batch.frames[i];
         if (src.flags != 0) continue;
         if (src.address > kPandaCanMaxAddress) continue;
         if (src.src > kPandaCanMaxTxBus) continue;
@@ -73,19 +73,19 @@ std::vector<PandaCanFrame> frames_from_batch(const K230CanBatch &batch)
     return frames;
 }
 
-void publish_disconnected(K230LatestChannel &state_pub, bool tx_enabled)
+void publish_disconnected(LatestChannel &state_pub, bool tx_enabled)
 {
-    K230PandaState state;
-    state.timestamp_ns = k230_now_ns();
+    PandaState state;
+    state.timestamp_ns = monotonic_now_ns();
     state.tx_enabled = tx_enabled ? 1 : 0;
     state_pub.publish(&state, sizeof(state));
 }
 
-void publish_health(K230LatestChannel &state_pub, PandaClient &panda, bool tx_enabled)
+void publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enabled)
 {
     PandaHealth health;
-    K230PandaState state;
-    state.timestamp_ns = k230_now_ns();
+    PandaState state;
+    state.timestamp_ns = monotonic_now_ns();
     state.connected = panda.connected() ? 1 : 0;
     state.comms_healthy = panda.comms_healthy() ? 1 : 0;
     state.tx_enabled = tx_enabled ? 1 : 0;
@@ -131,7 +131,7 @@ struct BridgeStats {
         PandaHealth health;
         const bool got_health = panda.get_health(&health);
         std::fprintf(stderr,
-                     "k230_pandad: rx=%u tx=%u batches=%u stale=%u "
+                     "pandad: rx=%u tx=%u batches=%u stale=%u "
                      "queue=%llu/%llu rxFull=%u logFull=%u/%u "
                      "blocked=%u rejected=%u errors=%u "
                      "canerr=%u/%u/%u pandaBlocked=%u "
@@ -159,7 +159,7 @@ struct BridgeStats {
                      got_health ? health.faults : 0);
         for (const auto &[key, count] : rejected_frames) {
             std::fprintf(stderr,
-                         "k230_pandad: rejected addr=0x%x bus=%u count=%u\n",
+                         "pandad: rejected addr=0x%x bus=%u count=%u\n",
                          key.first, key.second, count);
         }
         *this = BridgeStats{};
@@ -169,7 +169,7 @@ struct BridgeStats {
 /* 수신 프레임을 10 ms 또는 256개 단위로 모아 CAN 토픽과 로그 토픽에 올린다. */
 class RxBatcher {
 public:
-    RxBatcher() { pending_.reserve(kK230CanBatchMaxFrames); }
+    RxBatcher() { pending_.reserve(kCanBatchMaxFrames); }
 
     void clear()
     {
@@ -192,18 +192,18 @@ public:
     {
         return !pending_.empty() &&
                (now_ns - last_publish_ns_ >= kCanPublishIntervalNs ||
-                pending_.size() >= kK230CanBatchMaxFrames);
+                pending_.size() >= kCanBatchMaxFrames);
     }
 
-    void publish(uint64_t now_ns, K230CanQueue &can_pub, K230CanQueue &can_log_pub,
+    void publish(uint64_t now_ns, CanQueue &can_pub, CanQueue &can_log_pub,
                  BridgeStats *stats)
     {
-        if (pending_.size() > kK230CanBatchMaxFrames) {
-            const size_t overflow = pending_.size() - kK230CanBatchMaxFrames;
+        if (pending_.size() > kCanBatchMaxFrames) {
+            const size_t overflow = pending_.size() - kCanBatchMaxFrames;
             pending_.erase(pending_.begin(), pending_.begin() + overflow);
             dropped_ += static_cast<unsigned>(overflow);
         }
-        K230CanBatch batch = rx_can_batch(pending_);
+        CanBatch batch = rx_can_batch(pending_);
         batch.dropped += dropped_;
         if (!can_pub.push(batch)) {
             ++stats->rx_queue_full;
@@ -225,12 +225,12 @@ bool connect_and_configure(PandaClient &panda, uint16_t safety_model, uint16_t s
                            BridgeStats *stats)
 {
     if (!panda.connect()) {
-        std::fprintf(stderr, "k230_pandad: waiting for panda\n");
+        std::fprintf(stderr, "pandad: waiting for panda\n");
         sleep(1);
         return false;
     }
     std::fprintf(stderr,
-                 "k230_pandad: connected serial=%s hw_type=%u health_v=%u can_v=%u\n",
+                 "pandad: connected serial=%s hw_type=%u health_v=%u can_v=%u\n",
                  panda.usb_serial().c_str(), panda.hw_type(),
                  panda.health_packet_version(), panda.can_packet_version());
     PandaHealth configured_health;
@@ -239,7 +239,7 @@ bool connect_and_configure(PandaClient &panda, uint16_t safety_model, uint16_t s
         configured_health.safety_mode != safety_model ||
         configured_health.safety_param != safety_param) {
         std::fprintf(stderr,
-                     "k230_pandad: safety setup failed expected=%u:%u actual=%u:%u\n",
+                     "pandad: safety setup failed expected=%u:%u actual=%u:%u\n",
                      safety_model, safety_param,
                      configured_health.safety_mode,
                      configured_health.safety_param);
@@ -281,19 +281,19 @@ RxResult service_rx(PandaClient &panda, bool log_can, RxBatcher *rx, BridgeStats
 }
 
 // sendcan 큐를 비워 panda로 보낸다. 배치가 하나라도 있었으면 true.
-bool service_tx(K230CanQueue &sendcan_sub, K230CanQueue &sendcan_log_pub, PandaClient &panda,
+bool service_tx(CanQueue &sendcan_sub, CanQueue &sendcan_log_pub, PandaClient &panda,
                 bool tx_enabled, BridgeStats *stats)
 {
     bool had_sendcan = false;
-    K230CanBatch send_batch;
+    CanBatch send_batch;
     while (sendcan_sub.pop(&send_batch)) {
         had_sendcan = true;
         ++stats->tx_batches;
         // The producer can publish after the loop sampled its clock. Use a
         // fresh timestamp here so a new batch is never mistaken for a
         // future/stale batch and skipped from the torque sequence.
-        const uint64_t tx_now = k230_now_ns();
-        if (!k230_can_batch_is_fresh(send_batch, tx_now, kMaxSendCanAgeNs)) {
+        const uint64_t tx_now = monotonic_now_ns();
+        if (!can_batch_is_fresh(send_batch, tx_now, kMaxSendCanAgeNs)) {
             ++stats->tx_stale;
             continue;
         }
@@ -319,40 +319,40 @@ int main()
     install_stop_signal_handlers(&g_stop);
 
     try {
-        K230CanQueue can_pub;
-        K230CanQueue sendcan_sub;
-        K230CanQueue can_log_pub;
-        K230CanQueue sendcan_log_pub;
-        K230LatestChannel panda_state_pub;
-        if (!can_pub.open(kK230CanTopic, kK230CanQueueSlots, true))
+        CanQueue can_pub;
+        CanQueue sendcan_sub;
+        CanQueue can_log_pub;
+        CanQueue sendcan_log_pub;
+        LatestChannel panda_state_pub;
+        if (!can_pub.open(kCanTopic, kCanQueueSlots, true))
             throw std::runtime_error("open can ipc failed");
-        if (!sendcan_sub.open(kK230SendCanTopic, kK230CanQueueSlots, true))
+        if (!sendcan_sub.open(kSendCanTopic, kCanQueueSlots, true))
             throw std::runtime_error("open sendcan ipc failed");
-        if (!can_log_pub.open(kK230CanLogTopic, kK230CanQueueSlots, true))
+        if (!can_log_pub.open(kCanLogTopic, kCanQueueSlots, true))
             throw std::runtime_error("open CAN log ipc failed");
-        if (!sendcan_log_pub.open(kK230SendCanLogTopic, kK230CanQueueSlots, true))
+        if (!sendcan_log_pub.open(kSendCanLogTopic, kCanQueueSlots, true))
             throw std::runtime_error("open sendcan log ipc failed");
-        if (!panda_state_pub.open(kK230PandaStateTopic, sizeof(K230PandaState), true))
+        if (!panda_state_pub.open(kPandaStateTopic, sizeof(PandaState), true))
             throw std::runtime_error("open pandaState ipc failed");
         can_pub.reset();
         can_log_pub.reset();
         sendcan_log_pub.reset();
 
-        const bool tx_enabled = env_flag("K230_PANDA_TX", false);
-        const bool heartbeat_engaged = env_flag("K230_PANDA_ENGAGED", false);
-        const bool log_can = env_flag("K230_PANDA_LOG_CAN", false);
-        const uint16_t idle_us = static_cast<uint16_t>(env_unsigned("K230_PANDA_IDLE_US", 5000));
+        const bool tx_enabled = env_flag("EDGEPILOT_PANDA_TX", false);
+        const bool heartbeat_engaged = env_flag("EDGEPILOT_PANDA_ENGAGED", false);
+        const bool log_can = env_flag("EDGEPILOT_PANDA_LOG_CAN", false);
+        const uint16_t idle_us = static_cast<uint16_t>(env_unsigned("EDGEPILOT_PANDA_IDLE_US", 5000));
         uint16_t default_safety_param = 0;
-        const uint16_t safety_model = parse_safety_model("K230_PANDA_SAFETY", &default_safety_param);
-        const uint16_t safety_param = static_cast<uint16_t>(env_unsigned("K230_PANDA_SAFETY_PARAM", default_safety_param));
+        const uint16_t safety_model = parse_safety_model("EDGEPILOT_PANDA_SAFETY", &default_safety_param);
+        const uint16_t safety_param = static_cast<uint16_t>(env_unsigned("EDGEPILOT_PANDA_SAFETY_PARAM", default_safety_param));
 
         if (tx_enabled) {
             std::fprintf(stderr,
-                         "k230_pandad: TX enabled safety=%u param=%u engaged=%u\n",
+                         "pandad: TX enabled safety=%u param=%u engaged=%u\n",
                          safety_model, safety_param, heartbeat_engaged ? 1 : 0);
         } else {
             std::fprintf(stderr,
-                         "k230_pandad: shadow mode TX disabled safety=%u param=%u\n",
+                         "pandad: shadow mode TX disabled safety=%u param=%u\n",
                          safety_model, safety_param);
         }
 
@@ -369,7 +369,7 @@ int main()
                 if (!connect_and_configure(panda, safety_model, safety_param, &stats)) continue;
                 last_health_ns = 0;
                 last_heartbeat_ns = 0;
-                rx.reset(k230_now_ns());
+                rx.reset(monotonic_now_ns());
             }
 
             const RxResult received = service_rx(panda, log_can, &rx, &stats);
@@ -379,7 +379,7 @@ int main()
                 continue;
             }
 
-            const uint64_t now = k230_now_ns();
+            const uint64_t now = monotonic_now_ns();
             if (rx.due(now)) rx.publish(now, can_pub, can_log_pub, &stats);
             const bool had_sendcan =
                 service_tx(sendcan_sub, sendcan_log_pub, panda, tx_enabled, &stats);
@@ -402,10 +402,10 @@ int main()
             }
         }
 
-        std::fprintf(stderr, "\nk230_pandad: stopping\n");
+        std::fprintf(stderr, "\npandad: stopping\n");
         return 0;
     } catch (const std::exception &e) {
-        std::fprintf(stderr, "k230_pandad error: %s\n", e.what());
+        std::fprintf(stderr, "pandad error: %s\n", e.what());
         return 1;
     }
 }

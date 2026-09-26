@@ -5,16 +5,16 @@
 #include <cmath>
 #include <cstring>
 
-void k230_fill_model_state(K230ModelState &state, const ParsedModelOutput &parsed,
+void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
                            const ProjectionState &projection,
                            const OnlineCalibrator::Snapshot &calibration,
                            uint64_t frame_id, uint64_t capture_timestamp_ns,
                            float model_execution_ms)
 {
-    state = K230ModelState{};
+    state = ModelState{};
     state.frame_id = frame_id;
     state.capture_timestamp_ns = capture_timestamp_ns;
-    state.model_timestamp_ns = k230_now_ns();
+    state.model_timestamp_ns = monotonic_now_ns();
     state.model_execution_ms = model_execution_ms;
     state.valid = parsed.valid ? 1 : 0;
     state.best_plan = parsed.plan.best_index;
@@ -102,7 +102,7 @@ void k230_fill_model_state(K230ModelState &state, const ParsedModelOutput &parse
         state.calibration.spread[i] = calibration.spread[i];
 }
 
-ParsedModelOutput k230_parsed_from_model_state(const K230ModelState &state)
+ParsedModelOutput parsed_from_model_state(const ModelState &state)
 {
     ParsedModelOutput parsed;
     parsed.valid = state.valid != 0;
@@ -157,7 +157,7 @@ ParsedModelOutput k230_parsed_from_model_state(const K230ModelState &state)
     return parsed;
 }
 
-ProjectionState k230_projection_from_model_state(const K230ModelState &state)
+ProjectionState projection_from_model_state(const ModelState &state)
 {
     return make_projection_state(state.calibration.roll, state.calibration.pitch, state.calibration.yaw);
 }

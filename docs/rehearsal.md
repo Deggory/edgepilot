@@ -3,21 +3,21 @@
 [← Documentation index](../README.md)
 
 A rehearsal runs the whole MaixCAM2 runtime on a recorded drive at real time:
-`k230_replayd` takes the place of `k230_camerad` and `k230_pandad`, and
-`k230_modeld`, `k230_controlsd`, `k230_overlayd` and `k230_recordd` run exactly
+`replayd` takes the place of `camerad` and `pandad`, and
+`modeld`, `controlsd`, `overlayd` and `recordd` run exactly
 as in the car. The LCD shows the recorded road with the live HUD, alert sounds
 play, and the rehearsal can itself be recorded and compared with the original.
 
-## What `k230_replayd` does
+## What `replayd` does
 
 - **Video:** decodes `segments/NNN/road.h264` frame by frame on the AX630C
   hardware decoder (VDEC) at the recorded capture intervals and copies each
   frame into the CMM frame ring with IVPS, where the camera would put it. The
   CPU never touches pixels.
 - **CAN and panda state:** publishes the recorded `CanRx` batches and
-  `PandaState` on the same timeline, into the queues `k230_pandad` feeds (and
+  `PandaState` on the same timeline, into the queues `pandad` feeds (and
   the recorder's CAN log queue).
-- **Transmit:** `k230_controlsd`'s send requests are **not transmitted**; they
+- **Transmit:** `controlsd`'s send requests are **not transmitted**; they
   go to the send log only, so a rehearsal is always shadow.
 - Timestamps are rewritten to the current time; recorded times only set the
   pacing. When the clip ends it idles so the manager does not restart it.
@@ -43,21 +43,21 @@ load. Record the rehearsal on the SD card, since the recorder requires 5 GB and
 
 Stop the service and start the manager in rehearsal mode:
 
-    systemctl stop supercombo
-    K230_LOG_DIR=/run/supercombo \
-    K230_REPLAY_ROUTE=/tmp/rehearsal/<route> K230_REPLAY_START=0 K230_REPLAY_DURATION=58 \
-    K230_FORCE_ENGAGED=1 K230_RECORD_ROOT=/root/rehearsal_out \
-    SUPERCOMBO_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
-    python3 /root/sc_run/k230_manager.py
+    systemctl stop edgepilot
+    EDGEPILOT_LOG_DIR=/run/edgepilot \
+    EDGEPILOT_REPLAY_ROUTE=/tmp/rehearsal/<route> EDGEPILOT_REPLAY_START=0 EDGEPILOT_REPLAY_DURATION=58 \
+    EDGEPILOT_FORCE_ENGAGED=1 EDGEPILOT_RECORD_ROOT=/root/rehearsal_out \
+    EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
+    python3 /root/edgepilot/manager.py
 
-- `K230_REPLAY_START`/`_DURATION` are seconds from the first frame of the
+- `EDGEPILOT_REPLAY_START`/`_DURATION` are seconds from the first frame of the
   copied segments (duration 0 = to the end).
-- `K230_FORCE_ENGAGED=1` because a clip cut from the middle of a drive has no
+- `EDGEPILOT_FORCE_ENGAGED=1` because a clip cut from the middle of a drive has no
   engage button edge; nothing is transmitted anyway.
-- `SUPERCOMBO_CAMERA_INTRINSICS` for K230 footage (both the model warp and the
+- `EDGEPILOT_CAMERA_INTRINSICS` for K230 footage (both the model warp and the
   HUD projection follow it); omit it for MaixCAM2 routes.
 - Turn on `params/recording.json` `enabled` to record the rehearsal, then
-  `systemctl start supercombo` when done.
+  `systemctl start edgepilot` when done.
 
 ## Comparing
 

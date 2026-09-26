@@ -5,13 +5,13 @@
 ## Managed startup
 
 ```sh
-python3 /root/sc_run/k230_manager.py [supercombo.axmodel]
+python3 /root/edgepilot/manager.py [supercombo.axmodel]
 ```
 
 The manager changes to its own directory, so it can be started from anywhere.
-The no-argument command selects `models/supercombo.axmodel` (or `K230_MODEL`),
+The no-argument command selects `models/supercombo.axmodel` (or `EDGEPILOT_MODEL`),
 K7 control enabled, Panda TX enabled, and the FastAPI parameter server enabled.
-`k230_pandad` is off unless `K230_ENABLE_PANDA=1`. Every setting can be
+`pandad` is off unless `EDGEPILOT_ENABLE_PANDA=1`. Every setting can be
 overridden with its environment variable; see
 [Runtime options](runtime-options.md).
 
@@ -19,11 +19,11 @@ Stop it with Ctrl-C or `SIGTERM`: children get `SIGTERM`, then `SIGKILL` after
 3 s.
 
 For boot autostart, `scripts/install_autostart.sh [root@board]` installs
-`scripts/supercombo.service` (after `rc-local.service`, which loads the AX
+`scripts/edgepilot.service` (after `rc-local.service`, which loads the AX
 drivers; `Conflicts=launcher.service`; `Restart=always`) and disables the stock
 launcher at boot. The unit reads `/etc/environment` for `LD_LIBRARY_PATH` and
-sets `K230_LOG_DIR=/run/supercombo`, so each child's output goes to
-`/run/supercombo/<name>.log` (tmpfs, emptied past 1 MiB). `systemctl start
+sets `EDGEPILOT_LOG_DIR=/run/edgepilot`, so each child's output goes to
+`/run/edgepilot/<name>.log` (tmpfs, emptied past 1 MiB). `systemctl start
 launcher.service` switches back to the stock UI; `install_autostart.sh
 --remove` undoes the install.
 
@@ -47,40 +47,40 @@ keeps the AX system open.
 
 ## Runtime processes
 
-### `k230_manager.py`
+### `manager.py`
 
 - stops the stock UI (`systemctl stop launcher.service`) and any app under
   `/maixapp/apps/`, which cost about 30% CPU and hold the camera and NPU, unless
-  `K230_STOP_LAUNCHER=0`
-- with `K230_ENABLE_PANDA=1`, switches the USB-C port to host mode
+  `EDGEPILOT_STOP_LAUNCHER=0`
+- with `EDGEPILOT_ENABLE_PANDA=1`, switches the USB-C port to host mode
   (`/sys/class/usb_role/8000000.dwc3-role-switch/role`) and restores the
   previous role on exit
-- starts, in this order: `k230_camerad`, `k230_overlayd` (1 s later, after
-  camerad has opened VI and the AX pools), `k230_modeld`, then `k230_pandad`,
-  `k230_controlsd`, and the parameter server when enabled; binaries that are
+- starts, in this order: `camerad`, `overlayd` (1 s later, after
+  camerad has opened VI and the AX pools), `modeld`, then `pandad`,
+  `controlsd`, and the parameter server when enabled; binaries that are
   not installed are skipped
 - restarts a process 1 s after it exits
-- publishes `managerState` to `/dev/shm/k230_manager_state` every second
+- publishes `managerState` to `/dev/shm/edgepilot_manager_state` every second
 - nice levels: `camerad=0`, `overlayd=10`, `modeld=-15`, `pandad=-10`,
   `controlsd=-8`, `param_server=10`
 
-### `k230_camerad`
+### `camerad`
 
 - opens the `ov_os04d10` through `libmaixcam_lib` (VI) at `NV12 1280x720` with
-  AI-ISP off, so the NPU stays free for `k230_modeld`
+  AI-ISP off, so the NPU stays free for `modeld`
 - runs the sensor itself at 20 fps (`AX_ISP_SetSnsAttr`) with auto exposure on
-  and the maximum shutter capped at 33,333 us (`SUPERCOMBO_MAX_SHUTTER_US`), so
+  and the maximum shutter capped at 33,333 us (`EDGEPILOT_MAX_SHUTTER_US`), so
   frames arrive 50 ms apart as the model expects
 - allocates the 8 frame-ring slots as CMM (physically contiguous) blocks and
   copies each camera frame into the next slot with IVPS TDP; the CPU never
   touches the pixels
-- the ring header in `/dev/shm/k230_road_ai` (ring version 5) carries each
+- the ring header in `/dev/shm/edgepilot_road_ai` (ring version 5) carries each
   slot's physical address and a per-slot seqlock; only frame metadata is
   published as `roadAiFrame`
 - lowers the sensor library's log level, which otherwise writes a harmless
   gain-table error on every AE update
 
-### `k230_overlayd`
+### `overlayd`
 
 - drives the LCD with two VO layers; the hardware composes them and rotates the
   result for the 480x640 panel
@@ -104,33 +104,33 @@ keeps the AX system open.
   `/boot/configs`)
 - plays the K230 piezo alert melodies on the board speaker, shows departure
   alerts and engage refusals on screen, and writes every alert as a
-  `k230_overlayd: alert=...` log line
+  `overlayd: alert=...` log line
 
-### `k230_modeld`
+### `modeld`
 
 - takes one argument, the axmodel path, and refuses any model that does not
   match the openpilot master core contract
 - runs on every frame (20 Hz): the GDC (`AX_IVPS_Dewarp`, perspective) warps
   the ring slot directly from its physical address into the two 512x256 model
-  views; `SUPERCOMBO_WARP_CPU=1` selects the CPU warp instead
+  views; `EDGEPILOT_WARP_CPU=1` selects the CPU warp instead
 - checks after the warp that the slot was not overwritten; a torn frame is
   dropped before it enters the image and feature queues
 - runs the NPU, parses the output, updates online calibration, feeds the
   calibration back into the next warp, and publishes compact `modelState`
 - see [Model pipeline](model-pipeline.md)
 
-### `k230_pandad` (optional)
+### `pandad` (optional)
 
-- started only with `K230_ENABLE_PANDA=1`, when built with
-  `-DSUPERCOMBO_BUILD_PANDA=ON` (the default)
+- started only with `EDGEPILOT_ENABLE_PANDA=1`, when built with
+  `-DEDGEPILOT_BUILD_PANDA=ON` (the default)
 - connects to the Panda over `libusb`, publishes compact Panda health and
   ordered CAN receive batches, and can relay ordered `sendcan` batches
-- standalone default is shadow mode (`K230_PANDA_TX=0`); the manager's default
+- standalone default is shadow mode (`EDGEPILOT_PANDA_TX=0`); the manager's default
   enables TX
 
-### `k230_controlsd` (K7 controller)
+### `controlsd` (K7 controller)
 
-- enabled by default (`K230_ENABLE_CONTROL=1`)
+- enabled by default (`EDGEPILOT_ENABLE_CONTROL=1`)
 - runs the openpilot-compatible lane planner and lateral MPC in a worker,
   with the KIA K7 YG HEV torque controller and `LKAS11`/`CLU11`/`MDPS12` packer
   at 100 Hz
@@ -140,14 +140,14 @@ keeps the AX system open.
   first driver SET speed remains the maximum. Closing distance is projected
   through the measured 1.5 km/h/s vehicle response, repeated `SET-` pulses wait
   for that response, and `RES+` cannot immediately reverse a recent slowdown
-- publishes generated raw `sendcan` batches for `k230_pandad`
+- publishes generated raw `sendcan` batches for `pandad`
 - publishes compact `controlState` diagnostics for the display HUD
-- does not transmit by itself; actual TX still requires `k230_pandad` with
-  `K230_PANDA_TX=1`
+- does not transmit by itself; actual TX still requires `pandad` with
+  `EDGEPILOT_PANDA_TX=1`
 
-### `k230_recordd`
+### `recordd`
 
-- follows the frame `k230_modeld` used (`/dev/shm/k230_record_frame`), copies
+- follows the frame `modeld` used (`/dev/shm/edgepilot_record_frame`), copies
   the ring slot into its own pool block with IVPS, checks the slot was not
   overwritten meanwhile, and encodes it with the hardware H.264 encoder (VENC,
   CBR, 1 s GOP) — the CPU never touches pixels (~5% of a core while recording).
@@ -201,10 +201,10 @@ through its `iter_event_records`.
 
 Camera frames never go through the small-message IPC. The frame ring's pixels
 live in camerad's CMM blocks and are read by physical address: the GDC in
-`k230_modeld` and IVPS in `k230_overlayd` read the slot directly, and a CPU
+`modeld` and IVPS in `overlayd` read the slot directly, and a CPU
 reader (the CPU warp fallback) maps it uncached. Only the ring header and
 per-frame metadata are in `/dev/shm`. This keeps the split runtime close to
 openpilot's process boundaries without paying the cost of Cap'n Proto/cereal.
 
-The lateral plan has a single producer: the lateral MPC inside `k230_controlsd`.
+The lateral plan has a single producer: the lateral MPC inside `controlsd`.
 `modelState` carries perception output only.

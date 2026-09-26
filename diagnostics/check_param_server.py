@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.display_control import duty_cycle_ns
-from scripts.k230_param_server import (
+from scripts.param_server import (
     HTML,
     IPC_HEADER,
     IPC_MAGIC,
@@ -195,7 +195,7 @@ def learner_payload(**values):
 class LearnerStateTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.path = Path(self.temporary.name) / "k230_learner_state"
+        self.path = Path(self.temporary.name) / "edgepilot_learner_state"
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -208,13 +208,13 @@ class LearnerStateTest(unittest.TestCase):
     def test_layout_matches_cpp_offsets(self):
         """ipc_messages.h의 offsetof 고정값과 Python 필드 배치가 같아야 한다."""
         source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
-        size = int(re.search(r"sizeof\(K230LearnerState\) == (\d+)", source).group(1))
+        size = int(re.search(r"sizeof\(LearnerState\) == (\d+)", source).group(1))
         self.assertEqual(LEARNER_STATE.size, size)
         offsets, offset = {}, 0
         for name, fmt in LEARNER_FIELDS:
             offsets[name] = offset
             offset += struct.calcsize("<" + fmt)
-        asserted = re.findall(r"K230_LEARNER_STATE_AT\((\w+), (\d+)\);", source)
+        asserted = re.findall(r"EDGEPILOT_LEARNER_STATE_AT\((\w+), (\d+)\);", source)
         self.assertGreaterEqual(len(asserted), 8)
         for name, expected in asserted:
             self.assertEqual(offsets[name], int(expected), name)

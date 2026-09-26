@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
-/* engage/조향 차단 사유. 컨트롤러가 정하고, K230ControlState에는 와이어 이름(문자열)으로
+/* engage/조향 차단 사유. 컨트롤러가 정하고, ControlState에는 와이어 이름(문자열)으로
  * 실려 녹화·Python 리더·HUD가 읽는다. 행 하나가 열거값·와이어 이름·HUD 라벨·분류라서
  * 사유를 더할 때 다른 곳을 고칠 필요가 없다. */
 enum class BlockKind : uint8_t {
@@ -22,7 +22,7 @@ enum class BlockKind : uint8_t {
 };
 
 // ControlStale은 컨트롤러가 내지 않는다. 스냅샷이 오래됐을 때 overlay가 대신 쓴다.
-#define K230_BLOCK_REASONS(X)                                                        \
+#define EDGEPILOT_BLOCK_REASONS(X)                                                        \
   X(None,               "",                     "",                BlockKind::None)         \
   X(NotEngaged,         "not_engaged",          "STANDBY",         BlockKind::Reject)       \
   X(ControllerDisabled, "controller_disabled",  "CONTROL OFF",     BlockKind::Hard)         \
@@ -48,23 +48,23 @@ enum class BlockKind : uint8_t {
   X(ControlStale,       "control_stale",        "CONTROL STALE",   BlockKind::Reject)
 
 enum class BlockReason : uint8_t {
-#define K230_BLOCK_ENUM(name, wire, label, kind) name,
-  K230_BLOCK_REASONS(K230_BLOCK_ENUM)
-#undef K230_BLOCK_ENUM
+#define EDGEPILOT_BLOCK_ENUM(name, wire, label, kind) name,
+  EDGEPILOT_BLOCK_REASONS(EDGEPILOT_BLOCK_ENUM)
+#undef EDGEPILOT_BLOCK_ENUM
   Count
 };
 
 struct BlockReasonRow {
   BlockReason reason;
-  const char *name;   // 와이어 이름. K230ControlState::active_block[32]에 들어간다.
+  const char *name;   // 와이어 이름. ControlState::active_block[32]에 들어간다.
   const char *label;  // HUD 라벨
   BlockKind kind;
 };
 
 constexpr BlockReasonRow kBlockReasons[] = {
-#define K230_BLOCK_ROW(name, wire, label, kind) {BlockReason::name, wire, label, kind},
-  K230_BLOCK_REASONS(K230_BLOCK_ROW)
-#undef K230_BLOCK_ROW
+#define EDGEPILOT_BLOCK_ROW(name, wire, label, kind) {BlockReason::name, wire, label, kind},
+  EDGEPILOT_BLOCK_REASONS(EDGEPILOT_BLOCK_ROW)
+#undef EDGEPILOT_BLOCK_ROW
 };
 static_assert(sizeof(kBlockReasons) / sizeof(kBlockReasons[0]) ==
               static_cast<size_t>(BlockReason::Count), "one row per BlockReason");

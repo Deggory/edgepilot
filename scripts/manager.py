@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """MaixCAM2(AX630C) 보드 런타임 감시자. 프로세스를 시작 순서대로 띄우고(camerad가 VI와
 AX 공용 풀을 연 뒤 overlayd) 죽으면 1초 뒤 다시 띄우며, 1초마다 managerState를 /dev/shm에
-낸다. 어떤 프로세스를 띄울지는 K230_ENABLE_CONTROL·K230_ENABLE_PANDA·
-K230_ENABLE_PARAM_SERVER가 정한다. K230_REPLAY_ROUTE(+ _START, _DURATION 초)를 주면 카메라와
-판다 대신 그 녹화 route를 재생하는 리허설 모드로 돈다(k230_replayd가 camerad 자리를 맡는다).
+낸다. 어떤 프로세스를 띄울지는 EDGEPILOT_ENABLE_CONTROL·EDGEPILOT_ENABLE_PANDA·
+EDGEPILOT_ENABLE_PARAM_SERVER가 정한다. EDGEPILOT_REPLAY_ROUTE(+ _START, _DURATION 초)를 주면 카메라와
+판다 대신 그 녹화 route를 재생하는 리허설 모드로 돈다(replayd가 camerad 자리를 맡는다).
 
 시작 전에 보드 UI 런처와 그 앱을 멈춘다(CPU 약 30%를 쓰고 카메라·화면과 겹친다,
-K230_STOP_LAUNCHER=0이면 그대로 둔다). USB-C 역할은 K230_USB_ROLE(host|device)이 있으면
-그대로 고정하고, 없으면 pandad를 띄울 때만 호스트로 바꿨다가 끝낼 때 되돌린다. K230_LOG_DIR를 주면(부팅 서비스 supercombo.service) 자식의 출력을
+EDGEPILOT_STOP_LAUNCHER=0이면 그대로 둔다). USB-C 역할은 EDGEPILOT_USB_ROLE(host|device)이 있으면
+그대로 고정하고, 없으면 pandad를 띄울 때만 호스트로 바꿨다가 끝낼 때 되돌린다. EDGEPILOT_LOG_DIR를 주면(부팅 서비스 edgepilot.service) 자식의 출력을
 그 디렉터리의 <이름>.log에 남기고 LOG_MAX_BYTES를 넘으면 비운다(tmpfs에 두어 SD에
 쓰지 않는다). 주지 않으면 터미널로 그대로 나온다.
 
-사용: python3 k230_manager.py [supercombo.axmodel]   (모델 기본값은 설치 디렉터리의
-models/supercombo.axmodel, K230_MODEL로도 바꿀 수 있다)
+사용: python3 manager.py [supercombo.axmodel]   (모델 기본값은 설치 디렉터리의
+models/supercombo.axmodel, EDGEPILOT_MODEL로도 바꿀 수 있다)
 """
 import mmap
 import os
@@ -29,10 +29,10 @@ IPC_MAGIC = 0x4B323349
 IPC_VERSION = 1
 HEADER = struct.Struct("<IIIIQQII")
 HEADER_SIZE = HEADER.size
-# K230ProcessState: 오버레이가 읽는 것은 이름과 running뿐이다.
+# ProcessState: 오버레이가 읽는 것은 이름과 running뿐이다.
 PROCESS = struct.Struct("<16sI")
 MAX_PROCESSES = 7
-# C++ K230ManagerState는 8바이트 정렬이라 배열 뒤에 꼬리 패딩이 붙는다.
+# C++ ManagerState는 8바이트 정렬이라 배열 뒤에 꼬리 패딩이 붙는다.
 _MANAGER_STATE_BODY = 8 + 4 + 4 + PROCESS.size * MAX_PROCESSES
 MANAGER_STATE_SIZE = (_MANAGER_STATE_BODY + 7) // 8 * 8
 DEFAULT_MODEL_PATH = "models/supercombo.axmodel"
@@ -40,8 +40,8 @@ USB_ROLE_FILE = "/sys/class/usb_role/8000000.dwc3-role-switch/role"
 LOG_MAX_BYTES = 1 << 20
 # camerad가 VI를 열면 AX 공용 풀이 다시 설정돼서 먼저 떠 있던 화면·인코더의 풀이 무효가
 # 된다. camerad가 다시 뜰 때마다 이 프로세스들도 camerad가 자리 잡은 뒤에 다시 띄운다.
-CAMERA = "k230_camerad"
-CAMERA_DEPENDENTS = ("k230_overlayd", "k230_recordd")
+CAMERA = "camerad"
+CAMERA_DEPENDENTS = ("overlayd", "recordd")
 CAMERA_SETTLE_S = 1.5
 # camerad가 크래시(신호)로 죽으면 VI/IVPS 그룹과 AX 풀을 풀지 못한 채 남아서, 다른 프로세스
 # (modeld 등)가 AX를 쥐고 있는 한 새 camerad가 VI를 열지 못한다. 그때와 시작 직후 연달아
@@ -68,10 +68,10 @@ AI_ISP_MODEL_PATH = "models/supercombo_npu1.axmodel"
 
 
 def ai_isp_enabled() -> bool:
-    """camerad와 같은 규칙: SUPERCOMBO_AI_ISP가 있으면 그 값, 없으면 /boot/configs maix_npu_ai_isp."""
-    value = os.environ.get("SUPERCOMBO_AI_ISP")
+    """camerad와 같은 규칙: EDGEPILOT_AI_ISP가 있으면 그 값, 없으면 /boot/configs maix_npu_ai_isp."""
+    value = os.environ.get("EDGEPILOT_AI_ISP")
     if value:
-        return env_enabled("SUPERCOMBO_AI_ISP")
+        return env_enabled("EDGEPILOT_AI_ISP")
     try:
         with open("/boot/configs") as f:
             for line in f:
@@ -84,8 +84,8 @@ def ai_isp_enabled() -> bool:
 
 def default_model_path() -> str:
     """AI-ISP가 NPU 절반을 쓰면 코어 하나용(NPU1)으로 컴파일한 모델을 쓴다."""
-    if os.environ.get("K230_MODEL"):
-        return os.environ["K230_MODEL"]
+    if os.environ.get("EDGEPILOT_MODEL"):
+        return os.environ["EDGEPILOT_MODEL"]
     if ai_isp_enabled() and os.path.exists(AI_ISP_MODEL_PATH):
         return AI_ISP_MODEL_PATH
     return DEFAULT_MODEL_PATH
@@ -152,27 +152,27 @@ class ProcSpec:
 
 def process_specs(model: str) -> List[ProcSpec]:
     """시작 순서대로. camerad가 VI를 열며 AX 공용 풀을 설정하므로 화면(overlayd)보다 먼저 뜬다."""
-    enable_control = env_enabled("K230_ENABLE_CONTROL", True)
-    # 리허설: 녹화 route를 카메라·판다 대신 재생한다(k230_replayd). 나머지는 그대로다.
-    replay = os.environ.get("K230_REPLAY_ROUTE")
-    camera = (ProcSpec(CAMERA, ["./k230_replayd", replay,
-                                os.environ.get("K230_REPLAY_START", "0"),
-                                os.environ.get("K230_REPLAY_DURATION", "0")], 0)
-              if replay else ProcSpec(CAMERA, ["./k230_camerad"], 0))
+    enable_control = env_enabled("EDGEPILOT_ENABLE_CONTROL", True)
+    # 리허설: 녹화 route를 카메라·판다 대신 재생한다(replayd). 나머지는 그대로다.
+    replay = os.environ.get("EDGEPILOT_REPLAY_ROUTE")
+    camera = (ProcSpec(CAMERA, ["./replayd", replay,
+                                os.environ.get("EDGEPILOT_REPLAY_START", "0"),
+                                os.environ.get("EDGEPILOT_REPLAY_DURATION", "0")], 0)
+              if replay else ProcSpec(CAMERA, ["./camerad"], 0))
     specs = [
         camera,
-        ProcSpec("k230_overlayd", ["./k230_overlayd"], 10),
-        ProcSpec("k230_recordd", ["./k230_recordd"], 15),
-        ProcSpec("k230_modeld", ["./k230_modeld", model], -15),
+        ProcSpec("overlayd", ["./overlayd"], 10),
+        ProcSpec("recordd", ["./recordd"], 15),
+        ProcSpec("modeld", ["./modeld", model], -15),
     ]
     # MaixCAM2에서는 Panda USB(Y 케이블) 배선 전이라 명시적으로 켤 때만 띄운다.
-    if env_enabled("K230_ENABLE_PANDA") and not replay:
-        specs.append(ProcSpec("k230_pandad", ["./k230_pandad"], -10))
+    if env_enabled("EDGEPILOT_ENABLE_PANDA") and not replay:
+        specs.append(ProcSpec("pandad", ["./pandad"], -10))
     if enable_control:
-        specs.append(ProcSpec("k230_controlsd", ["./k230_controlsd"], -8))
-    if env_enabled("K230_ENABLE_PARAM_SERVER", enable_control):
+        specs.append(ProcSpec("controlsd", ["./controlsd"], -8))
+    if env_enabled("EDGEPILOT_ENABLE_PARAM_SERVER", enable_control):
         server_script = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "k230_param_server.py"
+            os.path.dirname(os.path.abspath(__file__)), "param_server.py"
         )
         specs.append(ProcSpec("param_server", [sys.executable, server_script], 10))
     missing = [spec.name for spec in specs
@@ -184,7 +184,7 @@ def process_specs(model: str) -> List[ProcSpec]:
 
 def prepare_board(run_pandad: bool) -> Optional[str]:
     """UI 런처를 멈추고, pandad가 뜨면 USB-C를 호스트로 바꾼다. 바꾸기 전 역할을 돌려준다."""
-    if env_enabled("K230_STOP_LAUNCHER", True):
+    if env_enabled("EDGEPILOT_STOP_LAUNCHER", True):
         ret = subprocess.run(["systemctl", "stop", "launcher.service"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
         print(f"manager: launcher.service stop -> {ret}", flush=True)
@@ -193,11 +193,11 @@ def prepare_board(run_pandad: bool) -> Optional[str]:
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if not os.path.exists(USB_ROLE_FILE):
         return None
-    # K230_USB_ROLE(host|device)를 주면 그 역할로 두고 끝낼 때 되돌리지 않는다(부팅 서비스는
+    # EDGEPILOT_USB_ROLE(host|device)를 주면 그 역할로 두고 끝낼 때 되돌리지 않는다(부팅 서비스는
     # host: 차에서 판다를 USB-C 호스트로 붙인다). 없으면 pandad가 뜰 때만 host로 바꾸고 되돌린다.
-    fixed = os.environ.get("K230_USB_ROLE", "").strip().lower()
+    fixed = os.environ.get("EDGEPILOT_USB_ROLE", "").strip().lower()
     if fixed and fixed not in ("host", "device"):
-        print(f"manager: ignoring K230_USB_ROLE={fixed!r} (host or device)", flush=True)
+        print(f"manager: ignoring EDGEPILOT_USB_ROLE={fixed!r} (host or device)", flush=True)
         fixed = ""
     wanted = fixed or ("host" if run_pandad else "")
     if not wanted:
@@ -250,16 +250,16 @@ class Manager:
     def __init__(self, argv: List[str]):
         if len(argv) > 2:
             raise ValueError(
-                f"Usage: {argv[0] if argv else 'k230_manager.py'} [supercombo.axmodel]"
+                f"Usage: {argv[0] if argv else 'manager.py'} [supercombo.axmodel]"
             )
         self.model = argv[1] if len(argv) >= 2 else default_model_path()
         print(f"manager: AI-ISP {'on' if ai_isp_enabled() else 'off'}, model {self.model}", flush=True)
-        os.environ.setdefault("K230_PANDA_TX", "1")
-        os.environ.setdefault("K230_PANDA_ENGAGED", "1")
-        os.environ.setdefault("K230_PANDA_SAFETY", "hyundaiCommunity")
-        os.environ.setdefault("K230_PANDA_SAFETY_PARAM", "0")
+        os.environ.setdefault("EDGEPILOT_PANDA_TX", "1")
+        os.environ.setdefault("EDGEPILOT_PANDA_ENGAGED", "1")
+        os.environ.setdefault("EDGEPILOT_PANDA_SAFETY", "hyundaiCommunity")
+        os.environ.setdefault("EDGEPILOT_PANDA_SAFETY_PARAM", "0")
         self.shutdown = False
-        self.manager_state = LatestPublisher("/k230_manager_state", MANAGER_STATE_SIZE)
+        self.manager_state = LatestPublisher("/edgepilot_manager_state", MANAGER_STATE_SIZE)
         # 시작 순서 = 상태 테이블 순서. dict는 삽입 순서를 지킨다.
         self.procs: Dict[str, ProcState] = {
             spec.name: ProcState(spec=spec)
@@ -267,7 +267,7 @@ class Manager:
         }
         self.previous_usb_role: Optional[str] = None
         self.camera_quick_fails = 0
-        self.log_dir = os.environ.get("K230_LOG_DIR") or None
+        self.log_dir = os.environ.get("EDGEPILOT_LOG_DIR") or None
         if self.log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
 
@@ -357,7 +357,7 @@ class Manager:
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, self.handle_signal)
 
-        self.previous_usb_role = prepare_board("k230_pandad" in self.procs)
+        self.previous_usb_role = prepare_board("pandad" in self.procs)
         for state in self.procs.values():
             if state.spec.name in CAMERA_DEPENDENTS and not self.camera_settled():
                 continue  # 감시 루프가 camerad가 자리 잡은 뒤에 띄운다
@@ -416,7 +416,7 @@ class Manager:
 
 
 def main(argv: List[str]) -> int:
-    # 실행 파일(./k230_*)과 models/는 설치 디렉터리 기준이다.
+    # 실행 파일(./*d)과 models/는 설치 디렉터리 기준이다.
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     try:
         return Manager(argv).run()

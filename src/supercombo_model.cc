@@ -68,7 +68,7 @@ SupercomboModel::SupercomboModel(const char *model_file, const AppConfig &config
                 sizeof(float) * 2);
     std::fprintf(stderr, "Supercombo openpilot-master axmodel (pulsar2 %s)\n",
                  session_.tools_version().c_str());
-    if (!env_flag("SUPERCOMBO_WARP_CPU", false)) {
+    if (!env_flag("EDGEPILOT_WARP_CPU", false)) {
         try {
             gdc_.reset(new GdcWarp(static_cast<int>(config.nv12_width), static_cast<int>(config.nv12_height)));
             std::fprintf(stderr, "Supercombo warp backend=gdc (AX IVPS)\n");
@@ -147,14 +147,14 @@ uint8_t *SupercomboModel::input_buffer(int src_w, int src_h)
 bool SupercomboModel::run_frame_preloaded(int src_w, int src_h, std::vector<float> &raw_output)
 {
     if (!input_buffer(src_w, src_h)) return false;
-    const uint64_t t0 = k230_now_ns();
+    const uint64_t t0 = monotonic_now_ns();
     float med[9], sbig[9];
     input_transform_.projection_matrix(med);
     big_input_transform_.projection_matrix(sbig);
     if (!gdc_->warp(med, sbig, road_history_.newest_slot(), wide_history_.newest_slot())) return false;
     road_history_.commit();
     wide_history_.commit();
-    return infer(t0, k230_now_ns(), raw_output);
+    return infer(t0, monotonic_now_ns(), raw_output);
 }
 
 bool SupercomboModel::run_frame_phys(unsigned long long src_phys, int src_w, int src_h,
@@ -162,7 +162,7 @@ bool SupercomboModel::run_frame_phys(unsigned long long src_phys, int src_w, int
                                      const std::function<bool()> &source_still_valid)
 {
     if (!input_buffer(src_w, src_h)) return false;
-    const uint64_t t0 = k230_now_ns();
+    const uint64_t t0 = monotonic_now_ns();
     float med[9], sbig[9];
     input_transform_.projection_matrix(med);
     big_input_transform_.projection_matrix(sbig);
@@ -171,7 +171,7 @@ bool SupercomboModel::run_frame_phys(unsigned long long src_phys, int src_w, int
         return false;
     road_history_.commit();
     wide_history_.commit();
-    return infer(t0, k230_now_ns(), raw_output);
+    return infer(t0, monotonic_now_ns(), raw_output);
 }
 
 bool SupercomboModel::run_frame_nv12(const uint8_t *nv12, int src_w, int src_h,
@@ -183,7 +183,7 @@ bool SupercomboModel::run_frame_nv12(const uint8_t *nv12, int src_w, int src_h,
     }
     // GDC를 쓸 수 없는 프레임(예: NV21)이 처음 오면 그때 wide 워프 스레드를 띄운다.
     if (!wide_thread_.joinable()) wide_thread_ = std::thread(&SupercomboModel::wide_worker, this);
-    const uint64_t t0 = k230_now_ns();
+    const uint64_t t0 = monotonic_now_ns();
     uint64_t request;
     {
         std::lock_guard<std::mutex> lock(wide_mutex_);
@@ -209,7 +209,7 @@ bool SupercomboModel::run_frame_nv12(const uint8_t *nv12, int src_w, int src_h,
     if (!road_ok || !wide_ok) return false;
     road_history_.commit();
     wide_history_.commit();
-    return infer(t0, k230_now_ns(), raw_output);
+    return infer(t0, monotonic_now_ns(), raw_output);
 }
 
 bool SupercomboModel::infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_output)
@@ -219,7 +219,7 @@ bool SupercomboModel::infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_ou
     temporal_.push_desire_pulse();
     temporal_.desire_input(session_.input<float>(index_[kDesire]));
     temporal_.feature_input(session_.input<float>(index_[kFeatures]));
-    const uint64_t t2 = k230_now_ns();
+    const uint64_t t2 = monotonic_now_ns();
 
     if (!session_.run()) {
         /* 이미지·desire 큐는 이미 한 칸 나갔으므로 특징 큐도 빈 칸으로 한 칸 밀어
@@ -228,12 +228,12 @@ bool SupercomboModel::infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_ou
         temporal_.push_feature_history(empty.data(), empty.size());
         return false;
     }
-    const uint64_t t3 = k230_now_ns();
+    const uint64_t t3 = monotonic_now_ns();
 
     raw_output.resize(kModelOutputFloats);
     std::memcpy(raw_output.data(), session_.output<float>(0), sizeof(float) * kModelOutputFloats);
     temporal_.push_feature_history(raw_output.data(), raw_output.size());
-    const uint64_t t4 = k230_now_ns();
+    const uint64_t t4 = monotonic_now_ns();
 
     if (profile_) {
         const uint64_t stamps[] = {t0, t1, t2, t3, t4};

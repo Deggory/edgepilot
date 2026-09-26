@@ -2,7 +2,7 @@
 
 #include "utils_time.h"
 
-PandaGateOutput PandaHealthGate::update(const K230PandaState &state, uint64_t now_ns,
+PandaGateOutput PandaHealthGate::update(const PandaState &state, uint64_t now_ns,
                                         bool force_engaged) {
   PandaGateOutput out;
   out.state_fresh = timestamp_fresh_ns(state.timestamp_ns, now_ns, kPandaStateTimeoutNs);
@@ -29,7 +29,7 @@ PandaGateOutput PandaHealthGate::update(const K230PandaState &state, uint64_t no
   return out;
 }
 
-PathHoldOutput PathHoldGate::update(const K230ModelState &model, uint64_t now_ns,
+PathHoldOutput PathHoldGate::update(const ModelState &model, uint64_t now_ns,
                                     uint64_t model_timeout_ns) {
   PathHoldOutput out;
   out.raw = path_from_model_state(model, now_ns, model_timeout_ns);

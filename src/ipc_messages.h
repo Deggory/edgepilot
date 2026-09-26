@@ -2,7 +2,7 @@
 #define IPC_MESSAGES_H
 
 /* 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 토픽 이름, 매직/버전,
- * 채널 헤더, 상태 스냅샷, 그리고 ParsedModelOutput <-> K230ModelState 변환.
+ * 채널 헤더, 상태 스냅샷, 그리고 ParsedModelOutput <-> ModelState 변환.
  * 채널 구현은 ipc_channels.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다. */
 
 #include "app_config.h"
@@ -17,39 +17,39 @@
 #include <cstdint>
 #include <vector>
 
-constexpr uint32_t kK230IpcMagic = 0x4b323349;
-constexpr uint32_t kK230IpcVersion = 1;
-constexpr uint32_t kK230FrameRingMagic = 0x4b465249;
-constexpr uint32_t kK230FrameRingVersion = 5;
-constexpr uint32_t kK230CanQueueMagic = 0x4b435151;
-constexpr uint32_t kK230CanQueueVersion = 1;
-constexpr unsigned kK230FrameSlots = 8;
-constexpr unsigned kK230MaxProcesses = 7;
-constexpr unsigned kK230AiWidth = kDefaultAiWidth;
-constexpr unsigned kK230AiHeight = kDefaultAiHeight;
-constexpr unsigned kK230AiFrameBytes = kK230AiWidth * kK230AiHeight * 3 / 2;
-constexpr char kK230RoadAiFrameTopic[] = "/k230_road_ai_frame";
-constexpr char kK230RecordFrameTopic[] = "/k230_record_frame";
-constexpr char kK230ModelStateTopic[] = "/k230_model_state";
-constexpr char kK230ManagerStateTopic[] = "/k230_manager_state";
-constexpr char kK230CanTopic[] = "/k230_can";
-constexpr char kK230SendCanTopic[] = "/k230_sendcan";
-constexpr char kK230CanLogTopic[] = "/k230_can_log";
-constexpr char kK230SendCanLogTopic[] = "/k230_sendcan_log";
-constexpr char kK230PandaStateTopic[] = "/k230_panda_state";
-constexpr char kK230ControlStateTopic[] = "/k230_control_state";
+constexpr uint32_t kIpcMagic = 0x4b323349;
+constexpr uint32_t kIpcVersion = 1;
+constexpr uint32_t kFrameRingMagic = 0x4b465249;
+constexpr uint32_t kFrameRingVersion = 5;
+constexpr uint32_t kCanQueueMagic = 0x4b435151;
+constexpr uint32_t kCanQueueVersion = 1;
+constexpr unsigned kFrameSlots = 8;
+constexpr unsigned kMaxProcesses = 7;
+constexpr unsigned kAiWidth = kDefaultAiWidth;
+constexpr unsigned kAiHeight = kDefaultAiHeight;
+constexpr unsigned kAiFrameBytes = kAiWidth * kAiHeight * 3 / 2;
+constexpr char kRoadAiFrameTopic[] = "/edgepilot_road_ai_frame";
+constexpr char kRecordFrameTopic[] = "/edgepilot_record_frame";
+constexpr char kModelStateTopic[] = "/edgepilot_model_state";
+constexpr char kManagerStateTopic[] = "/edgepilot_manager_state";
+constexpr char kCanTopic[] = "/edgepilot_can";
+constexpr char kSendCanTopic[] = "/edgepilot_sendcan";
+constexpr char kCanLogTopic[] = "/edgepilot_can_log";
+constexpr char kSendCanLogTopic[] = "/edgepilot_sendcan_log";
+constexpr char kPandaStateTopic[] = "/edgepilot_panda_state";
+constexpr char kControlStateTopic[] = "/edgepilot_control_state";
 
-constexpr char kK230LearnerStateTopic[] = "/k230_learner_state";
+constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
 
-constexpr uint32_t kK230HudFlagLaneless = 1U << 0;
-constexpr uint32_t kK230HudFlagBrakeHold = 1U << 1;
-constexpr char kK230RoadAiFrameRing[] = "/k230_road_ai";
-constexpr unsigned kK230CanBatchMaxFrames = 256;
-constexpr unsigned kK230CanQueueSlots = 64;
+constexpr uint32_t kHudFlagLaneless = 1U << 0;
+constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
+constexpr char kRoadAiFrameRing[] = "/edgepilot_road_ai";
+constexpr unsigned kCanBatchMaxFrames = 256;
+constexpr unsigned kCanQueueSlots = 64;
 
-struct K230IpcHeader {
-    uint32_t magic = kK230IpcMagic;
-    uint32_t version = kK230IpcVersion;
+struct IpcHeader {
+    uint32_t magic = kIpcMagic;
+    uint32_t version = kIpcVersion;
     uint32_t payload_capacity = 0;
     uint32_t reserved0 = 0;
     std::atomic<uint64_t> seq{0};
@@ -58,30 +58,30 @@ struct K230IpcHeader {
     uint32_t reserved1 = 0;
 };
 
-static_assert(sizeof(K230IpcHeader) == 40,
-              "K230IpcHeader layout is part of the Python manager ABI");
+static_assert(sizeof(IpcHeader) == 40,
+              "IpcHeader layout is part of the Python manager ABI");
 
-struct K230FrameRingHeader {
-    uint32_t magic = kK230FrameRingMagic;
-    uint32_t version = kK230FrameRingVersion;
-    uint32_t slot_count = kK230FrameSlots;
-    uint32_t width = kK230AiWidth;
-    uint32_t height = kK230AiHeight;
-    uint32_t frame_bytes = kK230AiFrameBytes;
+struct FrameRingHeader {
+    uint32_t magic = kFrameRingMagic;
+    uint32_t version = kFrameRingVersion;
+    uint32_t slot_count = kFrameSlots;
+    uint32_t width = kAiWidth;
+    uint32_t height = kAiHeight;
+    uint32_t frame_bytes = kAiFrameBytes;
     uint32_t reserved0 = 0;
     uint32_t reserved1 = 0;
-    std::atomic<uint64_t> slot_seq[kK230FrameSlots]{};
-    std::atomic<uint64_t> slot_frame_id[kK230FrameSlots]{};
+    std::atomic<uint64_t> slot_seq[kFrameSlots]{};
+    std::atomic<uint64_t> slot_frame_id[kFrameSlots]{};
     /* 슬롯 픽셀이 있는 CMM 블록의 물리 주소. 0이면 아직 붙지 않았다. */
-    uint64_t slot_phys[kK230FrameSlots]{};
+    uint64_t slot_phys[kFrameSlots]{};
 };
 
-struct K230RoadAiFrame {
+struct RoadAiFrame {
     uint64_t frame_id = 0;
     uint64_t timestamp_ns = 0;
     uint32_t slot = 0;
-    uint32_t width = kK230AiWidth;
-    uint32_t height = kK230AiHeight;
+    uint32_t width = kAiWidth;
+    uint32_t height = kAiHeight;
     uint32_t format = 0;
     uint32_t crop_x = 0;
     uint32_t crop_y = 0;
@@ -89,13 +89,13 @@ struct K230RoadAiFrame {
     uint32_t crop_height = 0;
 };
 
-struct K230IpcPoint {
+struct IpcPoint {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
 };
 
-struct K230LeadState {
+struct LeadState {
     uint32_t valid = 0;
     float probability = 0.0f;
     float x = 0.0f;
@@ -104,7 +104,7 @@ struct K230LeadState {
     float acceleration = 0.0f;
 };
 
-struct K230PoseState {
+struct PoseState {
     uint32_t valid = 0;
     float trans[3] = {};
     float rot[3] = {};
@@ -112,7 +112,7 @@ struct K230PoseState {
     float rot_std[3] = {};
 };
 
-struct K230CalibrationState {
+struct CalibrationState {
     uint32_t status = 0;
     int32_t valid_blocks = 0;
     float roll = 0.0f;
@@ -121,7 +121,7 @@ struct K230CalibrationState {
     float spread[3] = {};
 };
 
-struct K230ModelState {
+struct ModelState {
     uint64_t frame_id = 0;
     uint64_t capture_timestamp_ns = 0;
     uint64_t model_timestamp_ns = 0;
@@ -131,43 +131,43 @@ struct K230ModelState {
     float plan_probability = 0.0f;
     float model_t[kTrajectorySize] = {};
     float lane_t[kTrajectorySize] = {};
-    K230IpcPoint plan[kTrajectorySize] = {};
-    K230IpcPoint lanes[4][kTrajectorySize] = {};
+    IpcPoint plan[kTrajectorySize] = {};
+    IpcPoint lanes[4][kTrajectorySize] = {};
     float lane_probabilities[4] = {};
     float lane_stds[4] = {};
-    K230IpcPoint road_edges[2][kTrajectorySize] = {};
+    IpcPoint road_edges[2][kTrajectorySize] = {};
     float road_edge_stds[2] = {};
     float desire_state[kDesireLen] = {};
-    K230LeadState lead;
-    K230PoseState pose;
-    K230CalibrationState calibration;
+    LeadState lead;
+    PoseState pose;
+    CalibrationState calibration;
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
- * kK230RecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(K230ModelState) == 3256,
-              "K230ModelState layout is shared with the recording reader");
+ * kRecordingVersion도 함께 올려야 한다. */
+static_assert(sizeof(ModelState) == 3256,
+              "ModelState layout is shared with the recording reader");
 
-struct K230ProcessState {
+struct ProcessState {
     char name[16] = {};
     uint32_t running = 0;
 };
 
-static_assert(sizeof(K230ProcessState) == 20,
-              "K230ProcessState layout is shared with the Python manager");
+static_assert(sizeof(ProcessState) == 20,
+              "ProcessState layout is shared with the Python manager");
 
-struct K230ManagerState {
+struct ManagerState {
     uint64_t timestamp_ns = 0;
     uint32_t process_count = 0;
     uint32_t reserved = 0;
-    K230ProcessState processes[kK230MaxProcesses] = {};
+    ProcessState processes[kMaxProcesses] = {};
 };
 
-static_assert(sizeof(K230ManagerState) == 160,
-              "K230ManagerState layout is shared with the Python manager");
+static_assert(sizeof(ManagerState) == 160,
+              "ManagerState layout is shared with the Python manager");
 
-struct K230CanFrame {
+struct IpcCanFrame {
     uint32_t address = 0;
     uint32_t src = 0;
     uint32_t bus_time = 0;
@@ -176,16 +176,16 @@ struct K230CanFrame {
     uint8_t data[64] = {};
 };
 
-struct K230CanBatch {
+struct CanBatch {
     uint64_t timestamp_ns = 0;
     uint32_t valid = 0;
     uint32_t count = 0;
     uint32_t dropped = 0;
     uint32_t reserved = 0;
-    K230CanFrame frames[kK230CanBatchMaxFrames] = {};
+    IpcCanFrame frames[kCanBatchMaxFrames] = {};
 };
 
-inline bool k230_can_batch_is_fresh(const K230CanBatch &batch, uint64_t now_ns,
+inline bool can_batch_is_fresh(const CanBatch &batch, uint64_t now_ns,
                                     uint64_t max_age_ns)
 {
     return batch.valid && timestamp_fresh_ns(batch.timestamp_ns, now_ns, max_age_ns);
@@ -195,22 +195,22 @@ inline bool k230_can_batch_is_fresh(const K230CanBatch &batch, uint64_t now_ns,
  * fill(dst, src)이 프레임별 필드를 옮긴다. controlsd(CanFrame)와 pandad
  * (PandaCanFrame)가 같은 껍데기를 쓴다. */
 template <class Frame, class Fill>
-K230CanBatch k230_make_can_batch(const std::vector<Frame> &frames, Fill fill)
+CanBatch make_can_batch(const std::vector<Frame> &frames, Fill fill)
 {
-    K230CanBatch batch;
-    batch.timestamp_ns = k230_now_ns();
+    CanBatch batch;
+    batch.timestamp_ns = monotonic_now_ns();
     batch.valid = 1;
     batch.count = static_cast<uint32_t>(
-        std::min<size_t>(frames.size(), kK230CanBatchMaxFrames));
+        std::min<size_t>(frames.size(), kCanBatchMaxFrames));
     batch.dropped = static_cast<uint32_t>(frames.size() - batch.count);
     for (uint32_t i = 0; i < batch.count; ++i) fill(&batch.frames[i], frames[i]);
     return batch;
 }
 
-struct K230CanQueueHeader {
-    uint32_t magic = kK230CanQueueMagic;
-    uint32_t version = kK230CanQueueVersion;
-    uint32_t slot_count = kK230CanQueueSlots;
+struct CanQueueHeader {
+    uint32_t magic = kCanQueueMagic;
+    uint32_t version = kCanQueueVersion;
+    uint32_t slot_count = kCanQueueSlots;
     uint32_t reserved0 = 0;
     std::atomic<uint64_t> write_seq{0};
     std::atomic<uint64_t> read_seq{0};
@@ -218,7 +218,7 @@ struct K230CanQueueHeader {
     uint64_t reserved2 = 0;
 };
 
-struct K230PandaState {
+struct PandaState {
     uint64_t timestamp_ns = 0;
     uint32_t connected = 0;
     uint32_t comms_healthy = 0;
@@ -243,7 +243,7 @@ struct K230PandaState {
     uint32_t current = 0;
 };
 
-struct K230ControlState {
+struct ControlState {
     uint64_t timestamp_ns = 0;
     uint32_t enabled = 0;
     uint32_t engaged = 0;
@@ -292,21 +292,21 @@ struct K230ControlState {
 
 /* paramsd·torqued 출력(상류 vehicleParameters·lateralTorqueParameters). controlsd가
  * paramsd 출력마다(20 Hz) 발행하고 recordd가 LearnerState로 저장한다. */
-constexpr uint32_t kK230LearnerVehicleInputsOk = 1U << 0;
-constexpr uint32_t kK230LearnerVehicleValid = 1U << 1;
-constexpr uint32_t kK230LearnerSensorValid = 1U << 2;
-constexpr uint32_t kK230LearnerSteerRatioValid = 1U << 3;
-constexpr uint32_t kK230LearnerStiffnessValid = 1U << 4;
-constexpr uint32_t kK230LearnerOffsetAverageValid = 1U << 5;
-constexpr uint32_t kK230LearnerOffsetValid = 1U << 6;
-constexpr uint32_t kK230LearnerTorqueInputsOk = 1U << 7;
-constexpr uint32_t kK230LearnerTorqueValid = 1U << 8;
-constexpr uint32_t kK230LearnerUseVehicle = 1U << 9;   // 스위치 적용 후 실제 사용
-constexpr uint32_t kK230LearnerUseTorque = 1U << 10;
-constexpr uint32_t kK230LearnerVehicleRestored = 1U << 11;
-constexpr uint32_t kK230LearnerTorqueRestored = 1U << 12;
+constexpr uint32_t kLearnerVehicleInputsOk = 1U << 0;
+constexpr uint32_t kLearnerVehicleValid = 1U << 1;
+constexpr uint32_t kLearnerSensorValid = 1U << 2;
+constexpr uint32_t kLearnerSteerRatioValid = 1U << 3;
+constexpr uint32_t kLearnerStiffnessValid = 1U << 4;
+constexpr uint32_t kLearnerOffsetAverageValid = 1U << 5;
+constexpr uint32_t kLearnerOffsetValid = 1U << 6;
+constexpr uint32_t kLearnerTorqueInputsOk = 1U << 7;
+constexpr uint32_t kLearnerTorqueValid = 1U << 8;
+constexpr uint32_t kLearnerUseVehicle = 1U << 9;   // 스위치 적용 후 실제 사용
+constexpr uint32_t kLearnerUseTorque = 1U << 10;
+constexpr uint32_t kLearnerVehicleRestored = 1U << 11;
+constexpr uint32_t kLearnerTorqueRestored = 1U << 12;
 
-struct K230LearnerState {
+struct LearnerState {
     uint64_t timestamp_ns = 0;
     uint32_t flags = 0;
     float steer_ratio = 0.0f;
@@ -338,91 +338,91 @@ struct K230LearnerState {
     uint32_t reserved = 0;
 };
 /* recordd가 그대로 저장하고 tools/model/recording_reader.py LEARNER_STATE와
- * scripts/k230_param_server.py LEARNER_FIELDS가 위치로 읽는다(check_param_server.py가 대조). */
-#define K230_LEARNER_STATE_AT(field, expected) \
-    static_assert(offsetof(K230LearnerState, field) == (expected), \
-                  "K230LearnerState." #field " moved")
-K230_LEARNER_STATE_AT(flags, 8);
-K230_LEARNER_STATE_AT(steer_ratio, 12);
-K230_LEARNER_STATE_AT(yaw_bias_rad_s, 48);
-K230_LEARNER_STATE_AT(lat_accel_factor_raw, 52);
-K230_LEARNER_STATE_AT(max_resets, 80);
-K230_LEARNER_STATE_AT(total_bucket_points, 84);
-K230_LEARNER_STATE_AT(road_bank_lat_accel, 92);
-K230_LEARNER_STATE_AT(prior_steer_ratio, 96);
-K230_LEARNER_STATE_AT(bucket_points, 108);
-K230_LEARNER_STATE_AT(reserved, 124);
-#undef K230_LEARNER_STATE_AT
-static_assert(sizeof(K230LearnerState) == 128, "K230LearnerState size");
+ * scripts/param_server.py LEARNER_FIELDS가 위치로 읽는다(check_param_server.py가 대조). */
+#define EDGEPILOT_LEARNER_STATE_AT(field, expected) \
+    static_assert(offsetof(LearnerState, field) == (expected), \
+                  "LearnerState." #field " moved")
+EDGEPILOT_LEARNER_STATE_AT(flags, 8);
+EDGEPILOT_LEARNER_STATE_AT(steer_ratio, 12);
+EDGEPILOT_LEARNER_STATE_AT(yaw_bias_rad_s, 48);
+EDGEPILOT_LEARNER_STATE_AT(lat_accel_factor_raw, 52);
+EDGEPILOT_LEARNER_STATE_AT(max_resets, 80);
+EDGEPILOT_LEARNER_STATE_AT(total_bucket_points, 84);
+EDGEPILOT_LEARNER_STATE_AT(road_bank_lat_accel, 92);
+EDGEPILOT_LEARNER_STATE_AT(prior_steer_ratio, 96);
+EDGEPILOT_LEARNER_STATE_AT(bucket_points, 108);
+EDGEPILOT_LEARNER_STATE_AT(reserved, 124);
+#undef EDGEPILOT_LEARNER_STATE_AT
+static_assert(sizeof(LearnerState) == 128, "LearnerState size");
 
 /* controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이
  * 구조체를 그대로 저장하고 tools/model/recording_reader.py가 위치로 디코드하므로 필드
  * 순서까지 전부 고정한다. 같은 크기 필드 둘을 맞바꿔도 여기서 걸린다. */
-#define K230_CONTROL_STATE_AT(field, expected) \
-    static_assert(offsetof(K230ControlState, field) == (expected), \
-                  "K230ControlState." #field " moved: recording v5 layout")
-K230_CONTROL_STATE_AT(timestamp_ns, 0);
-K230_CONTROL_STATE_AT(enabled, 8);
-K230_CONTROL_STATE_AT(engaged, 12);
-K230_CONTROL_STATE_AT(active, 16);
-K230_CONTROL_STATE_AT(should_send, 20);
-K230_CONTROL_STATE_AT(path_usable, 24);
-K230_CONTROL_STATE_AT(seeds_ready, 28);
-K230_CONTROL_STATE_AT(vehicle_fresh, 32);
-K230_CONTROL_STATE_AT(steering_fault, 36);
-K230_CONTROL_STATE_AT(left_blinker, 40);
-K230_CONTROL_STATE_AT(right_blinker, 44);
-K230_CONTROL_STATE_AT(cruise_active, 48);
-K230_CONTROL_STATE_AT(gear, 52);
-K230_CONTROL_STATE_AT(cluster_speed_kph, 56);
-K230_CONTROL_STATE_AT(cruise_max_speed_kph, 60);
-K230_CONTROL_STATE_AT(cruise_command_speed_kph, 64);
-K230_CONTROL_STATE_AT(steering_angle_deg, 68);
-K230_CONTROL_STATE_AT(desired_curvature, 72);
-K230_CONTROL_STATE_AT(actual_curvature, 76);
-K230_CONTROL_STATE_AT(normalized_output, 80);
-K230_CONTROL_STATE_AT(desired_torque, 84);
-K230_CONTROL_STATE_AT(apply_torque, 88);
-K230_CONTROL_STATE_AT(driver_torque, 92);
-K230_CONTROL_STATE_AT(desire, 96);
-K230_CONTROL_STATE_AT(active_block, 100);
-K230_CONTROL_STATE_AT(radar_lead_valid, 132);
-K230_CONTROL_STATE_AT(radar_lead_distance_m, 136);
-K230_CONTROL_STATE_AT(radar_lead_relative_speed_mps, 140);
-K230_CONTROL_STATE_AT(departure_alert_type, 144);
-K230_CONTROL_STATE_AT(departure_alert_event_id, 148);
-K230_CONTROL_STATE_AT(green_light_alert_armed, 152);
-K230_CONTROL_STATE_AT(tpms_valid, 156);
-K230_CONTROL_STATE_AT(tpms_unit, 160);
-K230_CONTROL_STATE_AT(tpms_pressure_fl, 164);
-K230_CONTROL_STATE_AT(tpms_pressure_fr, 168);
-K230_CONTROL_STATE_AT(tpms_pressure_rl, 172);
-K230_CONTROL_STATE_AT(tpms_pressure_rr, 176);
-K230_CONTROL_STATE_AT(tpms_warning, 180);
-K230_CONTROL_STATE_AT(hud_flags, 184);
-K230_CONTROL_STATE_AT(engage_event_id, 188);
-K230_CONTROL_STATE_AT(disengage_event_id, 192);
-K230_CONTROL_STATE_AT(engage_reject_event_id, 196);
-K230_CONTROL_STATE_AT(engage_reject_block, 200);
-K230_CONTROL_STATE_AT(ego_speed_kph, 232);
-#undef K230_CONTROL_STATE_AT
-static_assert(sizeof(K230ControlState) == 240,
-              "K230ControlState layout is shared by controlsd, overlay and recording v5");
-/* recordd가 K230RecordType::PandaState로 그대로 저장한다. */
-static_assert(sizeof(K230PandaState) == 96,
-              "K230PandaState is recorded as-is: bump kK230RecordingVersion");
+#define EDGEPILOT_CONTROL_STATE_AT(field, expected) \
+    static_assert(offsetof(ControlState, field) == (expected), \
+                  "ControlState." #field " moved: recording v5 layout")
+EDGEPILOT_CONTROL_STATE_AT(timestamp_ns, 0);
+EDGEPILOT_CONTROL_STATE_AT(enabled, 8);
+EDGEPILOT_CONTROL_STATE_AT(engaged, 12);
+EDGEPILOT_CONTROL_STATE_AT(active, 16);
+EDGEPILOT_CONTROL_STATE_AT(should_send, 20);
+EDGEPILOT_CONTROL_STATE_AT(path_usable, 24);
+EDGEPILOT_CONTROL_STATE_AT(seeds_ready, 28);
+EDGEPILOT_CONTROL_STATE_AT(vehicle_fresh, 32);
+EDGEPILOT_CONTROL_STATE_AT(steering_fault, 36);
+EDGEPILOT_CONTROL_STATE_AT(left_blinker, 40);
+EDGEPILOT_CONTROL_STATE_AT(right_blinker, 44);
+EDGEPILOT_CONTROL_STATE_AT(cruise_active, 48);
+EDGEPILOT_CONTROL_STATE_AT(gear, 52);
+EDGEPILOT_CONTROL_STATE_AT(cluster_speed_kph, 56);
+EDGEPILOT_CONTROL_STATE_AT(cruise_max_speed_kph, 60);
+EDGEPILOT_CONTROL_STATE_AT(cruise_command_speed_kph, 64);
+EDGEPILOT_CONTROL_STATE_AT(steering_angle_deg, 68);
+EDGEPILOT_CONTROL_STATE_AT(desired_curvature, 72);
+EDGEPILOT_CONTROL_STATE_AT(actual_curvature, 76);
+EDGEPILOT_CONTROL_STATE_AT(normalized_output, 80);
+EDGEPILOT_CONTROL_STATE_AT(desired_torque, 84);
+EDGEPILOT_CONTROL_STATE_AT(apply_torque, 88);
+EDGEPILOT_CONTROL_STATE_AT(driver_torque, 92);
+EDGEPILOT_CONTROL_STATE_AT(desire, 96);
+EDGEPILOT_CONTROL_STATE_AT(active_block, 100);
+EDGEPILOT_CONTROL_STATE_AT(radar_lead_valid, 132);
+EDGEPILOT_CONTROL_STATE_AT(radar_lead_distance_m, 136);
+EDGEPILOT_CONTROL_STATE_AT(radar_lead_relative_speed_mps, 140);
+EDGEPILOT_CONTROL_STATE_AT(departure_alert_type, 144);
+EDGEPILOT_CONTROL_STATE_AT(departure_alert_event_id, 148);
+EDGEPILOT_CONTROL_STATE_AT(green_light_alert_armed, 152);
+EDGEPILOT_CONTROL_STATE_AT(tpms_valid, 156);
+EDGEPILOT_CONTROL_STATE_AT(tpms_unit, 160);
+EDGEPILOT_CONTROL_STATE_AT(tpms_pressure_fl, 164);
+EDGEPILOT_CONTROL_STATE_AT(tpms_pressure_fr, 168);
+EDGEPILOT_CONTROL_STATE_AT(tpms_pressure_rl, 172);
+EDGEPILOT_CONTROL_STATE_AT(tpms_pressure_rr, 176);
+EDGEPILOT_CONTROL_STATE_AT(tpms_warning, 180);
+EDGEPILOT_CONTROL_STATE_AT(hud_flags, 184);
+EDGEPILOT_CONTROL_STATE_AT(engage_event_id, 188);
+EDGEPILOT_CONTROL_STATE_AT(disengage_event_id, 192);
+EDGEPILOT_CONTROL_STATE_AT(engage_reject_event_id, 196);
+EDGEPILOT_CONTROL_STATE_AT(engage_reject_block, 200);
+EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
+#undef EDGEPILOT_CONTROL_STATE_AT
+static_assert(sizeof(ControlState) == 240,
+              "ControlState layout is shared by controlsd, overlay and recording v5");
+/* recordd가 RecordType::PandaState로 그대로 저장한다. */
+static_assert(sizeof(PandaState) == 96,
+              "PandaState is recorded as-is: bump kRecordingVersion");
 /* 기록 버전과 저장 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다. */
-static_assert(kK230RecordingVersion == 5 && sizeof(K230ModelState) == 3256 &&
-                  sizeof(K230ControlState) == 240 && sizeof(K230PandaState) == 96,
-              "recording v5 pins these payloads; bump kK230RecordingVersion together");
+static_assert(kRecordingVersion == 5 && sizeof(ModelState) == 3256 &&
+                  sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
+              "recording v5 pins these payloads; bump kRecordingVersion together");
 
 /* modeld가 발행 직전에, overlayd와 hud_snapshot이 소비 직후에 쓴다. */
-void k230_fill_model_state(K230ModelState &state, const ParsedModelOutput &parsed,
+void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
                            const ProjectionState &projection,
                            const OnlineCalibrator::Snapshot &calibration,
                            uint64_t frame_id, uint64_t capture_timestamp_ns,
                            float model_execution_ms);
-ParsedModelOutput k230_parsed_from_model_state(const K230ModelState &state);
-ProjectionState k230_projection_from_model_state(const K230ModelState &state);
+ParsedModelOutput parsed_from_model_state(const ModelState &state);
+ProjectionState projection_from_model_state(const ModelState &state);
 
 #endif

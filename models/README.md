@@ -4,8 +4,8 @@ The MaixCAM2 runtime runs the openpilot **master** `driving_supercombo` core as
 a Pulsar2 6.0 axmodel (U16 activations, uint8 image inputs) on the AX630C NPU.
 The axmodel is **not in this directory**: it is built with
 [`tools/model/axmodel`](../tools/model/axmodel/README.md) and uploaded to the
-board as `/root/sc_run/models/supercombo.axmodel` with
-`SUPERCOMBO_AXMODEL=... scripts/upload_to_board.sh`.
+board as `/root/edgepilot/models/supercombo.axmodel` with
+`EDGEPILOT_AXMODEL=... scripts/upload_to_board.sh`.
 
 What is tracked here is the calibration data the axmodel build still uses, and
 the K230 v0.9.4 model and its records.
@@ -45,13 +45,13 @@ keeps in its graph (images, desire, features) are kept on the CPU by
 `src/model_temporal.h`; the 512-float hidden state at offset 1064 is fed back
 through `features_buffer`.
 
-`k230_modeld` verifies this contract at load and refuses any other axmodel, so
+`modeld` verifies this contract at load and refuses any other axmodel, so
 a mismatched model fails loudly instead of being misparsed. The output layout
 is in [Model pipeline](../docs/model-pipeline.md#model-output).
 
 ## Verification
 
-On the board, NPU inference takes about 8.5 ms and a whole `k230_modeld` frame
+On the board, NPU inference takes about 8.5 ms and a whole `modeld` frame
 about 12.5 ms. On a 200-frame K230 replay the board output matched the host
 axengine runner to 0.0008 m in plan lateral offset at 2 s, with a hidden-state
 cosine similarity of 0.9994.

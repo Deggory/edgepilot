@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a recorded route for the on-board rehearsal (k230_replayd).
+"""Prepare a recorded route for the on-board rehearsal (replayd).
 
 The AX630C hardware decoder only takes H.264, while routes are HEVC. This
 re-encodes the chosen segments to H.264 (x264, no B-frames, 1 s GOP, SPS/PPS
@@ -15,8 +15,8 @@ import struct
 import subprocess
 from pathlib import Path
 
-INDEX_HEADER = struct.Struct("<8sIIIIIIQQ")   # K230FrameIndexHeader (48 B)
-INDEX_RECORD = struct.Struct("<QQQQII")       # K230FrameIndexRecord (40 B)
+INDEX_HEADER = struct.Struct("<8sIIIIIIQQ")   # FrameIndexHeader (48 B)
+INDEX_RECORD = struct.Struct("<QQQQII")       # FrameIndexRecord (40 B)
 
 
 def read_index(path: Path):

@@ -24,7 +24,7 @@ of this branch; the piezo alert melodies now play on the board speaker.
 
 - **supercombo on the AX630C NPU.** The openpilot master `driving_supercombo`
   core, compiled with Pulsar2 6.0 (U16 activations, uint8 image inputs), runs in
-  about 8.5 ms on the NPU; a whole `k230_modeld` frame is about 12.5 ms, well
+  about 8.5 ms on the NPU; a whole `modeld` frame is about 12.5 ms, well
   inside the 20 Hz budget. The history queues the released ONNX keeps in-graph
   (images, desire, features) run on the CPU in `src/model_temporal.h`.
 - **Hardware all the way to the model.** The camera frame goes into a CMM
@@ -55,23 +55,22 @@ of this branch; the piezo alert melodies now play on the board speaker.
 
 ```mermaid
 flowchart TB
-  camera([ov_os04d10]) -->|VI 1280x720 NV12| camerad[k230_camerad]
-  camerad -->|"CMM frame ring (phys addr)"| modeld["k230_modeld<br/>GDC warp · supercombo · NPU"]
-  camerad -->|CMM frame ring| overlayd["k230_overlayd<br/>VO layer 0 video · layer 1 HUD"]
-  modeld -->|modelState| controlsd["k230_controlsd<br/>planner · MPC · torque"]
-  controlsd <-->|"sendcan · CAN RX"| pandad[k230_pandad]
+  camera([ov_os04d10]) -->|VI 1280x720 NV12| camerad[camerad]
+  camerad -->|"CMM frame ring (phys addr)"| modeld["modeld<br/>GDC warp · supercombo · NPU"]
+  camerad -->|CMM frame ring| overlayd["overlayd<br/>VO layer 0 video · layer 1 HUD"]
+  modeld -->|modelState| controlsd["controlsd<br/>planner · MPC · torque"]
+  controlsd <-->|"sendcan · CAN RX"| pandad[pandad]
   pandad <--> panda(["Panda · vehicle CAN"])
   modeld & controlsd & pandad --> overlayd
 ```
 
 Each process does one job and talks to the others through `/dev/shm`, keeping
-openpilot's process boundaries without Cap'n Proto/cereal. `k230_manager.py`
-starts and supervises them, and `k230_param_server.py` serves the tuning UI. The
-process names keep their `k230_` prefix from the K230 runtime. See
+openpilot's process boundaries without Cap'n Proto/cereal. `manager.py`
+starts and supervises them, and `param_server.py` serves the tuning UI. See
 [Split runtime](docs/runtime.md) for each process.
 
 `scripts/install_autostart.sh` installs a systemd unit that starts the runtime at
-boot in place of the stock launcher. `k230_recordd` records drives with the
+boot in place of the stock launcher. `recordd` records drives with the
 AX630C hardware HEVC encoder in the K230 recording format.
 
 ## Safety model
@@ -80,14 +79,14 @@ Every layer must agree before steering torque reaches the car:
 
 1. **Panda safety firmware** (`hyundaiCommunity`) enforces the Hyundai torque,
    rate, and driver-override limits and is never bypassed.
-2. **`k230_controlsd` gates** require a fresh model, a valid MPC solution, fresh
+2. **`controlsd` gates** require a fresh model, a valid MPC solution, fresh
    vehicle state, the right gear, a fastened seatbelt, and an explicit driver
    SET press. A failing gate shows its reason on the HUD.
 3. **Controller limits** cap the curvature at openpilot's `0.2 1/m` with a jerk
    limit, rate-limit the torque, and ramp it to zero before the MDPS fault angle.
-4. **`K230_PANDA_TX`** is the final transmit switch; the controller never
-   transmits on its own. On the MaixCAM2 the manager starts `k230_pandad` only
-   with `K230_ENABLE_PANDA=1`.
+4. **`EDGEPILOT_PANDA_TX`** is the final transmit switch; the controller never
+   transmits on its own. On the MaixCAM2 the manager starts `pandad` only
+   with `EDGEPILOT_ENABLE_PANDA=1`.
 
 ## Hardware
 
@@ -118,13 +117,13 @@ source; the Panda wiring is not finished yet.
    upload:
 
    ```sh
-   SUPERCOMBO_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh root@192.168.219.117
+   EDGEPILOT_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh root@192.168.219.117
    ```
 
 4. **Run.** On the board:
 
    ```sh
-   python3 /root/sc_run/k230_manager.py
+   python3 /root/edgepilot/manager.py
    ```
 
    The manager stops the stock launcher first. Tune parameters at

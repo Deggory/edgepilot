@@ -14,7 +14,7 @@ MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmod
 3. 변환(Pulsar2 6.0-lite, docker amd64):
    작업 디렉터리를 `/data`로 마운트하고 `pulsar2 build --config /data/pulsar2_u16_u8in.json`.
    U16 전체, 이미지 입력은 uint8(`input_processors`)이다. 결과 `build/core.axmodel`을
-   보드의 `/root/sc_run/models/supercombo.axmodel`로 올린다.
+   보드의 `/root/edgepilot/models/supercombo.axmodel`로 올린다.
 
 참고: Elu는 Pulsar2 6.0/7.0 모두 U16에서 잘못 컴파일돼서(0.9.4 모델) master 모델로 옮겼다.
 보드 NPU 추론은 약 8.5 ms다.

@@ -31,13 +31,13 @@
 #include <thread>
 #include <vector>
 
-/* 카메라 내부 파라미터 측정용 스틸 캡처(K230 k230_camcal의 k230_snapshot을 옮긴 것).
+/* 카메라 내부 파라미터 측정용 스틸 캡처(K230 camcal의 k230_snapshot을 옮긴 것).
  *
  * 런타임과 같은 MaixCamera 경로(센서 2560x1440 전체 화각을 크롭 없이 줄임, 보드
  * cam_flip/mirror, AI-ISP 설정)로 1920x1080을 받아, LCD에는 전체 화면을 원본 비율로
  * (위아래 검은 띠) 보여 주고, Func 키·화면 터치·터미널 Enter를 누르면 그 프레임을 무손실
  * PNG로 저장한다. 저장은 별도 스레드가 하므로 미리보기는 멈추지 않고, 파일이 디스크에
- * 쓰이면 확인음이 난다. 카메라를 독점하므로 supercombo 런타임을 먼저 멈춘다.
+ * 쓰이면 확인음이 난다. 카메라를 독점하므로 edgepilot 런타임을 먼저 멈춘다.
  *
  * 환경: CAMCAL_DIR(기본 /root/camcal/snapshots), CAMCAL_WIDTH/HEIGHT(1920/1080),
  * CAMCAL_FORMAT(png|jpg), CAMCAL_MAX_SHUTTER_US(기본 10000: 손떨림 번짐을 줄인다),
@@ -133,7 +133,7 @@ private:
 
     void save(const Shot &shot)
     {
-        const uint64_t start = k230_now_ns();
+        const uint64_t start = monotonic_now_ns();
         cv::Mat yuv(height_ * 3 / 2, width_, CV_8UC1, const_cast<uint8_t *>(shot.nv12.data()));
         const cv::Mat y = yuv.rowRange(0, height_);
         cv::Mat lap;
@@ -163,7 +163,7 @@ private:
             ::close(fd);
             return synced;
         }();
-        const double ms = (k230_now_ns() - start) / 1e6;
+        const double ms = (monotonic_now_ns() - start) / 1e6;
         if (ok) {
             ++saved;
             last_sharp = sharp;
@@ -283,7 +283,7 @@ int main()
         const std::string dir = env_string("CAMCAL_DIR", "/root/camcal/snapshots");
         const bool png = env_string("CAMCAL_FORMAT", "png") != "jpg";
         // MaixCamera가 읽는 최대 노출. 손에 들고 찍으므로 런타임(33 ms)보다 짧게 둔다.
-        setenv("SUPERCOMBO_MAX_SHUTTER_US", env_string("CAMCAL_MAX_SHUTTER_US", "10000").c_str(), 1);
+        setenv("EDGEPILOT_MAX_SHUTTER_US", env_string("CAMCAL_MAX_SHUTTER_US", "10000").c_str(), 1);
         make_dirs(dir);
         int index = next_index(dir);
 
@@ -303,7 +303,7 @@ int main()
                      width, height, dir.c_str(), png ? "png" : "jpg");
 
         uint64_t frames = 0, errors = 0, window_frames = 0;
-        uint64_t window_start = k230_now_ns(), flash_until = 0;
+        uint64_t window_start = monotonic_now_ns(), flash_until = 0;
         bool redraw = true, flashing = false, was_busy = false;
         while (!g_stop) {
             CmmBlock &slot = slots[frames % kSlots];
@@ -318,7 +318,7 @@ int main()
             bool quit = false;
             const int presses = inputs.poll(&quit);
             if (quit) break;
-            const uint64_t now = k230_now_ns();
+            const uint64_t now = monotonic_now_ns();
             if (presses > 0) {
                 if (saver.busy()) {
                     sound.play(AlertSoundId::unable);

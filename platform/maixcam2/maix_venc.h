@@ -2,7 +2,7 @@
 #define MAIXCAM2_VENC_H
 
 /* AX620E 하드웨어 비디오 인코더(VENC, H.264 또는 HEVC). 녹화는 H.264로 한다: 보드
- * 디코더(VDEC)가 H.264만 풀어서, 녹화한 주행을 그대로 리허설(k230_replayd)에 쓸 수 있다.
+ * 디코더(VDEC)가 H.264만 풀어서, 녹화한 주행을 그대로 리허설(replayd)에 쓸 수 있다.
  * 프레임 링 슬롯(CMM)을 IVPS로 자체 풀 블록에 복사한 뒤(인코더는 비동기로 읽으므로 camerad가 슬롯을 덮어써도 안전하다) 인코더에
  * 넣고, 나온 스트림을 Annex B 패킷으로 돌려준다. 파라미터 세트(SPS/PPS, HEVC면 VPS도)는 codec config로 따로 내고
  * 프레임 패킷에서는 뺀다(RecordingWriter가 세그먼트 앞에 붙인다). MSP SDK를 직접

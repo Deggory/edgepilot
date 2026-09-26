@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Solve MaixCAM2 camera intrinsics from checkerboard photos taken with k230_camcal.
+"""Solve MaixCAM2 camera intrinsics from checkerboard photos taken with camcal.
 
 The runtime warps model input with a plain pinhole intrinsic (fx, fy, cx, cy) and
 applies no distortion correction, so the headline result is those four numbers at

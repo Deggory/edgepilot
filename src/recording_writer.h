@@ -53,15 +53,15 @@ class RecordingWriter {
 public:
   RecordingWriter(std::string root, std::string params_directory,
                   unsigned width, unsigned height, unsigned fps,
-                  unsigned bitrate, K230VideoCodec codec);
+                  unsigned bitrate, VideoCodec codec);
   ~RecordingWriter();
 
   void set_enabled(bool enabled, uint64_t now_ns);
   void set_codec_config(const uint8_t *data, size_t size);
-  void write_encoded_frame(const K230RoadAiFrame &frame, const uint8_t *data,
+  void write_encoded_frame(const RoadAiFrame &frame, const uint8_t *data,
                            size_t size, bool keyframe);
-  void write_can(K230RecordType type, const K230CanBatch &batch);
-  void write_state(K230RecordType type, uint64_t timestamp_ns,
+  void write_can(RecordType type, const CanBatch &batch);
+  void write_state(RecordType type, uint64_t timestamp_ns,
                    const void *data, size_t size);
   void close();
 
@@ -86,8 +86,8 @@ private:
 
     Kind kind = Kind::Stop;
     uint64_t timestamp_ns = 0;
-    K230RecordType record_type = K230RecordType::ModelState;
-    K230RoadAiFrame frame{};
+    RecordType record_type = RecordType::ModelState;
+    RoadAiFrame frame{};
     bool keyframe = false;
     /* 인코딩 패킷, 상태 스냅샷, 또는 이미 디스크 형식으로 직렬화한 CAN 배치.
      * 배치를 값으로 품으면 항목마다 21.5 KB라 큐 상한이 램 절벽이 된다. */
@@ -97,14 +97,14 @@ private:
   void enqueue(PendingWrite &&write, bool force = false);
   void worker_loop();
   void process(PendingWrite &&write);
-  void write_encoded_frame_impl(const K230RoadAiFrame &frame,
+  void write_encoded_frame_impl(const RoadAiFrame &frame,
                                 const uint8_t *data, size_t size,
                                 bool keyframe);
   // 이벤트 레코드 하나(헤더 + 페이로드). CAN 배치와 상태 스냅샷이 같이 쓴다.
-  void write_record_impl(K230RecordType type, uint64_t timestamp_ns,
+  void write_record_impl(RecordType type, uint64_t timestamp_ns,
                          const void *data, size_t size);
   bool start_route(uint64_t now_ns);
-  bool open_segment(const K230RoadAiFrame &frame);
+  bool open_segment(const RoadAiFrame &frame);
   void close_segment();
   bool open_event_chunk(uint64_t now_ns);
   void close_event_chunk();
@@ -112,7 +112,7 @@ private:
   void write_manifest(bool complete) const;
   void snapshot_params() const;
   bool has_storage_reserve() const;
-  bool write_event_header(K230RecordType type, uint64_t timestamp_ns,
+  bool write_event_header(RecordType type, uint64_t timestamp_ns,
                           uint32_t payload_size);
   static FILE *open_buffered(const std::string &path);
 
@@ -126,7 +126,7 @@ private:
   unsigned height_ = 0;
   unsigned fps_ = 0;
   unsigned bitrate_ = 0;
-  K230VideoCodec codec_ = K230VideoCodec::H264;
+  VideoCodec codec_ = VideoCodec::H264;
   std::atomic<bool> requested_enabled_{false};
   std::atomic<bool> active_{false};
   std::atomic<bool> blocked_for_space_{false};

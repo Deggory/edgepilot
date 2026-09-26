@@ -39,9 +39,9 @@ MaixCamera::MaixCamera(int width, int height, int fps, bool nv12)
     vin.eHdrMode = AX_SNS_LINEAR_MODE;
     vin.eLoadRawNode = LOAD_RAW_IFE;
     /* AI-ISP(NPU 절반을 쓰는 AI 노이즈 제거). /boot/configs maix_npu_ai_isp가 켜져 있으면
-     * 미들웨어가 NPU를 가상 분할로 초기화하므로 같은 설정을 따른다(SUPERCOMBO_AI_ISP로
+     * 미들웨어가 NPU를 가상 분할로 초기화하므로 같은 설정을 따른다(EDGEPILOT_AI_ISP로
      * 덮어쓸 수 있다). 분할 NPU에서는 modeld가 코어 하나용(NPU1) 모델을 써야 한다. */
-    const char *ai_isp_env = std::getenv("SUPERCOMBO_AI_ISP");
+    const char *ai_isp_env = std::getenv("EDGEPILOT_AI_ISP");
     const bool ai_isp = ai_isp_env && ai_isp_env[0]
         ? std::atoi(ai_isp_env) != 0
         : maix::app::get_sys_config_kv("npu", "ai_isp", "0") == "1";
@@ -63,13 +63,13 @@ MaixCamera::MaixCamera(int width, int height, int fps, bool nv12)
      * 프레임 수에 비례하므로 30 fps에서 버리던 프레임의 처리 비용이 없어지고, 모델은
      * 정확히 50 ms 간격의 프레임을 받는다. 자동 노출은 켜진 채로 둔다(MaixCDK set_fps는
      * 노출을 프레임 전체로 고정해 영상이 날아간다). 최대 노출은 33 ms로 묶어 30 fps
-     * 때보다 움직임 번짐이 늘지 않게 한다(SUPERCOMBO_MAX_SHUTTER_US). */
+     * 때보다 움직임 번짐이 늘지 않게 한다(EDGEPILOT_MAX_SHUTTER_US). */
     AX_SNS_ATTR_T sns = {};
     if (AX_ISP_GetSnsAttr(0, &sns) == 0 && sns.fFrameRate != static_cast<AX_F32>(fps)) {
         sns.fFrameRate = static_cast<AX_F32>(fps);
         if (AX_ISP_SetSnsAttr(0, &sns) != 0) throw std::runtime_error("sensor frame rate change failed");
     }
-    const char *shutter_env = std::getenv("SUPERCOMBO_MAX_SHUTTER_US");
+    const char *shutter_env = std::getenv("EDGEPILOT_MAX_SHUTTER_US");
     const AX_U32 max_shutter = shutter_env ? static_cast<AX_U32>(std::atoi(shutter_env)) : 33333;
     AX_ISP_IQ_AE_PARAM_T ae = {};
     if (max_shutter > 0 && AX_ISP_IQ_GetAeParam(0, &ae) == 0 && ae.tAeAlgAuto.nMaxShutter > max_shutter) {

@@ -17,7 +17,7 @@ constexpr float kDefaultModelFy = 910.0f;
 constexpr float kDefaultModelCx = 256.0f;
 constexpr float kDefaultModelCy = 47.6f;
 /* MaixCAM2(ov_os04d10) 카메라 내부 파라미터, 1920x1080 기준. 런타임과 같은 카메라
- * 경로(k230_camcal: 센서 전체 화각 축소, 보드 cam_flip/mirror)로 65" TV 11x6
+ * 경로(camcal: 센서 전체 화각 축소, 보드 cam_flip/mirror)로 65" TV 11x6
  * 체스보드를 찍어 구했다(2026-09-26, 42장, 재투영 0.52 px, 1σ fx/fy ±2, cx ±2.6,
  * cy ±1.7; docs/camcal.md). 모든 출력 해상도가 센서 전체 화각의 축소라 비례 환산된다.
  * 왜곡(k1 -0.009, k2 0.013, k3 -0.021)은 평균 2.6 px라 워프는 핀홀로 둔다.
@@ -79,7 +79,7 @@ struct AppConfig {
     bool log_calibration = false;
     bool profile = false;
 
-    /* 카메라 내부 파라미터(1920x1080 기준). SUPERCOMBO_CAMERA_INTRINSICS="fx,fy,cx,cy"로
+    /* 카메라 내부 파라미터(1920x1080 기준). EDGEPILOT_CAMERA_INTRINSICS="fx,fy,cx,cy"로
      * 바꿀 수 있다(예: K230 녹화 리플레이에는 K230 카메라 값). input_warp_*는
      * 이 값을 캡처 해상도로 비례 환산한 것이다. */
     float camera_fx = kCameraFx;

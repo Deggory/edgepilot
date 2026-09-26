@@ -51,14 +51,14 @@ T read_at(const std::vector<uint8_t> &bytes, size_t offset) {
   return value;
 }
 
-K230CanBatch synthetic_batch(uint64_t timestamp_ns, uint32_t count, uint32_t dropped) {
-  K230CanBatch batch;
+CanBatch synthetic_batch(uint64_t timestamp_ns, uint32_t count, uint32_t dropped) {
+  CanBatch batch;
   batch.timestamp_ns = timestamp_ns;
   batch.valid = 1;
   batch.count = count;
   batch.dropped = dropped;
-  for (uint32_t i = 0; i < std::min<uint32_t>(count, kK230CanBatchMaxFrames); ++i) {
-    K230CanFrame &frame = batch.frames[i];
+  for (uint32_t i = 0; i < std::min<uint32_t>(count, kCanBatchMaxFrames); ++i) {
+    IpcCanFrame &frame = batch.frames[i];
     frame.address = 0x340 + i;
     frame.src = i % 3;
     frame.bus_time = 1000 + i;
@@ -78,30 +78,30 @@ TEST(RecordingWriter, RouteOnDisk) {
   mkdir(params.c_str(), 0775);
   std::ofstream(params + "/steering.json") << "{\"steer_max\": 384}\n";
   std::ofstream(params + "/notes.txt") << "not a param file\n";
-  setenv("K230_RECORD_STAGING", staging.c_str(), 1);
+  setenv("EDGEPILOT_RECORD_STAGING", staging.c_str(), 1);
 
   const uint64_t t0 = 5'000'000'000ULL;
   {
-    RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000, K230VideoCodec::H264);
+    RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000, VideoCodec::H264);
     writer.set_enabled(true, t0);
     const uint8_t codec_config[] = {'C', 'F', 'G', 0x01};
     writer.set_codec_config(codec_config, sizeof(codec_config));
     for (uint64_t i = 0; i < 3; ++i) {
-      K230RoadAiFrame frame;
+      RoadAiFrame frame;
       frame.frame_id = 100 + i;
       frame.timestamp_ns = t0 + i * 50'000'000ULL;
       std::vector<uint8_t> packet(64 + i * 16, static_cast<uint8_t>(0xA0 + i));
       writer.write_encoded_frame(frame, packet.data(), packet.size(), i == 0);
     }
-    writer.write_can(K230RecordType::CanRx, synthetic_batch(t0 + 10'000'000ULL, 3, 2));
-    writer.write_can(K230RecordType::CanTx, synthetic_batch(t0 + 20'000'000ULL, 300, 0));
-    writer.write_can(K230RecordType::ModelState, synthetic_batch(t0, 1, 0));  // 무시돼야 한다
+    writer.write_can(RecordType::CanRx, synthetic_batch(t0 + 10'000'000ULL, 3, 2));
+    writer.write_can(RecordType::CanTx, synthetic_batch(t0 + 20'000'000ULL, 300, 0));
+    writer.write_can(RecordType::ModelState, synthetic_batch(t0, 1, 0));  // 무시돼야 한다
     std::vector<uint8_t> control(240);
     for (size_t i = 0; i < control.size(); ++i) control[i] = static_cast<uint8_t>(i);
-    writer.write_state(K230RecordType::ControlState, t0 + 30'000'000ULL, control.data(),
+    writer.write_state(RecordType::ControlState, t0 + 30'000'000ULL, control.data(),
                        control.size());
     std::vector<uint8_t> panda(96, 0x5A);
-    writer.write_state(K230RecordType::PandaState, t0 + 40'000'000ULL, panda.data(),
+    writer.write_state(RecordType::PandaState, t0 + 40'000'000ULL, panda.data(),
                        panda.size());
     writer.set_enabled(false, t0 + 50'000'000ULL);
     writer.close();
@@ -119,15 +119,15 @@ TEST(RecordingWriter, RouteOnDisk) {
   // events/000.bin: 헤더 + CanRx(3) + CanTx(256으로 잘림) + 상태 2개
   const std::vector<uint8_t> events = read_file(route + "/events/000.bin");
   ASSERT_EQ(std::memcmp(events.data(), "K230LOG1", 8), 0) << "이벤트 로그 magic";
-  ASSERT_EQ(read_at<uint32_t>(events, 8), kK230RecordingVersion) << "이벤트 로그 버전";
+  ASSERT_EQ(read_at<uint32_t>(events, 8), kRecordingVersion) << "이벤트 로그 버전";
   const uint32_t header_size = read_at<uint32_t>(events, 12);
   // 이벤트 로그 헤더 크기와 route 시작 시각
-  ASSERT_EQ(header_size, sizeof(K230EventFileHeader));
+  ASSERT_EQ(header_size, sizeof(EventFileHeader));
   ASSERT_EQ(read_at<uint64_t>(events, 16), t0);
   size_t offset = header_size;
   struct Expected { uint16_t type; uint64_t ts; uint32_t payload; };
-  const size_t frame_bytes = sizeof(K230RecordedCanFrame);
-  const size_t batch_header = sizeof(K230RecordedCanBatchHeader);
+  const size_t frame_bytes = sizeof(RecordedCanFrame);
+  const size_t batch_header = sizeof(RecordedCanBatchHeader);
   const Expected expected[] = {
       {1, t0 + 10'000'000ULL, static_cast<uint32_t>(batch_header + 3 * frame_bytes)},
       {2, t0 + 20'000'000ULL, static_cast<uint32_t>(batch_header + 256 * frame_bytes)},
@@ -135,18 +135,18 @@ TEST(RecordingWriter, RouteOnDisk) {
       {5, t0 + 40'000'000ULL, 96},
   };
   for (const Expected &record : expected) {
-    const auto header = read_at<K230EventRecordHeader>(events, offset);
+    const auto header = read_at<EventRecordHeader>(events, offset);
     // 이벤트 레코드 헤더 순서
     ASSERT_EQ(header.type, record.type);
     ASSERT_EQ(header.timestamp_ns, record.ts);
     ASSERT_EQ(header.payload_size, record.payload);
     offset += sizeof(header);
     if (record.type == 1) {
-      const auto batch = read_at<K230RecordedCanBatchHeader>(events, offset);
+      const auto batch = read_at<RecordedCanBatchHeader>(events, offset);
       // CanRx 묶음 헤더
       ASSERT_EQ(batch.count, 3);
       ASSERT_EQ(batch.dropped, 2);
-      const auto frame1 = read_at<K230RecordedCanFrame>(events, offset + batch_header + frame_bytes);
+      const auto frame1 = read_at<RecordedCanFrame>(events, offset + batch_header + frame_bytes);
       // 기록된 CAN 프레임 필드
       ASSERT_EQ(frame1.address, 0x341);
       ASSERT_EQ(frame1.src, 1);
@@ -155,7 +155,7 @@ TEST(RecordingWriter, RouteOnDisk) {
       ASSERT_EQ(frame1.flags, 0x2);
       ASSERT_EQ(frame1.data[3], 11);
     } else if (record.type == 2) {
-      const auto batch = read_at<K230RecordedCanBatchHeader>(events, offset);
+      const auto batch = read_at<RecordedCanBatchHeader>(events, offset);
       // 256프레임을 넘는 묶음은 기록 형식의 최대치로 잘린다
       ASSERT_EQ(batch.count, 256);
       ASSERT_EQ(batch.dropped, 0);
@@ -172,18 +172,18 @@ TEST(RecordingWriter, RouteOnDisk) {
   ASSERT_EQ(video.size(), 4 + 64 + 80 + 96);
   ASSERT_EQ(std::memcmp(video.data(), "CFG", 3), 0);
   const std::vector<uint8_t> index = read_file(route + "/segments/000/frames.bin");
-  const auto index_header = read_at<K230FrameIndexHeader>(index, 0);
+  const auto index_header = read_at<FrameIndexHeader>(index, 0);
   // 프레임 인덱스 헤더
   ASSERT_EQ(std::memcmp(index_header.magic, "K230IDX1", 8), 0);
   ASSERT_EQ(index_header.width, 1280);
   ASSERT_EQ(index_header.height, 720);
   ASSERT_EQ(index_header.fps, 20);
-  ASSERT_EQ(index_header.record_size, sizeof(K230FrameIndexRecord));
+  ASSERT_EQ(index_header.record_size, sizeof(FrameIndexRecord));
   ASSERT_EQ(index_header.segment_start_ns, t0);
-  ASSERT_EQ(index.size(), sizeof(K230FrameIndexHeader) + 3 * sizeof(K230FrameIndexRecord))
+  ASSERT_EQ(index.size(), sizeof(FrameIndexHeader) + 3 * sizeof(FrameIndexRecord))
       << "패킷마다 인덱스 레코드 하나";
-  const auto second = read_at<K230FrameIndexRecord>(
-      index, sizeof(K230FrameIndexHeader) + sizeof(K230FrameIndexRecord));
+  const auto second = read_at<FrameIndexRecord>(
+      index, sizeof(FrameIndexHeader) + sizeof(FrameIndexRecord));
   // 프레임 인덱스 레코드의 오프셋이 스트림을 따른다
   ASSERT_EQ(second.frame_id, 101);
   ASSERT_EQ(second.encode_index, 1);

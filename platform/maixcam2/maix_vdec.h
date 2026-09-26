@@ -3,7 +3,7 @@
 
 /* AX620E 하드웨어 비디오 디코더(VDEC). 한 번에 한 프레임(Annex B)을 넣고, 디코딩된
  * NV12 프레임을 IVPS로 호출자의 CMM 블록(예: 프레임 링 슬롯)에 복사해 준다. 리허설
- * (k230_replayd)이 녹화 영상을 카메라처럼 재생할 때 쓴다. MSP SDK를 직접 쓰며 AX 헤더는
+ * (replayd)이 녹화 영상을 카메라처럼 재생할 때 쓴다. MSP SDK를 직접 쓰며 AX 헤더는
  * 이 파일 밖으로 새지 않는다. AX_SYS_Init은 생성자가 한다. */
 
 #include <cstddef>

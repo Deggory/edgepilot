@@ -30,7 +30,7 @@
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
-/* 책상 확인용: SIGUSR1을 받을 때마다 알림음을 차례로 하나씩 낸다(pkill -USR1 k230_overlayd). */
+/* 책상 확인용: SIGUSR1을 받을 때마다 알림음을 차례로 하나씩 낸다(pkill -USR1 overlayd). */
 volatile sig_atomic_t g_test_sound_requests = 0;
 
 void on_test_sound_signal(int) { ++g_test_sound_requests; }
@@ -92,7 +92,7 @@ public:
     {
         // OpenCV 스레드 풀은 대기 중에도 코어를 돌려서 modeld와 CPU를 다툰다.
         cv::setNumThreads(0);
-        // 차선 투영도 모델 워프와 같은 카메라 파라미터를 쓴다(SUPERCOMBO_CAMERA_INTRINSICS).
+        // 차선 투영도 모델 워프와 같은 카메라 파라미터를 쓴다(EDGEPILOT_CAMERA_INTRINSICS).
         projection_set_camera_intrinsics(config.camera_fx, config.camera_fy, config.camera_cx,
                                          config.camera_cy);
         default_projection_ = make_projection_state(config.manual_roll,
@@ -103,20 +103,20 @@ public:
 
     int run()
     {
-        if (!model_state_sub_.open(kK230ModelStateTopic, sizeof(K230ModelState), true))
+        if (!model_state_sub_.open(kModelStateTopic, sizeof(ModelState), true))
             throw std::runtime_error("open modelState ipc failed");
-        if (!panda_state_sub_.open(kK230PandaStateTopic, sizeof(K230PandaState), true))
+        if (!panda_state_sub_.open(kPandaStateTopic, sizeof(PandaState), true))
             throw std::runtime_error("open pandaState ipc failed");
-        if (!control_state_sub_.open(kK230ControlStateTopic, sizeof(K230ControlState), true))
+        if (!control_state_sub_.open(kControlStateTopic, sizeof(ControlState), true))
             throw std::runtime_error("open controlState ipc failed");
-        if (!manager_state_sub_.open(kK230ManagerStateTopic, sizeof(K230ManagerState), true))
+        if (!manager_state_sub_.open(kManagerStateTopic, sizeof(ManagerState), true))
             throw std::runtime_error("open managerState ipc failed");
-        if (!frame_sub_.open(kK230RoadAiFrameTopic, sizeof(K230RoadAiFrame), true))
+        if (!frame_sub_.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true))
             throw std::runtime_error("open roadAiFrame ipc failed");
 
-        uint64_t window_start = k230_now_ns();
+        uint64_t window_start = monotonic_now_ns();
         while (!g_stop) {
-            const uint64_t loop_start = k230_now_ns();
+            const uint64_t loop_start = monotonic_now_ns();
             pending_redraw_ = update_model() || pending_redraw_;
             pending_redraw_ = update_aux_state() || pending_redraw_;
             pending_redraw_ = update_turn_signal(loop_start) || pending_redraw_;
@@ -128,7 +128,7 @@ public:
                 draw_overlay();
             }
 
-            const uint64_t now = k230_now_ns();
+            const uint64_t now = monotonic_now_ns();
             if (now - window_start >= 1000000000ULL) {
                 const double seconds = (now - window_start) / 1e9;
                 hud_.preview_fps = static_cast<float>(preview_frames_ / seconds);
@@ -161,14 +161,14 @@ private:
      * 비율을 지키고, 투영(projection.cc)도 같은 영역을 640x480 화면에 담는다. */
     bool update_preview()
     {
-        K230RoadAiFrame meta;
+        RoadAiFrame meta;
         if (!frame_sub_.read_new(&last_frame_seq_, &meta, sizeof(meta), 0)) return false;
         if (!frame_ring_.valid() && !frame_ring_.open(false)) return false;
         if (meta.slot >= frame_ring_.slot_count()) {
             ++errors_;
             return false;
         }
-        const uint64_t start = profile_ ? k230_now_ns() : 0;
+        const uint64_t start = profile_ ? monotonic_now_ns() : 0;
         const unsigned long long phys = frame_ring_.slot_phys(meta.slot);
         /* IVPS가 CMM 슬롯을 직접 읽는다(복사 없음). 읽는 동안 camerad가 슬롯을
          * 덮어썼으면 화면에 올리기 전에 버린다. */
@@ -183,7 +183,7 @@ private:
             ++errors_;
             return false;
         }
-        if (profile_) present_stats_.add(k230_now_ns() - start);
+        if (profile_) present_stats_.add(monotonic_now_ns() - start);
         ++preview_frames_;
         return true;
     }
@@ -192,7 +192,7 @@ private:
      * 가로로 누르지 않는 640 폭 배치라 글꼴이 네이티브 픽셀에 정수 배율로 맞는다. */
     void draw_overlay()
     {
-        const uint64_t draw_start = profile_ ? k230_now_ns() : 0;
+        const uint64_t draw_start = profile_ ? monotonic_now_ns() : 0;
         uint8_t *buffer = display_.begin_overlay();
         if (!buffer) {
             ++errors_;
@@ -203,13 +203,13 @@ private:
         overlay_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
                       have_model_state_ ? latest_projection_ : default_projection_, hud_, false);
         if (!display_.end_overlay()) ++errors_;
-        if (profile_) overlay_stats_.add(k230_now_ns() - draw_start);
+        if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
         ++overlay_frames_;
     }
 
     /* 새 스냅샷이면 저장하고 true. */
     template <typename State>
-    static bool poll(K230LatestChannel &channel, State *state, uint64_t *seq)
+    static bool poll(LatestChannel &channel, State *state, uint64_t *seq)
     {
         State candidate;
         uint64_t candidate_seq = *seq;
@@ -225,9 +225,9 @@ private:
         if (!poll(model_state_sub_, &latest_model_state_, &latest_model_seq_)) return false;
         ++model_updates_;
         have_model_state_ = latest_model_state_.valid != 0 &&
-            fresh(latest_model_state_.model_timestamp_ns, k230_now_ns());
-        latest_output_ = k230_parsed_from_model_state(latest_model_state_);
-        latest_projection_ = k230_projection_from_model_state(latest_model_state_);
+            fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
+        latest_output_ = parsed_from_model_state(latest_model_state_);
+        latest_projection_ = projection_from_model_state(latest_model_state_);
         return true;
     }
 
@@ -284,7 +284,7 @@ private:
     /* 최신 스냅샷을 HUD 상태로 옮기고, control 이벤트 카운터로 토스트·알림을 낸다. */
     void refresh_hud_state()
     {
-        const uint64_t now = k230_now_ns();
+        const uint64_t now = monotonic_now_ns();
         const Freshness f = freshness(now);
         have_model_state_ = latest_model_state_.valid != 0 && f.model;
         hud_apply_panda_state(latest_panda_state_, f.panda, &hud_);
@@ -308,7 +308,7 @@ private:
         test_sounds_played_ = requests;
         const size_t i = static_cast<size_t>(requests - 1) % std::size(kOrder);
         sound_.play(kOrder[i]);
-        std::fprintf(stderr, "\nk230_overlayd: test sound %s\n", kNames[i]);
+        std::fprintf(stderr, "\noverlayd: test sound %s\n", kNames[i]);
     }
 
     /* 고른 알림을 소리 내고 기록한다. engage 거부는 토스트도 띄운다. 알렸으면 true. */
@@ -324,15 +324,15 @@ private:
         if (decision.alert == OverlayAlert::none) return false;
         sound_.play(kSounds[static_cast<int>(decision.alert)]);
         if (decision.alert == OverlayAlert::unable) {
-            const K230ControlState &c = latest_control_state_;
+            const ControlState &c = latest_control_state_;
             std::snprintf(hud_.engage_alert_message, sizeof(hud_.engage_alert_message),
                           "UNABLE TO ENGAGE: %s", engage_block_text(c.engage_reject_block));
             engage_alert_until_ns_ = now + kEngageAlertNs;
-            std::fprintf(stderr, "k230_overlayd: alert=unable event=%u block=%s\n",
+            std::fprintf(stderr, "overlayd: alert=unable event=%u block=%s\n",
                          decision.event_id, c.engage_reject_block);
             return true;
         }
-        std::fprintf(stderr, "k230_overlayd: alert=%s event=%u\n",
+        std::fprintf(stderr, "overlayd: alert=%s event=%u\n",
                      kAlertNames[static_cast<int>(decision.alert)], decision.event_id);
         return true;
     }
@@ -351,7 +351,7 @@ private:
             alert_state_initialized_ = true;
         } else if (unavailable && !previous_unavailable_ && !suppressed) {
             sound_.play(AlertSoundId::unavailable);
-            std::fprintf(stderr, "k230_overlayd: alert=unavailable\n");
+            std::fprintf(stderr, "overlayd: alert=unavailable\n");
         }
         previous_unavailable_ = unavailable;
     }
@@ -370,13 +370,13 @@ private:
     int test_sounds_played_ = 0;
     bool profile_ = false;
 
-    K230LatestChannel model_state_sub_;
-    K230LatestChannel panda_state_sub_;
-    K230LatestChannel control_state_sub_;
-    K230LatestChannel manager_state_sub_;
-    K230LatestChannel frame_sub_;
+    LatestChannel model_state_sub_;
+    LatestChannel panda_state_sub_;
+    LatestChannel control_state_sub_;
+    LatestChannel manager_state_sub_;
+    LatestChannel frame_sub_;
     MaixDisplay display_;
-    K230FrameRing frame_ring_;
+    FrameRing frame_ring_;
     uint64_t last_frame_seq_ = 0;
     uint64_t last_overlay_draw_ns_ = 0;
 
@@ -384,10 +384,10 @@ private:
     uint64_t latest_panda_seq_ = 0;
     uint64_t latest_control_seq_ = 0;
     uint64_t latest_manager_seq_ = 0;
-    K230ModelState latest_model_state_ {};
-    K230PandaState latest_panda_state_ {};
-    K230ControlState latest_control_state_ {};
-    K230ManagerState latest_manager_state_ {};
+    ModelState latest_model_state_ {};
+    PandaState latest_panda_state_ {};
+    ControlState latest_control_state_ {};
+    ManagerState latest_manager_state_ {};
     ParsedModelOutput latest_output_ {};
     ProjectionState latest_projection_ {};
     ProjectionState default_projection_ {};
@@ -424,7 +424,7 @@ int main()
         OverlayDisplay app(config);
         return app.run();
     } catch (const std::exception &e) {
-        std::fprintf(stderr, "k230_overlayd error: %s\n", e.what());
+        std::fprintf(stderr, "overlayd error: %s\n", e.what());
         return 1;
     }
 }

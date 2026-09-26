@@ -11,8 +11,8 @@
  * 앰프가 계속 켜져 있어 첫 음이 잘리지 않는다. 파이프와 ALSA 버퍼를 작게 잡아 지연은
  * 0.1초 안쪽이다. 새 알림은 재생 중인 알림을 끊는다. aplay가 죽으면 소리 스레드가 다시
  * 띄운다.
- * 환경: K230_ALERT_SOUND=0이면 끈다, K230_ALERT_VOLUME(0~100, 기본 70),
- * K230_ALERT_PCM(ALSA 장치, 기본 plughw:0,1). */
+ * 환경: EDGEPILOT_ALERT_SOUND=0이면 끈다, EDGEPILOT_ALERT_VOLUME(0~100, 기본 70),
+ * EDGEPILOT_ALERT_PCM(ALSA 장치, 기본 plughw:0,1). */
 
 #include <atomic>
 #include <cstdint>

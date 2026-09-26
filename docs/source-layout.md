@@ -7,9 +7,9 @@
 - `src/app_config.*`
   - parses the small runtime option set once at startup, and holds the
     MaixCAM2 camera intrinsics, the capture size, and the 4:3 preview crop
-    shared by `k230_overlayd` and `projection`.
+    shared by `overlayd` and `projection`.
 - `src/replay_source.*`
-  - reads `SCNV12R1` replay files into `Nv12Frame` for `k230_modeld` replay
+  - reads `SCNV12R1` replay files into `Nv12Frame` for `modeld` replay
     mode. POSIX only.
 
 ## MaixCAM2 platform
@@ -104,7 +104,7 @@ only in the board build, against `deps/ax630` from
 - `src/control_block.h`
   - the engage/steer block reasons as one table: enum, wire name, HUD label,
     and kind (reject / hard disengage / transient Panda handshake /
-    availability). The controller decides in `BlockReason`, `K230ControlState`
+    availability). The controller decides in `BlockReason`, `ControlState`
     carries the wire name so recordings and the Python readers stay text, and
     `overlay_state` labels it from the same rows. `gtest_overlay_state` proves
     every reason has a label.
@@ -113,7 +113,7 @@ only in the board build, against `deps/ax630` from
 
 `src/control_holds.*` implements both holds as `PandaHealthGate` and
 `PathHoldGate`; `gtest_control_replay` exercises their boundaries.
-`k230_controlsd` tolerates a single malformed plan frame by holding the last
+`controlsd` tolerates a single malformed plan frame by holding the last
 usable path for at most 150 ms; the normal 250 ms model freshness timeout remains
 a hard safety gate, so a stale or invalid model still removes control. A
 transient Panda health-snapshot gap is similarly limited to 100 ms; a fresh,
@@ -125,9 +125,9 @@ released after that short hold if they persist.
 - `src/ipc_messages.*`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the `K230*State` snapshots with their `static_assert`s, and the
-    `ParsedModelOutput` ↔ `K230ModelState` marshalling. Recording v5 stores
-    `K230ModelState`, `K230ControlState`, and `K230PandaState` as-is, so their
-    offsets are pinned here and tied to `kK230RecordingVersion`. Code that only
+    `ParsedModelOutput` ↔ `ModelState` marshalling. Recording v5 stores
+    `ModelState`, `ControlState`, and `PandaState` as-is, so their
+    offsets are pinned here and tied to `kRecordingVersion`. Code that only
     reads or fills a message includes this and nothing else.
 - `src/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
@@ -135,48 +135,48 @@ released after that short hold if they persist.
     The frame ring (version 5) keeps only its header in shm; the slots are
     camerad's CMM blocks, listed by physical address, each with a seqlock that
     hardware readers check before and after reading.
-- `src/k230_camerad.cc`, `src/k230_modeld.cc`, `src/k230_overlayd.cc`
+- `src/camerad.cc`, `src/modeld.cc`, `src/overlayd.cc`
   - openpilot-style process split: capture into the ring, model, and the
-    two-layer LCD HUD. The `k230_` names are kept from the K230 runtime.
+    two-layer LCD HUD.
 - `src/overlay_renderer.*`
   - draws the HUD (panels, plan/lane/road-edge ribbons, lead marker, turn
     signals, alerts, traffic-signal sprites) with OpenCV into a straight-alpha
     BGRA buffer. `HudLayout` picks the compact 640-wide layout (208 px panels)
     or the 800-wide K230 layout by target width; lanes, path, and markers are
     anti-aliased. Stateless apart from the preloaded sprites; the turn-signal
-    phase comes from `k230_overlayd`.
+    phase comes from `overlayd`.
 - `src/overlay_state.*`
   - `OverlayHudState`, the `K230*State` → `OverlayHudState` mapping shared by
-    `k230_overlayd` and `hud_snapshot`, the engage-block label table, and
+    `overlayd` and `hud_snapshot`, the engage-block label table, and
     `OverlayAlertEvents`, which turns the controlsd event counters into the one
     toast/log alert a frame may raise (baseline on first sight, rebaseline on a
     controlsd restart, reject > engage > disengage > departure). No OpenCV, so
     `gtest_overlay_state` pins all of it on the host.
 - `src/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling into `OverlayHudState`, called
-    at 1 Hz by `k230_overlayd`.
+    at 1 Hz by `overlayd`.
 - `src/recording_writer.*`, `src/recording_format.h`
   - the event-log writer and on-disk contract of the K230 recorder, kept for
     the recorder port and for the host tools that read K230 drives.
     `gtest_recording_writer` pins the layout; `recording_format.h`
-    (`kK230RecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
+    (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
     is mirrored by `tools/model/recording_reader.py`. No process uses it on the
     MaixCAM2 yet.
-- `src/panda_client.*`, `src/panda_can_codec.*`, `src/k230_pandad.cc`
+- `src/panda_client.*`, `src/panda_can_codec.*`, `src/pandad.cc`
   - optional panda USB bridge. It handles USB, health, heartbeat, receive CAN,
     and the final TX gate, but does not generate vehicle control messages.
-- `src/k230_controlsd.cc`
+- `src/controlsd.cc`
   - standalone K7 YG HEV lateral controller using the validated Hyundai CAN bus
     split, torque limits, counters, checksums, 60 kph MDPS helper, and a 20 Hz
     planner worker separated from the 100 Hz control loop.
-- `scripts/k230_manager.py`
+- `scripts/manager.py`
   - minimal supervisor and heartbeat publisher. It is intentionally not a full
     openpilot manager clone. It stops the stock launcher, switches USB-C to host
     for the Panda, and one table in start order decides which processes run
-    (`K230_ENABLE_CONTROL`, `K230_ENABLE_PANDA`, `K230_ENABLE_PARAM_SERVER`) and
+    (`EDGEPILOT_ENABLE_CONTROL`, `EDGEPILOT_ENABLE_PANDA`, `EDGEPILOT_ENABLE_PARAM_SERVER`) and
     with what nice value.
-- `scripts/k230_param_server.py`, `scripts/display_control.py`
-  - the FastAPI parameter editor (`K230_ENABLE_PARAM_SERVER`) and the
+- `scripts/param_server.py`, `scripts/display_control.py`
+  - the FastAPI parameter editor (`EDGEPILOT_ENABLE_PARAM_SERVER`) and the
     MaixCAM2 backlight helper it calls (PWM3).
 
 ## Scripts and tools
@@ -219,11 +219,11 @@ released after that short hold if they persist.
 - `src/utils_process.h`
   - what a process gets from the OS: environment variables (`env_flag` is the
     one boolean convention), the `params/` directory path, and the
-    SIGINT/SIGTERM → stop-flag hookup used by every `k230_*d` main.
+    SIGINT/SIGTERM → stop-flag hookup used by every `*d` main.
 - `src/utils_math.h`
   - clamping, openpilot `interp`, degree/radian conversion.
 - `src/utils_time.h`
-  - `k230_now_ns` (`CLOCK_BOOTTIME`), the clock behind every timestamp that
+  - `monotonic_now_ns` (`CLOCK_BOOTTIME`), the clock behind every timestamp that
     crosses a process boundary, and the freshness predicates for ns and
     CAN-seconds timestamps. Per-process scheduling may still use
     `std::chrono::steady_clock`.

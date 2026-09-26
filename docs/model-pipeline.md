@@ -2,8 +2,8 @@
 
 [← Documentation index](../README.md)
 
-`k230_camerad` captures `NV12 1280x720` into the CMM frame ring. On every frame
-(20 Hz), `k230_modeld` warps the newest slot into independent `512x256` medmodel
+`camerad` captures `NV12 1280x720` into the CMM frame ring. On every frame
+(20 Hz), `modeld` warps the newest slot into independent `512x256` medmodel
 and sbigmodel views, pushes them into the per-tower image histories, runs the
 openpilot master supercombo core on the AX630C NPU, and publishes compact
 `modelState`.
@@ -12,7 +12,7 @@ openpilot master supercombo core on the AX630C NPU, and publishes compact
 | --- | --- |
 | GDC warp, both views | ~1 ms |
 | NPU inference | ~8.5 ms |
-| whole `k230_modeld` frame | ~12.5 ms |
+| whole `modeld` frame | ~12.5 ms |
 
 The K230 ran openpilot v0.9.4 as an nncase kmodel in 27.7 ms of KPU time; that
 pipeline is not part of this branch.
@@ -23,7 +23,7 @@ The model is the openpilot master `driving_supercombo` with its history queues
 cut off, compiled with Pulsar2 6.0 as a U16 axmodel whose image inputs are
 uint8. How it is built is in
 [tools/model/axmodel](../tools/model/axmodel/README.md); the resulting file is
-not in the repository and is uploaded with `SUPERCOMBO_AXMODEL=...
+not in the repository and is uploaded with `EDGEPILOT_AXMODEL=...
 scripts/upload_to_board.sh`. `src/ax_engine_session.*` wraps `libax_engine`
 (the board image ships no engine headers, so `src/ax_engine_api.h` declares the
 API) with a cached CMM buffer per tensor.
@@ -37,7 +37,7 @@ traffic_convention  [1, 2]             float   constant (right-hand traffic)
 -> outputs          [1, 2576]          float
 ```
 
-`k230_modeld` checks every name, shape, dtype, and buffer size at load and
+`modeld` checks every name, shape, dtype, and buffer size at load and
 refuses any other model, so a mismatched axmodel fails loudly instead of being
 misparsed.
 
@@ -72,7 +72,7 @@ path), followed by packing into the YUV6 plane order
   history slot. Against the CPU warp, Y differs by at most 1 LSB and U/V by
   0.4 LSB on average; on a K230 replay the plan lateral offset at 2 s against
   the fp32 host reference differs by 0.0005 m.
-- **CPU (`SUPERCOMBO_WARP_CPU=1`, NV21 frames, or GDC unavailable).**
+- **CPU (`EDGEPILOT_WARP_CPU=1`, NV21 frames, or GDC unavailable).**
   `src/model_input_transform.*` fuses the homography sampling with YUV6
   packing through compact fixed-point lookup tables (12-bit weights). The wide
   tower is warped on the second core. The ring slot is mapped uncached for this
@@ -90,7 +90,7 @@ The source intrinsics are scaled from the measured `1920x1080` MaixCAM2
 - **At 1280x720** (the capture size) that is `fx=754.2`, `fy=753.9`,
   `cx=626.8`, `cy=368.4`.
 - **Measurement:** 42 photos of an 11x6 inner-corner chessboard on a 65" TV, taken
-  with `k230_camcal` through the runtime's camera path (0.52 px RMS; see
+  with `camcal` through the runtime's camera path (0.52 px RMS; see
   [camcal](camcal.md)).
 - **Earlier values:** `tools/calib/maixcam2_os04d10_intrinsics.json` came from the
   stock camera app. It agrees on focal length, but `cx` differs by 7 px.
@@ -104,7 +104,7 @@ was trained on.
 
 `tools/calib/warp_preview.py` shows what the model sees from a captured frame:
 both model views and their footprints on the source image.
-`SUPERCOMBO_CAMERA_INTRINSICS` overrides the matrix, for example with the K230
+`EDGEPILOT_CAMERA_INTRINSICS` overrides the matrix, for example with the K230
 camera (`1583.3981,1583.7622,954.9441,545.1774`) to replay K230 recordings.
 
 ## Model output

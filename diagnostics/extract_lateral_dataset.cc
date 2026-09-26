@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
       static_cast<float>(params.steer_max);
 
   VehicleCanState vehicle{};
-  K230ModelState model{};
+  ModelState model{};
   bool have_model = false;
   double model_time_s = -1.0;
   float bank = 0.0f;
@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
   std::vector<char> buf;
   for (int arg = 2; arg < argc; ++arg) {
     std::ifstream file(argv[arg], std::ios::binary);
-    K230EventFileHeader hdr{};
+    EventFileHeader hdr{};
     file.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
     if (!file || std::memcmp(hdr.magic, "K230LOG1", 8) != 0) {
       std::fprintf(stderr, "skip %s: not an event file\n", argv[arg]);
@@ -86,11 +86,11 @@ int main(int argc, char **argv) {
     }
     file.seekg(hdr.header_size);
 
-    K230EventRecordHeader rh{};
+    EventRecordHeader rh{};
     while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
       /* 8-19 route처럼 tmpfs가 차서 끊긴 파일은 0으로 채워진 구간이 남는다.
        * 재동기화를 시도하지 않고 그 파일을 거기서 끝낸다. */
-      if (rh.type < 1 || rh.type > static_cast<uint16_t>(K230RecordType::LearnerState) ||
+      if (rh.type < 1 || rh.type > static_cast<uint16_t>(RecordType::LearnerState) ||
           rh.payload_size > (1U << 20)) {
         std::fprintf(stderr, "%s: truncated at %lld bytes (type=%u len=%u)\n",
                      argv[arg],
@@ -104,14 +104,14 @@ int main(int argc, char **argv) {
       const double now_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
       if (route_start_s < 0.0) route_start_s = now_s;
 
-      if (rh.type == static_cast<uint16_t>(K230RecordType::CanRx)) {
-        K230RecordedCanBatchHeader batch{};
+      if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
+        RecordedCanBatchHeader batch{};
         if (rh.payload_size < sizeof(batch)) continue;
         std::memcpy(&batch, buf.data(), sizeof(batch));
         size_t offset = sizeof(batch);
         for (uint32_t i = 0; i < batch.count; ++i) {
-          if (offset + sizeof(K230RecordedCanFrame) > rh.payload_size) break;
-          K230RecordedCanFrame frame{};
+          if (offset + sizeof(RecordedCanFrame) > rh.payload_size) break;
+          RecordedCanFrame frame{};
           std::memcpy(&frame, buf.data() + offset, sizeof(frame));
           offset += sizeof(frame);
           if (frame.data_len > 8) continue;
@@ -124,19 +124,19 @@ int main(int argc, char **argv) {
         continue;
       }
 
-      if (rh.type == static_cast<uint16_t>(K230RecordType::ModelState) &&
-          rh.payload_size >= sizeof(K230ModelState)) {
+      if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
+          rh.payload_size >= sizeof(ModelState)) {
         std::memcpy(&model, buf.data(), sizeof(model));
         have_model = model.valid != 0;
         model_time_s = now_s;
         continue;
       }
 
-      if (rh.type != static_cast<uint16_t>(K230RecordType::ControlState) ||
-          rh.payload_size < sizeof(K230ControlState)) {
+      if (rh.type != static_cast<uint16_t>(RecordType::ControlState) ||
+          rh.payload_size < sizeof(ControlState)) {
         continue;
       }
-      K230ControlState cs{};
+      ControlState cs{};
       std::memcpy(&cs, buf.data(), sizeof(cs));
 
       const float v = vehicle_speed_kph(vehicle, now_s, kVehicleTimeoutS) / 3.6f;

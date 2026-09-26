@@ -48,27 +48,27 @@ int main(int argc, char **argv) {
   bool have_cs = false;
   for (size_t a = 1; a < positional.size(); ++a) {
     std::ifstream f(positional[a], std::ios::binary);
-    K230EventFileHeader hdr{};
+    EventFileHeader hdr{};
     f.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
     if (std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
     f.seekg(hdr.header_size);
-    K230EventRecordHeader rh{};
+    EventRecordHeader rh{};
     std::vector<char> buf;
     while (f.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
       buf.resize(rh.payload_size);
       if (!f.read(buf.data(), rh.payload_size)) break;
-      if (rh.type == static_cast<uint16_t>(K230RecordType::ControlState) &&
-          rh.payload_size >= sizeof(K230ControlState)) {
-        K230ControlState cs{};
+      if (rh.type == static_cast<uint16_t>(RecordType::ControlState) &&
+          rh.payload_size >= sizeof(ControlState)) {
+        ControlState cs{};
         std::memcpy(&cs, buf.data(), sizeof(cs));
         v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
         measured = cs.actual_curvature;
         des_rec = cs.desired_curvature;
         have_cs = true;
-      } else if (rh.type == static_cast<uint16_t>(K230RecordType::ModelState) &&
-                 rh.payload_size >= sizeof(K230ModelState)) {
+      } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
+                 rh.payload_size >= sizeof(ModelState)) {
         if (!have_cs) continue;
-        K230ModelState ms{};
+        ModelState ms{};
         /* v4 이하 녹화는 plan 뒤에 stds/orientations(792 B), v3 이하는 lead 뒤에
          * stop_line(28 B)이 더 있다(구 페이로드 4080 B, 꼬리 패딩 4 B 포함).
          * 통째로 복사하면 차선 필드가 792 B 어긋난다. */
@@ -76,8 +76,8 @@ int main(int argc, char **argv) {
         const size_t lead_extra = hdr.version <= 3 ? 28 : 0;
         if (rh.payload_size < sizeof(ms) + plan_extra + lead_extra) continue;
         const char *src = buf.data();
-        const size_t lanes_off = offsetof(K230ModelState, lanes);
-        const size_t pose_off = offsetof(K230ModelState, pose);
+        const size_t lanes_off = offsetof(ModelState, lanes);
+        const size_t pose_off = offsetof(ModelState, pose);
         std::memcpy(&ms, src, lanes_off);
         std::memcpy(reinterpret_cast<char *>(&ms) + lanes_off, src + lanes_off + plan_extra,
                     pose_off - lanes_off);

@@ -4,7 +4,7 @@
 
 #include <memory>
 
-struct K230ModelState;
+struct ModelState;
 struct DrivingParams;
 struct SteeringParams;
 struct VehicleCanState;
@@ -21,7 +21,7 @@ public:
   void update_params(const SteeringParams &params,
                      const DrivingParams &driving);
 
-  LateralTarget update(const K230ModelState &model,
+  LateralTarget update(const ModelState &model,
                        const VehicleCanState &vehicle, float v_ego,
                        float measured_curvature, bool active,
                        float output_scale);

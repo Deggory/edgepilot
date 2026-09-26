@@ -29,7 +29,7 @@ struct PandaGateOutput {
 
 class PandaHealthGate {
 public:
-  PandaGateOutput update(const K230PandaState &state, uint64_t now_ns, bool force_engaged);
+  PandaGateOutput update(const PandaState &state, uint64_t now_ns, bool force_engaged);
 
 private:
   bool have_last_ready_ = false;
@@ -45,7 +45,7 @@ struct PathHoldOutput {
 
 class PathHoldGate {
 public:
-  PathHoldOutput update(const K230ModelState &model, uint64_t now_ns, uint64_t model_timeout_ns);
+  PathHoldOutput update(const ModelState &model, uint64_t now_ns, uint64_t model_timeout_ns);
 
 private:
   LateralPath last_usable_;

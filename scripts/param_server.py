@@ -36,9 +36,9 @@ else:
     from display_control import DisplayBacklight
 
 
-CONTROLSD_NAME = "k230_controlsd"
-RECORDD_NAME = "k230_recordd"
-# 파라미터 파일 경로는 K230_PARAMS_DIR 하나로만 바꾼다. 파일별 override는
+CONTROLSD_NAME = "controlsd"
+RECORDD_NAME = "recordd"
+# 파라미터 파일 경로는 EDGEPILOT_PARAMS_DIR 하나로만 바꾼다. 파일별 override는
 # 그 디렉터리 설정과 중복이라 없앴다.
 GROUP_FILES = {
     "steering": "steering.json",
@@ -409,7 +409,7 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
 
 
 def configured_paths() -> Dict[str, Path]:
-    params_dir = Path(os.environ.get("K230_PARAMS_DIR", "params"))
+    params_dir = Path(os.environ.get("EDGEPILOT_PARAMS_DIR", "params"))
     return {
         group: params_dir / filename
         for group, filename in GROUP_FILES.items()
@@ -417,7 +417,7 @@ def configured_paths() -> Dict[str, Path]:
 
 
 def configured_default_paths() -> Dict[str, Path]:
-    params_dir = Path(os.environ.get("K230_PARAM_DEFAULTS_DIR", "params.defaults"))
+    params_dir = Path(os.environ.get("EDGEPILOT_PARAM_DEFAULTS_DIR", "params.defaults"))
     return {
         group: params_dir / filename
         for group, filename in GROUP_FILES.items()
@@ -604,10 +604,10 @@ class ParamStore:
 
 # ---------------------------------------------------------------- 학습 상태(paramsd·torqued)
 
-LEARNER_STATE_PATH = os.environ.get("K230_LEARNER_STATE_PATH", "/dev/shm/k230_learner_state")
+LEARNER_STATE_PATH = os.environ.get("EDGEPILOT_LEARNER_STATE_PATH", "/dev/shm/edgepilot_learner_state")
 IPC_MAGIC = 0x4B323349
-IPC_HEADER = struct.Struct("<IIIIQQII")  # K230IpcHeader; seq가 홀수면 쓰는 중
-# K230LearnerState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ offsetof와 대조한다.
+IPC_HEADER = struct.Struct("<IIIIQQII")  # IpcHeader; seq가 홀수면 쓰는 중
+# LearnerState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ offsetof와 대조한다.
 LEARNER_FIELDS = (
     ("timestamp_ns", "Q"), ("flags", "I"),
     ("steer_ratio", "f"), ("stiffness_factor", "f"), ("roll_rad", "f"),
@@ -622,7 +622,7 @@ LEARNER_FIELDS = (
     ("bucket_points", "8h"), ("reserved", "I"),
 )
 LEARNER_STATE = struct.Struct("<" + "".join(fmt for _, fmt in LEARNER_FIELDS))
-LEARNER_FLAGS = (  # ipc_messages.h kK230Learner* 비트 순서
+LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
     "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
     "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored",
@@ -644,12 +644,12 @@ def decode_learner_state(payload: bytes) -> Dict[str, Any]:
 
 
 def boottime_ns() -> int:
-    clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)  # k230_now_ns와 같은 시계
+    clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)  # monotonic_now_ns와 같은 시계
     return time.clock_gettime_ns(clock)
 
 
 class LearnerStateReader:
-    """controlsd의 /k230_learner_state를 읽기 전용으로 연다. 파일이 다시 만들어지면 새로 연다."""
+    """controlsd의 /edgepilot_learner_state를 읽기 전용으로 연다. 파일이 다시 만들어지면 새로 연다."""
 
     def __init__(self, path: str = LEARNER_STATE_PATH):
         self.path = path
@@ -1863,9 +1863,9 @@ def main() -> None:
     import uvicorn
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default=os.environ.get("K230_PARAM_HOST", "0.0.0.0"))
+    parser.add_argument("--host", default=os.environ.get("EDGEPILOT_PARAM_HOST", "0.0.0.0"))
     parser.add_argument(
-        "--port", type=int, default=int(os.environ.get("K230_PARAM_PORT", "8080"))
+        "--port", type=int, default=int(os.environ.get("EDGEPILOT_PARAM_PORT", "8080"))
     )
     args = parser.parse_args()
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")

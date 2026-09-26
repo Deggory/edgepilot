@@ -13,7 +13,7 @@ struct Nv12Frame {
     std::vector<uint8_t> data;
 };
 
-/* SCNV12R1 리플레이 파일의 NV12 프레임 소스. k230_modeld의 헤드리스 재생용. */
+/* SCNV12R1 리플레이 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용. */
 class ReplayNv12Source {
 public:
     explicit ReplayNv12Source(const std::string &path);

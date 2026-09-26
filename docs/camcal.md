@@ -3,7 +3,7 @@
 [← Documentation index](../README.md)
 
 This measures the MaixCAM2 camera's pinhole intrinsics (`fx fy cx cy`) from photos
-of a checkerboard shown on a 65" 4K TV. It is a port of the K230 `k230_camcal`
+of a checkerboard shown on a 65" 4K TV. It is a port of the K230 `camcal`
 workflow. The runtime uses these values for the model input warp and the HUD
 projection (`src/app_config.h` `kCamera*`, given at 1920x1080).
 
@@ -11,7 +11,7 @@ projection (`src/app_config.h` `kCamera*`, given at 1920x1080).
 tools/camcal/calib_checkerboard_65in_4k.png   target to show on the TV
         |
         v  photographed with the Func button
-k230_camcal (board)                           LCD preview + shutter -> PNG
+camcal (board)                           LCD preview + shutter -> PNG
         |
         v
 tools/camcal/calibrate_intrinsics.py          detect corners, solve fx/fy/cx/cy
@@ -19,7 +19,7 @@ tools/camcal/calibrate_intrinsics.py          detect corners, solve fx/fy/cx/cy
 
 ## Capture app
 
-`k230_camcal` opens the camera through the same `MaixCamera` path as the runtime,
+`camcal` opens the camera through the same `MaixCamera` path as the runtime,
 so the geometry matches:
 
 - It uses the full 2560x1440 sensor field scaled to 1920x1080, with no crop.
@@ -42,10 +42,10 @@ camera:
   meanwhile. A press during a save is refused with the "unable" tone.
 - **Files:** they go to `/root/camcal/snapshots/snap_NNNN_<time>.png`. Numbering
   continues from the files already there.
-- **When done:** run `systemctl stop camcal && systemctl start supercombo`.
+- **When done:** run `systemctl stop camcal && systemctl start edgepilot`.
 
 To run it in the foreground over SSH instead, run
-`systemctl stop supercombo && /root/sc_run/k230_camcal`. Enter or space then also
+`systemctl stop edgepilot && /root/edgepilot/camcal`. Enter or space then also
 takes a shot, and `q` quits.
 
 Each saved shot is logged with its Laplacian-variance sharpness:
@@ -112,7 +112,7 @@ The solver prints `fx fy cx cy` at the capture size, the difference from the
 runtime `kCamera*`, the field of view, the distortion terms, and the worst views.
 The runtime warp is pinhole only. Put the four numbers, which are at 1920x1080,
 into `src/app_config.h` `kCamera*`. They can also be set per run with
-`SUPERCOMBO_CAMERA_INTRINSICS=fx,fy,cx,cy`.
+`EDGEPILOT_CAMERA_INTRINSICS=fx,fy,cx,cy`.
 
 ## 2026-09-26 measurement
 

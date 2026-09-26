@@ -3,7 +3,7 @@
 
   hud_tools.py inputs <route_dir> <out_dir> [--time SECONDS]
       Extract hud_snapshot inputs from a recordd route: model.bin (raw
-      K230ModelState, 3256 bytes), control.bin (raw K230ControlState padded to
+      ModelState, 3256 bytes), control.bin (raw ControlState padded to
       240 bytes) and camera.png (the matching road frame). Without --time the
       moment is chosen automatically: controller active, 40-95 km/h, all lane
       lines confident, a lead if any.
@@ -32,7 +32,7 @@ from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa:
                               iter_event_records, route_event_files,
                               route_segments, segment_video)
 
-MODEL_STATE_SIZE = 3256   # hud_snapshot replays the v5 K230ModelState only
+MODEL_STATE_SIZE = 3256   # hud_snapshot replays the v5 ModelState only
 CONTROL_STATE_SIZE = 240
 FRAME_MAGIC = b"K230ARGB"
 LOGICAL = (800, 480)

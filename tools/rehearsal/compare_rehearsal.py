@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare an on-board rehearsal recording with the route it replayed.
 
-The rehearsal (k230_replayd) feeds a recorded route's camera and CAN to the
+The rehearsal (replayd) feeds a recorded route's camera and CAN to the
 MaixCAM2 runtime, which records its own route. Both routes carry the same CAN
 speed, so the MaixCAM2 control states are aligned to the original by
 cross-correlating speed_kph. Reported per 100 Hz control tick, over the ticks

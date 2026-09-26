@@ -1,7 +1,7 @@
 # 스크립트
 
 호스트에서 빌드·배포·검사에 쓰는 스크립트와, 보드에 설치돼 런타임과 함께 도는 Python이 있다.
-보드용 파일은 `upload_to_board.sh`가 보드 설치 디렉터리(`/root/sc_run`)의 최상위에 실행 파일과
+보드용 파일은 `upload_to_board.sh`가 보드 설치 디렉터리(`/root/edgepilot`)의 최상위에 실행 파일과
 나란히 둔다.
 
 ## 호스트
@@ -9,7 +9,7 @@
 | 스크립트 | 사용 | 하는 일 |
 | --- | --- | --- |
 | `fetch_maixcam2_sdk.sh` | `[root@보드]` | MaixCAM2 교차 빌드 의존성을 `deps/ax630/`에 받는다. MSP SDK `v3.0.0_20250319114413`(SHA256 고정)과 MaixCDK 헤더(커밋 `30f4b8b`)는 네트워크에서, 보드의 `/opt/lib`, `libmaixcam_lib.so.1.2.5`, `libsamplerate`, OpenCV 4.11은 보드에서 SSH로 그대로 복사한다 |
-| `upload_to_board.sh` | `[root@보드]` | `build-ax630/bin`의 런타임, 보드용 Python, UI 스프라이트, 파라미터 기본값을 보드에 올린다. `SUPERCOMBO_AXMODEL`을 주면 모델도 `models/supercombo.axmodel`로 올린다 |
+| `upload_to_board.sh` | `[root@보드]` | `build-ax630/bin`의 런타임, 보드용 Python, UI 스프라이트, 파라미터 기본값을 보드에 올린다. `EDGEPILOT_AXMODEL`을 주면 모델도 `models/supercombo.axmodel`로 올린다 |
 | `run_host_tests.sh` | | 호스트 단위 테스트를 빌드하고 `ctest`로 전부 돌린다([gtest/](../gtest/README.md)). 보드도 `deps/`도 필요 없다 |
 
 빌드 자체는 `tools/docker_ax630/build.sh`가 arm64 Ubuntu 22.04 컨테이너에서 한다(결과는
@@ -17,11 +17,11 @@
 
 환경 변수로 바꿀 수 있는 것:
 
-- `upload_to_board.sh`: `SUPERCOMBO_AXMODEL`(올릴 axmodel, 저장소에는 없다), `K230_BIN_DIR`
-  (기본 `build-ax630/bin`), `K230_BOARD_DIR`(기본 `/root/sc_run`). 실행 중인 바이너리는
+- `upload_to_board.sh`: `EDGEPILOT_AXMODEL`(올릴 axmodel, 저장소에는 없다), `EDGEPILOT_BIN_DIR`
+  (기본 `build-ax630/bin`), `EDGEPILOT_BOARD_DIR`(기본 `/root/edgepilot`). 실행 중인 바이너리는
   덮어쓸 수 없으므로 `.upload/`에 올린 뒤 `mv`로 바꾼다. 매니저는 다시 띄우지 않는다. 보드의
   `params/`는 덮어쓰지 않고, 기본값은 `params.defaults/`에 두어 없는 파일만 채운다.
-- `run_host_tests.sh`: `K230_HOST_BUILD_DIR`(기본 `build-host`), `JOBS`.
+- `run_host_tests.sh`: `EDGEPILOT_HOST_BUILD_DIR`(기본 `build-host`), `JOBS`.
 
 자세한 빌드와 배포 절차는 [Build and deploy](../docs/build-and-deploy.md)에 있다.
 
@@ -29,8 +29,8 @@
 
 | 파일 | 사용 | 하는 일 |
 | --- | --- | --- |
-| `k230_manager.py` | `python3 /root/sc_run/k230_manager.py [supercombo.axmodel]` | 런타임 감시자. 보드 UI 런처를 멈추고 프로세스를 순서대로 띄우며 죽으면 1초 뒤 다시 띄운다. 아직 부팅 때 자동으로 실행되지 않는다(init 스크립트·systemd 유닛 없음) |
-| `k230_param_server.py` | `[--host 주소] [--port 포트]` | 파라미터 편집 웹 서버(FastAPI, 기본 `0.0.0.0:8080`). 매니저가 함께 띄운다 |
+| `manager.py` | `python3 /root/edgepilot/manager.py [supercombo.axmodel]` | 런타임 감시자. 보드 UI 런처를 멈추고 프로세스를 순서대로 띄우며 죽으면 1초 뒤 다시 띄운다. 아직 부팅 때 자동으로 실행되지 않는다(init 스크립트·systemd 유닛 없음) |
+| `param_server.py` | `[--host 주소] [--port 포트]` | 파라미터 편집 웹 서버(FastAPI, 기본 `0.0.0.0:8080`). 매니저가 함께 띄운다 |
 | `display_control.py` | (모듈) | LCD 백라이트 제어. 파라미터 서버가 `display.json`을 적용할 때 쓴다. 아직 K230 핀(IO25, `pwmchip3`) 기준이라 MaixCAM2 백라이트(`pwmchip0/pwm3`)와 맞지 않는다 |
 | `requirements-param-server.txt` | `python3 -m pip install -r ...` | 파라미터 서버 의존성(fastapi, uvicorn) |
 

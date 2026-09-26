@@ -2,7 +2,7 @@
 # 기본 UI 런처와는 동시에 돌 수 없다(카메라·NPU·화면). 런처로 돌아가려면
 #   systemctl start launcher.service   (Conflicts로 이 서비스가 멈춘다)
 [Unit]
-Description=openpilot runtime (k230_manager) on MaixCAM2
+Description=openpilot runtime (manager) on MaixCAM2
 Conflicts=launcher.service camcal.service
 # rc-local이 AX 드라이버(/soc/scripts/auto_load_all_drv.sh)를 올린 뒤에 시작한다.
 After=launcher.service camcal.service wifi.service rc-local.service
@@ -14,13 +14,13 @@ WorkingDirectory=@DEST@
 # 라이브러리에만 적용돼서, libax_engine이 부르는 libax_interpreter 같은 간접 의존성은 못 찾는다.
 EnvironmentFile=-/etc/environment
 Environment=PYTHONUNBUFFERED=1
-Environment=K230_LOG_DIR=/run/supercombo
+Environment=EDGEPILOT_LOG_DIR=/run/edgepilot
 # 차에서 판다를 USB-C(호스트)로 붙인다. 맥에 USB로 연결해 디버깅하려면 device로 바꾼다.
-Environment=K230_USB_ROLE=host
-# 판다(pandad)를 띄운다. 송신·활성 heartbeat는 매니저 기본값(K230_PANDA_TX=1,
-# K230_PANDA_ENGAGED=1)을 따른다. 송신 없이 보려면 K230_PANDA_TX=0을 더한다.
-Environment=K230_ENABLE_PANDA=1
-ExecStart=/usr/local/bin/python3 @DEST@/k230_manager.py
+Environment=EDGEPILOT_USB_ROLE=host
+# 판다(pandad)를 띄운다. 송신·활성 heartbeat는 매니저 기본값(EDGEPILOT_PANDA_TX=1,
+# EDGEPILOT_PANDA_ENGAGED=1)을 따른다. 송신 없이 보려면 EDGEPILOT_PANDA_TX=0을 더한다.
+Environment=EDGEPILOT_ENABLE_PANDA=1
+ExecStart=/usr/local/bin/python3 @DEST@/manager.py
 # SIGTERM은 매니저에만 보내고(자식을 순서대로 끈다), 남은 프로세스는 제한 시간 뒤 SIGKILL.
 KillMode=mixed
 TimeoutStopSec=10

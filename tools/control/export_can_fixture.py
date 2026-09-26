@@ -2,7 +2,7 @@
 """녹화 events/NNN.bin(K230LOG1) 하나를 gtest_control_replay의 K230CAN1 픽스처로 내보낸다.
 
 수신 CAN(CanRx) 레코드만 담고, 타임스탬프는 첫 프레임을 0으로 다시 잰다.
-사용: export_can_fixture.py <events/NNN.bin> <out.k230can>
+사용: export_can_fixture.py <events/NNN.bin> <out.can>
 """
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from recording_reader import RECORD_CAN_RX, iter_event_records  # noqa: E402
 
-BATCH_HEADER = struct.Struct("<II")        # K230RecordedCanBatchHeader
-RECORDED_FRAME = struct.Struct("<IIIII64s")  # K230RecordedCanFrame
+BATCH_HEADER = struct.Struct("<II")        # RecordedCanBatchHeader
+RECORDED_FRAME = struct.Struct("<IIIII64s")  # RecordedCanFrame
 FIXTURE_MAGIC = b"K230CAN1"
 FIXTURE_RECORD = struct.Struct("<QIBB8s2x")  # timestamp_us, address, bus, len, data, pad
 

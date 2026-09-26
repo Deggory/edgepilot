@@ -2,7 +2,7 @@
 
 #include <string>
 
-/* k230_controlsd가 함께 읽는 런타임 파라미터. params/steering.json과
+/* controlsd가 함께 읽는 런타임 파라미터. params/steering.json과
  * params/driving.json이 각각의 출처다. CAN 계층은 이 헤더에 의존하지만
  * 반대 방향은 없다 — 토크 제한 변환은 hyundai_can.h가 제공한다. */
 

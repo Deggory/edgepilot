@@ -309,7 +309,7 @@ private:
 
 // ---------------------------------------------------------------- controlsd 연결
 
-/* k230_controlsd 안의 paramsd·torqued. 제어 틱 끝에 이번 틱 값(보낸 토크 포함)으로 갱신하고
+/* controlsd 안의 paramsd·torqued. 제어 틱 끝에 이번 틱 값(보낸 토크 포함)으로 갱신하고
  * 컨트롤러는 다음 틱에 live()를 쓴다. 상류 controlsd가 직전 메시지를 쓰는 것과 같다.
  * 사전값·지연은 생성 시 파라미터로 고정한다(상류 CarParams처럼 주행 중 바뀌지 않는다). */
 class LateralLearners {

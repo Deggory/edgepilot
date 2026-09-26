@@ -15,26 +15,26 @@ const char *engage_block_label(const char *block)
 
 /* ---- 공유 상태 → HUD 상태 ---- */
 
-void hud_apply_panda_state(const K230PandaState &panda, bool fresh, OverlayHudState *hud)
+void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud)
 {
     hud->panda_connected = fresh && panda.connected != 0;
     hud->panda_healthy = fresh && panda.comms_healthy != 0;
     hud->panda_faults = fresh ? panda.faults : 0;
 }
 
-void hud_apply_control_state(const K230ControlState &c, bool fresh, OverlayHudState *hud)
+void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState *hud)
 {
     hud->controller_enabled = fresh && c.enabled != 0;
     hud->controller_engaged = fresh && c.engaged != 0;
     hud->controller_active = fresh && c.active != 0;
     hud->lateral_mode_available = fresh;
-    hud->laneless_mode = fresh && (c.hud_flags & kK230HudFlagLaneless) != 0;
+    hud->laneless_mode = fresh && (c.hud_flags & kHudFlagLaneless) != 0;
     hud->vehicle_fresh = fresh && c.vehicle_fresh != 0;
     hud->steering_fault = fresh && c.steering_fault != 0;
     hud->left_blinker = fresh && c.left_blinker != 0;
     hud->right_blinker = fresh && c.right_blinker != 0;
     hud->cruise_active = fresh && c.cruise_active != 0;
-    hud->brake_hold = fresh && (c.hud_flags & kK230HudFlagBrakeHold) != 0;
+    hud->brake_hold = fresh && (c.hud_flags & kHudFlagBrakeHold) != 0;
     hud->gear = fresh ? c.gear : 0;
     hud->cluster_speed_kph = fresh ? c.cluster_speed_kph : 0.0f;
     hud->ego_speed_kph = fresh ? c.ego_speed_kph : 0.0f;
@@ -63,9 +63,9 @@ void hud_apply_control_state(const K230ControlState &c, bool fresh, OverlayHudSt
                   fresh ? c.active_block : "control_stale");
 }
 
-void hud_apply_model_state(const K230ModelState &model, bool fresh, OverlayHudState *hud)
+void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud)
 {
-    const K230CalibrationState &calibration = model.calibration;
+    const CalibrationState &calibration = model.calibration;
     hud->calibration_available = fresh;
     hud->calibration_status = calibration.status;
     hud->calibration_valid_blocks = calibration.valid_blocks;
@@ -74,11 +74,11 @@ void hud_apply_model_state(const K230ModelState &model, bool fresh, OverlayHudSt
     hud->calibration_yaw_deg = rad_to_deg(calibration.yaw);
 }
 
-void hud_apply_manager_state(const K230ManagerState &manager, bool fresh, bool model_ok,
+void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
                              OverlayHudState *hud)
 {
     const unsigned total = fresh
-        ? std::min<unsigned>(manager.process_count, kK230MaxProcesses) : 0;
+        ? std::min<unsigned>(manager.process_count, kMaxProcesses) : 0;
     unsigned running = 0;
     for (unsigned i = 0; i < total; ++i) running += manager.processes[i].running ? 1U : 0U;
     hud->services_healthy = fresh && total >= 3 && running == total && model_ok;
@@ -86,7 +86,7 @@ void hud_apply_manager_state(const K230ManagerState &manager, bool fresh, bool m
 
 /* ---- 이벤트 카운터 → 알림 ---- */
 
-bool OverlayAlertEvents::baseline(const K230ControlState &control)
+bool OverlayAlertEvents::baseline(const ControlState &control)
 {
     const auto counter_reset = [](uint32_t current, uint32_t previous) {
         return previous != 0 && current < previous;
@@ -106,7 +106,7 @@ bool OverlayAlertEvents::baseline(const K230ControlState &control)
     return true;
 }
 
-OverlayAlertEvents::Decision OverlayAlertEvents::update(const K230ControlState &control,
+OverlayAlertEvents::Decision OverlayAlertEvents::update(const ControlState &control,
                                                         DepartureAlertType departure_type)
 {
     Decision decision;

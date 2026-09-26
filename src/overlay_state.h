@@ -2,7 +2,7 @@
 #define OVERLAY_STATE_H
 
 /* 공유 상태 스냅샷(K230*State) → HUD 표시 상태. 그리기와 무관해 OpenCV 없이
- * 컴파일되며, k230_overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
+ * 컴파일되며, overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
 
 #include "departure_alert.h"
 #include "ipc_messages.h"
@@ -73,12 +73,12 @@ struct OverlayHudState {
 };
 
 /* 공유 상태 스냅샷 → HUD 표시 상태. fresh가 아니면 값을 0/false로 두어 HUD가 "--"를
- * 그린다. k230_overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
-void hud_apply_panda_state(const K230PandaState &panda, bool fresh, OverlayHudState *hud);
-void hud_apply_control_state(const K230ControlState &control, bool fresh, OverlayHudState *hud);
-void hud_apply_model_state(const K230ModelState &model, bool fresh, OverlayHudState *hud);
+ * 그린다. overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
+void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud);
+void hud_apply_control_state(const ControlState &control, bool fresh, OverlayHudState *hud);
+void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud);
 /* model_ok: 유효하고 신선한 모델 출력이 있는지. services_healthy의 조건 중 하나. */
-void hud_apply_manager_state(const K230ManagerState &manager, bool fresh, bool model_ok,
+void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
                              OverlayHudState *hud);
 
 /* 오버레이가 울리는 알림. 열거 순서가 같은 프레임 안의 우선순위다. */
@@ -95,11 +95,11 @@ public:
         OverlayAlert alert = OverlayAlert::none;
         uint32_t event_id = 0;
     };
-    Decision update(const K230ControlState &control, DepartureAlertType departure_type);
+    Decision update(const ControlState &control, DepartureAlertType departure_type);
 
 private:
     // 기준값을 (다시) 잡은 프레임이면 true.
-    bool baseline(const K230ControlState &control);
+    bool baseline(const ControlState &control);
 
     bool initialized_ = false;
     uint32_t last_engage_ = 0;

@@ -28,10 +28,10 @@ int main()
 
     try {
         AppConfig config = AppConfig::from_env_defaults();
-        K230LatestChannel frame_pub;
-        K230FrameRing frame_ring;
+        LatestChannel frame_pub;
+        FrameRing frame_ring;
 
-        if (!frame_pub.open(kK230RoadAiFrameTopic, sizeof(K230RoadAiFrame), true))
+        if (!frame_pub.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true))
             throw std::runtime_error("open roadAiFrame ipc failed");
         if (!frame_ring.open(true, config.nv12_width, config.nv12_height))
             throw std::runtime_error("open road ai frame ring failed");
@@ -48,7 +48,7 @@ int main()
         }
         uint64_t frame_id = 0;
         unsigned errors = 0;
-        uint64_t window_start = k230_now_ns();
+        uint64_t window_start = monotonic_now_ns();
         uint64_t window_frames = 0;
         std::fprintf(stderr, "camerad: MaixCAM2 VI %ux%u NV12, 20 fps sensor, CMM ring\n",
                      config.nv12_width, config.nv12_height);
@@ -57,13 +57,13 @@ int main()
             const unsigned slot = static_cast<unsigned>(frame_id % frame_ring.slot_count());
             frame_ring.begin_write(slot);
             const bool got = camera.read_to(slots[slot].phys);
-            const uint64_t capture_ns = k230_now_ns();
+            const uint64_t capture_ns = monotonic_now_ns();
             frame_ring.end_write(slot, got ? frame_id : UINT64_MAX);
             if (!got) {
                 ++errors;
                 continue;
             }
-            K230RoadAiFrame msg;
+            RoadAiFrame msg;
             msg.frame_id = frame_id;
             msg.timestamp_ns = capture_ns;
             msg.slot = slot;
@@ -80,7 +80,7 @@ int main()
             ++window_frames;
             if (config.max_frames > 0 && frame_id >= config.max_frames) break;
 
-            const uint64_t now = k230_now_ns();
+            const uint64_t now = monotonic_now_ns();
             if (now - window_start >= 1000000000ULL) {
                 std::fprintf(stderr, "camerad: fps=%.2f frames=%llu errors=%u          \r",
                              window_frames * 1e9 / (now - window_start),

@@ -10,10 +10,10 @@ directories are generated output and are not tracked:
 | `build-ax630/` | MaixCAM2 runtime (`tools/docker_ax630/build.sh`), the upload default |
 | `build-host/` | host tests and tools (`scripts/run_host_tests.sh`) |
 
-The runtime build produces `k230_camerad`, `k230_modeld`, `k230_overlayd`,
-`k230_controlsd`, and `k230_pandad`. `-DSUPERCOMBO_BUILD_PANDA=OFF` drops
-`k230_pandad` and the libusb dependency; the manager skips a binary that is not
-installed. `-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON` adds the tools in
+The runtime build produces `camerad`, `modeld`, `overlayd`,
+`controlsd`, and `pandad`. `-DEDGEPILOT_BUILD_PANDA=OFF` drops
+`pandad` and the libusb dependency; the manager skips a binary that is not
+installed. `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON` adds the tools in
 [diagnostics/](../diagnostics/README.md) without changing the runtime.
 
 ## 1. Fetch the SDK and board libraries
@@ -42,7 +42,7 @@ build is offline. Run the script again after a board image update.
 tools/docker_ax630/build.sh
 ```
 
-The script checks `deps/ax630`, builds the `supercombo-ax630-build` image
+The script checks `deps/ax630`, builds the `edgepilot-ax630-build` image
 (`linux/arm64` Ubuntu 22.04, the same distribution as the board image, so the
 binaries run against the board's glibc and libstdc++), and configures and builds
 `build-ax630/` inside it with `AX_LIB_DIR=deps/ax630/lib` and an rpath of
@@ -58,13 +58,13 @@ headers, or the board OpenCV are missing.
 ## 3. Upload to the board
 
 ```sh
-SUPERCOMBO_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh [root@192.168.219.117]
+EDGEPILOT_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh [root@192.168.219.117]
 ```
 
 The script copies the binaries from `build-ax630/bin`, the board-side Python, the
-UI sprites, and the parameter defaults to `/root/sc_run`. The axmodel is not in
+UI sprites, and the parameter defaults to `/root/edgepilot`. The axmodel is not in
 the repository ([how to build it](../tools/model/axmodel/README.md)); it is
-copied to `models/supercombo.axmodel` only when `SUPERCOMBO_AXMODEL` is set, so
+copied to `models/supercombo.axmodel` only when `EDGEPILOT_AXMODEL` is set, so
 later uploads can leave it out.
 
 - A running binary cannot be overwritten, so files go to `.upload/` first and
@@ -74,7 +74,7 @@ later uploads can leave it out.
 - Runtime tuning and calibration JSON files already in `params/` are never
   overwritten. Repository defaults go to `params.defaults/` and seed a runtime
   file only when it does not exist.
-- `K230_BOARD_DIR` changes the install directory and `K230_BIN_DIR` the binary
+- `EDGEPILOT_BOARD_DIR` changes the install directory and `EDGEPILOT_BIN_DIR` the binary
   directory.
 
 ## Host tests

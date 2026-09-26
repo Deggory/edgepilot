@@ -33,7 +33,7 @@ public:
                         std::vector<float> &raw_output);
     /* 하드웨어(GDC) 워프를 쓰면 소비자가 프레임을 이 CMM 버퍼에 직접 채우고
      * run_frame_preloaded로 실행한다. GDC를 못 쓰는 경우(NV21 소스,
-     * SUPERCOMBO_WARP_CPU=1, 크기 불일치) nullptr. */
+     * EDGEPILOT_WARP_CPU=1, 크기 불일치) nullptr. */
     uint8_t *input_buffer(int src_w, int src_h);
     bool run_frame_preloaded(int src_w, int src_h, std::vector<float> &raw_output);
     /* 소스 NV12가 다른 CMM 블록(프레임 링 슬롯)에 있을 때 GDC가 직접 읽는다. 워프 뒤
@@ -57,7 +57,7 @@ private:
 
     AxEngineSession session_;
     int index_[kInputCount] = {};
-    bool profile_ = false;  // SUPERCOMBO_PROFILE: 30프레임마다 단계별 평균 ms
+    bool profile_ = false;  // EDGEPILOT_PROFILE: 30프레임마다 단계별 평균 ms
     ModelInputTransform input_transform_;
     ModelInputTransform big_input_transform_;
     std::unique_ptr<GdcWarp> gdc_;

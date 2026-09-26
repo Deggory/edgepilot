@@ -1,5 +1,5 @@
 /* 실차 전 리허설: 녹화 route를 카메라와 판다처럼 실시간으로 재생한다. camerad·pandad
- * 자리에서 돌고(k230_manager.py K230_REPLAY_ROUTE), modeld·controlsd·overlayd·recordd는
+ * 자리에서 돌고(manager.py EDGEPILOT_REPLAY_ROUTE), modeld·controlsd·overlayd·recordd는
  * 차에서와 똑같이 돈다.
  *  - 영상: segments/NNN/road.h264(AX630C VDEC는 H.264만 디코딩한다; 녹화의 HEVC는
  *    tools/rehearsal/transcode_route.py로 바꿔 둔다)를 프레임 인덱스로 한 프레임씩 VDEC에
@@ -8,7 +8,7 @@
  *    낸다(pandad처럼 CAN은 녹화용 로그 큐에도 넣는다). controlsd의 송신 요청은 보내지
  *    않고 송신 로그로만 넘긴다(recordd가 기록한다).
  * 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
- * 사용: k230_replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지) */
+ * 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지) */
 #include "app_config.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
@@ -84,7 +84,7 @@ struct Segment {
 
 struct Event {
     uint64_t timestamp_ns;
-    K230RecordType type;
+    RecordType type;
     std::vector<uint8_t> payload;
 };
 
@@ -94,10 +94,10 @@ public:
     {
         for (const std::string &seg_dir : numbered_entries(dir + "/segments", nullptr)) {
             const std::vector<uint8_t> index = read_file(seg_dir + "/frames.bin");
-            if (index.size() < sizeof(K230FrameIndexHeader)) continue;
-            K230FrameIndexHeader header;
+            if (index.size() < sizeof(FrameIndexHeader)) continue;
+            FrameIndexHeader header;
             std::memcpy(&header, index.data(), sizeof(header));
-            if (std::memcmp(header.magic, "K230IDX1", 8) != 0 || header.record_size != sizeof(K230FrameIndexRecord))
+            if (std::memcmp(header.magic, "K230IDX1", 8) != 0 || header.record_size != sizeof(FrameIndexRecord))
                 continue;
             width = header.width;
             height = header.height;
@@ -113,7 +113,7 @@ public:
                 segment.video_path = seg_dir + "/road.hevc";
             }
             for (size_t i = 0; i < count; ++i) {
-                K230FrameIndexRecord r;
+                FrameIndexRecord r;
                 std::memcpy(&r, index.data() + header.header_size + i * sizeof(r), sizeof(r));
                 if (i == 0) segment.header_bytes = r.file_offset;
                 frames.push_back({segments.size(), r.file_offset, r.packet_size, r.capture_timestamp_ns,
@@ -123,15 +123,15 @@ public:
         }
         for (const std::string &path : numbered_entries(dir + "/events", ".bin")) {
             const std::vector<uint8_t> data = read_file(path);
-            size_t pos = sizeof(K230EventFileHeader);
+            size_t pos = sizeof(EventFileHeader);
             if (data.size() < pos || std::memcmp(data.data(), "K230LOG1", 8) != 0) continue;
-            while (pos + sizeof(K230EventRecordHeader) <= data.size()) {
-                K230EventRecordHeader h;
+            while (pos + sizeof(EventRecordHeader) <= data.size()) {
+                EventRecordHeader h;
                 std::memcpy(&h, data.data() + pos, sizeof(h));
                 pos += sizeof(h);
                 if (pos + h.payload_size > data.size()) break;
-                const auto type = static_cast<K230RecordType>(h.type);
-                if (type == K230RecordType::CanRx || type == K230RecordType::PandaState)
+                const auto type = static_cast<RecordType>(h.type);
+                if (type == RecordType::CanRx || type == RecordType::PandaState)
                     events.push_back({h.timestamp_ns, type,
                                       std::vector<uint8_t>(data.begin() + pos, data.begin() + pos + h.payload_size)});
                 pos += h.payload_size;
@@ -169,23 +169,23 @@ public:
     std::vector<Event> events;
 };
 
-K230CanBatch can_batch_from_record(const std::vector<uint8_t> &payload, uint64_t now_ns)
+CanBatch can_batch_from_record(const std::vector<uint8_t> &payload, uint64_t now_ns)
 {
-    K230CanBatch batch;
-    if (payload.size() < sizeof(K230RecordedCanBatchHeader)) return batch;
-    K230RecordedCanBatchHeader header;
+    CanBatch batch;
+    if (payload.size() < sizeof(RecordedCanBatchHeader)) return batch;
+    RecordedCanBatchHeader header;
     std::memcpy(&header, payload.data(), sizeof(header));
     const uint32_t count = std::min<uint32_t>(
-        {header.count, kK230CanBatchMaxFrames,
-         static_cast<uint32_t>((payload.size() - sizeof(header)) / sizeof(K230RecordedCanFrame))});
+        {header.count, kCanBatchMaxFrames,
+         static_cast<uint32_t>((payload.size() - sizeof(header)) / sizeof(RecordedCanFrame))});
     batch.timestamp_ns = now_ns;
     batch.valid = 1;
     batch.count = count;
     batch.dropped = header.dropped;
     for (uint32_t i = 0; i < count; ++i) {
-        K230RecordedCanFrame f;
+        RecordedCanFrame f;
         std::memcpy(&f, payload.data() + sizeof(header) + i * sizeof(f), sizeof(f));
-        K230CanFrame &out = batch.frames[i];
+        IpcCanFrame &out = batch.frames[i];
         out.address = f.address;
         out.src = f.src;
         out.bus_time = f.bus_time;
@@ -223,15 +223,15 @@ int main(int argc, char *argv[])
         size_t next_event = 0;
         while (next_event < route.events.size() && route.events[next_event].timestamp_ns < t0) ++next_event;
 
-        K230LatestChannel frame_pub, panda_pub;
-        K230FrameRing ring;
-        K230CanQueue can_pub, can_log_pub, sendcan_sub, sendcan_log_pub;
-        if (!frame_pub.open(kK230RoadAiFrameTopic, sizeof(K230RoadAiFrame), true) ||
-            !panda_pub.open(kK230PandaStateTopic, sizeof(K230PandaState), true) ||
-            !can_pub.open(kK230CanTopic, kK230CanQueueSlots, true) ||
-            !can_log_pub.open(kK230CanLogTopic, kK230CanQueueSlots, true) ||
-            !sendcan_sub.open(kK230SendCanTopic, kK230CanQueueSlots, true) ||
-            !sendcan_log_pub.open(kK230SendCanLogTopic, kK230CanQueueSlots, true))
+        LatestChannel frame_pub, panda_pub;
+        FrameRing ring;
+        CanQueue can_pub, can_log_pub, sendcan_sub, sendcan_log_pub;
+        if (!frame_pub.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true) ||
+            !panda_pub.open(kPandaStateTopic, sizeof(PandaState), true) ||
+            !can_pub.open(kCanTopic, kCanQueueSlots, true) ||
+            !can_log_pub.open(kCanLogTopic, kCanQueueSlots, true) ||
+            !sendcan_sub.open(kSendCanTopic, kCanQueueSlots, true) ||
+            !sendcan_log_pub.open(kSendCanLogTopic, kCanQueueSlots, true))
             throw std::runtime_error("open ipc failed");
         if (!ring.open(true, route.width, route.height))
             throw std::runtime_error("open frame ring failed");
@@ -250,15 +250,15 @@ int main(int argc, char *argv[])
                      route_dir.c_str(), (t0 - route_start) / 1e9, route.frames.size() - first,
                      route.events.size() - next_event, route.width, route.height);
 
-        const uint64_t base = k230_now_ns() + 200000000ULL;  // 소비자가 붙을 여유
+        const uint64_t base = monotonic_now_ns() + 200000000ULL;  // 소비자가 붙을 여유
         auto due = [&](uint64_t recorded_ns) { return base + (recorded_ns - t0); };
         std::vector<uint8_t> packet;
         uint64_t frame_id = 0, sent = 0, decode_errors = 0, can_batches = 0, tx_batches = 0;
-        uint64_t dropped_outputs = 0, last_output_ns = k230_now_ns();
+        uint64_t dropped_outputs = 0, last_output_ns = monotonic_now_ns();
         size_t next_frame = first;
-        uint64_t window = k230_now_ns(), window_frames = 0;
+        uint64_t window = monotonic_now_ns(), window_frames = 0;
         while (!g_stop) {
-            const uint64_t now = k230_now_ns();
+            const uint64_t now = monotonic_now_ns();
             // 영상: 녹화 간격대로 한 프레임씩 넣고, 나온 프레임을 곧바로 링에 싣는다.
             if (next_frame < route.frames.size() && route.frames[next_frame].capture_ns < t_end &&
                 now >= due(route.frames[next_frame].capture_ns)) {
@@ -275,9 +275,9 @@ int main(int argc, char *argv[])
                 uint64_t pts = 0;
                 if (decoder.receive_to(slots[slot].phys, &pts, 0)) {
                     ring.end_write(slot, frame_id);
-                    K230RoadAiFrame meta;
+                    RoadAiFrame meta;
                     meta.frame_id = frame_id++;
-                    meta.timestamp_ns = k230_now_ns();
+                    meta.timestamp_ns = monotonic_now_ns();
                     meta.slot = slot;
                     meta.width = route.width;
                     meta.height = route.height;
@@ -297,20 +297,20 @@ int main(int argc, char *argv[])
             while (next_event < route.events.size() && route.events[next_event].timestamp_ns < t_end &&
                    now >= due(route.events[next_event].timestamp_ns)) {
                 const Event &e = route.events[next_event++];
-                if (e.type == K230RecordType::CanRx) {
-                    const K230CanBatch batch = can_batch_from_record(e.payload, now);
+                if (e.type == RecordType::CanRx) {
+                    const CanBatch batch = can_batch_from_record(e.payload, now);
                     can_pub.push(batch);
                     can_log_pub.push(batch);
                     ++can_batches;
-                } else if (e.payload.size() == sizeof(K230PandaState)) {
-                    K230PandaState state;
+                } else if (e.payload.size() == sizeof(PandaState)) {
+                    PandaState state;
                     std::memcpy(&state, e.payload.data(), sizeof(state));
                     state.timestamp_ns = now;
                     panda_pub.publish(&state, sizeof(state));
                 }
             }
             // controlsd의 송신 요청: 보내지 않고 송신 로그로만.
-            K230CanBatch tx;
+            CanBatch tx;
             while (sendcan_sub.pop(&tx)) {
                 tx.timestamp_ns = now;
                 sendcan_log_pub.push(tx);

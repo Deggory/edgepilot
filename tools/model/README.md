@@ -3,7 +3,7 @@
 The MaixCAM2 model is built by [`axmodel/`](axmodel/README.md): it cuts the NPU
 core out of the openpilot master `driving_supercombo.onnx`, builds calibration
 and evaluation data, and compiles it with Pulsar2 6.0 into the axmodel that
-`k230_modeld` loads. See [`../../models/README.md`](../../models/README.md) for
+`modeld` loads. See [`../../models/README.md`](../../models/README.md) for
 the contract and the board numbers.
 
 The other scripts here come from the K230 v0.9.4 pipeline. The nncase compile
@@ -37,7 +37,7 @@ requirements) and the Pulsar2 6.0 Docker image for the compile step.
 
 ## Recording-driven helpers
 
-These read K230 `k230_recordd` routes and reproduce the device's input pipeline
+These read K230 `recordd` routes and reproduce the device's input pipeline
 (`recording_reader.py` decodes the route, `model_warp.py` is a numpy port of
 the CPU warp in `src/model_input_transform.cc`, `route_frames.py` joins them,
 and `op094_runner.py` drives the v0.9.4 ONNX with the desire/feature history the
@@ -50,7 +50,7 @@ K230 runtime kept).
     the feature buffer the v0.9.4 model itself produced, so calibration saw the
     real activation ranges.
 - `make_replay.py`
-  - writes an `SCNV12R1` replay for `k230_modeld` replay mode on the board.
+  - writes an `SCNV12R1` replay for `modeld` replay mode on the board.
     Its optional `--model` host reference runs the v0.9.4 ONNX and does not fit
     the master contract; see `../../docs/diagnostics.md`.
 - `lane_bias.py`

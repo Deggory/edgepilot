@@ -38,7 +38,7 @@ FRAME_INDEX_RECORD = np.dtype([
     ("flags", "<u4"),
 ])
 
-# K230ControlState: natural alignment, no packing pragma; all members are
+# ControlState: natural alignment, no packing pragma; all members are
 # 4/8-byte so the layout is padding-free except the trailing 8-byte pad.
 CONTROL_STATE = np.dtype([
     ("timestamp_ns", "<u8"),
@@ -68,7 +68,7 @@ CONTROL_STATE = np.dtype([
     ("ego_speed_kph", "<f4"),
 ])
 
-# K230LearnerState (paramsd/torqued output, 20 Hz). flags bits: ipc_messages.h kK230Learner*.
+# LearnerState (paramsd/torqued output, 20 Hz). flags bits: ipc_messages.h kLearner*.
 LEARNER_STATE = np.dtype([
     ("timestamp_ns", "<u8"), ("flags", "<u4"),
     ("steer_ratio", "<f4"), ("stiffness_factor", "<f4"), ("roll_rad", "<f4"),
@@ -85,9 +85,9 @@ LEARNER_STATE = np.dtype([
     ("bucket_points", "<i2", (8,)), ("reserved", "<u4"),
 ])
 
-# The head of K230ModelState (frame_id ..). Only the fields these tools need are
+# The head of ModelState (frame_id ..). Only the fields these tools need are
 # decoded; the plan/lane payload in the middle is skipped by offset.
-# K230CalibrationState is the struct's last member, so it is located from the
+# CalibrationState is the struct's last member, so it is located from the
 # end of the payload.
 MODEL_STATE_HEAD = np.dtype([
     ("frame_id", "<u8"),
@@ -107,12 +107,12 @@ CALIBRATION_STATE = np.dtype([
 ])
 
 TRAJECTORY_SIZE = 33
-IPC_POINT = 12  # K230IpcPoint: three float32
+IPC_POINT = 12  # IpcPoint: three float32
 
 
 @functools.lru_cache(maxsize=None)
 def model_state_layout(version: int) -> dict[str, int]:
-    """Byte offsets inside a K230ModelState payload, per recording version.
+    """Byte offsets inside a ModelState payload, per recording version.
 
     The struct lost fields as the runtime dropped things nothing consumed, so
     a reader that hardcodes one version silently misreads the others:
@@ -308,7 +308,7 @@ class EventRecord:
         expected = CONTROL_STATE.itemsize + _pad8(CONTROL_STATE.itemsize)
         if len(self.payload) != expected:
             raise ValueError(f"{self.path}: control state payload {len(self.payload)} "
-                             f"!= {expected}; K230ControlState changed without a "
+                             f"!= {expected}; ControlState changed without a "
                              f"recording-version bump")
         return np.frombuffer(self.payload, CONTROL_STATE, count=1)[0]
 
@@ -319,7 +319,7 @@ class EventRecord:
         return np.frombuffer(self.payload, LEARNER_STATE, count=1)[0]
 
     def model_layout(self) -> dict[str, int]:
-        """K230ModelState offsets for this record's version, checked against
+        """ModelState offsets for this record's version, checked against
         its size: the writer pads records to 8 bytes, so anything outside
         struct size +0..7 means the layout moved without a version bump."""
         layout = model_state_layout(self.version)

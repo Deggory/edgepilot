@@ -392,7 +392,7 @@ TEST(CalibrationEquivalence, CalibrationService)
     constexpr const char *kTestParamsDir = "params/work";
     constexpr const char *kTestCalibration = "params/work/calibration.json";
     std::remove(kTestCalibration);
-    setenv("K230_PARAMS_DIR", kTestParamsDir, 1);
+    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
 
     OnlineCalibrator restored_calibrator;
     const float restored_rpy[3] = {0.0f, deg_to_rad(2.0f), deg_to_rad(-0.75f)};
@@ -453,18 +453,18 @@ TEST(CalibrationEquivalence, CalibrationService)
               static_cast<int>(CalibrationStatus::Calibrated))
         << "다시 읽은 보정은 보정 완료 상태다";
 
-    unsetenv("K230_PARAMS_DIR");
+    unsetenv("EDGEPILOT_PARAMS_DIR");
     std::remove(kTestCalibration);
 }
 
 TEST(CalibrationEquivalence, AppConfigEnvFeedback)
 {
-    unsetenv("SUPERCOMBO_CALIB_ROLL_DEG");
-    unsetenv("SUPERCOMBO_CALIB_PITCH_DEG");
-    unsetenv("SUPERCOMBO_CALIB_YAW_DEG");
+    unsetenv("EDGEPILOT_CALIB_ROLL_DEG");
+    unsetenv("EDGEPILOT_CALIB_PITCH_DEG");
+    unsetenv("EDGEPILOT_CALIB_YAW_DEG");
 
-    setenv("SUPERCOMBO_CALIB_PITCH_DEG", "1.25", 1);
-    setenv("SUPERCOMBO_CALIB_YAW_DEG", "-0.75", 1);
+    setenv("EDGEPILOT_CALIB_PITCH_DEG", "1.25", 1);
+    setenv("EDGEPILOT_CALIB_YAW_DEG", "-0.75", 1);
     AppConfig fallback = AppConfig::from_env_defaults();
     EXPECT_TRUE(fallback.manual_calibration)
         << "수동 보정 환경 변수를 주면 수동 모드가 켜진다";
@@ -482,19 +482,19 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
         << "ISP 출력 크기로 카메라 cy를 맞춘다";
 
     // 다른 카메라(예: K230 녹화 리플레이)의 1080p 내부 파라미터로 바꾸면 비례 환산된다
-    setenv("SUPERCOMBO_CAMERA_INTRINSICS", "1583.3981,1583.7622,954.9441,545.1774", 1);
+    setenv("EDGEPILOT_CAMERA_INTRINSICS", "1583.3981,1583.7622,954.9441,545.1774", 1);
     AppConfig k230 = AppConfig::from_env_defaults();
     EXPECT_NEAR(k230.input_warp_fx, 1583.3981f * 1280.0f / 1920.0f, 1e-3) << "fx 덮어쓰기";
     EXPECT_NEAR(k230.input_warp_cy, 545.1774f * 720.0f / 1080.0f, 1e-3) << "cy 덮어쓰기";
     k230.set_warp_source(1920, 1080);
     EXPECT_NEAR(k230.input_warp_cx, 954.9441f, 1e-3) << "1080p 소스면 그대로";
-    setenv("SUPERCOMBO_CAMERA_INTRINSICS", "oops", 1);
+    setenv("EDGEPILOT_CAMERA_INTRINSICS", "oops", 1);
     EXPECT_THROW(AppConfig::from_env_defaults(), std::runtime_error) << "잘못된 형식은 거부";
-    unsetenv("SUPERCOMBO_CAMERA_INTRINSICS");
+    unsetenv("EDGEPILOT_CAMERA_INTRINSICS");
 
-    unsetenv("SUPERCOMBO_CALIB_ROLL_DEG");
-    unsetenv("SUPERCOMBO_CALIB_PITCH_DEG");
-    unsetenv("SUPERCOMBO_CALIB_YAW_DEG");
+    unsetenv("EDGEPILOT_CALIB_ROLL_DEG");
+    unsetenv("EDGEPILOT_CALIB_PITCH_DEG");
+    unsetenv("EDGEPILOT_CALIB_YAW_DEG");
 }
 
 /* 모델 프레임 → 카메라 영상 투영 행렬의 참조식(openpilot get_warp_matrix 경로를 double로). */
