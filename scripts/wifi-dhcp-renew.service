@@ -1,0 +1,21 @@
+# Wi-Fi가 (다시) 연결될 때마다 wlan0 DHCP 임대를 새로 받는다(scripts/wifi-dhcp-renew.sh).
+[Unit]
+Description=Renew the wlan0 DHCP lease whenever Wi-Fi (re)connects
+After=wifi.service
+BindsTo=wifi.service
+# wpa_supplicant 제어 소켓이 늦게 생기면 wpa_cli가 바로 끝나 재시작을 반복한다. 재시작 제한에
+# 걸려 그 부팅 동안 훅이 없어지지 않도록 제한을 없앤다.
+StartLimitIntervalSec=0
+
+[Service]
+# 소켓이 생길 때까지(최대 60초) 기다린 뒤 붙는다.
+ExecStartPre=/bin/sh -c 'for i in $(seq 60); do [ -S /var/run/wpa_supplicant/wlan0 ] && exit 0; sleep 1; done; exit 1'
+# 순정 이미지는 AIC8800 드라이버 디버그 레벨이 1039(TRACE/DEBUG)라 초당 5줄 넘게 커널 로그를
+# 내고, 저널이 그걸 SD에 계속 쓴다(부팅 로그의 72%). 오류만 남긴다.
+ExecStartPre=-/bin/sh -c 'echo 1 > /sys/module/aic8800_fdrv/parameters/aicwf_dbg_level'
+ExecStart=/usr/sbin/wpa_cli -i wlan0 -a /usr/local/sbin/wifi-dhcp-renew.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

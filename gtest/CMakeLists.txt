@@ -31,6 +31,7 @@ add_host_test(gtest_lateral_mpc planning)
 add_host_test(gtest_model_output_parser common)
 add_host_test(gtest_overlay_state overlay_state)
 add_host_test(gtest_panda_can_codec panda_codec)
+add_host_test(gtest_projection common)
 add_host_test(gtest_recording_writer recording_writer)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

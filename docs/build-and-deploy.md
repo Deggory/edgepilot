@@ -7,115 +7,82 @@ directories are generated output and are not tracked:
 
 | Directory | Build |
 | --- | --- |
-| `build/` | macOS cross-build, the upload default |
-| `build-native/` | on-board native build |
+| `build-ax630/` | MaixCAM2 runtime (`tools/docker_ax630/build.sh`), the upload default |
 | `build-host/` | host tests and tools (`scripts/run_host_tests.sh`) |
 
-The default is the real-vehicle build: the Panda USB/CAN bridge and
-`k230_controlsd` are included. `-DSUPERCOMBO_BUILD_PANDA=OFF` builds the
-camera/model/display processes only; start the manager with
-`K230_ENABLE_CONTROL=0 K230_ENABLE_PANDA=0` in that case.
-`-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON` adds the tools in
+The runtime build produces `k230_camerad`, `k230_modeld`, `k230_overlayd`,
+`k230_controlsd`, and `k230_pandad`. `-DSUPERCOMBO_BUILD_PANDA=OFF` drops
+`k230_pandad` and the libusb dependency; the manager skips a binary that is not
+installed. `-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON` adds the tools in
 [diagnostics/](../diagnostics/README.md) without changing the runtime.
 
-Every board build needs `deps/`, which is not tracked.
-`scripts/fetch_nncase_runtime.sh` recreates it from the Kendryte nncase v2.11.0
-release plus gsl-lite 0.37.0, both pinned by SHA256:
-
-- `deps/include/nncase/runtime/interpreter.h`
-- `deps/include/gsl/gsl-lite.hpp` (27 nncase headers include it; the nncase
-  tarball does not ship it)
-- `deps/lib/libNncase.Runtime.Native.a`
-- `deps/lib/libnncase.rt_modules.k230.a`
-- `deps/lib/libfunctional_k230.a`
-
-## macOS cross-build
-
-Common host tools come from Homebrew. The Xuantie target toolchain, K230
-sysroot, board libraries, and RISC-V linker stay in the workspace because they
-are target-specific and not interchangeable with their macOS counterparts.
+## 1. Fetch the SDK and board libraries
 
 ```sh
-brew install cmake llvm pkg-config binutils z3 zstd
+scripts/fetch_maixcam2_sdk.sh [root@192.168.219.117]
 ```
 
-- `cmake` configures, and the macOS Command Line Tools `make` builds
-- `llvm` provides the Clang cross compiler and LLVM binutils
-- `pkg-config` does host-side package discovery
-- `z3` and `zstd` are LLVM runtime dependencies on macOS
-- Homebrew `binutils` provides general host utilities; it does not replace the
-  target GNU linker at `host-tools/binutils-build-riscv/ld/ld-new`
+This fills `deps/ax630/` (not tracked):
 
-`scripts/configure_k230_macos.sh` expects this workspace layout:
+- the AX620E MSP SDK `v3.0.0_20250319114413`, the version the board runtime
+  uses, from the MaixCDK release, checked by SHA256
+- MaixCDK headers at commit `30f4b8b`: `ax_middleware.hpp` (the C++ interface
+  of `libmaixcam_lib`), the `maix_basic`/`maix_image` headers it uses, and the
+  OS04D10-aware MSP sample sources
+- from the board over SSH, copied as-is so the ABI matches: `/opt/lib` (the AX
+  runtime), `/usr/lib/libmaixcam_lib.so.1.2.5`, `libsamplerate`, and the OpenCV
+  4.11 headers and `core`/`imgproc`/`imgcodecs` libraries
 
-```text
-k230/
-├── supercombo_k230/                # this repository (tools/target-pkg-config lives here)
-│   └── build/                      # generated build output
-├── toolchain/xuantie-900/          # Xuantie compiler and target sysroot
-├── host-tools/binutils-build-riscv/ld/ld-new
-├── third-party/board-libs/usr/lib/
-├── third-party/drm-dev/usr/include/
-└── third-party/opencv/cmake/
-```
+The SDK download needs the network and the board copy needs SSH; after that the
+build is offline. Run the script again after a board image update.
 
-If the workspace is elsewhere, set `K230_WORKSPACE_DIR`, or override the
-individual paths (`K230_XUANTIE_TOOLCHAIN_DIR`, `K230_RISCV_LD`, ...). The script
-validates them before configuring. Configure once, then build incrementally:
+## 2. Build in the container
 
 ```sh
-cd /path/to/k230/supercombo_k230
-./scripts/configure_k230_macos.sh          # optional argument: build directory
-cd build
-cmake ..
-make -j2
+tools/docker_ax630/build.sh
 ```
 
-The runtime build produces `k230_camerad`, `k230_modeld`, `k230_overlayd`,
-`k230_recordd`, `k230_pandad`, and `k230_controlsd` in `build/bin/`.
+The script checks `deps/ax630`, builds the `supercombo-ax630-build` image
+(`linux/arm64` Ubuntu 22.04, the same distribution as the board image, so the
+binaries run against the board's glibc and libstdc++), and configures and builds
+`build-ax630/` inside it with `AX_LIB_DIR=deps/ax630/lib` and an rpath of
+`/opt/lib`. On an Apple Silicon Mac, an arm64 Docker VM such as colima builds
+natively without emulation.
+
+CMake stops with a clear message if `libax_engine`/`libax_sys`, the MaixCDK
+headers, or the board OpenCV are missing.
 
 > [!WARNING]
-> Do not use a generic Ubuntu riscv64 compiler for board binaries: it can link
-> against a newer glibc than the flashed K230 image provides. The Xuantie
-> sysroot used by `configure_k230_macos.sh` is glibc 2.33, matching the board.
+> Do not build on the board: a native build runs out of its 1 GB of memory.
 
-## Native board build
-
-After the packages in [Board setup](board-setup.md) are installed:
+## 3. Upload to the board
 
 ```sh
-cd /root/supercombo_k230
-./scripts/fetch_nncase_runtime.sh
-cmake -S . -B build-native \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DSUPERCOMBO_BUILD_PANDA=ON
-cmake --build build-native -j2
-cmake --install build-native --prefix /root/supercombo_k230
-./k230_manager.py
+SUPERCOMBO_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh [root@192.168.219.117]
 ```
 
-The board GCC assembler does not accept the T-Head mnemonic `dcache.civa`, so
-`include/thead.h` and `src/mmz.c` use the equivalent raw instruction:
+The script copies the binaries from `build-ax630/bin`, the board-side Python, the
+UI sprites, and the parameter defaults to `/root/sc_run`. The axmodel is not in
+the repository ([how to build it](../tools/model/axmodel/README.md)); it is
+copied to `models/supercombo.axmodel` only when `SUPERCOMBO_AXMODEL` is set, so
+later uploads can leave it out.
 
-```c
-__asm volatile(".insn i 0x0b, 0, x0, %0, 0x027" : : "r"(op_addr));
-```
+- A running binary cannot be overwritten, so files go to `.upload/` first and
+  are moved into place.
+- The manager is not restarted. Stop it before the upload (or restart it after)
+  so the new binaries run.
+- Runtime tuning and calibration JSON files already in `params/` are never
+  overwritten. Repository defaults go to `params.defaults/` and seed a runtime
+  file only when it does not exist.
+- `K230_BOARD_DIR` changes the install directory and `K230_BIN_DIR` the binary
+  directory.
 
-Keep that form unless the assembler supports the `xtheadcmo` extension
-mnemonic.
-
-## Upload to the board
+## Host tests
 
 ```sh
-K230_SSH="sshpass -p '<password>' ssh" \
-K230_SCP="sshpass -p '<password>' scp" \
-  scripts/upload_to_board.sh root@192.168.219.111
+scripts/run_host_tests.sh
 ```
 
-The upload script reads binaries from `build/bin` by default. Set
-`K230_BUILD_DIR=build-native` for an on-board build or `K230_BIN_DIR` for a
-custom binary directory.
-
-Runtime tuning and calibration JSON files already present under `params/` are
-never overwritten. Repository defaults are copied to `params.defaults/` and seed
-a runtime file only when that file does not exist.
+Builds `build-host/` with the runtime off and runs every test through `ctest`:
+88 googletest cases and `check_param_server.py`. It needs neither the board nor
+`deps/`; googletest is downloaded on the first configure.

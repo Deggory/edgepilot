@@ -1,68 +1,55 @@
 #!/usr/bin/env bash
-# 빌드한 런타임을 보드에 올린다: 실행 파일, 보드용 Python, 모델, UI 스프라이트, 파라미터 기본값.
+# 교차 빌드한 런타임을 MaixCAM2에 올린다: 실행 파일, 보드용 Python, UI 스프라이트, 파라미터 기본값,
+# 그리고 모델(SUPERCOMBO_AXMODEL을 주었을 때만; 저장소에는 axmodel이 없다).
 # 보드의 params/는 덮어쓰지 않고, 기본값은 params.defaults/에 두어 없는 파일만 채운다.
-# 사용: scripts/upload_to_board.sh [root@보드]   (기본 root@192.168.219.111, 바이너리는 K230_BUILD_DIR/bin)
+# 실행 중인 바이너리는 덮어쓸 수 없으므로 .upload/에 올린 뒤 mv로 바꾼다. 매니저는 다시
+# 띄우지 않는다.
+# 사용: scripts/upload_to_board.sh [root@보드]
+#   (기본 root@192.168.219.117, 설치 디렉터리 K230_BOARD_DIR=/root/sc_run, 빌드 build-ax630)
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
-BOARD="${1:-root@192.168.219.111}"
-DEST="${K230_BOARD_DIR:-/root/supercombo_k230}"
-BUILD_DIR="${K230_BUILD_DIR:-build}"
-BIN_DIR="${K230_BIN_DIR:-${BUILD_DIR}/bin}"
-read -r -a SSH_CMD <<< "${K230_SSH:-ssh}"
-read -r -a SCP_CMD <<< "${K230_SCP:-scp}"
-SSH_OPTIONS=(
-  -o StrictHostKeyChecking=no
-)
+BOARD="${1:-root@192.168.219.117}"
+DEST="${K230_BOARD_DIR:-/root/sc_run}"
+BIN_DIR="${K230_BIN_DIR:-build-ax630/bin}"
+AXMODEL="${SUPERCOMBO_AXMODEL:-}"
+SSH=(ssh -o StrictHostKeyChecking=no)
+SCP=(scp -q -o StrictHostKeyChecking=no)
 
 runtime_files=(
   "${BIN_DIR}/k230_camerad"
   "${BIN_DIR}/k230_modeld"
   "${BIN_DIR}/k230_overlayd"
+  "${BIN_DIR}/k230_controlsd"
   "${BIN_DIR}/k230_recordd"
+  "${BIN_DIR}/k230_camcal"
   scripts/k230_manager.py
   scripts/k230_param_server.py
   scripts/display_control.py
   scripts/requirements-param-server.txt
 )
-model="models/supercombo.kmodel"
+[ -x "${BIN_DIR}/k230_pandad" ] && runtime_files+=("${BIN_DIR}/k230_pandad")
 param_files=(calibration.json adaptive_cruise.json steering.json driving.json recording.json display.json)
 ui_assets=(
   assets/ui/traffic_wait_red_retro-270x155-v3.png
   assets/ui/traffic_go_green_retro-270x155-v3.png
 )
 
-if [ -x "${BIN_DIR}/k230_pandad" ]; then
-  runtime_files+=("${BIN_DIR}/k230_pandad" "${BIN_DIR}/k230_controlsd")
-fi
-
-for runtime_file in "${runtime_files[@]}"; do
-  if [ ! -f "${runtime_file}" ]; then
-    echo "Missing runtime file: ${runtime_file}" >&2
-    exit 1
-  fi
-done
-for ui_asset in "${ui_assets[@]}"; do
-  if [ ! -f "${ui_asset}" ]; then
-    echo "Missing UI asset: ${ui_asset}" >&2
-    exit 1
-  fi
+for file in "${runtime_files[@]}" "${ui_assets[@]}" ${AXMODEL:+"$AXMODEL"}; do
+  [ -f "$file" ] || { echo "Missing: $file" >&2; exit 1; }
 done
 
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" \
-  "test -x /etc/init.d/S35supercombo_k230 || { echo 'Missing image-provided /etc/init.d/S35supercombo_k230' >&2; exit 1; }; rm -rf '$DEST/.upload'; mkdir -p '$DEST/.upload' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
-"${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" "${runtime_files[@]}" "$BOARD:$DEST/.upload/"
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "for source in '$DEST/.upload/'*; do mv \"\$source\" '$DEST/'; done"
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "mkdir -p '$DEST/.upload/assets/ui' '$DEST/assets/ui'"
-"${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" "${ui_assets[@]}" "$BOARD:$DEST/.upload/assets/ui/"
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" \
-  "rm -f '$DEST/assets/ui/'*.png; for source in '$DEST/.upload/assets/ui/'*; do mv \"\$source\" '$DEST/assets/ui/'; done"
-"${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" "$model" "$BOARD:$DEST/.upload/supercombo.kmodel"
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "mv '$DEST/.upload/supercombo.kmodel' '$DEST/models/supercombo.kmodel'"
-"${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" "${param_files[@]/#/params/}" "$BOARD:$DEST/params.defaults/"
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" \
-  "for name in ${param_files[*]}; do test -e '$DEST/params/'\"\$name\" || cp '$DEST/params.defaults/'\"\$name\" '$DEST/params/'\"\$name\"; done"
-"${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "rm -rf '$DEST/.upload'; sync"
-echo "Uploaded runtime files to $BOARD:$DEST"
+"${SSH[@]}" "$BOARD" "rm -rf '$DEST/.upload' && mkdir -p '$DEST/.upload/assets/ui' '$DEST/assets/ui' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
+"${SCP[@]}" "${runtime_files[@]}" "$BOARD:$DEST/.upload/"
+"${SCP[@]}" "${ui_assets[@]}" "$BOARD:$DEST/.upload/assets/ui/"
+[ -n "$AXMODEL" ] && "${SCP[@]}" "$AXMODEL" "$BOARD:$DEST/.upload/supercombo.axmodel"
+"${SCP[@]}" "${param_files[@]/#/params/}" "$BOARD:$DEST/params.defaults/"
+"${SSH[@]}" "$BOARD" "set -e; cd '$DEST'
+  for f in .upload/assets/ui/*; do mv \"\$f\" assets/ui/; done
+  if [ -f .upload/supercombo.axmodel ]; then mv .upload/supercombo.axmodel models/; fi
+  for f in .upload/*; do [ -f \"\$f\" ] && mv \"\$f\" .; done
+  for name in ${param_files[*]}; do [ -e params/\$name ] || cp params.defaults/\$name params/; done
+  rm -rf .upload; sync"
+echo "Uploaded runtime to $BOARD:$DEST${AXMODEL:+ (with model $AXMODEL)}"

@@ -15,6 +15,16 @@
  * 호환되지 않는다. LearnerState(6)는 v5에 더한 타입이라 모르는 리더는 건너뛴다. */
 constexpr uint32_t kK230RecordingVersion = 5;
 
+/* 세그먼트 영상 코덱. manifest의 video_codec과 파일 이름(road.h264 / road.hevc)이 따른다.
+ * MaixCAM2는 H.264로 녹화한다(보드 디코더가 H.264만 풀어 녹화를 그대로 리허설에 쓴다).
+ * K230 녹화는 HEVC다. */
+enum class K230VideoCodec : uint8_t { H264, Hevc };
+
+inline const char *k230_video_codec_name(K230VideoCodec codec)
+{
+  return codec == K230VideoCodec::H264 ? "h264" : "hevc";
+}
+
 enum class K230RecordType : uint16_t {
   CanRx = 1,
   CanTx = 2,

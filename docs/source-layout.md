@@ -5,42 +5,73 @@
 ## Configuration and input
 
 - `src/app_config.*`
-  - parses the small runtime option set once at startup.
-- `src/input_source.*`
-  - normalizes live `/dev/video2 NV12` and `SCNV12R1` replay files to
-    `Nv12Frame`.
+  - parses the small runtime option set once at startup, and holds the
+    MaixCAM2 camera intrinsics, the capture size, and the 4:3 preview crop
+    shared by `k230_overlayd` and `projection`.
+- `src/replay_source.*`
+  - reads `SCNV12R1` replay files into `Nv12Frame` for `k230_modeld` replay
+    mode. POSIX only.
+
+## MaixCAM2 platform
+
+`platform/maixcam2/` keeps the AX and MaixCDK headers out of `src/`. It builds
+only in the board build, against `deps/ax630` from
+`scripts/fetch_maixcam2_sdk.sh`.
+
+- `maix_camera.*`
+  - opens the camera (VI) through `libmaixcam_lib`'s `ax_middleware` classes,
+    AI-ISP off, sensor at the requested fps with auto exposure and a capped
+    shutter, and copies each frame into a CMM block by IVPS TDP.
+- `maix_display.*`
+  - the LCD as two VO layers: layer 0 takes a CMM frame, IVPS crops the centre
+    4:3 and scales it to 640x480; layer 1 is a cached CMM BGRA block the HUD is
+    drawn into and pushed without a copy. VO rotates for the 480x640 panel and
+    applies the board's flip/mirror. Also turns the backlight on.
+- `maix_cmm.*`
+  - physically contiguous CMM blocks shared across processes (allocate in one,
+    map by physical address in another, uncached).
+- `maix_gdc_warp.*`
+  - the model input warp on the IVPS GDC (`AX_IVPS_Dewarp`, perspective): two
+    512x256 views from a physical source address, unpacked to YUV6. Uses only
+    MSP SDK headers, not the middleware, so the NPU process initialises AX SYS
+    once.
+- `maix_shim.cc`, `stub/`
+  - the few MaixCDK runtime pieces (log, err, board config lookup) and Kconfig
+    stubs that the inline code in `ax_middleware.hpp` references but
+    `libmaixcam_lib` does not export.
 
 ## Perception
 
 - `src/model_output.*`
-  - owns the supercombo raw-output layout (`model_output_layout`, every block
-    offset with a `static_assert`) and exposes parsed plan, lanes, road edges,
-    leads, and pose. Also owns the shared `T_IDXS`/`X_IDXS` trajectory grids.
+  - owns the openpilot master supercombo raw-output layout
+    (`model_output_layout`, every block offset with a `static_assert`) and
+    exposes parsed plan, lanes, road edges, leads, and pose. Also owns the
+    shared `T_IDXS`/`X_IDXS` trajectory grids.
 - `src/model_temporal.h`
-  - the supercombo temporal inputs (desire pulse history, feature buffer, the
-    constant traffic-convention and nav inputs) without any nncase dependency,
-    so `gtest_model_output_parser` can pin the v0.9.4 convention on the host.
+  - the history queues the NPU core does not carry: 100-tick desire pulses
+    pooled to 25x8, 96 ticks of hidden state strided to 24x512, and the
+    5-frame image history per tower. No engine dependency, so
+    `gtest_model_output_parser` pins the convention on the host.
 - `src/model_input_transform.*`
-  - direct `NV12 -> calibrated warped YUV6` input transform. It fuses homography
-    sampling and openpilot-compatible YUV6 packing without creating an
-    intermediate RGB or warped image buffer. Its compact fixed-point LUT is
-    16 bytes/sample instead of 24, and the K230 build uses an exact C908 RVV
-    kernel with a scalar fallback.
+  - the CPU input warp: direct `NV12 -> calibrated warped YUV6`, fusing
+    homography sampling and YUV6 packing through a compact fixed-point LUT.
+    Also produces the projection matrices the GDC warp uses.
 - `src/supercombo_model.*`
-  - the nncase wrapper: loads the kmodel, owns the input tensors, writes the
-    constant and temporal inputs (`model_temporal.h`) and runs one frame. The
-    only file under `src/` that includes nncase headers.
-- `src/gpu_warp.*`
-  - the VGLite (2.5D GPU) input warp: the perspective 3x3 and bilinear
-    sampling run on the GPU and land directly in the model's input tensor.
-    `SUPERCOMBO_WARP_CPU=1` selects the CPU path in `model_input_transform`
-    instead.
+  - loads the axmodel, enforces the input/output contract, runs the GDC (or
+    CPU) warp into the image histories, fills the temporal inputs, and runs one
+    frame. `run_frame_phys` reads a ring slot by physical address and drops the
+    frame if it was overwritten during the warp.
+- `src/ax_engine_session.*`, `src/ax_engine_api.h`
+  - a minimal `libax_engine` session with a cached CMM buffer per tensor. The
+    board image ships no engine headers, so `ax_engine_api.h` declares the API.
+    The only files under `src/` that touch the NPU.
 - `src/calibration_service.*`, `src/calibration_online.*`
   - wrap pose-based online calibration, manual override, projection policy, and
     the model-input calibration feedback loop.
 - `src/projection.*`
   - converts model road coordinates through the openpilot-style `view_from_calib`
-    matrix and compensates for the rotated `800x480` display.
+    matrix onto the display, using the target's real width and the same 4:3
+    preview crop as the video layer.
 
 ## Planning and control
 
@@ -58,6 +89,9 @@
   `src/control_params.*`, `src/hyundai_can.*`
   - apply the planner's lag-adjusted curvature through the validated K7
     torque/CAN path.
+- `src/lateral_learners.*`
+  - the paramsd/torqued ports that estimate steer ratio and torque response
+    while driving (opt-in).
 - `src/lateral_path.*`
   - reduces `modelState` to the steering-usability gate (reach and point
     count). It computes no path geometry; curvature comes from the MPC.
@@ -67,7 +101,6 @@
   - `can_frame.h` holds the transport type and the K7 YG HEV address/bus table;
     `vehicle_can` decodes received frames into vehicle state, `hyundai_can`
     encodes LKAS11/CLU11/MDPS12 commands.
-
 - `src/control_block.h`
   - the engage/steer block reasons as one table: enum, wire name, HUD label,
     and kind (reject / hard disengage / transient Panda handshake /
@@ -98,44 +131,37 @@ released after that short hold if they persist.
     reads or fills a message includes this and nothing else.
 - `src/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
-    and the shared NV12 frame ring, all on one `ShmRegion` (open, size,
-    map, close); each channel keeps only its own size policy.
-- `src/k230_overlayd.cc`, `src/k230_camerad.cc`, `src/k230_modeld.cc`
-  - openpilot-style process split. `k230_overlayd` is the direct DRM overlay
-    process; `k230_camerad` and `k230_modeld` keep the camera/model path
-    independent.
+    and the camera frame ring, all on one `ShmRegion` (open, size, map, close).
+    The frame ring (version 5) keeps only its header in shm; the slots are
+    camerad's CMM blocks, listed by physical address, each with a seqlock that
+    hardware readers check before and after reading.
+- `src/k230_camerad.cc`, `src/k230_modeld.cc`, `src/k230_overlayd.cc`
+  - openpilot-style process split: capture into the ring, model, and the
+    two-layer LCD HUD. The `k230_` names are kept from the K230 runtime.
 - `src/overlay_renderer.*`
   - draws the HUD (panels, plan/lane/road-edge ribbons, lead marker, turn
-    signals, alerts, traffic-signal sprites) with OpenCV into the CPU ARGB8888
-    buffer used by the split DRM overlay process. Stateless apart from the
-    preloaded sprites; the turn-signal phase comes from `k230_overlayd`.
+    signals, alerts, traffic-signal sprites) with OpenCV into a straight-alpha
+    BGRA buffer. `HudLayout` picks the compact 640-wide layout (208 px panels)
+    or the 800-wide K230 layout by target width; lanes, path, and markers are
+    anti-aliased. Stateless apart from the preloaded sprites; the turn-signal
+    phase comes from `k230_overlayd`.
 - `src/overlay_state.*`
   - `OverlayHudState`, the `K230*State` → `OverlayHudState` mapping shared by
     `k230_overlayd` and `hud_snapshot`, the engage-block label table, and
     `OverlayAlertEvents`, which turns the controlsd event counters into the one
-    piezo/toast alert a frame may play (baseline on first sight, rebaseline on a
+    toast/log alert a frame may raise (baseline on first sight, rebaseline on a
     controlsd restart, reject > engage > disengage > departure). No OpenCV, so
     `gtest_overlay_state` pins all of it on the host.
 - `src/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling into `OverlayHudState`, called
     at 1 Hz by `k230_overlayd`.
-- `src/k230_recordd.cc`, `src/mvx_v4l2_encoder.*`, `src/recording_writer.*`,
-  `src/recording_format.h`
-  - low-priority data recorder, direct MVX V4L2 M2M encoder, timestamp index,
-    compact event log, route segmentation, and storage-reserve guard.
-    `RecordingWriter` serializes every record before it enters the write queue
-    (a queue entry is the packet or record bytes, not a 21 KB CAN batch), and
-    `StagingMover` is the thread that moves closed files from tmpfs to the SD
-    card. `gtest_recording_writer` pins the on-disk layout on the host.
-    `recording_format.h` is the on-disk contract (`kK230RecordingVersion`,
-    the `K230LOG1` / `K230IDX1` headers, record types) that
-    `tools/model/recording_reader.py` mirrors.
-- `src/piezo_buzzer.*`
-  - the PWM buzzer: one table of tone sequences per `PiezoAlert`, played from
-    a helper thread so `k230_overlayd` never waits on it.
-- `src/mmz.c`
-  - the K230 SDK's MMZ (physically contiguous memory) allocator shim behind
-    `k230_camerad`'s capture buffers.
+- `src/recording_writer.*`, `src/recording_format.h`
+  - the event-log writer and on-disk contract of the K230 recorder, kept for
+    the recorder port and for the host tools that read K230 drives.
+    `gtest_recording_writer` pins the layout; `recording_format.h`
+    (`kK230RecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
+    is mirrored by `tools/model/recording_reader.py`. No process uses it on the
+    MaixCAM2 yet.
 - `src/panda_client.*`, `src/panda_can_codec.*`, `src/k230_pandad.cc`
   - optional panda USB bridge. It handles USB, health, heartbeat, receive CAN,
     and the final TX gate, but does not generate vehicle control messages.
@@ -145,27 +171,34 @@ released after that short hold if they persist.
     planner worker separated from the 100 Hz control loop.
 - `scripts/k230_manager.py`
   - minimal supervisor and heartbeat publisher. It is intentionally not a full
-    openpilot manager clone. One table in start order decides which processes
-    run (`K230_ENABLE_CONTROL`, `K230_ENABLE_PANDA`, `K230_ENABLE_PARAM_SERVER`)
-    and with what nice value.
+    openpilot manager clone. It stops the stock launcher, switches USB-C to host
+    for the Panda, and one table in start order decides which processes run
+    (`K230_ENABLE_CONTROL`, `K230_ENABLE_PANDA`, `K230_ENABLE_PARAM_SERVER`) and
+    with what nice value.
 - `scripts/k230_param_server.py`, `scripts/display_control.py`
   - the FastAPI parameter editor (`K230_ENABLE_PARAM_SERVER`) and the
-    backlight/brightness helper it calls.
+    MaixCAM2 backlight helper it calls (PWM3).
 
 ## Scripts and tools
 
-- `scripts/configure_k230_macos.sh`, `scripts/fetch_nncase_runtime.sh`,
-  `scripts/upload_to_board.sh`, `scripts/run_host_tests.sh`,
-  `scripts/build_supercombo_model.sh`
-  - cross-build configuration, pinned nncase runtime download, deploy, host
-    tests, and the ONNX → kmodel pipeline. See `scripts/README.md` and
+- `scripts/fetch_maixcam2_sdk.sh`, `tools/docker_ax630/`,
+  `scripts/upload_to_board.sh`, `scripts/run_host_tests.sh`
+  - pinned SDK and board-library fetch, the arm64 build container, deploy, and
+    host tests. See `scripts/README.md` and
     [Build and deploy](build-and-deploy.md).
+- `tools/model/axmodel/`
+  - the openpilot master → axmodel pipeline (core extraction, calibration data,
+    Pulsar2 config).
 - `tools/model/`
-  - the kmodel pipeline scripts plus the recording readers:
+  - the recording readers and the v0.9.4-era model helpers:
     `recording_reader.py` decodes `recordd` routes (frame index, event log,
-    HEVC) and is the one Python mirror of `recording_format.h` /
+    H.264 from MaixCAM2 or HEVC from K230) and is the one Python mirror of `recording_format.h` /
     `ipc_messages.h`; `lane_bias.py`, `route_frames.py`, `make_replay.py`, and
     `make_calibration.py` build on it. See `tools/model/README.md`.
+- `tools/calib/`
+  - camera calibration: board-side chessboard capture, the PC-side solver, the
+    chessboard image, the resulting MaixCAM2 intrinsics, and the model-view
+    preview.
 - `tools/control/`
   - `fit_lateral_params.py` (torque regression and actuator-lag estimate from
     drives) and `export_can_fixture.py` (recorded CAN → `gtest_control_replay`
@@ -178,7 +211,7 @@ released after that short hold if they persist.
     `gtest/CMakeLists.txt`; `scripts/run_host_tests.sh` runs them. See
     `gtest/README.md`.
 - `diagnostics/`
-  - benchmarks, replay tools (built by `diagnostics/CMakeLists.txt`), and the
+  - replay and HUD tools (built by `diagnostics/CMakeLists.txt`), and the
     Python `check_param_server.py`; see `diagnostics/README.md`.
 
 ## Shared helpers

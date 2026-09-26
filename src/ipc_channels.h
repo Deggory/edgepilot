@@ -73,23 +73,32 @@ private:
     K230CanBatch *slots_ = nullptr;
 };
 
+/* 카메라 프레임 링. shm에는 헤더만 있고, 슬롯 픽셀은 생산자(camerad)가 잡은 CMM
+ * 블록에 있다(헤더에 물리 주소). 카메라·GDC·IVPS가 물리 주소로 직접 읽고 쓰며, 각
+ * 슬롯의 seqlock(slot_seq, 쓰는 중이면 홀수)이 덮어쓰기를 알린다. */
 class K230FrameRing {
 public:
     K230FrameRing() = default;
     ~K230FrameRing();
 
+    // create면 헤더를 새로 초기화한다(생산자). 아니면 생산자가 만든 링에 붙는다.
     bool open(bool create, unsigned width = kK230AiWidth, unsigned height = kK230AiHeight,
               unsigned slots = kK230FrameSlots);
     void close();
-    bool write_slot(unsigned index, uint64_t frame_id, const uint8_t *source,
-                    size_t size);
+    /* CPU로 읽을 때: attach_slot으로 붙인 슬롯 매핑에서 seqlock으로 복사한다. */
     bool copy_slot(unsigned index, uint64_t frame_id, uint8_t *destination,
                    size_t size) const;
-    /* NV12 슬롯을 Y/UV 목적지로 나눠 복사한다. 소비자가 이미 스트라이드가
-     * 있는 버퍼(예: 인코더 입력)를 쥐고 있을 때 중간 복사를 없앤다. */
-    bool copy_slot_planes(unsigned index, uint64_t frame_id, uint8_t *luma,
-                          size_t luma_stride, uint8_t *chroma,
-                          size_t chroma_stride) const;
+    uint64_t slot_phys(unsigned index) const;
+    void set_slot_phys(unsigned index, uint64_t phys);
+    void attach_slot(unsigned index, uint8_t *virt);
+    /* 하드웨어가 슬롯에 직접 쓸 때: begin_write .. (쓰기) .. end_write. */
+    void begin_write(unsigned index);
+    void end_write(unsigned index, uint64_t frame_id);
+    /* 하드웨어가 슬롯을 직접 읽을 때: read_begin이 안정된 seq를 주고, 다 읽은 뒤
+     * read_still_valid로 그동안 덮어써지지 않았는지 본다. */
+    bool read_begin(unsigned index, uint64_t frame_id, uint64_t *seq) const;
+    bool read_still_valid(unsigned index, uint64_t frame_id, uint64_t seq) const;
+
     unsigned slot_count() const { return header_ ? header_->slot_count : 0; }
     unsigned frame_bytes() const { return header_ ? header_->frame_bytes : 0; }
     unsigned width() const { return header_ ? header_->width : 0; }
@@ -99,7 +108,7 @@ public:
 private:
     ShmRegion region_;
     K230FrameRingHeader *header_ = nullptr;
-    uint8_t *frames_ = nullptr;
+    uint8_t *slot_virt_[kK230FrameSlots] = {};
 };
 
 #endif

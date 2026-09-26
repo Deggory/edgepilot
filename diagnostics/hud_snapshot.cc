@@ -3,7 +3,8 @@
  * K230ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성 장면을 쓴다.
  * 호스트와 보드에서 같은 소스로 빌드한다.
  * 사용: hud_snapshot [--assets DIR] [--model model.bin] [--control control.bin]
- *       [--iterations N] [--out PREFIX] [--landscape] */
+ *       [--iterations N] [--out PREFIX] [--landscape | --maixcam2]
+ * --maixcam2: 640x480 네이티브 배치(k230_overlayd의 VO 버퍼와 같다). */
 #include "overlay_state.h"
 #include "ipc_messages.h"
 #include "overlay_renderer.h"
@@ -79,7 +80,6 @@ ParsedModelOutput synthetic_output()
     }
     output.leads.valid = true;
     output.leads.global_probabilities[0] = 0.85f;
-    output.leads.predictions[0].probabilities[0] = 0.85f;
     output.leads.predictions[0].points[0] = {42.0f, 0.4f, 16.0f, 0.0f};
     return output;
 }
@@ -110,6 +110,7 @@ int main(int argc, char **argv)
     std::string out_prefix = "hud_snapshot";
     int iterations = 50;
     bool landscape = false;
+    bool maixcam2 = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> const char * { return i + 1 < argc ? argv[++i] : ""; };
@@ -119,10 +120,11 @@ int main(int argc, char **argv)
         else if (arg == "--iterations") iterations = std::max(1, std::atoi(next()));
         else if (arg == "--out") out_prefix = next();
         else if (arg == "--landscape") landscape = true;
+        else if (arg == "--maixcam2") landscape = maixcam2 = true;
         else {
             std::fprintf(stderr,
                          "usage: %s [--assets DIR] [--model model.bin] [--control control.bin]\n"
-                         "          [--iterations N] [--out PREFIX] [--landscape]\n",
+                         "          [--iterations N] [--out PREFIX] [--landscape | --maixcam2]\n",
                          argv[0]);
             return 2;
         }
@@ -213,7 +215,7 @@ int main(int argc, char **argv)
         {"fault", true, fault},
     };
 
-    const uint32_t width = landscape ? 800 : 480;
+    const uint32_t width = maixcam2 ? 640 : landscape ? 800 : 480;
     const uint32_t height = landscape ? 480 : 800;
     std::vector<uint32_t> storage(static_cast<size_t>(width) * height, 0);
     const OverlayTarget target{storage.data(), width, height, width * 4};

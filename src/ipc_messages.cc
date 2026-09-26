@@ -137,7 +137,6 @@ ParsedModelOutput k230_parsed_from_model_state(const K230ModelState &state)
     if (state.lead.valid) {
         parsed.leads.valid = true;
         parsed.leads.global_probabilities[0] = state.lead.probability;
-        parsed.leads.predictions[0].probabilities[0] = state.lead.probability;
         parsed.leads.predictions[0].points[0] = {
             state.lead.x,
             state.lead.y,

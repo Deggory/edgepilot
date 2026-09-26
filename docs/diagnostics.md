@@ -10,73 +10,83 @@ their options, and how to build them are listed in
 ## HUD snapshots
 
 `hud_snapshot` renders the overlay renderer off-line for the idle / standby /
-drive / busy / depart / fault scenarios, writes each `480x800` frame as a
-`K230ARGB` file and prints draw timings. It links OpenCV like `k230_overlayd`,
-so build it where OpenCV is installed: the board-native CMake build with
-`-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`, or a Linux host.
+drive / busy / depart / fault scenarios, writes each frame as a `K230ARGB` file
+and prints draw timings. `--maixcam2` draws the native 640x480 layout that
+`k230_overlayd` puts on VO layer 1; without it the tool draws the K230 `480x800`
+portrait frame (`--landscape` for `800x480`). It links OpenCV like
+`k230_overlayd`, so build it where OpenCV is found: a host with OpenCV, or the
+container build with `-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`.
 
 ```sh
-./hud_snapshot --assets assets/ui --out /tmp/hud
-python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]
+./hud_snapshot --maixcam2 --assets assets/ui --out /tmp/hud
 ```
 
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
 `K230ModelState` / `K230ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
-pair, plus the matching camera frame, from a `recordd` route. The `compose`
-command rotates each frame back to the `800x480` view and, with a camera frame,
-composites it the way the panel shows it.
+pair, plus the matching camera frame, from a K230 `recordd` route.
+`python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]` turns K230-size
+frames (`480x800` or `800x480`) into PNGs and composites a camera frame the way
+the K230 panel showed it; it does not accept 640x480 frames yet.
 
 ## NV12 replay
 
-`k230_modeld` can run headless from a recorded route: replay mode opens neither
-the camera nor the display and feeds the same NV12 path as live capture, so it
-validates model execution and online calibration from stored segments.
+`k230_modeld` can run headless from a recorded route: replay mode reads an
+`SCNV12R1` file instead of the camera ring and feeds the same GDC warp as live
+capture, so it validates model execution and online calibration from stored
+segments. It needs the NPU, so it runs on the board. The recordings available
+today come from the K230 camera, so pass its intrinsics.
 
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
 python3 tools/model/make_replay.py --route recordings/<route> --out /tmp/replay_nv12 --frames 120
-scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.111:/root/supercombo_k230/
+scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.117:/root/sc_run/
 
-# board
-SUPERCOMBO_REPLAY_NV12=/root/supercombo_k230/replay.scnv12 \
-  ./k230_modeld models/supercombo.kmodel 0
+# board (stop the manager first, or at least k230_modeld)
+cd /root/sc_run
+SUPERCOMBO_REPLAY_NV12=/root/sc_run/replay.scnv12 \
+SUPERCOMBO_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
+  ./k230_modeld models/supercombo.axmodel
 ```
 
 ## Model swap verification
 
-A kmodel swap changes three things at once: the warp input, the temporal
-plumbing, and the network. Verify them together by running the same NV12
-frames through the board and through the host.
+A model swap changes three things at once: the warp input, the temporal
+plumbing, and the network. The board side is verified by running a replay
+with the raw outputs dumped:
 
 ```sh
-# host: build the replay and the fp32 reference for the candidate ONNX
-python tools/model/make_replay.py \
-  --route <route_dir> --out /tmp/verify --frames 100 --skip 400 \
-  --model models/onnx/supercombo_uint8.onnx \
-  --rpy "$(python3 -c 'import json;print(",".join(map(str,json.load(open("params/calibration.json"))["rpy_rad"])))')"
-
 # board: same frames through the runtime, dumping raw outputs
 SUPERCOMBO_REPLAY_NV12=/root/verify/replay.scnv12 \
 SUPERCOMBO_RAW_DUMP=/root/verify/board_raw.bin \
 SUPERCOMBO_CALIB_AUTO=0 \
-  ./k230_modeld model/<candidate>.kmodel 0
+SUPERCOMBO_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
+  ./k230_modeld models/<candidate>.axmodel
 ```
 
-The `--rpy` value must be the board's stored calibration, because on the board
-the calibration service feeds the input warp on every frame. Compare
-`board_raw.bin` against
-`host_ref.npy` on the slices that drive control (plan lateral offset, lane
-positions) rather than on the raw vector, and check that the feature/hidden
-slice evolves smoothly — a dead temporal buffer still produces plausible
-single-frame output.
+`board_raw.bin` is an `SCODMP1` file of 2576-float frames. Compare it against a
+host reference on the slices that drive control (plan lateral offset, lane
+positions) rather than on the raw vector, and check that the hidden-state slice
+evolves smoothly — a dead temporal buffer still produces plausible single-frame
+output. With `SUPERCOMBO_CALIB_AUTO=0`, the host reference must use the rpy the
+board restored from `params/calibration.json`, because the calibration service
+feeds the input warp on every frame.
 
-Measured for the current v0.9.4 build (100 evening city frames, int16 PTQ with
-pre-quantized weights, uint8 image inputs): plan lateral 0.029 m mean / 0.183 m
-max at 2 s, lane position 0.102 m mean, feature buffer frame-to-frame
-correlation 0.60 against 0.62 for the fp32 reference on the same frames.
+The host reference in `tools/model/make_replay.py --model` runs the v0.9.4 ONNX
+and does not fit the master contract. For the master core, the fp32 reference
+with the runtime's queue semantics is built by
+`tools/model/axmodel/make_core_data.py` (its `eval/` set); a host runner that
+takes an `SCNV12R1` replay is not in the repository yet.
+
+Measured when the master axmodel was brought up (200-frame K230 replay): the
+board output against the host axengine runner gave a plan lateral difference of
+0.0008 m at 2 s and a hidden-state cosine similarity of 0.9994. The K230 v0.9.4
+numbers (int16 PTQ vs fp32) are in [models/README.md](../models/README.md).
 
 ## Lateral bias
+
+The tools below run on the host over recorded drives. The recorder is not
+ported to the MaixCAM2 yet, so today their input is K230 recordings.
 
 If the car holds one side of the lane, `tools/model/lane_bias.py` says whether
 the camera calibration is responsible:
@@ -146,9 +156,9 @@ returns `latAccelFactor` 4.00, the value that route was fit to.
 ## Lateral planner replay
 
 `replay_planner` re-runs `LateralPlanner` over a recording and writes
-what the planner asked for, one row per `ModelState`. It builds on the host now
-that the MPC has no riscv64 dependency, so a recorded route can be re-planned
-without the board:
+what the planner asked for, one row per `ModelState`. The MPC has no
+board-specific dependency, so a recorded route can be re-planned without the
+board:
 
 ```sh
 cmake --build build-host --target replay_planner -j2

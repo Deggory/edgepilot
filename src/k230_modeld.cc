@@ -1,13 +1,15 @@
 #include "app_config.h"
 #include "calibration_service.h"
-#include "input_source.h"
+#include "replay_source.h"
 #include "utils_process.h"
 #include "utils_time.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
 #include "model_output.h"
 #include "supercombo_model.h"
+#include "maix_cmm.h"
 
+#include <linux/videodev2.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -151,22 +153,19 @@ bool publish_output(K230LatestChannel &model_pub, SupercomboModel &model, const 
 int run_replay(const AppConfig &config, K230LatestChannel &model_pub)
 {
     ReplayNv12Source source(config.replay_nv12_path);
-    /* 재생 소스 해상도에 맞춘 기본 워프. GPU 워프도 이 크기로 만들어져야
+    /* 재생 소스 해상도에 맞춘 기본 워프. GDC 워프도 이 크기로 만들어져야
      * 라이브와 같은 경로를 탄다. */
     AppConfig replay_config = config;
     replay_config.nv12_width = source.width();
     replay_config.nv12_height = source.height();
-    replay_config.input_warp_fx = default_input_warp_fx(source.width());
-    replay_config.input_warp_fy = default_input_warp_fy(source.height());
-    replay_config.input_warp_cx = default_input_warp_cx(source.width());
-    replay_config.input_warp_cy = default_input_warp_cy(source.height());
+    replay_config.set_warp_source(source.width(), source.height());
     const unsigned target_frames = config.max_frames > 0
         ? std::min(config.max_frames, source.frame_count())
         : source.frame_count();
     std::fprintf(stderr, "modeld replay input format=NV12 frames=%u file=%s target=%u\n",
                  source.frame_count(), config.replay_nv12_path.c_str(), target_frames);
 
-    SupercomboModel model(config.kmodel_path.c_str(), replay_config);
+    SupercomboModel model(config.axmodel_path.c_str(), replay_config);
     CalibrationService calibration(config);
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
@@ -212,6 +211,29 @@ int run_replay(const AppConfig &config, K230LatestChannel &model_pub)
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 
+/* CPU 워프 대체 경로용: CMM 링 슬롯을 캐시 없이 매핑해 링에 붙인다. camerad가
+ * 다시 떠서 물리 주소가 바뀌면 다시 매핑한다. */
+struct RingSlotMaps {
+    unsigned long long phys[kK230FrameSlots] = {};
+    uint8_t *virt[kK230FrameSlots] = {};
+    size_t size = 0;
+
+    void attach(K230FrameRing &ring, unsigned slot)
+    {
+        const unsigned long long p = ring.slot_phys(slot);
+        if (p == phys[slot] && virt[slot]) return;
+        if (virt[slot]) cmm_unmap(virt[slot], size);
+        size = ring.frame_bytes();
+        virt[slot] = cmm_map(p, size);
+        phys[slot] = p;
+        ring.attach_slot(slot, virt[slot]);
+    }
+    ~RingSlotMaps()
+    {
+        for (unsigned i = 0; i < kK230FrameSlots; ++i) cmm_unmap(virt[i], size);
+    }
+};
+
 int run_live(const AppConfig &config, K230LatestChannel &model_pub,
              K230LatestChannel &record_frame_pub)
 {
@@ -226,7 +248,7 @@ int run_live(const AppConfig &config, K230LatestChannel &model_pub,
     }
     if (!frame_ring.valid()) return 1;
 
-    SupercomboModel model(config.kmodel_path.c_str(), config);
+    SupercomboModel model(config.axmodel_path.c_str(), config);
     CalibrationService calibration(config);
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
@@ -240,27 +262,14 @@ int run_live(const AppConfig &config, K230LatestChannel &model_pub,
     unsigned frame_sync_failures = 0;
     uint64_t last_frame_id = 0;
     bool have_last_frame_id = false;
-    const unsigned target_fps = std::max(1U, std::min(config.model_fps, 30U));
-    const uint64_t model_interval_ns = 1000000000ULL / target_fps;
-    uint64_t next_model_start_ns = 0;
     RateWindow window;
-    /* GPU 워프를 쓰면 링 슬롯을 워프 소스 평면으로 곧장 복사해 중간 버퍼를 없앤다. */
-    GpuWarp::Planes planes;
-    const bool preload_planes = model.frame_planes(&planes);
-    std::vector<uint8_t> frame_copy(preload_planes ? 0 : frame_ring.frame_bytes());
+    std::vector<uint8_t> frame_copy(frame_ring.frame_bytes());
+    RingSlotMaps slot_maps;
 
-    std::fprintf(stderr, "modeld: live shared ring slots=%u frame=%ux%u bytes=%u target=%uHz\n",
-                 frame_ring.slot_count(), frame_ring.width(), frame_ring.height(),
-                 frame_ring.frame_bytes(), target_fps);
+    std::fprintf(stderr, "modeld: live frame ring slots=%u frame=%ux%u, every frame\n",
+                 frame_ring.slot_count(), frame_ring.width(), frame_ring.height());
 
     while (!g_stop) {
-        const uint64_t now_ns = k230_now_ns();
-        if (next_model_start_ns > now_ns) {
-            const uint64_t sleep_us = (next_model_start_ns - now_ns) / 1000ULL;
-            if (sleep_us > 0) usleep(static_cast<useconds_t>(sleep_us));
-        }
-        if (g_stop) break;
-
         K230RoadAiFrame meta;
         if (!frame_sub.read_new(&last_frame_seq, &meta, sizeof(meta), 1000)) {
             std::fprintf(stderr, "modeld: waiting for roadAiFrame\n");
@@ -276,12 +285,20 @@ int run_live(const AppConfig &config, K230LatestChannel &model_pub,
         have_last_frame_id = true;
         last_frame_id = meta.frame_id;
 
-        const bool frame_ready = preload_planes
-            ? frame_ring.copy_slot_planes(meta.slot, meta.frame_id, planes.luma,
-                                          planes.luma_stride, planes.chroma,
-                                          planes.chroma_stride)
-            : frame_ring.copy_slot(meta.slot, meta.frame_id,
-                                   frame_copy.data(), frame_copy.size());
+        model.set_chroma_vu(meta.format == V4L2_PIX_FMT_NV21);
+        const int frame_w = static_cast<int>(meta.width), frame_h = static_cast<int>(meta.height);
+        /* 링 슬롯이 CMM이고 GDC 워프를 쓰면 GDC가 슬롯을 직접 읽는다(복사 없음). 아니면
+         * 슬롯을 복사해 CPU 워프로 간다(CMM 슬롯은 캐시 없는 매핑으로 읽는다). */
+        const unsigned long long slot_phys = frame_ring.slot_phys(meta.slot);
+        const bool zero_copy = slot_phys != 0 && model.input_buffer(frame_w, frame_h) != nullptr;
+        uint64_t slot_seq = 0;
+        bool frame_ready = false;
+        if (zero_copy) {
+            frame_ready = frame_ring.read_begin(meta.slot, meta.frame_id, &slot_seq);
+        } else {
+            if (slot_phys != 0) slot_maps.attach(frame_ring, meta.slot);
+            frame_ready = frame_ring.copy_slot(meta.slot, meta.frame_id, frame_copy.data(), frame_copy.size());
+        }
         if (!frame_ready) {
             ++frame_sync_failures;
             ++errors;
@@ -290,18 +307,19 @@ int run_live(const AppConfig &config, K230LatestChannel &model_pub,
         ego.poll();
         model.set_desire(ego.desire());
 
-        // The recorder follows the exact frame selected by modeld, rather than
-        // sampling camerad's higher-rate latest-frame stream independently.
+        // 녹화기(아직 포팅 전)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
         if (!record_frame_pub.publish(&meta, sizeof(meta))) {
             std::fprintf(stderr, "\nmodeld: publish recordFrame failed\n");
         }
 
         const uint64_t t0 = k230_now_ns();
-        const bool ok = preload_planes
-            ? model.run_frame_preloaded(meta.width, meta.height, raw)
+        // GDC가 읽는 동안 슬롯이 덮어써졌으면 모델 상태(이미지·특징 큐)에 넣기 전에 버린다.
+        const bool ok = zero_copy
+            ? model.run_frame_phys(slot_phys, frame_w, frame_h, raw, [&] {
+                  return frame_ring.read_still_valid(meta.slot, meta.frame_id, slot_seq);
+              })
             : model.run_frame_nv12(frame_copy.data(), meta.width, meta.height, raw);
         const uint64_t t1 = k230_now_ns();
-        next_model_start_ns = t0 + model_interval_ns;
         if (ok) {
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);

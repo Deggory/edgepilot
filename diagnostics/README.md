@@ -6,7 +6,7 @@
 
 ## 빌드
 
-호스트 도구는 nncase, OpenCV, K230 디스플레이 라이브러리 없이 빌드된다:
+호스트 도구는 AX 런타임, MaixCAM2 SDK, OpenCV 없이 빌드된다:
 
 ```sh
 cmake -S . -B build-host \
@@ -16,8 +16,10 @@ cmake -S . -B build-host \
 cmake --build build-host --target replay_closed_loop -j2
 ```
 
-보드 도구는 `build/`의 교차 빌드에 `-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`을 더해 만든다.
-`hud_snapshot`은 `k230_overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
+보드용으로는 `tools/docker_ax630/`의 컨테이너에서 `build-ax630/`을 구성할 때
+`-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`을 더하면 같은 도구가 `build-ax630/bin`에 생긴다
+(`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는 없다. `hud_snapshot`은
+`k230_overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
 
 ## 도구
 
@@ -29,15 +31,10 @@ cmake --build build-host --target replay_closed_loop -j2
 | `replay_planner` | `[--laneless] <out.csv> <events.bin...>` | 녹화한 `ModelState`/`ControlState`로 `LateralPlanner`를 다시 돌려 요구 곡률을 CSV로 쓴다 |
 | `replay_lateral_learners` | `[옵션] <events.bin...>` | paramsd·torqued 학습기를 녹화에 돌려 학습값을 출력한다 |
 | `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
-| `bench_input_warp_overhead` | `[--runs N]` | NV12 → YUV6 입력 경로(직접 패킹, 스칼라·RVV 워프, float·u8)의 CPU 시간. 경로끼리 결과가 다르면 종료 코드 1 |
-| `hud_snapshot` | `[--assets DIR] [--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--landscape]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `K230ARGB` 프레임으로 그리고 그리기 시간을 출력한다 |
+| `hud_snapshot` | `[--assets DIR] [--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--landscape \| --maixcam2]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `K230ARGB` 프레임으로 그리고 그리기 시간을 출력한다. `--maixcam2`는 `k230_overlayd`와 같은 640x480 네이티브 배치, 기본은 K230의 480x800 |
 
-보드:
-
-| 도구 | 사용 | 하는 일 |
-| --- | --- | --- |
-| `bench_kmodel` | `[--iterations N] <model.kmodel>` | 0으로 채운 입력으로 kmodel 추론 시간을 잰다. 재기 전에 파이프라인을 멈춘다 |
-| `run_kmodel_sequence` | `<model.kmodel> <seq.k230msq> <out.bin>` | `K230MSQ1` 입력 시퀀스를 틱마다 넣고 출력을 덤프한다(호스트 FP32와 대조용). 실행마다 CMA가 새므로 강제 종료하지 말고 끝난 뒤 보드를 재부팅한다 |
+재생 도구의 입력은 녹화(`events/*.bin`)다. MaixCAM2에는 아직 녹화기가 없어서 지금은 K230에서
+녹화한 주행을 쓴다.
 
 `check_param_server.py`는 파라미터 서버를 검사하는 Python unittest다. 여기 있지만
 `ctest`에 등록돼 `scripts/run_host_tests.sh`로 함께 돈다.

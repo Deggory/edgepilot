@@ -2,86 +2,82 @@
 #define SUPERCOMBO_MODEL_H
 
 #include "app_config.h"
-#include "gpu_warp.h"
+#include "ax_engine_session.h"
 #include "model_input_transform.h"
 #include "model_output.h"
 #include "model_temporal.h"
+#include "maix_gdc_warp.h"
 
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
-#include <string>
+#include <mutex>
+#include <thread>
 #include <vector>
 
-#include <nncase/runtime/interpreter.h>
-#include <nncase/runtime/runtime_op_utility.h>
-#include <nncase/runtime/util.h>
-
-/* kmodel 로드·실행을 직접 감싼다. nncase 심볼은 이 클래스 안에만 둔다. */
+/* openpilot master supercombo 코어(axmodel)를 AX630C NPU에서 돌린다. 공개 ONNX가
+ * 그래프 안에 갖던 이미지·desire·특징 큐는 여기서 관리한다(model_temporal.h).
+ * 입력: input_imgs/big_input_imgs uint8 [1,12,128,256], desire [1,25,8],
+ * features_buffer [1,24,512], traffic_convention [1,2]. 출력 [1,2576]. */
 class SupercomboModel
 {
 public:
-    SupercomboModel(const char *kmodel_file, const AppConfig &config);
+    SupercomboModel(const char *model_file, const AppConfig &config);
+    ~SupercomboModel();
+    SupercomboModel(const SupercomboModel &) = delete;
+    SupercomboModel &operator=(const SupercomboModel &) = delete;
 
-    /* modeld가 프레임 링에서 이미 캐시 가능한 버퍼로 복사해 넘겨주므로
-     * 여기서 다시 복사하지 않는다. C908 vluxei32.v가 /dev/shm 매핑 위에서
-     * 불안정한 문제는 그 복사로 이미 해결된다. */
     bool run_frame_nv12(const uint8_t *nv12, int src_w, int src_h,
                         std::vector<float> &raw_output);
-    /* GPU 워프를 쓰는 경우 소비자가 프레임을 소스 평면에 직접 채울 수 있다.
-     * 그렇게 채웠으면 run_frame_preloaded로 실행한다. */
-    bool frame_planes(GpuWarp::Planes *planes);
+    /* 하드웨어(GDC) 워프를 쓰면 소비자가 프레임을 이 CMM 버퍼에 직접 채우고
+     * run_frame_preloaded로 실행한다. GDC를 못 쓰는 경우(NV21 소스,
+     * SUPERCOMBO_WARP_CPU=1, 크기 불일치) nullptr. */
+    uint8_t *input_buffer(int src_w, int src_h);
     bool run_frame_preloaded(int src_w, int src_h, std::vector<float> &raw_output);
+    /* 소스 NV12가 다른 CMM 블록(프레임 링 슬롯)에 있을 때 GDC가 직접 읽는다. 워프 뒤
+     * source_still_valid()가 거짓이면(읽는 동안 덮어써짐) 모델 상태를 바꾸지 않고 false. */
+    bool run_frame_phys(unsigned long long src_phys, int src_w, int src_h, std::vector<float> &raw_output,
+                        const std::function<bool()> &source_still_valid);
     void set_input_calibration(const float rpy[3]);
     void set_desire(int desire);
+    // 소스 프레임의 크로마 순서(NV21이면 true). 워프 두 탑에 같이 적용한다.
+    void set_chroma_vu(bool vu);
 
 private:
-    bool run_frame(const uint8_t *nv12, int src_w, int src_h, std::vector<float> &raw_output);
-    void setup_gpu(const AppConfig &config);
-    bool prepare_images_gpu(const uint8_t *nv12);
-    void bind_input_tensors();
-    void bind_output_tensors();
-    void run();
-    // 출력 텐서들을 순서대로 이어 raw_output에 복사한다. 매핑은 복사 동안만 산다.
-    bool copy_outputs(std::vector<float> &raw_output);
+    /* CPU 워프 대체 경로에서 wide 탑 워프를 두 번째 코어에서 돌린다. 워프는 원본
+     * NV12의 캐시 미스가 지배해서 두 탑을 나누면 시간이 크게 준다(메모리 대역을
+     * 함께 쓰므로 절반까지는 안 된다). 출력은 한 스레드일 때와 비트 동일하다.
+     * CPU 워프가 처음 필요할 때 띄운다(GDC만 쓰면 띄우지 않는다). */
+    void wide_worker();
+    bool infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_output);
 
-    static constexpr int kModelW = 512;
-    static constexpr int kModelH = 256;
-    static constexpr int kHalfW = kModelW / 2;
-    static constexpr int kHalfH = kModelH / 2;
-    static constexpr int kYuv6Floats = 6 * kHalfW * kHalfH;
-    static constexpr int kInputImageFloats = 12 * kHalfW * kHalfH;
+    enum Input { kRoad, kWide, kDesire, kFeatures, kTraffic, kInputCount };
 
-    /* 입력 텐서 index를 access로 매핑해 fn(uint8_t *data)를 부르고 언매핑한다.
-     * 버퍼가 min_bytes보다 작으면 fn을 부르지 않고 false. */
-    template <class Fn>
-    bool with_mapped_input(size_t index, nncase::runtime::map_access_t access,
-                           size_t min_bytes, Fn &&fn);
-    bool prepare_image_input(size_t index, ModelInputTransform &transform,
-                             const uint8_t *nv12, int src_w, int src_h);
-    bool advance_image_history(size_t index);
-    bool clear_image_input(size_t index);
-    bool write_input(size_t index, const float *data, size_t count);
-    size_t shape_count(size_t index) const;
-    // image 입력 텐서의 원소 크기. float32 kmodel은 4, uint8 kmodel은 1이다.
-    size_t image_elem_bytes(size_t index) const;
-
-    // traffic convention과 nav features는 상수라 생성 시 한 번만 쓴다.
-    bool write_constant_inputs();
-    bool write_temporal_inputs();
-
-    nncase::runtime::interpreter kmodel_interp_;
+    AxEngineSession session_;
+    int index_[kInputCount] = {};
     bool profile_ = false;  // SUPERCOMBO_PROFILE: 30프레임마다 단계별 평균 ms
-    std::vector<std::vector<int>> input_shapes_;
-    std::vector<std::vector<int>> output_shapes_;
-    std::vector<nncase::runtime::runtime_tensor> input_tensors_;
     ModelInputTransform input_transform_;
     ModelInputTransform big_input_transform_;
+    std::unique_ptr<GdcWarp> gdc_;
+    bool chroma_vu_ = false;
+    ModelImageHistory road_history_;
+    ModelImageHistory wide_history_;
     SupercomboTemporalState temporal_;
-    std::unique_ptr<GpuWarp> gpu_;
-    /* GPU 타깃은 텐서 주소에 고정이라 매핑을 유지한다. */
-    std::vector<nncase::runtime::mapped_buffer> image_maps_;
-    bool gpu_projection_dirty_ = true;
+    double profile_ms_[4] = {};
+    unsigned profile_frames_ = 0;
+
+    std::thread wide_thread_;
+    std::mutex wide_mutex_;
+    std::condition_variable wide_cv_;
+    const uint8_t *wide_src_ = nullptr;
+    int wide_w_ = 0;
+    int wide_h_ = 0;
+    uint64_t wide_request_ = 0;
+    uint64_t wide_done_ = 0;
+    bool wide_ok_ = true;
+    bool wide_stop_ = false;
 };
 
 #endif

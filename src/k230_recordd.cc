@@ -2,7 +2,7 @@
 #include "utils_process.h"
 #include "utils_time.h"
 #include "ipc_channels.h"
-#include "mvx_v4l2_encoder.h"
+#include "maix_venc.h"
 #include "recording_writer.h"
 
 #include <signal.h>
@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,12 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+/* 주행 녹화기. modeld가 실제로 쓴 프레임(recordFrame)을 하드웨어 H.264 인코더(VENC)로
+ * 압축하고, CAN과 모델·제어·판다·학습기 상태를 함께 RecordingWriter 형식(세그먼트별
+ * .h264 + 인덱스 + 이벤트 로그)으로 남긴다. 링 슬롯은 IVPS로 인코더 전용 버퍼에 복사한 뒤
+ * 슬롯이 그동안 덮어써지지 않았을 때만 인코더에 넣는다(maix_venc.h). 녹화 on/off는
+ * params/recording.json을 따른다. */
 
 namespace {
 
@@ -79,7 +86,6 @@ int main() {
   try {
     const std::string config_path = k230_param_path("recording.json");
     const std::string recording_root = env_string("K230_RECORD_ROOT", "recordings");
-    const std::string codec_device = env_string("K230_RECORD_CODEC", "/dev/video0");
     const unsigned recording_bitrate =
         read_recording_bitrate(config_path, kRecordingBitrate);
 
@@ -101,29 +107,26 @@ int main() {
       throw std::runtime_error("open CAN recording queues failed");
     }
 
-    MvxV4l2Encoder encoder;
-    if (!encoder.open(codec_device.c_str(), frame_ring.width(), frame_ring.height(),
-                      kRecordingFps, recording_bitrate)) {
-      throw std::runtime_error("open MVX hardware encoder failed");
-    }
+    VideoEncoder encoder(VideoEncoder::Codec::H264, static_cast<int>(frame_ring.width()),
+                         static_cast<int>(frame_ring.height()), kRecordingFps, recording_bitrate);
     RecordingWriter writer(recording_root, k230_params_dir(), frame_ring.width(),
-                           frame_ring.height(), kRecordingFps, recording_bitrate);
+                           frame_ring.height(), kRecordingFps, recording_bitrate,
+                           K230VideoCodec::H264);
 
-    auto packet_handler = [&writer](const MvxV4l2Encoder::Packet &packet) {
-      if (packet.codec_config) {
-        writer.set_codec_config(packet.data, packet.size);
-      } else if (packet.frame) {
-        writer.write_encoded_frame(*packet.frame, packet.data, packet.size,
-                                   packet.keyframe);
-      }
+    /* 인코더는 넣은 순서대로 내놓는다. 패킷의 frame_id로 넣을 때의 메타데이터를 찾는다. */
+    std::array<K230RoadAiFrame, 16> in_flight{};
+    auto on_config = [&writer](const uint8_t *data, size_t size) {
+      writer.set_codec_config(data, size);
     };
-    auto drain_encoder = [&encoder, &packet_handler]() {
+    auto on_packet = [&writer, &in_flight](const VideoEncoder::Packet &packet) {
+      const K230RoadAiFrame &frame = in_flight[packet.frame_id % in_flight.size()];
+      if (frame.frame_id != packet.frame_id) return;
+      writer.write_encoded_frame(frame, packet.data, packet.size, packet.keyframe);
+    };
+    auto drain_encoder = [&]() {
       const uint64_t deadline_ns = k230_now_ns() + 500000000ULL;
-      while (encoder.submitted_frames() != encoder.encoded_frames() &&
-             k230_now_ns() < deadline_ns) {
-        encoder.drain(packet_handler);
-        if (encoder.submitted_frames() != encoder.encoded_frames()) usleep(2000);
-      }
+      while (encoder.submitted() != encoder.encoded() && k230_now_ns() < deadline_ns)
+        encoder.drain(on_config, on_packet, 10);
     };
 
     K230LatestChannel model_sub;
@@ -177,24 +180,21 @@ int main() {
         if (frame.slot < frame_ring.slot_count() &&
             frame.width == frame_ring.width() && frame.height == frame_ring.height()) {
           if (age_ns <= kMaximumFrameAgeNs) {
-            /* 링 슬롯에서 인코더 입력 버퍼로 바로 복사한다. 중간 버퍼를 두면
-             * 프레임마다 1.4 MB를 한 번 더 옮기게 된다. */
-            bool copy_attempted = false;
-            const bool submitted = encoder.submit_frame(
-                frame,
-                [&](uint8_t *luma, size_t luma_stride, uint8_t *chroma,
-                    size_t chroma_stride) {
-                  copy_attempted = true;
-                  return frame_ring.copy_slot_planes(frame.slot, frame.frame_id, luma,
-                                                     luma_stride, chroma, chroma_stride);
-                },
-                packet_handler);
-            if (submitted) {
-              warmed = true;
-            } else if (copy_attempted) {
+            // 슬롯(CMM)을 IVPS로 인코더 버퍼에 복사한다. CPU는 픽셀을 만지지 않는다.
+            uint64_t slot_seq = 0;
+            const unsigned long long phys = frame_ring.slot_phys(frame.slot);
+            if (phys == 0 || !frame_ring.read_begin(frame.slot, frame.frame_id, &slot_seq)) {
               ++frame_sync_failures;
             } else {
-              ++dropped_frames;
+              in_flight[frame.frame_id % in_flight.size()] = frame;
+              bool torn = false;
+              const bool submitted = encoder.submit(phys, frame.frame_id, [&] {
+                torn = !frame_ring.read_still_valid(frame.slot, frame.frame_id, slot_seq);
+                return !torn;
+              });
+              if (submitted) warmed = true;
+              else if (torn) ++frame_sync_failures;
+              else ++dropped_frames;
             }
           } else {
             ++stale_frames;
@@ -203,8 +203,7 @@ int main() {
       } else if (!need_video_frame) {
         usleep(10000);
       }
-      if (encoder.submitted_frames() != encoder.encoded_frames())
-        encoder.drain(packet_handler);
+      if (encoder.submitted() != encoder.encoded()) encoder.drain(on_config, on_packet);
 
       K230CanBatch batch;
       while (can_log_sub.pop(&batch)) writer.write_can(K230RecordType::CanRx, batch);
@@ -254,8 +253,8 @@ int main() {
                      writer.requested_enabled() ? 1 : 0, writer.active() ? 1 : 0,
                      warmed ? 1 : 0,
                      static_cast<unsigned long long>(selected_frames),
-                     static_cast<unsigned long long>(encoder.submitted_frames()),
-                     static_cast<unsigned long long>(encoder.encoded_frames()),
+                     static_cast<unsigned long long>(encoder.submitted()),
+                     static_cast<unsigned long long>(encoder.encoded()),
                      static_cast<unsigned long long>(dropped_frames),
                      static_cast<unsigned long long>(stale_frames),
                      static_cast<unsigned long long>(frame_sync_failures),

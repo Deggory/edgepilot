@@ -22,17 +22,16 @@ public:
                                  ModelFrame model_frame = ModelFrame::MedModel);
 
     void set_calibration(float roll, float pitch, float yaw);
+    /* 크로마 평면의 바이트 순서. NV12는 U,V(기본), NV21은 V,U. 워프 출력의
+     * 4번 평면은 항상 U, 5번은 V다. */
+    void set_chroma_vu(bool vu) { chroma_vu_ = vu; }
     void projection_matrix(float *projection) const;
+    /* CPU 워프(GDC를 못 쓸 때의 대체 경로와 호스트 검사). 고정소수점 쌍선형 보간. */
     void nv12_to_yuv6_warped(const uint8_t *nv12, int src_w, int src_h, std::vector<float> &out);
     void nv12_to_yuv6_warped(const uint8_t *nv12, int src_w, int src_h, float *out);
-    void nv12_to_yuv6_warped_scalar(const uint8_t *nv12, int src_w, int src_h, float *out);
-    void nv12_to_yuv6_warped_rvv(const uint8_t *nv12, int src_w, int src_h, float *out);
-    /* uint8 입력 kmodel용 경로. 같은 고정소수점 보간의 반올림 값을 float 변환
+    /* uint8 입력 axmodel용 경로. 같은 고정소수점 보간의 반올림 값을 float 변환
      * 없이 그대로 쓰므로 float 경로와 비트 동일한 픽셀 값을 만든다. */
     void nv12_to_yuv6_warped(const uint8_t *nv12, int src_w, int src_h, uint8_t *out);
-    void nv12_to_yuv6_warped_scalar(const uint8_t *nv12, int src_w, int src_h, uint8_t *out);
-    void nv12_to_yuv6_warped_rvv(const uint8_t *nv12, int src_w, int src_h, uint8_t *out);
-    static bool rvv_available();
 
 private:
     struct SampleMap {
@@ -60,9 +59,7 @@ private:
     static uint8_t sample(const uint8_t *base, const SampleMap &map,
                           size_t index, int channel);
     template <typename OutT>
-    void warp_scalar(const uint8_t *nv12, int src_w, int src_h, OutT *out) const;
-    template <typename OutT>
-    void warp_rvv(const uint8_t *nv12, int src_w, int src_h, OutT *out) const;
+    void warp(const uint8_t *nv12, int src_w, int src_h, OutT *out);
 
     bool map_valid_ = false;
     int map_src_w_ = 0;
@@ -77,6 +74,7 @@ private:
     float pitch_ = 0.0f;
     float yaw_ = 0.0f;
     ModelFrame model_frame_ = ModelFrame::MedModel;
+    bool chroma_vu_ = false;
     std::array<SampleMap, 4> y_maps_;
     SampleMap uv_map_;
 };

@@ -1,4 +1,6 @@
-"""Reader for K230 recordd routes (frames.bin / event log / road.hevc).
+"""Reader for recordd routes (frames.bin / event log / road.hevc or road.h264).
+
+K230 routes carry HEVC (road.hevc); MaixCAM2 routes carry H.264 (road.h264).
 
 Binary layouts mirror src/recording_format.h and src/ipc_messages.h. Struct sizes
 are asserted against the payload sizes found in the stream, so a layout drift
@@ -179,12 +181,21 @@ def read_segment_index(segment_dir: Path) -> SegmentInfo:
     return SegmentInfo(segment_dir, width, height, fps, segment_start_ns, frames)
 
 
+def segment_video(seg_dir: Path) -> tuple[Path, str] | None:
+    """The segment's video file and its codec ("h264" or "hevc"), or None."""
+    for codec in ("h264", "hevc"):
+        path = seg_dir / f"road.{codec}"
+        if path.exists():
+            return path, codec
+    return None
+
+
 def route_segments(route_dir: Path) -> list[SegmentInfo]:
     seg_root = route_dir / "segments"
     segs = []
     for seg_dir in sorted(seg_root.iterdir()):
         if not (seg_dir.is_dir() and (seg_dir / "frames.bin").exists()
-                and (seg_dir / "road.hevc").exists()):
+                and segment_video(seg_dir)):
             continue
         try:
             info = read_segment_index(seg_dir)
@@ -199,8 +210,9 @@ def route_segments(route_dir: Path) -> list[SegmentInfo]:
 def decode_route_yuv(segments: list[SegmentInfo]):
     """Yield (index_record, y, u, v) across a whole route in stream order.
 
-    The segments of a route are 60 s slices of one continuous HEVC stream, and
-    the MVX encoder splits large access units (keyframes) across several
+    The segments of a route are 60 s slices of one continuous HEVC (K230) or
+    H.264 (MaixCAM2) stream, and the K230 MVX encoder splits large access units
+    (keyframes) across several
     dequeued buffers, so the per-record packet boundaries in frames.bin are not
     reliable AU boundaries. The bytes ARE in stream order though: feed them
     through one ffmpeg parser + decoder for the whole route and pair decoded
@@ -209,14 +221,21 @@ def decode_route_yuv(segments: list[SegmentInfo]):
     import av
     import re
 
-    codec = av.CodecContext.create("hevc", "r")
+    codec_name = segment_video(segments[0].path)[1]
+    codec = av.CodecContext.create(codec_name, "r")
 
     def au_starts(payload: bytes) -> int:
+        """Access units starting in payload: slices with first_slice_segment_in_pic
+        (HEVC) or first_mb_in_slice == 0 (H.264)."""
         count = 0
         for match in re.finditer(b"\x00\x00\x01", payload):
             pos = match.end()
-            if pos + 2 < len(payload) and ((payload[pos] >> 1) & 0x3F) <= 31 \
-                    and (payload[pos + 2] >> 7) & 1:
+            if codec_name == "hevc":
+                if pos + 2 < len(payload) and ((payload[pos] >> 1) & 0x3F) <= 31 \
+                        and (payload[pos + 2] >> 7) & 1:
+                    count += 1
+            elif pos + 1 < len(payload) and (payload[pos] & 0x1F) in (1, 5) \
+                    and (payload[pos + 1] >> 7) & 1:
                 count += 1
         return count
 
@@ -227,7 +246,7 @@ def decode_route_yuv(segments: list[SegmentInfo]):
     # are tagged with their AU index as pts to keep the pairing exact.
     au_records: list[tuple[np.void, int]] = []
     for segment in segments:
-        data = (segment.path / "road.hevc").read_bytes()
+        data = segment_video(segment.path)[0].read_bytes()
         for rec in segment.frames:
             payload = data[int(rec["file_offset"]):
                            int(rec["file_offset"]) + int(rec["packet_size"])]
@@ -251,7 +270,7 @@ def decode_route_yuv(segments: list[SegmentInfo]):
             yield rec, y[:vis_h], u[: vis_h // 2], v[: vis_h // 2]
 
     for segment in segments:
-        data = (segment.path / "road.hevc").read_bytes()
+        data = segment_video(segment.path)[0].read_bytes()
         # only bytes covered by index records are trustworthy; an unclean stop
         # can leave a partially written tail
         last = segment.frames[-1]

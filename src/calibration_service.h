@@ -7,11 +7,17 @@
 #include "projection.h"
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 
 class CalibrationService {
 public:
     explicit CalibrationService(const AppConfig &config);
+    ~CalibrationService();
+    CalibrationService(const CalibrationService &) = delete;
+    CalibrationService &operator=(const CalibrationService &) = delete;
 
     void update(const ParsedModelOutput &output, float v_ego);
     ProjectionState projection() const { return projection_; }
@@ -24,6 +30,7 @@ private:
     void maybe_log(const OnlineCalibrator::UpdateResult &result);
     void maybe_persist(const OnlineCalibrator::UpdateResult &result);
     void set_fixed_projection();
+    void persist_loop();
 
     bool auto_enabled_ = true;
     bool manual_override_ = false;
@@ -44,6 +51,19 @@ private:
     std::chrono::steady_clock::time_point last_persist_{};
     CalibrationStatus last_status_ = CalibrationStatus::Uncalibrated;
     int last_valid_blocks_ = -1;
+
+    /* 주행 중 저장은 SD가 녹화로 바쁠 때 open/rename이 몇 초씩 막혀 모델 루프를 세웠다.
+     * 그래서 저장 스레드에 최신 값만 넘긴다. */
+    struct PersistJob {
+        float rpy[3] = {};
+        OnlineCalibrator::Snapshot snapshot{};
+    };
+    std::mutex persist_mutex_;
+    std::condition_variable persist_cv_;
+    bool persist_pending_ = false;
+    bool persist_stop_ = false;
+    PersistJob persist_job_;
+    std::thread persist_thread_;
 };
 
 #endif

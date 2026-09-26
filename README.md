@@ -1,19 +1,19 @@
-# K230 × openpilot
+# MaixCAM2 × openpilot
 
 <p align="center">
-  <img src="docs/images/k230-openpilot-k7-hero.png"
-       alt="K230 x openpilot for the KIA K7 YG HEV"
-       width="100%">
-</p>
-
-<p align="center">
-  <strong>openpilot perception and lateral control, native on a Kendryte K230</strong><br>
-  KIA K7 YG HEV · supercombo on the KPU · Panda USB/CAN · 800x480 driving HUD
+  <strong>openpilot perception and lateral control, native on a Sipeed MaixCAM2 (AX630C)</strong><br>
+  KIA K7 YG HEV · supercombo on the AX630C NPU · Panda USB/CAN · 640x480 driving HUD
 </p>
 
 | Board | Vehicle | Model | Control | Runtime |
 | --- | --- | --- | --- | --- |
-| 01Studio CanMV K230 | KIA K7 YG HEV | openpilot v0.9.4 supercombo | lateral (LKAS torque) | C++17 split processes |
+| Sipeed MaixCAM2 (AX630C, 1 GB) | KIA K7 YG HEV | openpilot master supercombo (Pulsar2 axmodel) | lateral (LKAS torque) | C++17 split processes |
+
+This is the `ax630` branch: a port of the Kendryte K230 runtime to the
+MaixCAM2. The control stack, Panda/CAN protocol, parameter server, and recording
+format are carried over unchanged; the camera, display, model, and build are
+new. The K230 nncase/kmodel pipeline, VGLite warp, and MVX recorder are not part
+of this branch; the piezo alert melodies now play on the board speaker.
 
 > [!WARNING]
 > This is experimental vehicle-control software. Keep Panda safety enabled, run
@@ -22,47 +22,57 @@
 
 ## Highlights
 
-- **supercombo on the KPU.** openpilot v0.9.4 compiled with nncase (int16
-  activations, pre-quantized uint8 weights) runs in 27.7 ms per frame, inside
-  the 20 Hz budget. Both image towers are fed from one camera, and the
-  calibrated input warp runs on the VGLite GPU.
+- **supercombo on the AX630C NPU.** The openpilot master `driving_supercombo`
+  core, compiled with Pulsar2 6.0 (U16 activations, uint8 image inputs), runs in
+  about 8.5 ms on the NPU; a whole `k230_modeld` frame is about 12.5 ms, well
+  inside the 20 Hz budget. The history queues the released ONNX keeps in-graph
+  (images, desire, features) run on the CPU in `src/model_temporal.h`.
+- **Hardware all the way to the model.** The camera frame goes into a CMM
+  (physically contiguous) frame ring by IVPS copy; the GDC warps it straight
+  from there into both model views, and IVPS scales it onto the LCD. No process
+  touches camera pixels on the CPU.
 - **openpilot's lateral stack in C++.** Lane planner, lateral MPC, torque
   controller, and online camera calibration, with no openpilot checkout, Python
-  native extension, or Qt on the board. The in-tree MPC solver replaces acados
-  and is about 30x faster on the board. Ports of paramsd and torqued estimate
-  the steer ratio and torque response while driving (opt-in).
+  native extension, or Qt on the board. The in-tree MPC solver replaces acados.
+  Ports of paramsd and torqued estimate the steer ratio and torque response
+  while driving (opt-in).
 - **K7 YG HEV integration.** `LKAS11` and `MDPS12` at 100 Hz, `CLU11` at 50 Hz,
   the 60 kph MDPS speed helper, and a torque ramp that cuts the request before
   the MDPS fault angle.
 - **Vision cruise.** The vision lead nudges the stock fixed-speed cruise setpoint
   with `SET-`/`RES+` pulses. There is no longitudinal actuation.
 - **Driving HUD.** Plan, lanes, road edges, and lead over the camera preview on
-  the 800x480 LCD, status panels, piezo tones, and stop-and-go departure alerts.
-- **Record, replay, tune.** HEVC video and the CAN log in 60 s segments, host
-  tools that replay a drive open- or closed-loop, and a web parameter editor
-  whose changes the controller picks up within 100 ms.
+  the 640x480 LCD, drawn at 20 Hz on a hardware overlay layer, with status
+  panels and stop-and-go departure alerts (on screen and on the board speaker).
+- **Replay and tune.** Host tools replay a K230 recording open- or closed-loop,
+  and a web parameter editor pushes changes the controller picks up within
+  100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite that needs neither the board nor the
-  K230 toolchain.
+  macOS or Linux, with a googletest suite (89 tests) that needs neither the
+  board nor its SDK.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-  camera([camera]) --> camerad[k230_camerad]
-  camerad -->|NV12 ring| modeld["k230_modeld<br/>supercombo · KPU"]
+  camera([ov_os04d10]) -->|VI 1280x720 NV12| camerad[k230_camerad]
+  camerad -->|"CMM frame ring (phys addr)"| modeld["k230_modeld<br/>GDC warp · supercombo · NPU"]
+  camerad -->|CMM frame ring| overlayd["k230_overlayd<br/>VO layer 0 video · layer 1 HUD"]
   modeld -->|modelState| controlsd["k230_controlsd<br/>planner · MPC · torque"]
   controlsd <-->|"sendcan · CAN RX"| pandad[k230_pandad]
   pandad <--> panda(["Panda · vehicle CAN"])
-  modeld -->|frames| recordd["k230_recordd<br/>HEVC · CAN log"]
-  modeld & controlsd & pandad --> overlayd["k230_overlayd<br/>LCD HUD · piezo"]
-  camera -. preview .-> overlayd
+  modeld & controlsd & pandad --> overlayd
 ```
 
 Each process does one job and talks to the others through `/dev/shm`, keeping
 openpilot's process boundaries without Cap'n Proto/cereal. `k230_manager.py`
-starts and supervises them, and `k230_param_server.py` serves the tuning UI. See
+starts and supervises them, and `k230_param_server.py` serves the tuning UI. The
+process names keep their `k230_` prefix from the K230 runtime. See
 [Split runtime](docs/runtime.md) for each process.
+
+`scripts/install_autostart.sh` installs a systemd unit that starts the runtime at
+boot in place of the stock launcher. `k230_recordd` records drives with the
+AX630C hardware HEVC encoder in the K230 recording format.
 
 ## Safety model
 
@@ -76,46 +86,50 @@ Every layer must agree before steering torque reaches the car:
 3. **Controller limits** cap the curvature at openpilot's `0.2 1/m` with a jerk
    limit, rate-limit the torque, and ramp it to zero before the MDPS fault angle.
 4. **`K230_PANDA_TX`** is the final transmit switch; the controller never
-   transmits on its own.
+   transmits on its own. On the MaixCAM2 the manager starts `k230_pandad` only
+   with `K230_ENABLE_PANDA=1`.
 
 ## Hardware
 
-- 01Studio CanMV K230 with its camera and 3.5-inch 800x480 LCD, flashed with the
-  [CanMV-K230 Linux v1.2 image](https://github.com/cwal1220/k230_linux_sdk/releases/tag/v1.2-01studio-20260907.1)
-  (camera and display stack, nncase v2.11.0 runtime, `S35supercombo_k230`
-  service)
-- a comma Panda on USB
+- Sipeed MaixCAM2 (AX630C: 2x Cortex-A53 + NPU, 1 GB), with its stock
+  `ov_os04d10` camera and 640x480 LCD, on the stock image (Ubuntu 22.04 arm64,
+  AX runtime in `/opt/lib`, `libmaixcam_lib` 1.2.5)
+- a comma Panda on the USB-C port (the manager switches it to host mode)
 - a KIA K7 YG HEV
-- optional: the printable [windshield mount](docs/hardware/windshield_mount/README.md)
+
+The MaixCAM2 has a single USB-C port, so a Panda setup needs power from another
+source; the Panda wiring is not finished yet.
 
 ## Getting started
 
-1. **Prepare the board.** Flash the image above and install the packages in
-   [Board setup](docs/board-setup.md).
-2. **Build and upload.** Cross-build on macOS
-   ([setup](docs/build-and-deploy.md#macos-cross-build)) and upload:
+1. **Prepare the board.** See [Board setup](docs/board-setup.md) for SSH, the
+   parameter server packages, and the rootfs caveats.
+2. **Build.** Fetch the SDK and the board libraries once, then build in an
+   arm64 Ubuntu 22.04 container
+   ([details](docs/build-and-deploy.md)):
 
    ```sh
-   ./scripts/fetch_nncase_runtime.sh
-   ./scripts/configure_k230_macos.sh
-   make -C build -j2
-   scripts/upload_to_board.sh root@<board-ip>
+   scripts/fetch_maixcam2_sdk.sh root@192.168.219.117
+   tools/docker_ax630/build.sh          # -> build-ax630/bin
    ```
 
-   Or build natively on the board:
+3. **Upload.** The axmodel is not in the repository; build it with
+   [tools/model/axmodel](tools/model/axmodel/README.md) and pass it on the first
+   upload:
 
    ```sh
-   cd /root/supercombo_k230
-   ./scripts/fetch_nncase_runtime.sh
-   cmake -S . -B build-native -DCMAKE_BUILD_TYPE=Release
-   cmake --build build-native -j2
-   cmake --install build-native --prefix /root/supercombo_k230
+   SUPERCOMBO_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh root@192.168.219.117
    ```
 
-3. **Run.** The image's `S35supercombo_k230` service starts `k230_manager.py` at
-   boot; `/etc/init.d/S35supercombo_k230 restart` restarts it. Tune parameters at
+4. **Run.** On the board:
+
+   ```sh
+   python3 /root/sc_run/k230_manager.py
+   ```
+
+   The manager stops the stock launcher first. Tune parameters at
    `http://<board-ip>:8080`.
-4. **Shadow run first.** Verify Panda RX, safety mode, and counters with TX off
+5. **Shadow run first.** Verify Panda RX, safety mode, and counters with TX off
    before enabling it; the gates are listed in
    [K7 Panda port](docs/k7-panda-port.md).
 
@@ -126,7 +140,10 @@ Every layer must agree before steering torque reaches the car:
 ```
 
 - [Host unit tests](gtest/README.md): what each test covers and how to add one
-- [Diagnostic tools](diagnostics/README.md): replay, dataset, and benchmark tools
+- [Diagnostic tools](diagnostics/README.md): replay, dataset, and HUD tools
+- [Rehearsal](docs/rehearsal.md): replay a recorded drive through the whole runtime
+  on the board (hardware H.264 decode into the frame ring, CAN on the same timeline)
+- [Camera calibration](docs/camcal.md): measure the camera intrinsics with a TV checkerboard and the Func button
 - [Closed-loop replay](docs/closed-loop-replay.md): rank control changes against
   a recorded drive before driving them
 - [Scripts](scripts/README.md): build, deploy, and the board-side Python
@@ -134,22 +151,21 @@ Every layer must agree before steering torque reaches the car:
 ## Repository layout
 
 ```text
-src/          runtime processes and their libraries
-params/       runtime parameters, hot-reloaded by the processes
-models/       supercombo.kmodel, PTQ calibration data, verification records
-gtest/        host unit tests
-diagnostics/  replay, dataset, and benchmark tools
-scripts/      build and deploy scripts, board-side Python
-tools/        model pipeline, route readers, HUD tools
-assets/       UI sprites installed next to the binaries
-include/      K230 SDK headers
-docs/         documentation
+src/            runtime processes and their libraries
+platform/       MaixCAM2 camera (VI), display (VO), CMM, and GDC wrappers
+params/         runtime parameters, hot-reloaded by the processes
+models/         PTQ calibration samples, K230 verification records
+gtest/          host unit tests
+diagnostics/    replay, dataset, and HUD tools
+scripts/        SDK fetch, deploy, host tests, board-side Python
+tools/          axmodel pipeline, camera calibration, build container, route readers
+assets/         UI sprites installed next to the binaries
+docs/           documentation
 ```
 
 ## Documentation
 
-- **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md) ·
-  [Windshield mount](docs/hardware/windshield_mount/README.md)
+- **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md)
 - **How it works:** [Split runtime](docs/runtime.md) · [Model pipeline](docs/model-pipeline.md) ·
   [Model package](models/README.md) · [Source layout](docs/source-layout.md)
 - **Operating:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·
@@ -164,5 +180,6 @@ docs/         documentation
   runtime ports
 - [panda](https://github.com/commaai/panda): the CAN interface and its safety
   firmware
-- [nncase](https://github.com/kendryte/nncase) by Kendryte: the KPU compiler and
-  runtime
+- [MaixCDK](https://github.com/sipeed/MaixCDK) by Sipeed: the MaixCAM2 MSP SDK
+  and `libmaixcam_lib` headers
+- Pulsar2 by Axera: the AX630C NPU compiler

@@ -110,14 +110,12 @@ class ParamStoreTest(unittest.TestCase):
         self.assertEqual(controller.applied, [{"enabled": True, "brightness_percent": 35}])
         self.assertEqual(store.read_group("display")["brightness_percent"], 35)
 
-    def test_display_pwm_duty_uses_inversed_polarity_formula(self):
-        self.assertEqual(duty_cycle_ns(100), 0)
-        self.assertEqual(duty_cycle_ns(99), 4_250)
-        self.assertEqual(duty_cycle_ns(90), 42_500)
-        self.assertEqual(duty_cycle_ns(50), 45_691)
-        self.assertEqual(duty_cycle_ns(10), 48_882)
-        self.assertEqual(duty_cycle_ns(1), 49_600)
-        self.assertEqual(duty_cycle_ns(0), 50_000)
+    def test_display_pwm_duty_scales_by_board_maximum(self):
+        self.assertEqual(duty_cycle_ns(100), 95_000)
+        self.assertEqual(duty_cycle_ns(51), 48_450)
+        self.assertEqual(duty_cycle_ns(1), 950)
+        self.assertEqual(duty_cycle_ns(0), 0)
+        self.assertEqual(duty_cycle_ns(100, max_percent=100), 100_000)
 
     def test_missing_defaults_are_added_without_overwriting_tuning(self):
         defaults = Path(self.temporary.name) / "adaptive.defaults.json"

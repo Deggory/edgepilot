@@ -165,6 +165,8 @@ CalibrationService::CalibrationService(const AppConfig &config)
         last_snapshot_ = calibrator_.snapshot();
     }
 
+    persist_thread_ = std::thread(&CalibrationService::persist_loop, this);
+
     const char *mode = manual_override_ ? "manual" :
         (can_apply_online() ? (restored_ ? "auto-pose-restored" : "auto-pose-live") :
          (restored_ ? "stored" : "fixed"));
@@ -175,6 +177,35 @@ CalibrationService::CalibrationService(const AppConfig &config)
                  "projection calibration deg roll=%.3f pitch=%.3f yaw=%.3f params=%s\n",
                  rad_to_deg(current.roll), rad_to_deg(current.pitch), rad_to_deg(current.yaw),
                  calibration_path_.c_str());
+}
+
+CalibrationService::~CalibrationService()
+{
+    {
+        std::lock_guard<std::mutex> lock(persist_mutex_);
+        persist_stop_ = true;
+    }
+    persist_cv_.notify_one();
+    if (persist_thread_.joinable()) persist_thread_.join();
+}
+
+void CalibrationService::persist_loop()
+{
+    std::unique_lock<std::mutex> lock(persist_mutex_);
+    while (true) {
+        persist_cv_.wait(lock, [this] { return persist_pending_ || persist_stop_; });
+        if (!persist_pending_) return;  // 멈출 때 남은 저장은 마저 한다
+        const PersistJob job = persist_job_;
+        persist_pending_ = false;
+        lock.unlock();
+        if (save_stored_calibration(params_dir_, calibration_path_, job.rpy, job.snapshot))
+            std::fprintf(stderr,
+                         "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) validBlocks=%d\n",
+                         calibration_path_.c_str(), rad_to_deg(job.rpy[0]),
+                         rad_to_deg(job.rpy[1]), rad_to_deg(job.rpy[2]),
+                         job.snapshot.valid_blocks);
+        lock.lock();
+    }
 }
 
 void CalibrationService::set_fixed_projection()
@@ -224,17 +255,16 @@ void CalibrationService::maybe_persist(const OnlineCalibrator::UpdateResult &res
         if (now - last_persist_ < kPersistInterval) return;
         if (max_rpy_delta(persisted_rpy_, online_rpy_) < kPersistDeltaRad) return;
     }
-    if (!save_stored_calibration(params_dir_, calibration_path_, online_rpy_, result.snapshot))
-        return;
-
+    {
+        std::lock_guard<std::mutex> lock(persist_mutex_);
+        copy_rpy(persist_job_.rpy, online_rpy_);
+        persist_job_.snapshot = result.snapshot;
+        persist_pending_ = true;
+    }
+    persist_cv_.notify_one();
     copy_rpy(persisted_rpy_, online_rpy_);
     has_persisted_ = true;
     last_persist_ = now;
-    std::fprintf(stderr,
-                 "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) validBlocks=%d\n",
-                 calibration_path_.c_str(), rad_to_deg(online_rpy_[0]),
-                 rad_to_deg(online_rpy_[1]), rad_to_deg(online_rpy_[2]),
-                 result.snapshot.valid_blocks);
 }
 
 void CalibrationService::maybe_log(const OnlineCalibrator::UpdateResult &result)

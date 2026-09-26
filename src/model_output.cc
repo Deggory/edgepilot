@@ -39,16 +39,7 @@ bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *
     const float global_prob = global_probabilities[idx];
     if (global_prob < min_probability) return false;
 
-    int best = 0;
-    float best_prob = predictions[0].probabilities[idx];
-    for (int i = 1; i < kLeadMhpN; ++i) {
-        if (predictions[i].probabilities[idx] > best_prob) {
-            best_prob = predictions[i].probabilities[idx];
-            best = i;
-        }
-    }
-
-    *lead = predictions[best].points[0];
+    *lead = predictions[idx].points[0];
     if (probability) *probability = global_prob;
     return true;
 }
@@ -56,26 +47,16 @@ bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *
 ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
 {
     ParsedModelOutput output;
-    // kmodel 계약이 6120 float로 고정이라 부분 길이를 받아줄 이유가 없다.
+    // axmodel 계약이 2576 float로 고정이라 부분 길이를 받아줄 이유가 없다.
     output.valid = raw.size() >= static_cast<size_t>(kModelOutputFloats);
     if (!output.valid) return output;
 
-    int best_plan = 0;
-    float best_prob = raw[kPlanStride - 1];
-    for (int i = 1; i < kPlanMhpN; ++i) {
-        const float prob = raw[i * kPlanStride + kPlanStride - 1];
-        if (prob > best_prob) {
-            best_prob = prob;
-            best_plan = i;
-        }
-    }
-
+    // 단일 가설이라 고를 것이 없다. 확률은 0.9.4 소비자 호환용으로 1.
     output.plan.valid = true;
-    output.plan.best_index = best_plan;
-    output.plan.probability = sigmoid(best_prob);
-    const int plan_base = best_plan * kPlanStride;
+    output.plan.best_index = 0;
+    output.plan.probability = 1.0f;
     for (int i = 0; i < kTrajectorySize; ++i) {
-        const int mean_base = plan_base + i * 15;
+        const int mean_base = kPlanOffset + i * kPlanWidth;
         output.plan.points[i] = {
             raw[mean_base + 0],
             raw[mean_base + 1],
@@ -116,22 +97,18 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
     }
 
     output.leads.valid = true;
-    for (int lead = 0; lead < kLeadMhpN; ++lead) {
-        const int base = kLeadOffset + lead * kLeadPredictionStride;
+    for (int sel = 0; sel < kLeadMhpSelection; ++sel) {
+        const int base = kLeadOffset + sel * kLeadTrajLen * kLeadElementSize;
         for (int i = 0; i < kLeadTrajLen; ++i) {
-            output.leads.predictions[lead].points[i] = {
+            output.leads.predictions[sel].points[i] = {
                 raw[base + i * kLeadElementSize + 0],
                 raw[base + i * kLeadElementSize + 1],
                 raw[base + i * kLeadElementSize + 2],
                 raw[base + i * kLeadElementSize + 3],
             };
         }
-        const int prob_base = base + kLeadPredictionStride - kLeadMhpSelection;
-        for (int i = 0; i < kLeadMhpSelection; ++i)
-            output.leads.predictions[lead].probabilities[i] = sigmoid(raw[prob_base + i]);
+        output.leads.global_probabilities[sel] = sigmoid(raw[kLeadProbOffset + sel]);
     }
-    for (int i = 0; i < kLeadMhpSelection; ++i)
-        output.leads.global_probabilities[i] = sigmoid(raw[kLeadProbOffset + i]);
 
     softmax(raw.data() + kDesireStateOffset,
             output.meta.desire_state.data(), kDesireLen);

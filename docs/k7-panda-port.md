@@ -10,7 +10,7 @@
   generated CAN batches to the ordered `/dev/shm/k230_sendcan` ring queue.
 - `k230_pandad` is the final TX gate. `K230_PANDA_TX=0` is the default and
   prevents every generated frame from reaching USB.
-- No openpilot checkout or Python DBC extension is required on the K230 board.
+- No openpilot checkout or Python DBC extension is required on the board.
 
 The CAN queues have 64 slots, reject new batches instead of overwriting older
 ones when full, and are drained in sequence order. Producer startup resets its
@@ -33,16 +33,26 @@ matches the K7 branch in the reference openpilot controller.
 
 Runtime parameters live in `params/`; see [params/README.md](../params/README.md).
 
+## MaixCAM2 connection
+
+The MaixCAM2 has a single USB-C port, which carries the Panda in host mode, so
+the board needs power from another source; this wiring is not finished yet.
+Until it is, the manager starts `k230_pandad` only with `K230_ENABLE_PANDA=1`.
+With it set, the manager switches the port to host
+(`/sys/class/usb_role/8000000.dwc3-role-switch/role`) before starting the
+processes and restores the previous role on exit.
+
 ## Build
 
-Build and upload as in [Build and deploy](build-and-deploy.md). The board image's
-Buildroot configuration must include `BR2_PACKAGE_LIBUSB=y` for `k230_pandad`.
+Build and upload as in [Build and deploy](build-and-deploy.md). The build
+container installs `libusb-1.0-0-dev`; the board needs the `libusb-1.0` runtime
+library for `k230_pandad`.
 
 ## Offline Validation
 
-Export one 60 s chunk of a continuous drive to a `K230CAN1` fixture and replay it
-through the controller (see [gtest/README.md](../gtest/README.md) for why a parked
-chunk fails):
+Export one 60 s chunk of a continuous drive (a K230 recording, until the recorder
+is ported) to a `K230CAN1` fixture and replay it through the controller (see
+[gtest/README.md](../gtest/README.md) for why a parked chunk fails):
 
 ```sh
 python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.k230can
@@ -58,10 +68,11 @@ openpilot reference.
 ## Shadow Run
 
 ```sh
+K230_ENABLE_PANDA=1 \
 K230_ENABLE_CONTROL=1 \
 K230_PANDA_TX=0 \
 K230_PANDA_SAFETY=nooutput \
-./scripts/k230_manager.py models/supercombo.kmodel 0
+python3 /root/sc_run/k230_manager.py
 ```
 
 Use `hyundaiCommunity` only after the connected vehicle fingerprint and Panda
@@ -73,6 +84,7 @@ vehicle report `mdpsBus=1`, `sasBus=1`, and `hyundaiCommunity:0`.
 Vehicle transmission requires every explicit setting below:
 
 ```sh
+K230_ENABLE_PANDA=1
 K230_ENABLE_CONTROL=1
 K230_PANDA_TX=1
 K230_PANDA_SAFETY=hyundaiCommunity

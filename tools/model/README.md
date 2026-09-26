@@ -1,65 +1,71 @@
 # Model tools
 
-Scripts that turn an upstream openpilot `supercombo.onnx` into the K230
-`.kmodel`. `../../scripts/build_supercombo_model.sh` runs them in order; see
-`../../models/README.md` for the resulting package, its contract, and the board
-verification numbers.
+The MaixCAM2 model is built by [`axmodel/`](axmodel/README.md): it cuts the NPU
+core out of the openpilot master `driving_supercombo.onnx`, builds calibration
+and evaluation data, and compiles it with Pulsar2 6.0 into the axmodel that
+`k230_modeld` loads. See [`../../models/README.md`](../../models/README.md) for
+the contract and the board numbers.
 
-## Scripts
+The other scripts here come from the K230 v0.9.4 pipeline. The nncase compile
+and ONNX sanitizer are gone with it; the helpers below remain because they read
+the K230 recordings, produce the PTQ samples `axmodel/make_core_data.py` still
+uses, or (for the last two) are kept for reference only.
 
-- `sanitize_onnx_for_nncase.py`
-  - Normalizes the release ONNX for nncase: fp16 weights and tensors to fp32
-    (the PTQ path needs an fp32 graph), duplicate opset entries merged, empty
-    node names filled, and `Reshape` `allowzero` removed. Values are unchanged.
+## axmodel pipeline
 
-- `prequant_bias_correct.py`
-  - Rounds every Conv/Gemm weight onto the per-channel uint8 grid nncase will
-    use (taken from an exported `QuantScheme.json`), so the compiler's weight
-    quantization becomes lossless, then runs calibration inputs through ONNX
-    Runtime layer by layer and cancels the mean output shift in each bias.
-    Activations are untouched; the KPU still quantizes them to int16.
-
-- `retype_image_inputs_uint8.py`
-  - Retypes the image inputs to uint8 and inserts `DequantizeLinear(scale=1)`.
-    Bit-identical outputs, but the runtime writes a quarter of the bytes and
-    skips the int-to-float conversion.
-
-- `compile_supercombo_nncase.py`
-  - Imports the ONNX into nncase, applies PTQ calibration, and writes the
-    `.kmodel`.
-  - On this Mac the practical K230 path is the `linux/amd64` Docker image
-    `supercombo-nncase-k230:2.11.0-sdk`. The build script passes the
-    Rosetta/.NET mitigation flags; without them the compiler spins on the ONNX
-    import and then dies inside the .NET JIT.
+- `axmodel/extract_core.py`
+  - cuts the history queues out of the released graph and rewrites the ops
+    Pulsar2 does not accept (opset-20 Cast, GatherND, the `Where(-inf)` mask, 2D
+    LpNorm) into equivalent ones; fp16 is promoted to fp32.
+- `axmodel/make_core_data.py`
+  - writes `calib/*.tar` from the 180 PTQ samples in `models/ptq` and an
+    `eval/` set from the K230 v0.9.4 evaluation bundle (`QEXP094_DIR`, outside
+    the repository), run through the fp32 core with the runtime's queue
+    semantics.
+- `axmodel/pulsar2_u16_u8in.json`
+  - the Pulsar2 build config: AX620E / NPU2, U16 everywhere, uint8 image inputs.
 
 ## Host environment
 
 ```sh
-python3 -m venv ~/Documents/k230/.model-venv
-~/Documents/k230/.model-venv/bin/pip install -r tools/model/requirements.txt
+python3 -m venv .model-venv
+.model-venv/bin/pip install -r tools/model/requirements.txt
 ```
+
+`axmodel/` additionally needs `onnx` and `onnxruntime` (both in the
+requirements) and the Pulsar2 6.0 Docker image for the compile step.
 
 ## Recording-driven helpers
 
-These read `k230_recordd` routes and reproduce the device's input pipeline
+These read K230 `k230_recordd` routes and reproduce the device's input pipeline
 (`recording_reader.py` decodes the route, `model_warp.py` is a numpy port of
-`src/model_input_transform.cc`, `route_frames.py` joins them, and
-`op094_runner.py` drives the model with the same desire/feature history the
-runtime keeps).
+the CPU warp in `src/model_input_transform.cc`, `route_frames.py` joins them,
+and `op094_runner.py` drives the v0.9.4 ONNX with the desire/feature history the
+K230 runtime kept).
 
+- `recording_reader.py`
+  - the one Python mirror of `src/recording_format.h` and `src/ipc_messages.h`.
 - `make_calibration.py`
-  - captures PTQ samples across routes; each sample carries the feature buffer
-    the model itself produced, so calibration sees the real activation ranges.
-    The build uses two sets: the original 60 (`ptq/supercombo_calib.npz`) and
-    120 native K230 samples from seven later routes
-    (`ptq/supercombo_calib_k230_120.npz`, routes listed in its metadata).
-
+  - captured the PTQ samples in `models/ptq` across routes; each sample carries
+    the feature buffer the v0.9.4 model itself produced, so calibration saw the
+    real activation ranges.
 - `make_replay.py`
-  - writes an `SCNV12R1` replay plus host reference outputs for the board
-    verification described in `../../docs/diagnostics.md`.
-
+  - writes an `SCNV12R1` replay for `k230_modeld` replay mode on the board.
+    Its optional `--model` host reference runs the v0.9.4 ONNX and does not fit
+    the master contract; see `../../docs/diagnostics.md`.
 - `lane_bias.py`
   - measures the lateral bias of a drive and splits it into a translation term
     and a rotation term, which is what tells you whether a lane-hugging
     complaint is a camera-calibration problem or not. See
     `../../docs/diagnostics.md`.
+- `model_warp.py`
+  - also used by `tools/calib/warp_preview.py` to show the MaixCAM2 model views.
+
+## K230 only (unused on this branch)
+
+- `prequant_bias_correct.py`
+  - rounded the v0.9.4 Conv/Gemm weights onto nncase's per-channel uint8 grid
+    and cancelled the mean output shift in each bias.
+- `retype_image_inputs_uint8.py`
+  - retyped the v0.9.4 image inputs to uint8. The axmodel gets uint8 image
+    inputs from Pulsar2's `input_processors` instead.

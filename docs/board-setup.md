@@ -2,58 +2,72 @@
 
 [← Documentation index](../README.md)
 
-For a freshly flashed or reflashed board, install the build/runtime helper packages
-first:
+The runtime runs on the stock Sipeed MaixCAM2 image. Nothing is reflashed: the
+image already carries what the binaries link against, and the build copies those
+exact files from the board (see [Build and deploy](build-and-deploy.md)).
+
+| Item | Value |
+| --- | --- |
+| SoC | AX630C, 2x Cortex-A53 + NPU, 1 GB |
+| Camera | `ov_os04d10`, opened at 1280x720 NV12 |
+| LCD | 640x480 landscape; the panel is 480x640 and VO rotates it |
+| OS | Ubuntu 22.04 arm64 |
+| AX runtime | `/opt/lib` (`libax_engine`, `libax_sys`, `libax_ivps`, ...) |
+| Camera/display library | `/usr/lib/libmaixcam_lib.so.1.2.5` |
+| Install directory | `/root/sc_run` |
+
+## SSH
+
+The scripts log in as `root` with key authentication; the default board address
+is `192.168.219.117`. Install your public key once:
 
 ```sh
-apt-get update
-apt-get install -y \
-  ca-certificates \
-  cmake \
-  curl \
-  g++ \
-  git \
-  libdrm-dev \
-  libusb-1.0-0-dev \
-  libopencv-dev \
-  make \
-  python3 \
-  python3-pip
+ssh-copy-id root@192.168.219.117
 ```
 
-## Package purpose
+`fetch_maixcam2_sdk.sh` and `upload_to_board.sh` take the board as their first
+argument when the address differs.
 
-- `g++`, `make`, `cmake`: board-native C/C++ build
-- `libdrm-dev`: DRM headers used by the overlay/display path
-- `libusb-1.0-0-dev`: optional panda USB/CAN bridge build
-- `libopencv-dev`: OpenCV headers/libraries used by the overlay renderer
-- `curl`, `ca-certificates`: `scripts/fetch_nncase_runtime.sh` download support
-- `git`: fresh clone from GitHub
-- `python3`: `k230_manager.py` and the K7 parameter web server
-- `python3-pip`: FastAPI/uvicorn install
+## Parameter server packages
 
-Install the parameter server dependencies:
+`k230_param_server.py` needs FastAPI and uvicorn:
 
 ```sh
-python3 -m pip install -r scripts/requirements-param-server.txt
+python3 -m pip install -r /root/sc_run/requirements-param-server.txt
 ```
 
-If the directory is copied to the board with all files already present, `git` is
-not needed for building. It is only needed for a fresh repository checkout.
+`k230_pandad` links `libusb-1.0`; install `libusb-1.0-0` on the board if it is
+missing.
 
-## Required image contents
+## Things to avoid on this board
 
-The flashed image must already include the K230 camera/display devices, `/dev/mmz`,
-and these runtime libraries in `/usr/lib/riscv64-linux-gnu/`:
+- **Do not build on the board.** A native build runs out of the 1 GB memory.
+  Build in the container described in [Build and deploy](build-and-deploy.md).
+- **Watch `libmaixcam_lib.so` after apt or ldconfig.** The board's apt/ldconfig
+  can repoint `/usr/lib/libmaixcam_lib.so` to a `_bak` file, and then camerad
+  and overlayd fail to start. Restore the link:
 
-- `libdisplay.so`
-- `libv4l2-drm.so`
-- `libdrm.so.2`
+  ```sh
+  ln -sfn libmaixcam_lib.so.1.2.5 /usr/lib/libmaixcam_lib.so
+  ```
 
-After that, [Build and deploy](build-and-deploy.md) builds the runtime on the board or
-cross-builds and uploads it.
+- **Do not walk the whole filesystem.** The stock rootfs has ext4
+  directory-checksum defects under `/usr/share/doc`; a whole-filesystem walk such
+  as `find /` hits them and the kernel remounts `/` read-only. Search specific
+  directories instead. The defects are fixed with an offline `e2fsck -fD` on the
+  root partition (SD card in another machine, filesystem unmounted).
+- **A running binary cannot be overwritten.** `upload_to_board.sh` handles this
+  by uploading into `.upload/` and moving the files into place; copy by hand the
+  same way.
+
+## Stock launcher
+
+The stock UI (`launcher.service`) and the apps it starts from `/maixapp/apps/`
+use about 30% CPU and hold the camera and NPU. `k230_manager.py` stops both
+before starting the runtime unless `K230_STOP_LAUNCHER=0`. It does not restart
+them on exit; `systemctl start launcher.service` brings the stock UI back.
 
 ## Physical mounting
 
-A printable windshield-mount bridge for the K230 and its LCD is documented in
-[hardware/windshield_mount](hardware/windshield_mount/README.md).
+The printable [windshield mount](hardware/windshield_mount/README.md) was
+designed for the K230 board and its LCD; it does not fit the MaixCAM2.

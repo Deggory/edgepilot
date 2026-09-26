@@ -53,6 +53,23 @@ ProjectionState make_projection_state(float roll, float pitch, float yaw)
     return state;
 }
 
+namespace {
+
+struct CameraIntrinsics {
+    float fx = kCameraFx;
+    float fy = kCameraFy;
+    float cx = kCameraCx;
+    float cy = kCameraCy;
+};
+CameraIntrinsics g_camera;
+
+}  // namespace
+
+void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy)
+{
+    g_camera = {fx, fy, cx, cy};
+}
+
 bool project_point(const ProjectionState &projection, float x_forward, float y_left, float z_up,
                    int width, int height, int *px, int *py)
 {
@@ -64,12 +81,18 @@ bool project_point(const ProjectionState &projection, float x_forward, float y_l
     const float vz = m[6] * x_forward + m[7] * y_left + m[8] * z_up;
     if (vz <= 0.1f) return false;
 
-    const float landscape_w = 800.0f;
-    const float landscape_h = 480.0f;
-    const float fx = default_input_warp_fx(static_cast<unsigned>(landscape_w));
-    const float fy = default_input_warp_fy(static_cast<unsigned>(landscape_h));
-    const float calibrated_cx = default_input_warp_cx(static_cast<unsigned>(landscape_w));
-    const float calibrated_cy = default_input_warp_cy(static_cast<unsigned>(landscape_h));
+    // 가로 화면(K230 800x480, MaixCAM2 640x480)은 카메라 영상 가운데의 kPreviewAspect
+    // 영역(1080p 기준 폭 kPreviewCropWidth1080)을 담는다(overlayd가 IVPS로 같은 영역을
+    // 자른다). 세로 버퍼(K230 480x800)면 긴 변이 가로 화면의 폭이다.
+    const float landscape_w = static_cast<float>(width > height ? width : height);
+    const float landscape_h = static_cast<float>(width > height ? height : width);
+    const float sx = landscape_w / kPreviewCropWidth1080;
+    const float sy = landscape_h / static_cast<float>(kDefaultSensorHeight);
+    const float crop_x = (static_cast<float>(kDefaultSensorWidth) - kPreviewCropWidth1080) * 0.5f;
+    const float fx = g_camera.fx * sx;
+    const float fy = g_camera.fy * sy;
+    const float calibrated_cx = (g_camera.cx - crop_x) * sx;
+    const float calibrated_cy = g_camera.cy * sy;
     const float cx = landscape_w - 1.0f - calibrated_cx;
     const float cy = landscape_h - 1.0f - calibrated_cy;
 

@@ -1,9 +1,13 @@
 #include "recording_writer.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/statvfs.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -14,7 +18,9 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -61,13 +67,48 @@ std::string route_name() {
   return name.str();
 }
 
+/* 닫힌 세그먼트를 SD로 옮긴다. 한 번에 복사하면 더티 페이지가 쌓였다가 한꺼번에 쓰이면서
+ * SD(저가 카드는 쓰기 수 MB/s)를 몇 초씩 붙잡아 다른 프로세스의 IO가 멈췄다(보드에서 부하
+ * 10, SSH 한 번에 36초). 1 MB씩 쓰고 바로 fdatasync하며 초당 kMoveBytesPerSecond로
+ * 제한한다. 녹화 평균(8 Mbps 영상 + CAN·상태 로그 ≈ 1.6 MB/s)보다 넉넉히 빠르다. */
+constexpr size_t kMoveChunkBytes = 1 << 20;
+constexpr double kMoveBytesPerSecond = 3.0 * (1 << 20);
+
 bool copy_file(const std::string &source, const std::string &destination) {
-  std::ifstream input(source, std::ios::binary);
-  if (!input) return false;
-  std::ofstream output(destination, std::ios::binary | std::ios::trunc);
-  if (!output) return false;
-  output << input.rdbuf();
-  return (input.good() || input.eof()) && output.good();
+  const int in = ::open(source.c_str(), O_RDONLY);
+  if (in < 0) return false;
+  const int out = ::open(destination.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (out < 0) {
+    ::close(in);
+    return false;
+  }
+  std::vector<char> buffer(kMoveChunkBytes);
+  bool ok = true;
+  const auto start = std::chrono::steady_clock::now();
+  size_t copied = 0;
+  while (ok) {
+    const ssize_t n = ::read(in, buffer.data(), buffer.size());
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) {
+      ok = n == 0;
+      break;
+    }
+    for (ssize_t done = 0; ok && done < n;) {
+      const ssize_t w = ::write(out, buffer.data() + done, static_cast<size_t>(n - done));
+      if (w < 0 && errno == EINTR) continue;
+      ok = w > 0;
+      if (ok) done += w;
+    }
+#if defined(__linux__)
+    if (ok) ::fdatasync(out);
+#endif
+    copied += static_cast<size_t>(n);
+    const auto due = start + std::chrono::duration<double>(copied / kMoveBytesPerSecond);
+    std::this_thread::sleep_until(due);
+  }
+  ok = ::close(out) == 0 && ok;
+  ::close(in);
+  return ok;
 }
 
 }  // namespace
@@ -113,6 +154,12 @@ void StagingMover::stop() {
 }
 
 void StagingMover::loop() {
+#if defined(__linux__)
+  // 옮기기는 급하지 않으니 가장 낮은 IO 우선순위(idle)로 한다: 다른 IO가 없을 때만 쓴다.
+  constexpr int kIoprioWhoProcess = 1, kIoprioClassIdle = 3, kIoprioClassShift = 13;
+  syscall(SYS_ioprio_set, kIoprioWhoProcess, static_cast<int>(syscall(SYS_gettid)),
+          kIoprioClassIdle << kIoprioClassShift);
+#endif
   while (true) {
     Job job;
     {
@@ -168,9 +215,9 @@ void StagingMover::move_tree(const std::string &from, const std::string &to) {
 
 RecordingWriter::RecordingWriter(std::string root, std::string params_directory,
                                  unsigned width, unsigned height, unsigned fps,
-                                 unsigned bitrate)
+                                 unsigned bitrate, K230VideoCodec codec)
     : root_(std::move(root)), params_directory_(std::move(params_directory)),
-      width_(width), height_(height), fps_(fps), bitrate_(bitrate) {
+      width_(width), height_(height), fps_(fps), bitrate_(bitrate), codec_(codec) {
   const char *staging = std::getenv("K230_RECORD_STAGING");
   staging_root_ = staging && staging[0] != '\0' ? staging : "/tmp/record_staging";
   /* 이전 세션이 route 도중 죽었으면 스테이징 잔여가 tmpfs(램)를 계속
@@ -322,7 +369,7 @@ bool RecordingWriter::open_segment(const K230RoadAiFrame &frame) {
   segment_relative_ = "segments/" + number.str();
   const std::string directory = route_path_ + "/" + segment_relative_;
   if (!make_directories(directory)) return false;
-  video_file_ = open_buffered(directory + "/road.hevc");
+  video_file_ = open_buffered(directory + "/road." + k230_video_codec_name(codec_));
   index_file_ = open_buffered(directory + "/frames.bin");
   if (!video_file_ || !index_file_) {
     close_segment();
@@ -504,7 +551,8 @@ void RecordingWriter::close_segment() {
   segment_start_ns_ = 0;
   video_offset_ = 0;
   if (had_files && !segment_relative_.empty()) {
-    for (const char *file : {"/road.hevc", "/frames.bin"}) {
+    const std::string video = std::string("/road.") + k230_video_codec_name(codec_);
+    for (const std::string &file : {video, std::string("/frames.bin")}) {
       mover_.enqueue_file(route_path_ + "/" + segment_relative_ + file,
                           final_route_path_ + "/" + segment_relative_ + file);
     }
@@ -518,7 +566,7 @@ void RecordingWriter::write_manifest(bool complete) const {
   manifest << "{\n"
            << "  \"version\": " << kK230RecordingVersion << ",\n"
            << "  \"complete\": " << (complete ? "true" : "false") << ",\n"
-           << "  \"video_codec\": \"hevc\",\n"
+           << "  \"video_codec\": \"" << k230_video_codec_name(codec_) << "\",\n"
            << "  \"width\": " << width_ << ",\n"
            << "  \"height\": " << height_ << ",\n"
            << "  \"fps\": " << fps_ << ",\n"

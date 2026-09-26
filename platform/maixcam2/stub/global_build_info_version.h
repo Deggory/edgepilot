@@ -1,0 +1,4 @@
+#pragma once
+#define MAIXCDK_VERSION_MAJOR 0
+#define MAIXCDK_VERSION_MINOR 0
+#define MAIXCDK_VERSION_PATCH 0

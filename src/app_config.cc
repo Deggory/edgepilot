@@ -2,7 +2,7 @@
 #include "utils_process.h"
 #include "utils_math.h"
 
-
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -10,18 +10,35 @@
 std::string AppConfig::usage(const char *program_name)
 {
     return std::string("Usage: ") + (program_name ? program_name : "k230_modeld") +
-        " <supercombo.kmodel> [debug_mode]";
+        " <supercombo.axmodel>";
+}
+
+void AppConfig::set_warp_source(unsigned width, unsigned height)
+{
+    // default_input_warp_*와 같은 연산 순서라 기본값에서는 비트까지 같다.
+    const float w = static_cast<float>(width), h = static_cast<float>(height);
+    input_warp_fx = camera_fx * w / static_cast<float>(kDefaultSensorWidth);
+    input_warp_fy = camera_fy * h / static_cast<float>(kDefaultSensorHeight);
+    input_warp_cx = camera_cx * w / static_cast<float>(kDefaultSensorWidth);
+    input_warp_cy = camera_cy * h / static_cast<float>(kDefaultSensorHeight);
 }
 
 AppConfig AppConfig::from_env_defaults()
 {
     AppConfig config;
 
-
-    config.input_warp_fx = default_input_warp_fx(config.nv12_width);
-    config.input_warp_fy = default_input_warp_fy(config.nv12_height);
-    config.input_warp_cx = default_input_warp_cx(config.nv12_width);
-    config.input_warp_cy = default_input_warp_cy(config.nv12_height);
+    const std::string intrinsics = env_string("SUPERCOMBO_CAMERA_INTRINSICS");
+    if (!intrinsics.empty()) {
+        float v[4];
+        if (std::sscanf(intrinsics.c_str(), "%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3]) != 4 ||
+            v[0] <= 0.0f || v[1] <= 0.0f)
+            throw std::runtime_error("SUPERCOMBO_CAMERA_INTRINSICS must be fx,fy,cx,cy at 1920x1080");
+        config.camera_fx = v[0];
+        config.camera_fy = v[1];
+        config.camera_cx = v[2];
+        config.camera_cy = v[3];
+    }
+    config.set_warp_source(config.nv12_width, config.nv12_height);
 
     config.max_frames = env_unsigned("SUPERCOMBO_MAX_FRAMES", 0);
 
@@ -36,18 +53,15 @@ AppConfig AppConfig::from_env_defaults()
     config.manual_yaw = deg_to_rad(env_float("SUPERCOMBO_CALIB_YAW_DEG", 0.0f));
     config.log_calibration = env_flag("SUPERCOMBO_LOG_CALIB");
     config.profile = env_flag("SUPERCOMBO_PROFILE");
-
-
     return config;
 }
 
 AppConfig AppConfig::from_env(int argc, char *argv[])
 {
-    if (argc < 2 || argc > 3)
+    if (argc != 2)
         throw std::invalid_argument(usage(argc > 0 ? argv[0] : "k230_modeld"));
 
     AppConfig config = from_env_defaults();
-    config.kmodel_path = argv[1];
-    config.debug_mode = argc >= 3 ? std::atoi(argv[2]) : 1;
+    config.axmodel_path = argv[1];
     return config;
 }

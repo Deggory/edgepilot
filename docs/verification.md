@@ -9,7 +9,9 @@
   calibration state machine, manual-vs-online feedback policy,
   medmodel/sbigmodel homography matrices, UV `transform_scale_buffer(0.5)`
   handling, and YUV6 plane order (`Y00, Y10, Y01, Y11, U, V`) without requiring
-  nncase or K230 display libraries.
+  the AX runtime or the MaixCAM2 SDK. It covers the CPU warp and the
+  projection matrices the GDC warp is given; the GDC itself runs only on the
+  board.
 - The verifier intentionally treats model-input feedback as roll-free, matching
   openpilot's `get_view_frame_from_road_frame(0, pitch, yaw, model_height)`
   extrinsic matrix. `rpyCalib` may contain a tiny roll internally in openpilot,
@@ -17,35 +19,36 @@
 - The verifier checks the ISP-normalized medmodel defaults and compares its
   matrix with the original openpilot formula.
 - With zero rpy, the warped YUV6 must equal a direct (unwarped) pack byte for byte.
-- Against openpilot's OpenCL interpolation on the actual `640x360` K230 source,
-  the worst 12-case mean absolute pixel difference is `0.314/255` and the worst
-  absolute difference is `7/255`. The paths use the same projection and YUV6
-  layout, but are not bit-exact because openpilot quantizes coordinates to 1/32
-  pixel with 15-bit coefficients while K230 uses 12-bit coefficients.
+- Against openpilot's OpenCL interpolation on a `640x360` K230 source, the
+  worst 12-case mean absolute pixel difference of the CPU warp is `0.314/255`
+  and the worst absolute difference is `7/255`. The paths use the same
+  projection and YUV6 layout, but are not bit-exact because openpilot quantizes
+  coordinates to 1/32 pixel with 15-bit coefficients while this warp uses 12-bit
+  coefficients.
+- On the board, the GDC warp matches the CPU warp to 1 LSB in Y and 0.4 LSB on
+  average in U/V; on a K230 replay the plan lateral offset at 2 s against the
+  fp32 host reference differs by 0.0005 m.
 - Automatic calibration requires both CAN `vEgo` and camera-odometry `trans[0]`
   above 15 mph, matching openpilot's acceptance gate.
 - The final graph keeps both visual towers live. `input_imgs` uses the
   910-pixel-focal medmodel virtual camera and `big_input_imgs` uses the
   455-pixel-focal sbigmodel virtual camera, matching the single-camera C2 path.
 
-`scripts/run_host_tests.sh` already runs this verifier. To run it alone,
-together with the warp benchmark:
+`scripts/run_host_tests.sh` already runs this verifier. To run it alone:
 
 ```sh
 cmake -S . -B build-host \
   -DCMAKE_BUILD_TYPE=Release \
   -DSUPERCOMBO_BUILD_RUNTIME=OFF \
   -DSUPERCOMBO_BUILD_DIAGNOSTICS=ON
-cmake --build build-host \
-  --target gtest_calibration_equivalence bench_input_warp_overhead -j2
+cmake --build build-host --target gtest_calibration_equivalence -j2
 build-host/bin/gtest_calibration_equivalence
-build-host/bin/bench_input_warp_overhead --runs 3000
 ```
 
 ## Lateral MPC solver
 
-`src/lateral_mpc.*` replaces the prebuilt riscv64 acados/HPIPM runtime that used
-to live in `deps/acados`. It solves the same OCP as openpilot 0.8.16's
+`src/lateral_mpc.*` replaces the prebuilt riscv64 acados/HPIPM runtime that the
+K230 build used to keep in `deps/acados`. It solves the same OCP as openpilot 0.8.16's
 `lateral_mpc_lib`. The problem was recovered from the generated solver's own
 `.rodata` and cross-checked against openpilot's `lat_mpc.py`: T_IDXS shooting
 nodes (16 intervals, 2.5 s), `idxbx=[2,3]` bounded at radians(90)/radians(50),
@@ -71,7 +74,7 @@ cost. A wrong sensitivity in the RK4 forward VDE fails this check, since the
 iteration would then settle where the linearized KKT holds but the true gradient
 does not.
 
-### A/B against the acados runtime (board, 2026-09-10)
+### A/B against the acados runtime (K230 board, 2026-09-10)
 
 400 cycles per speed with identical references, both solvers warm-started from
 reset. `lockstep` feeds both the same initial curvature; `free` lets each feed
@@ -84,8 +87,8 @@ back its own.
 | 12 | 1.3e-6 | 1.1e-6 | 1.3e-8 |
 | 27 | 2.3e-8 | 4.4e-8 | 5.5e-9 |
 
-Solve time on the board (C908, single core, with `k230_modeld` running, so the
-minimum is the meaningful figure):
+Solve time on the K230 board (C908, single core, with `k230_modeld` running, so
+the minimum is the meaningful figure; not re-measured on the AX630C):
 
 | Solver | min | p50 | p90 |
 | --- | --- | --- | --- |
@@ -98,8 +101,8 @@ control cycle could disappear into a single solve.
 ### End-to-end replay
 
 `replay_planner` over three segments of route `2026-09-07--02-21-46-703`
-(3545 frames, 1217 of them at standstill, 0-76 kph). Both runs are board
-binaries, so nothing here is host/target float noise; the host build produces a
+(3545 frames, 1217 of them at standstill, 0-76 kph, recorded on the K230). Both
+runs are K230 board binaries, so nothing here is host/target float noise; the host build produces a
 byte-identical CSV to the board build.
 
 | Segment | commanded curvature, max diff | RMS | signal range | frames differing |
@@ -149,8 +152,8 @@ most of the benefit. `mpcSolutionValid` and laneless mode never differ, and the
 command deviation from the pre-term baseline stays under 4.1e-3 1/m, confined to
 below 20 kph (7e-5 above 50 kph).
 
-Solve time is unchanged at 33.5 us on the board; the term is one extra weight in
-the input Hessian.
+Solve time is unchanged at 33.5 us on the K230 board; the term is one extra
+weight in the input Hessian.
 
 ### Rejected: more than one SQP iteration per cycle
 

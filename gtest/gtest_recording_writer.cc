@@ -82,7 +82,7 @@ TEST(RecordingWriter, RouteOnDisk) {
 
   const uint64_t t0 = 5'000'000'000ULL;
   {
-    RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000);
+    RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000, K230VideoCodec::H264);
     writer.set_enabled(true, t0);
     const uint8_t codec_config[] = {'C', 'F', 'G', 0x01};
     writer.set_codec_config(codec_config, sizeof(codec_config));
@@ -167,7 +167,7 @@ TEST(RecordingWriter, RouteOnDisk) {
   ASSERT_EQ(offset, events.size()) << "마지막 레코드 뒤에 남는 바이트가 없다";
 
   // segments/000: 코덱 설정 + 패킷 3개, 인덱스 오프셋은 누적
-  const std::vector<uint8_t> video = read_file(route + "/segments/000/road.hevc");
+  const std::vector<uint8_t> video = read_file(route + "/segments/000/road.h264");
   // 영상 스트림은 코덱 설정 뒤에 패킷이 이어진다
   ASSERT_EQ(video.size(), 4 + 64 + 80 + 96);
   ASSERT_EQ(std::memcmp(video.data(), "CFG", 3), 0);

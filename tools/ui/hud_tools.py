@@ -30,7 +30,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa: E402
                               iter_event_records, route_event_files,
-                              route_segments)
+                              route_segments, segment_video)
 
 MODEL_STATE_SIZE = 3256   # hud_snapshot replays the v5 K230ModelState only
 CONTROL_STATE_SIZE = 240
@@ -116,7 +116,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
             continue
         index = int(frames["encode_index"][hits[0]]) - int(frames["encode_index"][0])
         camera = args.out / "camera.png"
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(segment.path / "road.hevc"),
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(segment_video(segment.path)[0]),
                         "-vf", f"select=eq(n\\,{index})", "-frames:v", "1", str(camera)], check=True)
         print(f"camera frame: {segment.path.name} index {index} -> {camera}")
         break

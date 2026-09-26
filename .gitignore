@@ -3,8 +3,7 @@
 /build/
 /build-*/
 /cmake-build-*/
-# nncase 런타임과 gsl-lite는 scripts/fetch_nncase_runtime.sh가 버전과 SHA256을
-# 고정해 받는다. 추적하면 스크립트의 rm -rf와 출처가 둘로 갈린다.
+# 교차 빌드 의존성은 scripts/fetch_maixcam2_sdk.sh가 버전을 고정해 받는다.
 /deps/
 CMakeFiles/
 CMakeCache.txt
@@ -15,12 +14,10 @@ k230_modeld
 k230_overlayd
 k230_pandad
 k230_controlsd
-k230_recordd
 gtest_control_replay
 gtest_model_output_parser
 gtest_panda_can_codec
 hud_snapshot
-bench_input_warp_overhead
 gtest_calibration_equivalence
 __pycache__/
 *.pyc

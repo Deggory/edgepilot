@@ -8,7 +8,6 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
@@ -51,11 +50,9 @@ constexpr int kGlyphH = 7;
 constexpr int kGlyphAdvance = 6;
 constexpr int kShadowOffset = 2;
 
-/* 패널 격자: 좌우 각 4단, 800x480 논리 좌표. */
-constexpr int kBoxW = 236;
+/* 패널 격자: 좌우 각 4단. 폭에 따라 달라지는 값은 HudLayout. */
 constexpr int kBoxMargin = 8;
 constexpr int kBoxPadding = 10;
-constexpr int kColW = kBoxW - 2 * kBoxPadding;
 constexpr int kPanelH = 66;
 constexpr int kPanelGap = 8;
 constexpr int kPanelY0 = 10;
@@ -67,8 +64,6 @@ constexpr int kPanelAccentW = 3;
 constexpr int kPanelRuleY = 17;
 constexpr int kPanelRuleInset = 8;
 constexpr int kMetricInnerMargin = 8;
-constexpr int kMetricInnerW = kBoxW - 2 * kMetricInnerMargin;
-constexpr int kMetricTextMargin = 4;
 
 /* 패널 안 행 위치(패널 상단 기준). 제목줄 아래에 scale 2 두 줄(Row1/Row2) 또는
  * scale 1 세 줄(Row1/Line2/Line3). */
@@ -102,8 +97,6 @@ constexpr int kAlertTitleY = 8;
 constexpr int kAlertDetailY = 36;
 
 /* TPMS 패널: 두 열, 단위는 제목줄 배지. */
-constexpr int kTpmsColumnOffset = 112;
-constexpr int kTpmsColumnW = 108;
 constexpr float kTpmsLowBar = 2.2f;
 constexpr float kTpmsHighBar = 2.8f;
 constexpr float kTpmsLowPsi = 32.0f;
@@ -132,11 +125,6 @@ constexpr int kSignalHousingCenterX = 174;
 constexpr int kSignalHousingCenterY = 39;
 
 /* 깜빡이 셰브런: 단계 0~14 켜짐(4부터 2개, 8부터 3개), 15~24 꺼짐. */
-constexpr int kTurnCenterY = 42;
-constexpr int kTurnInnerOffset = 74;
-constexpr int kTurnChevronStep = 28;
-constexpr int kTurnChevronW = 24;
-constexpr int kTurnChevronHalfH = 34;
 constexpr int kTurnLitSteps = 15;
 constexpr int kTurnChevronStartStep[] = {0, 4, 8};
 constexpr int kTurnChevronAlpha[] = {70, 140, 210};
@@ -167,18 +155,120 @@ constexpr HealthLevel kHealthLevels[] = {
     {60.0f, 65.0f, 75.0f, kYellow},
 };
 
-/* 한 프레임의 그리기 대상: 네이티브 버퍼와 800x480 논리 좌표계. */
+/* 화면 폭에 따라 달라지는 배치. 800 폭(K230)은 원래 설계 그대로이고, 640 폭(MaixCAM2)은
+ * 네이티브 픽셀에 정수 배율 글꼴을 그리도록 다시 잡았다: 패널 폭 208은 4열 수치("100%")와
+ * 3열 수치("-2.30")가 배율 2로 들어가는 최소 폭이고, 가운데 208 px는 속도 세 자리(136 px)만
+ * 들어가므로 깜빡이 화살표는 속도 아래로, AUTO HOLD 상자는 신호등을 가리지 않게 왼쪽으로
+ * 옮겼다. */
+struct HudLayout {
+    int box_w;
+    int metric_text_margin;
+    int tpms_column_offset;
+    int tpms_column_w;
+    int turn_center_y;
+    int turn_inner_offset;
+    int turn_chevron_step;
+    int turn_chevron_w;
+    int turn_chevron_half_h;
+    int auto_hold_center_x;  // 0이면 화면 가운데
+
+    int col_w() const { return box_w - 2 * kBoxPadding; }
+    int metric_inner_w() const { return box_w - 2 * kMetricInnerMargin; }
+};
+
+constexpr HudLayout kWideLayout{236, 4, 112, 108, 42, 74, 28, 24, 34, 0};
+constexpr HudLayout kCompactLayout{208, 2, 98, 94, 124, 20, 28, 24, 24, 170};
+
+const HudLayout &layout_for_width(int width)
+{
+    return width <= 640 ? kCompactLayout : kWideLayout;
+}
+
+/* 한 프레임의 그리기 대상: 네이티브 버퍼와 가로 화면 좌표계(width x height).
+ * rotated면 버퍼는 세로 패널(K230 480x800)이다. */
 struct Frame {
     cv::Mat &mat;
     int width;
     int height;
     bool rotated;
+    HudLayout layout;
 
-    cv::Point native(int x, int y) const
+    // 반올림 없이: 안티앨리어싱 폴리곤이 1/16 px까지 쓴다.
+    cv::Point2f nativef(float x, float y) const
     {
-        return rotated ? cv::Point(height - 1 - y, x) : cv::Point(x, y);
+        return rotated ? cv::Point2f(height - 1 - y, x) : cv::Point2f(x, y);
     }
 };
+
+/* 직선(premultiplied 아님) 알파 BGRA 픽셀 위에 color를 커버리지 cov(0..255)로 over
+ * 합성한다. OSD 레이어가 직선 알파를 받으므로 색을 알파로 다시 나눠 둔다. */
+inline void blend_pixel(uint32_t &dst, uint32_t color, unsigned cov)
+{
+    const unsigned sa = ((color >> 24) * cov + 127) / 255;
+    if (sa == 0) return;
+    const unsigned dw = (dst >> 24) * (255 - sa) / 255;
+    const unsigned oa = sa + dw;
+    auto channel = [&](int shift) {
+        const unsigned s = (color >> shift) & 0xff;
+        const unsigned d = (dst >> shift) & 0xff;
+        return ((s * sa + d * dw + oa / 2) / oa) << shift;
+    };
+    dst = (oa << 24) | channel(16) | channel(8) | channel(0);
+}
+
+/* 커버리지 마스크를 네이티브 (x0, y0)에 놓고 합성한다(화면 밖은 잘라 낸다). */
+void blit_coverage(cv::Mat &dst, const cv::Mat &coverage, int x0, int y0, uint32_t color)
+{
+    const int c0 = std::max(0, -x0);
+    const int r0 = std::max(0, -y0);
+    const int c1 = std::min(coverage.cols, dst.cols - x0);
+    const int r1 = std::min(coverage.rows, dst.rows - y0);
+    for (int r = r0; r < r1; ++r) {
+        const uint8_t *cov = coverage.ptr<uint8_t>(r);
+        uint32_t *pixels = dst.ptr<uint32_t>(y0 + r) + x0;
+        for (int c = c0; c < c1; ++c)
+            if (cov[c]) blend_pixel(pixels[c], color, cov[c]);
+    }
+}
+
+uint32_t scalar_argb(const cv::Scalar &color)
+{
+    auto u8 = [](double v) { return static_cast<uint8_t>(std::clamp(v, 0.0, 255.0)); };
+    return argb(u8(color[3]), u8(color[2]), u8(color[1]), u8(color[0]));
+}
+
+/* 안티앨리어싱 폴리곤. BGRA에 바로 LINE_AA로 그리면 OpenCV가 알파까지 선형으로 섞어
+ * 투명 배경 쪽 가장자리가 검게 번지므로, 경계 상자만 한 8비트 마스크에 커버리지를
+ * 그린 뒤 blend_pixel로 합성한다. 꼭짓점은 1/16 px 정밀도(shift 4). */
+void fill_poly_aa(const Frame &frame, const cv::Point2f *points, int count,
+                  const cv::Scalar &color)
+{
+    if (count < 3) return;
+    constexpr int kShift = 4;
+    constexpr float kOne = 1 << kShift;
+    float min_x = points[0].x, max_x = min_x, min_y = points[0].y, max_y = min_y;
+    for (int i = 1; i < count; ++i) {
+        min_x = std::min(min_x, points[i].x);
+        max_x = std::max(max_x, points[i].x);
+        min_y = std::min(min_y, points[i].y);
+        max_y = std::max(max_y, points[i].y);
+    }
+    const cv::Rect box = cv::Rect(cv::Point(static_cast<int>(std::floor(min_x)) - 1,
+                                            static_cast<int>(std::floor(min_y)) - 1),
+                                  cv::Point(static_cast<int>(std::ceil(max_x)) + 2,
+                                            static_cast<int>(std::ceil(max_y)) + 2)) &
+                         cv::Rect(0, 0, frame.mat.cols, frame.mat.rows);
+    if (box.empty()) return;
+    // 상자 밖으로 나가는 꼭짓점도 상대 좌표로 그대로 넘긴다(fillPoly가 자른다).
+    std::vector<cv::Point> fixed(count);
+    for (int i = 0; i < count; ++i)
+        fixed[i] = cv::Point(static_cast<int>(std::lround((points[i].x - box.x) * kOne)),
+                             static_cast<int>(std::lround((points[i].y - box.y) * kOne)));
+    cv::Mat mask = cv::Mat::zeros(box.size(), CV_8UC1);
+    const cv::Point *polygon = fixed.data();
+    cv::fillPoly(mask, &polygon, &count, 1, cv::Scalar(255), cv::LINE_AA, kShift);
+    blit_coverage(frame.mat, mask, box.x, box.y, scalar_argb(color));
+}
 
 struct TrafficSignalSprite {
     cv::Mat logical;
@@ -338,9 +428,9 @@ std::string network_text(const OverlayHudState &hud)
 {
     if (!hud.network_connected) return "NET OFFLINE";
     if (hud.wifi_signal_dbm != 0)
-        return format_text("NET %s %s %dDBM", hud.network_interface, hud.network_ipv4,
+        return format_text("%s %s %dDBM", hud.network_interface, hud.network_ipv4,
                            hud.wifi_signal_dbm);
-    return format_text("NET %s %s", hud.network_interface, hud.network_ipv4);
+    return format_text("%s %s", hud.network_interface, hud.network_ipv4);
 }
 
 std::string cruise_text(const OverlayHudState &hud)
@@ -350,7 +440,7 @@ std::string cruise_text(const OverlayHudState &hud)
     const bool command_valid =
         std::isfinite(hud.cruise_command_speed_kph) && hud.cruise_command_speed_kph > 0.0f;
     if (!maximum_valid || !command_valid) return "MAX --  SET --";
-    return format_text("MAX %.0F  SET %.0F", hud.cruise_max_speed_kph,
+    return format_text("MAX %.0F SET %.0F", hud.cruise_max_speed_kph,
                        hud.cruise_command_speed_kph);
 }
 
@@ -590,6 +680,7 @@ public:
     explicit BitmapHud(const Frame &frame) : frame_(frame) {}
 
     int width() const { return frame_.width; }
+    const HudLayout &layout() const { return frame_.layout; }
     int height() const { return frame_.height; }
 
     /* 논리 사각형을 네이티브 행 단위로 채운다. */
@@ -664,15 +755,15 @@ public:
     /* 격자 패널 한 칸: 제목줄과 그 아래 구분선. */
     void titled_panel(int x, int y, uint32_t accent, const char *title)
     {
-        box(x, y, kBoxW, kPanelH, accent);
-        fill_rect(x + kPanelRuleInset, y + kPanelRuleY, kBoxW - 2 * kPanelRuleInset, 1, kPanelRule);
-        hud_text_left(x + kBoxPadding, y + kPanelTitleY, title, 1, kDim, kColW);
+        box(x, y, frame_.layout.box_w, kPanelH, accent);
+        fill_rect(x + kPanelRuleInset, y + kPanelRuleY, frame_.layout.box_w - 2 * kPanelRuleInset, 1, kPanelRule);
+        hud_text_left(x + kBoxPadding, y + kPanelTitleY, title, 1, kDim, frame_.layout.col_w());
     }
 
     /* 제목줄 오른쪽 끝의 작은 배지. */
     void title_badge(int box_x, int y, const std::string &text, uint32_t color)
     {
-        hud_text_center(box_x + kBoxW - kBadgeCenterInset, y + kPanelTitleY, text, 1, color,
+        hud_text_center(box_x + frame_.layout.box_w - kBadgeCenterInset, y + kPanelTitleY, text, 1, color,
                         kBadgeMaxW);
     }
 
@@ -681,12 +772,13 @@ public:
         fill_rect(x, y, 1, h, kSeparator);
     }
 
-    /* 열 제목(scale 1) 위 값(scale 2)을 columns 열로. */
+    /* 열 제목(scale 1) 위 값(scale 2)을 columns 열로. 값이 칸보다 넓으면 끝을 잘라
+     * 틀린 숫자를 보이지 않도록 scale 1로 줄여 전부 그린다. */
     void metric_columns(int box_x, int y, const char *const *labels,
                         const std::string *values, int columns, uint32_t color)
     {
-        const int column_w = kMetricInnerW / columns;
-        const int max_width = column_w - kMetricTextMargin;
+        const int column_w = frame_.layout.metric_inner_w() / columns;
+        const int max_width = column_w - frame_.layout.metric_text_margin;
         for (int column = 1; column < columns; ++column)
             separator(box_x + kMetricInnerMargin + column * column_w, y + kPanelRow1Y,
                       kMetricSeparatorH);
@@ -694,7 +786,11 @@ public:
             const int center_x = box_x + kMetricInnerMargin +
                                  col * column_w + column_w / 2;
             hud_text_center(center_x, y + kPanelRow1Y, labels[col], 1, kDim, max_width);
-            hud_text_center(center_x, y + kMetricValueY, values[col], 2, color, max_width);
+            if (text_width(values[col], 2) <= max_width)
+                hud_text_center(center_x, y + kMetricValueY, values[col], 2, color, max_width);
+            else
+                hud_text_center(center_x, y + kMetricValueY + kGlyphH / 2, values[col], 1, color,
+                                max_width);
         }
     }
 
@@ -719,7 +815,7 @@ private:
 
 int right_box_x(const BitmapHud &ui)
 {
-    return ui.width() - kBoxW - kBoxMargin;
+    return ui.width() - ui.layout().box_w - kBoxMargin;
 }
 
 /* ---- 패널 ---- */
@@ -770,10 +866,10 @@ void draw_system_panel(BitmapHud &ui, const OverlayHudState &hud)
     ui.titled_panel(box_x, kPanelY0, system_color(hud), "SYSTEM");
     ui.hud_text_left(x, kPanelY0 + kPanelRow1Y,
                      format_text("AI %.1F FPS  CAM %.1F FPS", hud.model_fps, hud.preview_fps),
-                     1, kDim, kColW);
+                     1, kDim, ui.layout().col_w());
     ui.hud_text_left(x, kPanelY0 + kPanelLine2Y,
                      format_text("HUD %.1F FPS", hud.overlay_fps), 1, kDim);
-    ui.hud_text_left(x, kPanelY0 + kPanelLine3Y, network_text(hud), 1, network_color(hud), kColW);
+    ui.hud_text_left(x, kPanelY0 + kPanelLine3Y, network_text(hud), 1, network_color(hud), ui.layout().col_w());
 }
 
 void draw_health_panel(BitmapHud &ui, const OverlayHudState &hud)
@@ -815,12 +911,12 @@ void draw_drive_panel(BitmapHud &ui, const OverlayHudState &hud)
     const int x = kLeftBoxX + kBoxPadding;
     ui.titled_panel(kLeftBoxX, kPanelY2, color, "DRIVE");
     ui.title_badge(kLeftBoxX, kPanelY2, lateral_mode_text(hud), lateral_mode_color(hud));
-    ui.hud_text_left(x, kPanelY2 + kPanelRow1Y, cruise_text(hud), 2, color, kColW);
+    ui.hud_text_left(x, kPanelY2 + kPanelRow1Y, cruise_text(hud), 2, color, ui.layout().col_w());
     ui.hud_text_left(x, kPanelY2 + kPanelRow2Y,
-                     format_text("GEAR %s  CRZ %s  %s", gear_text(hud.gear),
+                     format_text("GEAR %s CRZ %s %s", gear_text(hud.gear),
                                  hud.cruise_active ? "ON" : "OFF",
                                  active_block_text(hud).c_str()),
-                     1, color, kColW);
+                     1, color, ui.layout().col_w());
 }
 
 void draw_lead_panel(BitmapHud &ui, const LeadInfo &lead)
@@ -833,9 +929,9 @@ void draw_lead_panel(BitmapHud &ui, const LeadInfo &lead)
         ui.hud_text_left(x, kPanelY3 + kPanelRow1Y,
                          format_text("DIST %.0FM P %.0F%%", lead.distance_m,
                                      lead.vision ? lead.probability * 100.0f : 0.0f),
-                         2, color, kColW);
+                         2, color, ui.layout().col_w());
         ui.hud_text_left(x, kPanelY3 + kPanelRow2Y,
-                         format_text("REL %+.0F KPH", lead.relative_speed_kph), 2, color, kColW);
+                         format_text("REL %+.0F KPH", lead.relative_speed_kph), 2, color, ui.layout().col_w());
     } else {
         ui.hud_text_left(x, kPanelY3 + kPanelRow1Y, "NO LEAD", 2, kDim);
         ui.hud_text_left(x, kPanelY3 + kPanelRow2Y, "REL -- KPH", 2, kDim);
@@ -845,9 +941,9 @@ void draw_lead_panel(BitmapHud &ui, const LeadInfo &lead)
 void draw_auto_hold(BitmapHud &ui, const OverlayHudState &hud)
 {
     if (!hud.brake_hold) return;
-    const int x = (ui.width() - kAutoHoldW) / 2;
-    ui.box(x, kAutoHoldY, kAutoHoldW, kAutoHoldH, kGreen);
-    ui.hud_text_center(ui.width() / 2, kAutoHoldY + kAutoHoldTextY, "AUTO HOLD", 3, kGreen);
+    const int center_x = ui.layout().auto_hold_center_x ? ui.layout().auto_hold_center_x : ui.width() / 2;
+    ui.box(center_x - kAutoHoldW / 2, kAutoHoldY, kAutoHoldW, kAutoHoldH, kGreen);
+    ui.hud_text_center(center_x, kAutoHoldY + kAutoHoldTextY, "AUTO HOLD", 3, kGreen);
 }
 
 void draw_tpms_panel(BitmapHud &ui, const OverlayHudState &hud)
@@ -857,7 +953,7 @@ void draw_tpms_panel(BitmapHud &ui, const OverlayHudState &hud)
     const int x = kLeftBoxX + kBoxPadding;
     ui.titled_panel(kLeftBoxX, kPanelY3, color, "TPMS");
     ui.title_badge(kLeftBoxX, kPanelY3, range.bar ? "BAR" : "PSI", color);
-    ui.separator(kLeftBoxX + kMetricInnerMargin + kMetricInnerW / 2, kPanelY3 + kPanelRow1Y,
+    ui.separator(kLeftBoxX + kMetricInnerMargin + ui.layout().metric_inner_w() / 2, kPanelY3 + kPanelRow1Y,
                  kMetricSeparatorH);
 
     struct Wheel {
@@ -868,14 +964,14 @@ void draw_tpms_panel(BitmapHud &ui, const OverlayHudState &hud)
     };
     const Wheel wheels[] = {
         {"FL", hud.tpms_pressure_fl, x, kPanelY3 + kPanelRow1Y},
-        {"FR", hud.tpms_pressure_fr, x + kTpmsColumnOffset, kPanelY3 + kPanelRow1Y},
+        {"FR", hud.tpms_pressure_fr, x + ui.layout().tpms_column_offset, kPanelY3 + kPanelRow1Y},
         {"RL", hud.tpms_pressure_rl, x, kPanelY3 + kPanelRow2Y},
-        {"RR", hud.tpms_pressure_rr, x + kTpmsColumnOffset, kPanelY3 + kPanelRow2Y},
+        {"RR", hud.tpms_pressure_rr, x + ui.layout().tpms_column_offset, kPanelY3 + kPanelRow2Y},
     };
     for (const Wheel &wheel : wheels) {
         ui.hud_text_left(wheel.column_x, wheel.row_y,
                          pressure_text(hud, range, wheel.name, wheel.pressure), 2,
-                         pressure_color(hud, range, wheel.pressure), kTpmsColumnW);
+                         pressure_color(hud, range, wheel.pressure), ui.layout().tpms_column_w);
     }
 }
 
@@ -1010,15 +1106,12 @@ void draw_model_ribbon(const Frame &frame,
 
     if (pairs.size() < 2) return;
 
-    std::vector<cv::Point> vertices;
+    std::vector<cv::Point2f> vertices;
     vertices.reserve(pairs.size() * 2);
-    for (const ProjectedPair &pair : pairs) vertices.push_back(frame.native(pair.left.x, pair.left.y));
+    for (const ProjectedPair &pair : pairs) vertices.push_back(frame.nativef(pair.left.x, pair.left.y));
     for (auto it = pairs.rbegin(); it != pairs.rend(); ++it)
-        vertices.push_back(frame.native(it->right.x, it->right.y));
-
-    const cv::Point *polygon[] = {vertices.data()};
-    const int count[] = {static_cast<int>(vertices.size())};
-    cv::fillPoly(frame.mat, polygon, count, 1, color, cv::LINE_8);
+        vertices.push_back(frame.nativef(it->right.x, it->right.y));
+    fill_poly_aa(frame, vertices.data(), static_cast<int>(vertices.size()), color);
 }
 
 cv::Scalar openpilot_path_color(const OverlayHudState &hud)
@@ -1084,12 +1177,12 @@ void draw_lead_marker(const Frame &frame, const LeadInfo &lead, const OverlayHud
 
     auto fill_triangle = [&](int center_y, int half_width, int half_height,
                              const cv::Scalar &color) {
-        const cv::Point vertices[] = {
-            frame.native(cx, center_y - half_height),
-            frame.native(cx - half_width, center_y + half_height),
-            frame.native(cx + half_width, center_y + half_height),
+        const cv::Point2f vertices[] = {
+            frame.nativef(cx, center_y - half_height),
+            frame.nativef(cx - half_width, center_y + half_height),
+            frame.nativef(cx + half_width, center_y + half_height),
         };
-        cv::fillConvexPoly(frame.mat, vertices, 3, color, cv::LINE_8);
+        fill_poly_aa(frame, vertices, 3, color);
     };
 
     fill_triangle(cy + 2, outer_half_width + 3, size + 3, bgra(0, 0, 0, 130));
@@ -1140,20 +1233,18 @@ void draw_scene(const Frame &frame, const ParsedModelOutput &output,
 void draw_turn_chevron(const Frame &frame, int inner_x, bool points_left, int alpha)
 {
     const int direction = points_left ? -1 : 1;
-    const int shoulder_x = inner_x + direction * (kTurnChevronW / 2);
-    const int tip_x = inner_x + direction * kTurnChevronW;
+    const int shoulder_x = inner_x + direction * (frame.layout.turn_chevron_w / 2);
+    const int tip_x = inner_x + direction * frame.layout.turn_chevron_w;
 
-    const cv::Point vertices[] = {
-        frame.native(inner_x, kTurnCenterY - kTurnChevronHalfH),
-        frame.native(shoulder_x, kTurnCenterY - kTurnChevronHalfH),
-        frame.native(tip_x, kTurnCenterY),
-        frame.native(shoulder_x, kTurnCenterY + kTurnChevronHalfH),
-        frame.native(inner_x, kTurnCenterY + kTurnChevronHalfH),
-        frame.native(shoulder_x, kTurnCenterY),
+    const cv::Point2f vertices[] = {
+        frame.nativef(inner_x, frame.layout.turn_center_y - frame.layout.turn_chevron_half_h),
+        frame.nativef(shoulder_x, frame.layout.turn_center_y - frame.layout.turn_chevron_half_h),
+        frame.nativef(tip_x, frame.layout.turn_center_y),
+        frame.nativef(shoulder_x, frame.layout.turn_center_y + frame.layout.turn_chevron_half_h),
+        frame.nativef(inner_x, frame.layout.turn_center_y + frame.layout.turn_chevron_half_h),
+        frame.nativef(shoulder_x, frame.layout.turn_center_y),
     };
-    const cv::Point *points = vertices;
-    const int point_count = 6;
-    cv::fillPoly(frame.mat, &points, &point_count, 1, bgra(70, 230, 255, alpha), cv::LINE_8);
+    fill_poly_aa(frame, vertices, 6, bgra(70, 230, 255, alpha));
 }
 
 void draw_turn_signals(const Frame &frame, const OverlayHudState &hud)
@@ -1166,10 +1257,10 @@ void draw_turn_signals(const Frame &frame, const OverlayHudState &hud)
     auto draw_side = [&](bool active, bool points_left) {
         if (!active) return;
         const int direction = points_left ? -1 : 1;
-        const int first_inner_x = center_x + direction * kTurnInnerOffset;
+        const int first_inner_x = center_x + direction * frame.layout.turn_inner_offset;
         for (int i = 0; i < 3; ++i) {
             if (step < kTurnChevronStartStep[i]) break;
-            draw_turn_chevron(frame, first_inner_x + direction * i * kTurnChevronStep,
+            draw_turn_chevron(frame, first_inner_x + direction * i * frame.layout.turn_chevron_step,
                               points_left, kTurnChevronAlpha[i]);
         }
     };
@@ -1207,8 +1298,9 @@ void OverlayRenderer::draw(const OverlayTarget &target, const ParsedModelOutput 
     const int height = static_cast<int>(target.height);
     cv::Mat mat(height, width, CV_8UC4, target.map, static_cast<size_t>(target.stride));
     mat.setTo(cv::Scalar(0, 0, 0, 0));
-    const Frame frame{mat, rotate_landscape ? height : width,
-                      rotate_landscape ? width : height, rotate_landscape};
+    const int landscape_w = rotate_landscape ? height : width;
+    const Frame frame{mat, landscape_w, rotate_landscape ? width : height, rotate_landscape,
+                      layout_for_width(landscape_w)};
 
     const LeadInfo lead = lead_info(hud, output);
     draw_scene(frame, output, projection, hud, lead);

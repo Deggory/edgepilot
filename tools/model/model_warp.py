@@ -15,7 +15,9 @@ HALF_W, HALF_H = MODEL_W // 2, MODEL_H // 2
 WEIGHT_BITS = 12
 WEIGHT_SCALE = 1 << WEIGHT_BITS
 
-# src/app_config.h: calibrated K230 camera at 1920x1080
+# K230 camera at 1920x1080 (these tools read K230 recordings; the MaixCAM2 values
+# are in src/app_config.h). Replaying a K230 route on the AX630 runtime needs
+# SUPERCOMBO_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774
 CAMERA_FX_1080 = 1583.3981
 CAMERA_FY_1080 = 1583.7622
 CAMERA_CX_1080 = 954.9441

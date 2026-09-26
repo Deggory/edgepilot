@@ -473,13 +473,24 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
     EXPECT_EQ(fallback.nv12_width, kDefaultAiWidth) << "ISP 출력 폭 기본값은 오버스캔 폭";
     EXPECT_EQ(fallback.nv12_height, kDefaultAiHeight) << "ISP 출력 높이 기본값은 오버스캔 높이";
     EXPECT_NEAR(fallback.input_warp_fx, kDefaultInputWarpFx, 1e-5)
-        << "ISP 출력 크기로 K230 카메라 fx를 맞춘다";
+        << "ISP 출력 크기로 카메라 fx를 맞춘다";
     EXPECT_NEAR(fallback.input_warp_fy, kDefaultInputWarpFy, 1e-5)
-        << "ISP 출력 크기로 K230 카메라 fy를 맞춘다";
+        << "ISP 출력 크기로 카메라 fy를 맞춘다";
     EXPECT_NEAR(fallback.input_warp_cx, kDefaultInputWarpCx, 1e-5)
-        << "ISP 출력 크기로 K230 카메라 cx를 맞춘다";
+        << "ISP 출력 크기로 카메라 cx를 맞춘다";
     EXPECT_NEAR(fallback.input_warp_cy, kDefaultInputWarpCy, 1e-5)
-        << "ISP 출력 크기로 K230 카메라 cy를 맞춘다";
+        << "ISP 출력 크기로 카메라 cy를 맞춘다";
+
+    // 다른 카메라(예: K230 녹화 리플레이)의 1080p 내부 파라미터로 바꾸면 비례 환산된다
+    setenv("SUPERCOMBO_CAMERA_INTRINSICS", "1583.3981,1583.7622,954.9441,545.1774", 1);
+    AppConfig k230 = AppConfig::from_env_defaults();
+    EXPECT_NEAR(k230.input_warp_fx, 1583.3981f * 1280.0f / 1920.0f, 1e-3) << "fx 덮어쓰기";
+    EXPECT_NEAR(k230.input_warp_cy, 545.1774f * 720.0f / 1080.0f, 1e-3) << "cy 덮어쓰기";
+    k230.set_warp_source(1920, 1080);
+    EXPECT_NEAR(k230.input_warp_cx, 954.9441f, 1e-3) << "1080p 소스면 그대로";
+    setenv("SUPERCOMBO_CAMERA_INTRINSICS", "oops", 1);
+    EXPECT_THROW(AppConfig::from_env_defaults(), std::runtime_error) << "잘못된 형식은 거부";
+    unsetenv("SUPERCOMBO_CAMERA_INTRINSICS");
 
     unsetenv("SUPERCOMBO_CALIB_ROLL_DEG");
     unsetenv("SUPERCOMBO_CALIB_PITCH_DEG");
@@ -739,7 +750,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
                          camera_reference);
     for (int i = 0; i < 9; ++i)
         EXPECT_NEAR(camera_projection[i], camera_reference[i], 1e-4)
-            << "기본 투영은 K230 카메라 내부 파라미터를 쓴다";
+            << "기본 투영은 MaixCAM2 카메라 내부 파라미터를 쓴다";
 
     ModelInputTransform sbig_camera_transform(camera_config, ModelFrame::SmallBigModel);
     float sbig_camera_projection[9];
@@ -854,7 +865,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
             transform.set_calibration(rpy[0], rpy[1], rpy[2]);
             float projection[9];
             transform.projection_matrix(projection);
-            transform.nv12_to_yuv6_warped_scalar(
+            transform.nv12_to_yuv6_warped(
                 source_nv12.data(), kSourceW, kSourceH, compact.data());
             double projection_opencl[9];
             for (int i = 0; i < 9; ++i)
@@ -870,6 +881,33 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     EXPECT_LT(opencl_worst.mean, 1.0) << "640x360 고정소수점 워프 평균 절대 오차(openpilot OpenCL 참조 대비)";
     EXPECT_LT(opencl_worst.inner_max, 8.0)
         << "640x360 고정소수점 워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
+}
+
+/* NV21(MaixCAM2 카메라)은 크로마 바이트 순서만 NV12와 반대다. 같은 영상을 두
+ * 순서로 넣고 set_chroma_vu를 맞추면 워프 결과(uint8, 4번 평면 U·5번 평면 V)가
+ * 비트까지 같아야 한다. */
+TEST(CalibrationEquivalence, Nv21ChromaOrder)
+{
+    constexpr int kW = 640, kH = 360;
+    std::vector<uint8_t> nv12(kW * kH * 3 / 2);
+    fill_nv12(nv12, kW, kH);
+    std::vector<uint8_t> nv21 = nv12;
+    for (size_t i = kW * kH; i + 1 < nv21.size(); i += 2)
+        std::swap(nv21[i], nv21[i + 1]);
+
+    AppConfig config;
+    config.manual_pitch = deg_to_rad(1.0f);
+    ModelInputTransform from_nv12(config);
+    ModelInputTransform from_nv21(config);
+    from_nv21.set_chroma_vu(true);
+    std::vector<uint8_t> a(kYuv6Floats), b(kYuv6Floats), swapped(kYuv6Floats);
+    from_nv12.nv12_to_yuv6_warped(nv12.data(), kW, kH, a.data());
+    from_nv21.nv12_to_yuv6_warped(nv21.data(), kW, kH, b.data());
+    ASSERT_EQ(a, b) << "NV21 + set_chroma_vu(true) == NV12";
+    from_nv12.nv12_to_yuv6_warped(nv21.data(), kW, kH, swapped.data());
+    const size_t plane = kYuv6Floats / 6;
+    ASSERT_TRUE(std::equal(a.begin() + 4 * plane, a.begin() + 5 * plane, swapped.begin() + 5 * plane))
+        << "순서를 안 맞추면 U와 V가 뒤바뀐다";
 }
 
 } // namespace

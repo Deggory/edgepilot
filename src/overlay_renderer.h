@@ -13,7 +13,7 @@
  * k230_overlayd가 시각 기준으로 계산하므로 재그리기 빈도에 영향받지 않는다. */
 constexpr int kTurnSignalSteps = 25;
 
-/* ARGB8888 CPU 버퍼. 렌더러는 DRM 헤더 없이 이 뷰만 본다. */
+/* ARGB8888(스트레이트 알파) CPU 버퍼. 배치는 가로 화면 폭(800 또는 640)으로 고른다. */
 struct OverlayTarget {
     void *map = nullptr;
     uint32_t width = 0;

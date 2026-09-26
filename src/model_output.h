@@ -8,48 +8,45 @@
 
 constexpr int kTrajectorySize = 33;
 constexpr int kLeadMhpSelection = 3;
-constexpr int kLeadMhpN = 2;
 constexpr int kLeadTrajLen = 6;
 constexpr int kDesireLen = 8;
 constexpr float kModelHeight = 1.22f;
 
-/* openpilot v0.9.4 supercombo 출력 계약. SupercomboModel이 로드 시 이 값으로
- * kmodel을 검증하고, 파서가 꼬리 블록 오프셋을 여기서 역산한다. */
-constexpr int kModelOutputFloats = 6120;
-constexpr int kModelFeatureLen = 128;
+/* openpilot master driving_supercombo 출력 계약(ONNX metadata output_slices).
+ * SupercomboModel이 로드 시 이 값으로 axmodel을 검증하고 파서가 오프셋을 쓴다.
+ * 0.9.4와 달리 plan은 단일 가설(평균+표준편차), lead는 가설 없이 시간 오프셋
+ * (0/2/4 s) 3개가 각자 궤적을 갖고, 특징(hidden_state)은 512다. */
+constexpr int kModelOutputFloats = 2576;
+constexpr int kModelFeatureLen = 512;
 
-/* raw 출력 6120 float의 블록 오프셋. 앞(plan/lane/edge/lead/meta)은 앞에서, 꼬리
- * (pose/feature)는 뒤에서 유도한다. meta 블록만 크기를 유도할 수 없어서(desire_state
- * 뒤에 openpilot의 disengage 확률과 desire_pred가 붙는다) 둘이 겹치지 않는지만 본다.
- * 꼬리 순서는 pose(12) / wide_from_device_euler(6) / sim_pose(12) / road_transform(12)
- * / feature(128) / pad(2). 모델을 바꾸면 이 표와 아래 static_assert만 손본다. */
 namespace model_output_layout {
-constexpr int kPlanMhpN = 5;
-constexpr int kPlanStride = kTrajectorySize * 15 * 2 + 1;
-constexpr int kLaneOffset = kPlanMhpN * kPlanStride;
+constexpr int kMetaOffset = 0;              // 55
+constexpr int kDesirePredOffset = 55;       // 32
+constexpr int kPoseOffset = 87;             // 12: trans 3, rot 3, log std 6
+constexpr int kWideFromDeviceEulerOffset = 99;
+constexpr int kRoadTransformOffset = 105;
+constexpr int kLaneOffset = 117;            // 평균 4x33x2, 이어서 log std
 constexpr int kLaneLineSize = 4 * kTrajectorySize * 2;
-constexpr int kLaneProbOffset = kLaneOffset + kLaneLineSize * 2;
-constexpr int kRoadEdgeOffset = kLaneProbOffset + 8;
+constexpr int kLaneProbOffset = 645;        // 차선당 로짓 2개, 두 번째가 존재 확률
+constexpr int kRoadEdgeOffset = 653;
 constexpr int kRoadEdgeMeanSize = 2 * kTrajectorySize * 2;
-constexpr int kRoadEdgeSize = kRoadEdgeMeanSize * 2;
+constexpr int kLeadOffset = 917;            // 평균 3x6x4, 이어서 log std
 constexpr int kLeadElementSize = 4;
-constexpr int kLeadPredictionStride = kLeadTrajLen * kLeadElementSize * 2 + kLeadMhpSelection;
-constexpr int kLeadOffset = kRoadEdgeOffset + kRoadEdgeSize;
-constexpr int kLeadProbOffset = kLeadOffset + kLeadMhpN * kLeadPredictionStride;
-constexpr int kDesireStateOffset = kLeadProbOffset + kLeadMhpSelection;
-constexpr int kPadFloats = 2;
-constexpr int kRoadTransformFloats = 12;
-constexpr int kSimPoseFloats = 12;
-constexpr int kWideFromDeviceEulerFloats = 6;
-constexpr int kPoseFloats = 12;
-constexpr int kFeatureOffset = kModelOutputFloats - kPadFloats - kModelFeatureLen;
-constexpr int kPoseOffset = kFeatureOffset - kRoadTransformFloats - kSimPoseFloats -
-                            kWideFromDeviceEulerFloats - kPoseFloats;
-static_assert(kPlanStride == 991 && kLaneOffset == 4955 && kLaneProbOffset == 5483 &&
-                  kRoadEdgeOffset == 5491 && kLeadOffset == 5755 && kLeadProbOffset == 5857 &&
-                  kDesireStateOffset == 5860 && kPoseOffset == 5948 && kFeatureOffset == 5990,
-              "openpilot v0.9.4 supercombo output layout");
-static_assert(kPoseOffset > kDesireStateOffset + kDesireLen, "pose block must follow the meta block");
+constexpr int kLeadMeanSize = kLeadMhpSelection * kLeadTrajLen * kLeadElementSize;
+constexpr int kLeadProbOffset = 1061;
+constexpr int kFeatureOffset = 1064;
+constexpr int kPlanOffset = 1576;           // 평균 33x15, 이어서 log std
+constexpr int kPlanWidth = 15;
+constexpr int kDesireStateOffset = 2566;
+static_assert(kLaneProbOffset == kLaneOffset + kLaneLineSize * 2 &&
+                  kRoadEdgeOffset == kLaneProbOffset + 8 &&
+                  kLeadOffset == kRoadEdgeOffset + kRoadEdgeMeanSize * 2 &&
+                  kLeadProbOffset == kLeadOffset + kLeadMeanSize * 2 &&
+                  kFeatureOffset == kLeadProbOffset + kLeadMhpSelection &&
+                  kPlanOffset == kFeatureOffset + kModelFeatureLen &&
+                  kDesireStateOffset == kPlanOffset + kTrajectorySize * kPlanWidth * 2 &&
+                  kModelOutputFloats == kDesireStateOffset + kDesireLen + 2,
+              "openpilot master supercombo output layout");
 }  // namespace model_output_layout
 
 /* openpilot T_IDXS / X_IDXS 격자. 같은 식이 여러 파일에 재정의되지 않도록
@@ -108,12 +105,12 @@ struct ParsedLeadPoint {
 
 struct ParsedLeadPrediction {
     std::array<ParsedLeadPoint, kLeadTrajLen> points{};
-    std::array<float, kLeadMhpSelection> probabilities{};
 };
 
+/* 시간 오프셋(0/2/4 s)마다 궤적 하나와 존재 확률 하나. */
 struct ParsedLeads {
     bool valid = false;
-    std::array<ParsedLeadPrediction, kLeadMhpN> predictions{};
+    std::array<ParsedLeadPrediction, kLeadMhpSelection> predictions{};
     std::array<float, kLeadMhpSelection> global_probabilities{};
 
     bool primary(int time_idx, float min_probability, ParsedLeadPoint *lead, float *probability = nullptr) const;

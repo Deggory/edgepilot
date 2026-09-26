@@ -20,7 +20,7 @@
 constexpr uint32_t kK230IpcMagic = 0x4b323349;
 constexpr uint32_t kK230IpcVersion = 1;
 constexpr uint32_t kK230FrameRingMagic = 0x4b465249;
-constexpr uint32_t kK230FrameRingVersion = 3;
+constexpr uint32_t kK230FrameRingVersion = 5;
 constexpr uint32_t kK230CanQueueMagic = 0x4b435151;
 constexpr uint32_t kK230CanQueueVersion = 1;
 constexpr unsigned kK230FrameSlots = 8;
@@ -38,6 +38,7 @@ constexpr char kK230CanLogTopic[] = "/k230_can_log";
 constexpr char kK230SendCanLogTopic[] = "/k230_sendcan_log";
 constexpr char kK230PandaStateTopic[] = "/k230_panda_state";
 constexpr char kK230ControlStateTopic[] = "/k230_control_state";
+
 constexpr char kK230LearnerStateTopic[] = "/k230_learner_state";
 
 constexpr uint32_t kK230HudFlagLaneless = 1U << 0;
@@ -71,6 +72,8 @@ struct K230FrameRingHeader {
     uint32_t reserved1 = 0;
     std::atomic<uint64_t> slot_seq[kK230FrameSlots]{};
     std::atomic<uint64_t> slot_frame_id[kK230FrameSlots]{};
+    /* 슬롯 픽셀이 있는 CMM 블록의 물리 주소. 0이면 아직 붙지 않았다. */
+    uint64_t slot_phys[kK230FrameSlots]{};
 };
 
 struct K230RoadAiFrame {

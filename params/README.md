@@ -24,12 +24,12 @@ PID 상태는 유지되며 engage 여부에 따른 적용 지연은 없다.
 
 | 파라미터 | 기본값 | 단위 | 설명 |
 |---|---:|---|---|
-| `enabled` | false | bool | 웹의 `주행 기록` 메뉴에서 변경한다. 켜면 모델이 실제 선택한 1280x720 20 FPS 프레임을 MVX 하드웨어 H.265 인코더로 저장하고 CAN RX/TX 및 모델·제어 상태를 함께 기록한다. |
+| `enabled` | false | bool | 웹의 `주행 기록` 메뉴에서 변경한다. 켜면 모델이 실제 선택한 1280x720 20 FPS 프레임을 AX630C 하드웨어 H.264 인코더(VENC)로 저장하고 CAN RX/TX 및 모델·제어 상태를 함께 기록한다. |
 
-| `bitrate_bps` | 8000000 | bps / 1M~20M | H.265 인코더 목표 비트레이트다. 인코더는 recordd 기동 시 한 번 열리므로 변경은 재시작부터 적용된다. |
+| `bitrate_bps` | 8000000 | bps / 1M~20M | H.264 인코더 목표 비트레이트다. 인코더는 recordd 기동 시 한 번 열리므로 변경은 재시작부터 적용된다. |
 
-기록은 `recordings/<시각>/` 아래에 생성된다. 영상은 60초 단위 HEVC
-세그먼트로 나뉜다. 프레임의 원본 캡처 시각은 각 세그먼트의 `frames.bin`,
+기록은 `recordings/<시각>/` 아래에 생성된다. 영상은 60초 단위 H.264
+세그먼트(`road.h264`, K230 녹화는 `road.hevc`)로 나뉜다. 프레임의 원본 캡처 시각은 각 세그먼트의 `frames.bin`,
 CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`에
 저장된다. 남은 공간이 5 GiB
 또는 전체 용량의 10% 미만이면 새 기록을 시작하지 않거나 진행 중인 기록을
@@ -39,14 +39,10 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 
 | 파라미터 | 기본값 | 단위 | 설명 |
 |---|---:|---|---|
-| `enabled` | true | bool | LCD 영상 파이프라인은 유지하고 GPIO25 백라이트만 켜거나 끈다. |
-| `brightness_percent` | 100 | % | 1~99%는 PWM5를 20 kHz로 구동하고, 100%는 GPIO25 High를 사용한다. 전원을 꺼도 마지막 밝기는 유지된다. |
+| `enabled` | true | bool | LCD 영상 파이프라인은 유지하고 백라이트만 켜거나 끈다(duty 0). |
+| `brightness_percent` | 100 | % | 백라이트 PWM3(pwmchip0/pwm3, 10 kHz, 정극성) 점등률. 실제 duty는 밝기 x 보드 최대치(`/boot/board`의 `disp_max_backlight`, 기본 95%)다. |
 
-이 패널은 0.7% 부근에서 백라이트가 차단되고 중간 점등률 변화가 체감 밝기에
-작게 반영된다. 실측에 따라 UI 1~90%는 실제 점등률 0.8~15%, UI 90~100%는
-15~100%로 나누어 선형 보간한다. UI 100%는 GPIO High로 완전 점등한다. 보간
-결과는 inversed polarity의 duty cycle로 변환하며, 설정은 웹의 `디스플레이`
-메뉴에서 즉시 적용되고 재부팅 후에도 복원된다.
+설정은 웹의 `디스플레이` 메뉴에서 즉시 적용되고, param server가 뜰 때마다 다시 적용된다.
 
 ## driving.json
 
@@ -141,8 +137,8 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 | `angle_offset_deg` | -1.6 | degree / -10~10 | 조향각 센서의 직진 오프셋이다. 실제 곡률 추정 전에 센서 각도에서 뺀다. paramsd 학습 평균(2026-09-21~23 주행, −1.5~−1.6°)을 넣었다. 이전 −0.7°는 0.9° 차이로 곡률 약 4e-4를 틀려, 좌커브는 덜 돌고 우커브는 더 도는 것처럼 보이게 했다. |
 | `torque_lat_accel_offset` | 0.0 | m/s^2 / -1.0~1.0 | 장착 롤 오차 등이 만드는 상수 횡가속 편향을 feed-forward에서 뺀다(openpilot latAccelOffset). 값은 `tools/control/fit_lateral_params.py fit`으로 주행 로그에서 실측한다. 양수 = 차가 오른쪽으로 쏠릴 때 키우는 방향(+y=오른쪽 관례, openpilot 문서와 반대 어휘). fit 출력을 그대로 넣는다. |
 | `live_bank_compensation` | true | bool | ESP12 실측으로 추정한 도로 편경사(2초 필터)를 feed-forward에서 실시간 보정한다. 센서로 보이는 편향(크라운·영점)은 bank가 흡수하므로, `torque_lat_accel_offset`은 센서에 안 보이는 토크 경로/기계 편향 전용 트림으로만 쓴다. 정적 roll 항목은 이것으로 대체되어 없앴다. |
-| `use_live_vehicle_params` | false | bool | openpilot paramsd처럼 주행 중 학습한 조향비·타이어 강성·조향각 영점(합계)·도로 롤을 쓴다. 켜면 실제 곡률 계산이 `steer_ratio`·`angle_offset_deg` 대신 학습값을 쓰고, 롤은 실제 곡률·feed-forward(−roll·g)·곡률 횡가속 한계에 들어가며 `live_bank_compensation`을 대신한다. 학습값이 무효가 되면(영점·롤 한계 초과 등, 캘리브 완료 후) `paramsd_invalid`로 해제한다. 끄면 계산·기록만 한다. 학습 상태는 `live_parameters.json`(1분마다)에 남고 다음 시동에 이어진다. 웹 편집기에서는 `실시간 학습` 탭에서만 켜고 끈다. |
-| `use_live_torque_params` | false | bool | openpilot torqued처럼 토크→횡가속 배율(latAccelFactor)·편향·마찰을 학습해 토크 컨트롤러에 쓴다. 배율은 `torque_lat_accel_factor`(기본 2.8)의 ±30%, 마찰은 `torque_friction`의 ±50% 안이다. 켜면 `torque_lat_accel_offset`은 학습 편향으로 바뀐다. 버킷이 다 차기 전(`cal_perc` < 100)에는 사전값 그대로다. 점과 필터는 `live_torque_parameters.bin`(12초마다)에 남는다. 웹 편집기에서는 `실시간 학습` 탭에서만 켜고 끈다. |
+| `use_live_vehicle_params` | true | bool | openpilot paramsd처럼 주행 중 학습한 조향비·타이어 강성·조향각 영점(합계)·도로 롤을 쓴다. 켜면 실제 곡률 계산이 `steer_ratio`·`angle_offset_deg` 대신 학습값을 쓰고, 롤은 실제 곡률·feed-forward(−roll·g)·곡률 횡가속 한계에 들어가며 `live_bank_compensation`을 대신한다. 학습값이 무효가 되면(영점·롤 한계 초과 등, 캘리브 완료 후) `paramsd_invalid`로 해제한다. 끄면 계산·기록만 한다. 학습 상태는 `live_parameters.json`(1분마다)에 남고 다음 시동에 이어진다. 웹 편집기에서는 `실시간 학습` 탭에서만 켜고 끈다. |
+| `use_live_torque_params` | true | bool | openpilot torqued처럼 토크→횡가속 배율(latAccelFactor)·편향·마찰을 학습해 토크 컨트롤러에 쓴다. 배율은 `torque_lat_accel_factor`(기본 2.8)의 ±30%, 마찰은 `torque_friction`의 ±50% 안이다. 켜면 `torque_lat_accel_offset`은 학습 편향으로 바뀐다. 버킷이 다 차기 전(`cal_perc` < 100)에는 사전값 그대로다. 점과 필터는 `live_torque_parameters.bin`(12초마다)에 남는다. 웹 편집기에서는 `실시간 학습` 탭에서만 켜고 끈다. |
 | `mass_kg` | 1816.0 | kg / 1000~2600 | 차량 모델과 타이어 횡강성 계산에 사용하는 차량 질량이다. |
 | `wheelbase_m` | 2.855 | m / 2.0~3.5 | 차량 축거다. |
 | `center_to_front_ratio` | 0.4 | wheelbase ratio / 0.2~0.7 | 무게중심에서 전축까지 거리의 축거 대비 비율이다. |

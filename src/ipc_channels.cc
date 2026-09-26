@@ -70,34 +70,23 @@ bool K230FrameRing::open(bool create, unsigned width, unsigned height, unsigned 
         return false;
 
     if (!region_.open(kK230RoadAiFrameRing, create)) return false;
-
-    /* 만들 때는 요청 크기로 자르고, 붙을 때는 생산자가 만든 크기를 그대로 쓴다. */
-    size_t map_size = sizeof(K230FrameRingHeader) +
-        static_cast<size_t>(width) * height * 3 / 2 * slots;
-    if (!create) {
-        if (!region_.file_size(&map_size) || map_size < sizeof(K230FrameRingHeader)) {
-            close();
-            return false;
-        }
-    }
-    if (create && !region_.resize(map_size)) {
+    if (create && !region_.resize(sizeof(K230FrameRingHeader))) {
         std::perror("ipc: ftruncate frame ring");
         close();
         return false;
     }
-    if (!region_.map(map_size)) {
-        std::perror("ipc: mmap frame ring");
+    size_t size = 0;
+    if (!region_.file_size(&size) || size < sizeof(K230FrameRingHeader) ||
+        !region_.map(sizeof(K230FrameRingHeader))) {
         close();
         return false;
     }
 
     header_ = static_cast<K230FrameRingHeader *>(region_.data());
-    frames_ = reinterpret_cast<uint8_t *>(header_) + sizeof(K230FrameRingHeader);
-    if (create && (header_->magic != kK230FrameRingMagic ||
-                   header_->version != kK230FrameRingVersion ||
-                   header_->width != width ||
-                   header_->height != height ||
-                   header_->slot_count != slots)) {
+    if (create) {
+        /* 이전 실행의 seq·frame_id·물리 주소가 남아 있으면 소비자가 없는 슬롯을
+         * 유효하다고 읽으므로, 만들 때마다 전부 초기화한다. 물리 주소는 생산자가
+         * 슬롯 CMM을 잡은 뒤 set_slot_phys로 채운다. */
         header_->magic = kK230FrameRingMagic;
         header_->version = kK230FrameRingVersion;
         header_->slot_count = slots;
@@ -107,17 +96,16 @@ bool K230FrameRing::open(bool create, unsigned width, unsigned height, unsigned 
         header_->reserved0 = 0;
         header_->reserved1 = 0;
         for (unsigned index = 0; index < kK230FrameSlots; ++index) {
-            header_->slot_seq[index].store(0, std::memory_order_release);
-            header_->slot_frame_id[index].store(UINT64_MAX, std::memory_order_release);
+            header_->slot_seq[index].store(0, std::memory_order_relaxed);
+            header_->slot_frame_id[index].store(UINT64_MAX, std::memory_order_relaxed);
+            header_->slot_phys[index] = 0;
         }
-        std::memset(frames_, 0, static_cast<size_t>(header_->frame_bytes) * slots);
+        std::atomic_thread_fence(std::memory_order_release);
     }
     const bool valid = header_->magic == kK230FrameRingMagic &&
         header_->version == kK230FrameRingVersion &&
         header_->slot_count > 0 && header_->slot_count <= kK230FrameSlots &&
-        header_->frame_bytes > 0 &&
-        region_.size() >= sizeof(K230FrameRingHeader) +
-            static_cast<size_t>(header_->slot_count) * header_->frame_bytes;
+        header_->frame_bytes > 0;
     if (!valid) close();
     return valid;
 }
@@ -126,24 +114,54 @@ void K230FrameRing::close()
 {
     region_.close();
     header_ = nullptr;
-    frames_ = nullptr;
+    for (auto &virt : slot_virt_) virt = nullptr;
 }
 
-bool K230FrameRing::write_slot(unsigned index, uint64_t frame_id,
-                               const uint8_t *source, size_t size)
+uint64_t K230FrameRing::slot_phys(unsigned index) const
 {
-    if (!header_ || !source || index >= header_->slot_count ||
-        size != header_->frame_bytes) return false;
+    return header_ && index < kK230FrameSlots ? header_->slot_phys[index] : 0;
+}
 
+void K230FrameRing::set_slot_phys(unsigned index, uint64_t phys)
+{
+    if (header_ && index < kK230FrameSlots) header_->slot_phys[index] = phys;
+}
+
+void K230FrameRing::attach_slot(unsigned index, uint8_t *virt)
+{
+    if (index < kK230FrameSlots) slot_virt_[index] = virt;
+}
+
+void K230FrameRing::begin_write(unsigned index)
+{
     std::atomic<uint64_t> &sequence = header_->slot_seq[index];
     uint64_t next = sequence.load(std::memory_order_relaxed);
     if (next & 1ULL) ++next;
-    sequence.store(next + 1, std::memory_order_release);
-    std::memcpy(frames_ + static_cast<size_t>(index) * header_->frame_bytes,
-                source, size);
+    sequence.store(next + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
+void K230FrameRing::end_write(unsigned index, uint64_t frame_id)
+{
+    std::atomic<uint64_t> &sequence = header_->slot_seq[index];
     header_->slot_frame_id[index].store(frame_id, std::memory_order_release);
-    sequence.store(next + 2, std::memory_order_release);
+    sequence.store(sequence.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+}
+
+bool K230FrameRing::read_begin(unsigned index, uint64_t frame_id, uint64_t *seq) const
+{
+    if (!header_ || index >= header_->slot_count) return false;
+    const uint64_t before = header_->slot_seq[index].load(std::memory_order_acquire);
+    if (before == 0 || (before & 1ULL) != 0) return false;
+    if (header_->slot_frame_id[index].load(std::memory_order_acquire) != frame_id) return false;
+    *seq = before;
     return true;
+}
+
+bool K230FrameRing::read_still_valid(unsigned index, uint64_t frame_id, uint64_t seq) const
+{
+    return header_->slot_seq[index].load(std::memory_order_acquire) == seq &&
+           header_->slot_frame_id[index].load(std::memory_order_acquire) == frame_id;
 }
 
 namespace {
@@ -168,25 +186,14 @@ bool copy_slot_guarded(const K230FrameRingHeader &header, unsigned index,
 
         copy(source);
 
+        // 복사한 읽기가 뒤의 seq 확인보다 늦게 보이지 않게 한다(ARM은 약한 순서).
+        std::atomic_thread_fence(std::memory_order_acquire);
         const uint64_t after = sequence.load(std::memory_order_acquire);
         const uint64_t after_frame_id = stored_frame_id.load(std::memory_order_acquire);
         if (before == after && (after & 1ULL) == 0 && after_frame_id == frame_id)
             return true;
     }
     return false;
-}
-
-void copy_plane(uint8_t *destination, size_t destination_stride,
-                const uint8_t *source, unsigned width, unsigned rows)
-{
-    if (destination_stride == width) {
-        std::memcpy(destination, source, static_cast<size_t>(width) * rows);
-        return;
-    }
-    for (unsigned row = 0; row < rows; ++row) {
-        std::memcpy(destination + row * destination_stride,
-                    source + static_cast<size_t>(row) * width, width);
-    }
 }
 
 }  // namespace
@@ -197,29 +204,11 @@ bool K230FrameRing::copy_slot(unsigned index, uint64_t frame_id,
     if (!header_ || !destination || index >= header_->slot_count ||
         size != header_->frame_bytes) return false;
 
-    const uint8_t *source = frames_ + static_cast<size_t>(index) * header_->frame_bytes;
+    const uint8_t *source = slot_virt_[index];
+    if (!source) return false;
     return copy_slot_guarded(*header_, index, frame_id, source,
                              [&](const uint8_t *from) {
                                  std::memcpy(destination, from, size);
-                             });
-}
-
-bool K230FrameRing::copy_slot_planes(unsigned index, uint64_t frame_id,
-                                     uint8_t *luma, size_t luma_stride,
-                                     uint8_t *chroma, size_t chroma_stride) const
-{
-    if (!header_ || !luma || !chroma || index >= header_->slot_count ||
-        luma_stride < header_->width || chroma_stride < header_->width) return false;
-
-    const unsigned width = header_->width;
-    const unsigned height = header_->height;
-    const uint8_t *source = frames_ + static_cast<size_t>(index) * header_->frame_bytes;
-    return copy_slot_guarded(*header_, index, frame_id, source,
-                             [&](const uint8_t *from) {
-                                 copy_plane(luma, luma_stride, from, width, height);
-                                 copy_plane(chroma, chroma_stride,
-                                            from + static_cast<size_t>(width) * height,
-                                            width, height / 2);
                              });
 }
 
