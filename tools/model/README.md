@@ -23,7 +23,8 @@ uses, or (for the last two) are kept for reference only.
     the repository), run through the fp32 core with the runtime's queue
     semantics.
 - `axmodel/pulsar2_u16_u8in.json`
-  - the Pulsar2 build config: AX620E / NPU2, U16 everywhere, uint8 image inputs.
+  - the Pulsar2 build config: AX620E / NPU1 (one core; the AI-ISP denoiser
+    uses the other), U16 everywhere, uint8 image inputs.
 
 ## Host environment
 

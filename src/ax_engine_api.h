@@ -121,7 +121,6 @@ AX_S32 AX_SYS_MflushCache(AX_U64 phyaddr, AX_VOID *pviraddr, AX_U32 size);
 AX_S32 AX_SYS_MinvalidateCache(AX_U64 phyaddr, AX_VOID *pviraddr, AX_U32 size);
 
 AX_S32 AX_ENGINE_Init(AX_ENGINE_NPU_ATTR_T *pNpuAttr);
-AX_S32 AX_ENGINE_GetVNPUAttr(AX_ENGINE_NPU_ATTR_T *pNpuAttr);
 AX_S32 AX_ENGINE_CreateHandleV2(uint64_t **pHandle, const AX_VOID *pData, AX_U32 nDataSize,
                                 AX_ENGINE_HANDLE_EXTRA_T *pExtraParam);
 AX_S32 AX_ENGINE_DestroyHandle(uint64_t *nHandle);

@@ -23,8 +23,8 @@ tools/camcal/calibrate_intrinsics.py          detect corners, solve fx/fy/cx/cy
 so the geometry matches:
 
 - It uses the full 2560x1440 sensor field scaled to 1920x1080, with no crop.
-- The board `cam_flip` and `cam_mirror` settings apply, as does AI-ISP when it is
-  on.
+- The board `cam_flip` and `cam_mirror` settings apply, and AI-ISP is on as in
+  the runtime.
 
 The LCD shows the whole frame at its original 16:9 aspect, with black bars above
 and below. The top bar shows the number of saved shots. The bottom bar shows

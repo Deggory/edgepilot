@@ -20,7 +20,7 @@ only in the board build, against `deps/ax630` from
 
 - `maix_camera.*`
   - opens the camera (VI) through `libmaixcam_lib`'s `ax_middleware` classes,
-    AI-ISP off, sensor at the requested fps with auto exposure and a capped
+    AI-ISP always on, sensor at the requested fps with auto exposure and a capped
     shutter, and copies each frame into a CMM block by IVPS TDP.
 - `maix_display.*`
   - the LCD as two VO layers: layer 0 takes a CMM frame, IVPS crops the centre

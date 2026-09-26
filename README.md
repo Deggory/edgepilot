@@ -28,8 +28,8 @@ of this branch; the piezo alert melodies now play on the board speaker.
 
 - **supercombo on the AX630C NPU.** The openpilot master `driving_supercombo`
   core, compiled with Pulsar2 6.0 (U16 activations, uint8 image inputs), runs in
-  about 8.5 ms on the NPU; a whole `modeld` frame is about 12.5 ms, well
-  inside the 20 Hz budget. The history queues the released ONNX keeps in-graph
+  about 15.5 ms on one NPU core (the other core runs the AI-ISP denoiser); a
+  whole `modeld` frame is about 19.5 ms, inside the 20 Hz budget. The history queues the released ONNX keeps in-graph
   (images, desire, features) run on the CPU in `src/model_temporal.h`.
 - **Hardware all the way to the model.** The camera frame goes into a CMM
   (physically contiguous) frame ring by IVPS copy; the GDC warps it straight
@@ -116,12 +116,13 @@ source; the Panda wiring is not finished yet.
    tools/docker_ax630/build.sh          # -> build-ax630/bin
    ```
 
-3. **Upload.** The axmodel is not in the repository; build it with
-   [tools/model/axmodel](tools/model/axmodel/README.md) and pass it on the first
-   upload:
+3. **Upload.** The model (`models/supercombo.axmodel`, built with
+   [tools/model/axmodel](tools/model/axmodel/README.md)) is in the repository and
+   is sent only when it changed:
 
    ```sh
-   EDGEPILOT_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh root@192.168.219.117
+   scripts/upload_to_board.sh root@192.168.219.117
+   scripts/install_autostart.sh root@192.168.219.117   # also sets maix_npu_ai_isp=1
    ```
 
 4. **Run.** On the board:

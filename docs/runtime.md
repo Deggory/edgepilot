@@ -67,7 +67,8 @@ keeps the AX system open.
 ### `camerad`
 
 - opens the `ov_os04d10` through `libmaixcam_lib` (VI) at `NV12 1280x720` with
-  AI-ISP off, so the NPU stays free for `modeld`
+  AI-ISP on (one NPU core; `modeld` uses the other). It refuses to start unless
+  `/boot/configs` has `maix_npu_ai_isp=1`, which splits the NPU at boot
 - runs the sensor itself at 20 fps (`AX_ISP_SetSnsAttr`) with auto exposure on
   and the maximum shutter capped at 33,333 us (`EDGEPILOT_MAX_SHUTTER_US`), so
   frames arrive 50 ms apart as the model expects

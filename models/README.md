@@ -2,13 +2,14 @@
 
 The MaixCAM2 runtime runs the openpilot **master** `driving_supercombo` core as
 a Pulsar2 6.0 axmodel (U16 activations, uint8 image inputs) on the AX630C NPU.
-The axmodel is **not in this directory**: it is built with
-[`tools/model/axmodel`](../tools/model/axmodel/README.md) and uploaded to the
-board as `/root/edgepilot/models/supercombo.axmodel` with
-`EDGEPILOT_AXMODEL=... scripts/upload_to_board.sh`.
+It is `supercombo.axmodel` here, compiled for one NPU core (NPU1) because the
+AI-ISP denoiser always uses the other. It is built with
+[`tools/model/axmodel`](../tools/model/axmodel/README.md), and
+`scripts/upload_to_board.sh` puts it on the board as
+`/root/edgepilot/models/supercombo.axmodel`.
 
-What is tracked here is the calibration data the axmodel build still uses, and
-the K230 v0.9.4 model and its records.
+Also tracked are the calibration data the axmodel build uses, and the records of
+the K230 v0.9.4 model.
 
 ## Contents
 
@@ -51,9 +52,10 @@ is in [Model pipeline](../docs/model-pipeline.md#model-output).
 
 ## Verification
 
-On the board, NPU inference takes about 8.5 ms and a whole `modeld` frame
-about 12.5 ms. On a 200-frame K230 replay the board output matched the host
-axengine runner to 0.0008 m in plan lateral offset at 2 s, with a hidden-state
+On the board, NPU inference takes about 15.5 ms on one core and a whole
+`modeld` frame about 19.5 ms. On the 552-frame evaluation set the NPU1 model's
+output is bit-identical to the earlier two-core (NPU2) build. On a 200-frame
+K230 replay the board output matched the host axengine runner to 0.0008 m in plan lateral offset at 2 s, with a hidden-state
 cosine similarity of 0.9994.
 
 The master model replaced v0.9.4 because Pulsar2 6.0 and 7.0 both miscompile

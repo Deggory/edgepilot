@@ -64,31 +64,8 @@ def env_enabled(name: str, default: bool = False) -> bool:
     return value.lower() not in ("0", "false", "no", "off", "n")
 
 
-AI_ISP_MODEL_PATH = "models/supercombo_npu1.axmodel"
-
-
-def ai_isp_enabled() -> bool:
-    """camerad와 같은 규칙: EDGEPILOT_AI_ISP가 있으면 그 값, 없으면 /boot/configs maix_npu_ai_isp."""
-    value = os.environ.get("EDGEPILOT_AI_ISP")
-    if value:
-        return env_enabled("EDGEPILOT_AI_ISP")
-    try:
-        with open("/boot/configs") as f:
-            for line in f:
-                if line.strip() == "maix_npu_ai_isp=1":
-                    return True
-    except OSError:
-        pass
-    return False
-
-
 def default_model_path() -> str:
-    """AI-ISP가 NPU 절반을 쓰면 코어 하나용(NPU1)으로 컴파일한 모델을 쓴다."""
-    if os.environ.get("EDGEPILOT_MODEL"):
-        return os.environ["EDGEPILOT_MODEL"]
-    if ai_isp_enabled() and os.path.exists(AI_ISP_MODEL_PATH):
-        return AI_ISP_MODEL_PATH
-    return DEFAULT_MODEL_PATH
+    return os.environ.get("EDGEPILOT_MODEL") or DEFAULT_MODEL_PATH
 
 
 class LatestPublisher:
@@ -253,7 +230,7 @@ class Manager:
                 f"Usage: {argv[0] if argv else 'manager.py'} [supercombo.axmodel]"
             )
         self.model = argv[1] if len(argv) >= 2 else default_model_path()
-        print(f"manager: AI-ISP {'on' if ai_isp_enabled() else 'off'}, model {self.model}", flush=True)
+        print(f"manager: model {self.model}", flush=True)
         os.environ.setdefault("EDGEPILOT_PANDA_TX", "1")
         os.environ.setdefault("EDGEPILOT_PANDA_ENGAGED", "1")
         os.environ.setdefault("EDGEPILOT_PANDA_SAFETY", "hyundaiCommunity")

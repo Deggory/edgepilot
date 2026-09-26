@@ -18,6 +18,12 @@ if [ "$REMOVE" = 1 ]; then
   exit 0
 fi
 
+# AI-ISP가 NPU 한 코어를 쓰도록 부팅 때 NPU를 분할한다(camerad·modeld가 이를 전제한다).
+if "${SSH[@]}" "grep -qx 'maix_npu_ai_isp=1' /boot/configs"; then :; else
+  "${SSH[@]}" "sed -i '/^maix_npu_ai_isp=/d' /boot/configs && echo maix_npu_ai_isp=1 >> /boot/configs && sync"
+  echo "set maix_npu_ai_isp=1 in /boot/configs; reboot the board before starting the runtime"
+fi
+
 # Wi-Fi가 다른 AP로 넘어갈 때 DHCP를 새로 받는 훅(보드 udhcpc는 이전 임대를 들고 있다).
 "${SSH[@]}" "cat > /usr/local/sbin/wifi-dhcp-renew.sh && chmod 755 /usr/local/sbin/wifi-dhcp-renew.sh" \
   < scripts/wifi-dhcp-renew.sh

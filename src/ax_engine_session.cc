@@ -22,30 +22,17 @@ void init_runtime_once()
             status = 1;
             return;
         }
-        /* NPU 모드는 시스템 전역이다. 다른 프로세스(예: MaixCAM 앱)가 이미 다른
-         * 모드(가상 NPU)로 초기화했으면 기본 모드로는 거부되므로(커널: "repeatedly
-         * initialize npu with different npu attr"), pyaxengine처럼 현재 모드를
-         * 먼저 읽어 같은 모드로 초기화한다. */
+        /* AI-ISP(camerad)가 NPU 한 코어를 쓰므로 NPU는 늘 가상 분할로 부팅되고
+         * (/boot/configs maix_npu_ai_isp=1), 모델은 코어 하나용(NPU1)으로 컴파일돼 있다.
+         * NPU 모드는 시스템 전역이라 같은 모드로 초기화해야 한다. */
         AX_ENGINE_NPU_ATTR_T attr;
         std::memset(&attr, 0, sizeof(attr));
-        if (AX_ENGINE_GetVNPUAttr(&attr) != 0) {
-            /* 이 프로세스에서 아직 초기화 전이면 읽지 못한다. 커널이 알려 주는 현재 모드를
-             * 따른다: AI-ISP(camerad)가 켜지면 NPU는 가상 분할(vnpu=enable)이다. */
-            std::memset(&attr, 0, sizeof(attr));
-            char mode[16] = {};
-            if (FILE *f = std::fopen("/proc/ax_proc/npu/vnpu", "r")) {
-                if (!std::fgets(mode, sizeof(mode), f)) mode[0] = '\0';
-                std::fclose(f);
-            }
-            attr.eHardMode = std::strncmp(mode, "enable", 6) == 0 ? AX_ENGINE_VIRTUAL_NPU_ENABLE
-                                                                   : AX_ENGINE_VIRTUAL_NPU_DISABLE;
-        }
+        attr.eHardMode = AX_ENGINE_VIRTUAL_NPU_ENABLE;
         if (AX_ENGINE_Init(&attr) != 0) status = 2;
-        std::fprintf(stderr, "npu: %s mode\n",
-                     attr.eHardMode == AX_ENGINE_VIRTUAL_NPU_ENABLE ? "virtual (split)" : "full");
     });
     if (status == 1) throw std::runtime_error("AX_SYS_Init failed");
-    if (status == 2) throw std::runtime_error("AX_ENGINE_Init failed");
+    if (status == 2)
+        throw std::runtime_error("AX_ENGINE_Init (virtual NPU) failed; is maix_npu_ai_isp=1 in /boot/configs?");
 }
 
 AxEngineSession::DataType to_dtype(AX_ENGINE_DATA_TYPE_T dt)

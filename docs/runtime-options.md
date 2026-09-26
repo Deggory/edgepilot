@@ -49,11 +49,6 @@ true.
 
 ## Camera and input warp
 
-- `EDGEPILOT_AI_ISP=0|1`
-  - turns the AX630C AI-ISP (NPU denoise) off or on in `camerad`, and makes
-    `manager.py` pick the matching model (`supercombo_npu1.axmodel` when on).
-    The default follows `/boot/configs` `maix_npu_ai_isp`, which also decides
-    whether the NPU boots split.
 - `EDGEPILOT_MAX_SHUTTER_US=N`
   - caps the auto-exposure shutter in `camerad` (default `33333`, the
     30 fps frame time, so the 20 fps sensor does not add motion blur). `0`

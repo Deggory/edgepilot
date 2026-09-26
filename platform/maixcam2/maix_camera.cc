@@ -38,15 +38,12 @@ MaixCamera::MaixCamera(int width, int height, int fps, bool nv12)
     vin.eSysMode = COMMON_VIN_SENSOR;
     vin.eHdrMode = AX_SNS_LINEAR_MODE;
     vin.eLoadRawNode = LOAD_RAW_IFE;
-    /* AI-ISP(NPU 절반을 쓰는 AI 노이즈 제거). /boot/configs maix_npu_ai_isp가 켜져 있으면
-     * 미들웨어가 NPU를 가상 분할로 초기화하므로 같은 설정을 따른다(EDGEPILOT_AI_ISP로
-     * 덮어쓸 수 있다). 분할 NPU에서는 modeld가 코어 하나용(NPU1) 모델을 써야 한다. */
-    const char *ai_isp_env = std::getenv("EDGEPILOT_AI_ISP");
-    const bool ai_isp = ai_isp_env && ai_isp_env[0]
-        ? std::atoi(ai_isp_env) != 0
-        : maix::app::get_sys_config_kv("npu", "ai_isp", "0") == "1";
-    vin.bAiispEnable = ai_isp ? AX_TRUE : AX_FALSE;
-    std::fprintf(stderr, "camera: AI-ISP %s\n", ai_isp ? "on" : "off");
+    /* AI-ISP(NPU 한 코어를 쓰는 AI 노이즈 제거)는 늘 켠다. NPU 분할은 부팅 때
+     * /boot/configs maix_npu_ai_isp=1로 정해지므로(install_autostart.sh가 켠다) 그 설정이
+     * 없으면 여기서 멈춘다. modeld는 남은 코어 하나용(NPU1) 모델을 쓴다. */
+    if (maix::app::get_sys_config_kv("npu", "ai_isp", "0") != "1")
+        throw std::runtime_error("AI-ISP needs maix_npu_ai_isp=1 in /boot/configs (run install_autostart.sh, then reboot)");
+    vin.bAiispEnable = AX_TRUE;
     COMMON_SYS_ARGS_T common = {}, priv = {};
     vi.config_sample_case(&vin, &common, &priv);
     if (vi.init() != maix::err::ERR_NONE) throw std::runtime_error("AX VI init failed");

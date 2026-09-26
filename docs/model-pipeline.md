@@ -10,9 +10,13 @@ openpilot master supercombo core on the AX630C NPU, and publishes compact
 
 | Stage | Time on the board |
 | --- | --- |
-| GDC warp, both views | ~1 ms |
-| NPU inference | ~8.5 ms |
-| whole `modeld` frame | ~12.5 ms |
+| GDC warp, both views | ~3 ms |
+| NPU inference (one core, NPU1) | ~15.5 ms |
+| whole `modeld` frame | ~19.5 ms |
+
+The AI-ISP denoiser always runs on the other NPU core, so the NPU boots split
+(`/boot/configs` `maix_npu_ai_isp=1`, set by `install_autostart.sh`) and the model
+is compiled for one core.
 
 The K230 ran openpilot v0.9.4 as an nncase kmodel in 27.7 ms of KPU time; that
 pipeline is not part of this branch.
@@ -22,9 +26,8 @@ pipeline is not part of this branch.
 The model is the openpilot master `driving_supercombo` with its history queues
 cut off, compiled with Pulsar2 6.0 as a U16 axmodel whose image inputs are
 uint8. How it is built is in
-[tools/model/axmodel](../tools/model/axmodel/README.md); the resulting file is
-not in the repository and is uploaded with `EDGEPILOT_AXMODEL=...
-scripts/upload_to_board.sh`. `src/ax_engine_session.*` wraps `libax_engine`
+[tools/model/axmodel](../tools/model/axmodel/README.md); the result is committed
+as `models/supercombo.axmodel` and deployed by `scripts/upload_to_board.sh`. `src/ax_engine_session.*` wraps `libax_engine`
 (the board image ships no engine headers, so `src/ax_engine_api.h` declares the
 API) with a cached CMM buffer per tensor.
 

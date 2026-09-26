@@ -58,14 +58,13 @@ headers, or the board OpenCV are missing.
 ## 3. Upload to the board
 
 ```sh
-EDGEPILOT_AXMODEL=/path/to/core.axmodel scripts/upload_to_board.sh [root@192.168.219.117]
+scripts/upload_to_board.sh [root@192.168.219.117]
 ```
 
 The script copies the binaries from `build-ax630/bin`, the board-side Python, the
-UI sprites, and the parameter defaults to `/root/edgepilot`. The axmodel is not in
-the repository ([how to build it](../tools/model/axmodel/README.md)); it is
-copied to `models/supercombo.axmodel` only when `EDGEPILOT_AXMODEL` is set, so
-later uploads can leave it out.
+UI sprites, the parameter defaults and `models/supercombo.axmodel`
+([how it is built](../tools/model/axmodel/README.md)) to `/root/edgepilot`. The
+33 MB model is sent only when its SHA-256 differs from the board's copy.
 
 - A running binary cannot be overwritten, so files go to `.upload/` first and
   are moved into place.
