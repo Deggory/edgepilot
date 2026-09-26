@@ -66,7 +66,7 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 
 | 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
 |---|---:|---|---|
-| `laneless_mode` | false | bool | `false`는 Lane 모드로, 차선 확률이 높으면 차선 중심 경로를 섞고 낮아지면 자동으로 모델 경로만 쓴다. `true`는 Laneless 모드로, 차선 관측을 무시하고 항상 모델 plan을 따른다. 웹의 `주행 제한` 메뉴에서 바꾸고, 현재 사용 중인 경로는 HUD에 `LANE`/`LANELESS`로 표시된다. 차로 변경은 두 모드 모두 모델의 desire 입력으로 동작한다. |
+| `laneless_mode` | false | bool | `false`는 Lane 모드로, 차선 확률이 높으면 차선 중심 경로를 섞고 낮아지면 자동으로 모델 경로만 쓴다. `true`는 Laneless 모드로, openpilot 메인과 같은 방식(`get_curvature_from_plan`)이다. 차선·MPC·`path_offset_m` 없이 모델 plan의 yaw와 yaw rate로 목표 곡률 `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v`를 만든다(t_d = 조향 지연 + plan 나이). Lane 모드의 자동 모델 경로(차선이 안 보일 때)는 예전처럼 plan 위치를 MPC로 따른다. 웹의 `주행 제한` 메뉴에서 바꾸고, 현재 사용 중인 경로는 HUD에 `LANE`/`LANELESS`로 표시된다. 차로 변경은 두 모드 모두 모델의 desire 입력으로 동작한다. |
 
 ### 경로 제한
 

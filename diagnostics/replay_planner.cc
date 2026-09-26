@@ -2,6 +2,7 @@
  * 녹화된 인지 결과에 대해 플래너가 무엇을 요구했는지 오프라인으로 재현한다.
  * 사용: replay_planner [--laneless] <out.csv> <events.bin...> */
 #include "ipc_messages.h"
+#include "recorded_model_state.h"
 #include "lateral_controller.h"
 #include "lateral_planner.h"
 #include "recording_format.h"
@@ -65,24 +66,10 @@ int main(int argc, char **argv) {
         measured = cs.actual_curvature;
         des_rec = cs.desired_curvature;
         have_cs = true;
-      } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
-                 rh.payload_size >= sizeof(ModelState)) {
+      } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
         if (!have_cs) continue;
         ModelState ms{};
-        /* v4 이하 녹화는 plan 뒤에 stds/orientations(792 B), v3 이하는 lead 뒤에
-         * stop_line(28 B)이 더 있다(구 페이로드 4080 B, 꼬리 패딩 4 B 포함).
-         * 통째로 복사하면 차선 필드가 792 B 어긋난다. */
-        const size_t plan_extra = hdr.version <= 4 ? 2 * sizeof(ms.plan) : 0;
-        const size_t lead_extra = hdr.version <= 3 ? 28 : 0;
-        if (rh.payload_size < sizeof(ms) + plan_extra + lead_extra) continue;
-        const char *src = buf.data();
-        const size_t lanes_off = offsetof(ModelState, lanes);
-        const size_t pose_off = offsetof(ModelState, pose);
-        std::memcpy(&ms, src, lanes_off);
-        std::memcpy(reinterpret_cast<char *>(&ms) + lanes_off, src + lanes_off + plan_extra,
-                    pose_off - lanes_off);
-        std::memcpy(reinterpret_cast<char *>(&ms) + pose_off,
-                    src + pose_off + plan_extra + lead_extra, sizeof(ms) - pose_off);
+        if (!decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
         const float v = v_kph / 3.6f;
         LateralTarget t = planner.update(ms, vehicle, v, measured, true, 0.0f);
         /* 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이

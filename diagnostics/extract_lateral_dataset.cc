@@ -4,6 +4,7 @@
 #include "utils_math.h"
 #include "utils_time.h"
 #include "ipc_messages.h"
+#include "recorded_model_state.h"
 #include "recording_format.h"
 #include "control_params.h"
 #include "vehicle_can.h"
@@ -125,8 +126,7 @@ int main(int argc, char **argv) {
       }
 
       if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
-          rh.payload_size >= sizeof(ModelState)) {
-        std::memcpy(&model, buf.data(), sizeof(model));
+          decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &model)) {
         have_model = model.valid != 0;
         model_time_s = now_s;
         continue;

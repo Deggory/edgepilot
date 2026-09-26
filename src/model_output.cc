@@ -62,6 +62,8 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
             raw[mean_base + 1],
             raw[mean_base + 2],
         };
+        output.plan.yaw[i] = raw[mean_base + kPlanYawIndex];
+        output.plan.yaw_rate[i] = raw[mean_base + kPlanYawRateIndex];
     }
 
     for (int lane = 0; lane < 4; ++lane) {

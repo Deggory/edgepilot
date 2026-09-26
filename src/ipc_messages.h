@@ -142,12 +142,15 @@ struct ModelState {
     LeadState lead;
     PoseState pose;
     CalibrationState calibration;
+    // 녹화 v6부터. plan의 yaw·yaw rate(laneless 모드가 openpilot 메인처럼 곡률을 만든다).
+    float plan_yaw[kTrajectorySize] = {};
+    float plan_yaw_rate[kTrajectorySize] = {};
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
  * kRecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(ModelState) == 3256,
+static_assert(sizeof(ModelState) == 3520 && offsetof(ModelState, plan_yaw) == 3256,
               "ModelState layout is shared with the recording reader");
 // param_server.py(MODEL_CALIBRATION_OFFSET)가 이 위치에서 보정 상태를 읽는다.
 static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationState) == 32,
@@ -436,14 +439,14 @@ EDGEPILOT_CONTROL_STATE_AT(engage_reject_block, 200);
 EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
 #undef EDGEPILOT_CONTROL_STATE_AT
 static_assert(sizeof(ControlState) == 240,
-              "ControlState layout is shared by controlsd, overlay and recording v5");
+              "ControlState layout is shared by controlsd, overlay and the recording");
 /* recordd가 RecordType::PandaState로 그대로 저장한다. */
 static_assert(sizeof(PandaState) == 96,
               "PandaState is recorded as-is: bump kRecordingVersion");
 /* 기록 버전과 저장 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다. */
-static_assert(kRecordingVersion == 5 && sizeof(ModelState) == 3256 &&
+static_assert(kRecordingVersion == 6 && sizeof(ModelState) == 3520 &&
                   sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
-              "recording v5 pins these payloads; bump kRecordingVersion together");
+              "recording v6 pins these payloads; bump kRecordingVersion together");
 
 /* modeld가 발행 직전에, overlayd와 hud_snapshot이 소비 직후에 쓴다. */
 void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,

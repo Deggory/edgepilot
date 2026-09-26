@@ -7,6 +7,7 @@
 #include "lateral_controller.h"
 #include "model_output.h"
 #include "lateral_path.h"
+#include "lateral_planner.h"
 #include "lateral_torque.h"
 #include "vehicle_can.h"
 
@@ -1384,6 +1385,41 @@ TEST(ControlReplay, SteeringJsonMatchesDefaults) {
 }
 
 /* 상류 controlsd: 비활성 중 목표 곡률은 실제 곡률을 따라가고, 재활성 때 거기서 한계 안으로 출발한다. */
+/* laneless 모드는 openpilot 메인의 get_curvature_from_plan이다: 모델 plan의 yaw·yaw rate만 쓰고
+ * plan 위치·경로 오프셋·MPC를 쓰지 않는다. */
+TEST(ControlReplay, LanelessUsesPlanYawLikeUpstream) {
+  SteeringParams steering;
+  steering.path_offset_m = -0.3f;
+  DrivingParams driving;
+  driving.laneless_mode = true;
+  LateralPlanner planner(steering, driving);
+  const float v = 20.0f;
+  auto model_for = [&](float kappa, float lateral_offset) {
+    ModelState ms{};
+    ms.valid = 1;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+      const float t = model_t_idx(i);
+      ms.model_t[i] = t;
+      ms.plan[i] = {v * t, lateral_offset, 0.0f};
+      ms.plan_yaw[i] = kappa * v * t;
+      ms.plan_yaw_rate[i] = kappa * v;
+    }
+    return ms;
+  };
+  VehicleCanState vehicle{};
+  // 일정 곡률 plan: 2·ψ(t)/(v·t) − ψ̇/v = 2κ − κ = κ
+  LateralTarget turn = planner.update(model_for(0.002f, 0.0f), vehicle, v, 0.0f, true, 0.0f);
+  ASSERT_TRUE(turn.valid);
+  ASSERT_TRUE(turn.laneless_mode);
+  ASSERT_TRUE(turn.mpc_solution_valid);
+  EXPECT_NEAR(lag_adjusted_curvature(turn, v, 0.0f, 0.34f), 0.002f, 1e-5f) << "일정 곡률 plan은 그 곡률";
+  EXPECT_NEAR(lag_adjusted_curvature(turn, v, 0.1f, 0.34f), 0.002f, 1e-5f) << "plan 나이와 무관";
+  // yaw가 0이면 plan이 옆으로 0.5 m 떨어져 있고 오프셋이 −0.3이어도 목표는 직진이다
+  LateralTarget straight = planner.update(model_for(0.0f, 0.5f), vehicle, v, 0.0f, true, 0.0f);
+  EXPECT_NEAR(lag_adjusted_curvature(straight, v, 0.05f, 0.34f), 0.0f, 1e-7f)
+      << "위치와 경로 오프셋은 laneless 곡률에 들어가지 않는다";
+}
+
 TEST(ControlReplay, InactiveDesiredTracksActual) {
   LateralControllerConfig config;
   config.force_engaged = true;

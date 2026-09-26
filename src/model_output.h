@@ -37,6 +37,9 @@ constexpr int kLeadProbOffset = 1061;
 constexpr int kFeatureOffset = 1064;
 constexpr int kPlanOffset = 1576;           // 평균 33x15, 이어서 log std
 constexpr int kPlanWidth = 15;
+// Plan 행 안의 위치(openpilot modeld.constants.Plan): T_FROM_CURRENT_EULER 9:12, ORIENTATION_RATE 12:15.
+constexpr int kPlanYawIndex = 11;
+constexpr int kPlanYawRateIndex = 14;
 constexpr int kDesireStateOffset = 2566;
 static_assert(kLaneProbOffset == kLaneOffset + kLaneLineSize * 2 &&
                   kRoadEdgeOffset == kLaneProbOffset + 8 &&
@@ -77,6 +80,10 @@ struct ParsedPlan {
     int best_index = 0;
     float probability = 0.0f;
     std::array<ModelPoint, kTrajectorySize> points{};
+    // T_FROM_CURRENT_EULER z / ORIENTATION_RATE z (rad, rad/s). openpilot 메인의
+    // get_curvature_from_plan이 쓰는 값이다(laneless 모드).
+    std::array<float, kTrajectorySize> yaw{};
+    std::array<float, kTrajectorySize> yaw_rate{};
 };
 
 struct ParsedLaneLine {

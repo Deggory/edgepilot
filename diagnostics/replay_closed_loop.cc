@@ -13,6 +13,7 @@
 #include "control_params.h"
 #include "hyundai_can.h"
 #include "ipc_messages.h"
+#include "recorded_model_state.h"
 #include "lateral_controller.h"
 #include "lateral_path.h"
 #include "lateral_planner.h"
@@ -160,23 +161,6 @@ void transform_model(ModelState &ms, float dy, float dpsi) {
   for (auto &lane : ms.lanes)
     for (int i = 1; i < kTrajectorySize; ++i)
       lane[i].x = std::max(lane[i].x, lane[i - 1].x);
-}
-
-/* 녹화 ModelState를 현재 구조체로 읽는다. v4 이하는 plan 뒤 stds/orientations,
- * v3 이하는 lead 뒤 stop_line이 더 있다. */
-bool decode_model_state(const char *src, uint32_t payload_size, uint32_t version,
-                        ModelState *out) {
-  const size_t plan_extra = version <= 4 ? 2 * sizeof(out->plan) : 0;
-  const size_t lead_extra = version <= 3 ? 28 : 0;
-  if (payload_size < sizeof(*out) + plan_extra + lead_extra) return false;
-  const size_t lanes_off = offsetof(ModelState, lanes);
-  const size_t pose_off = offsetof(ModelState, pose);
-  std::memcpy(out, src, lanes_off);
-  std::memcpy(reinterpret_cast<char *>(out) + lanes_off, src + lanes_off + plan_extra,
-              pose_off - lanes_off);
-  std::memcpy(reinterpret_cast<char *>(out) + pose_off,
-              src + pose_off + plan_extra + lead_extra, sizeof(*out) - pose_off);
-  return true;
 }
 
 // 녹화에서 그대로 가져오는 외생 입력. 시뮬이 바꿀 수 없는 것들이다.
@@ -419,10 +403,9 @@ int main(int argc, char **argv) {
         ex.driver_torque = cs.driver_torque;
         ex.apply_rec = cs.apply_torque;
         ex.active_rec = cs.active;
-      } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
-                 rh.payload_size >= sizeof(ModelState)) {
+      } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
         ModelState ms{};
-        if (!decode_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
+        if (!decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
         if (sim_t < 0.0) {
           sim_t = rec_t;
           route_t0 = rec_t;

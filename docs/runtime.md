@@ -192,12 +192,15 @@ recorder port.
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
 an 8-byte `K230LOG1` magic, a version word, and fixed 16-byte record headers.
-The current version is `5`.
+The current version is `6`: `ModelState` gained the plan yaw and yaw rate
+(`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode steers from. Readers
+take version 5 and older payloads as before, with those arrays zeroed
+(`src/recorded_model_state.h`, `recording_reader.model_state_layout`).
 
 | Record type | Payload |
 | --- | ---: |
 | `CanRx` / `CanTx` | variable CAN batch |
-| `ModelState` | 3256 B |
+| `ModelState` | 3520 B |
 | `ControlState` | 240 B |
 | `PandaState` | 96 B |
 | `LearnerState` | 128 B |

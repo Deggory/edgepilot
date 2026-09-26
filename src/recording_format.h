@@ -13,7 +13,7 @@
  * v5: 소비자가 없던 plan_position_stds/plan_orientations(792 B)를
  * ModelState에서 뺐다. 페이로드가 4048 -> 3256 B로 줄어 v4 이하 녹화와
  * 호환되지 않는다. LearnerState(6)는 v5에 더한 타입이라 모르는 리더는 건너뛴다. */
-constexpr uint32_t kRecordingVersion = 5;
+constexpr uint32_t kRecordingVersion = 6;
 
 /* 세그먼트 영상 코덱. manifest의 video_codec과 파일 이름(road.h264 / road.hevc)이 따른다.
  * MaixCAM2는 H.264로 녹화한다(보드 디코더가 H.264만 풀어 녹화를 그대로 리허설에 쓴다).

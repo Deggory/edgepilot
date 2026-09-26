@@ -128,6 +128,7 @@ def model_state_layout(version: int) -> dict[str, int]:
       v3 and older carry stop_line (payload 4076 + 4 pad = 4080)
       v4 dropped stop_line (4048)
       v5 dropped plan_position_stds and plan_orientations (3256)
+      v6 appended plan_yaw and plan_yaw_rate (3520)
     Callers should check ``layout["__size__"]`` against the payload size they
     actually saw so a future layout change fails loudly instead of decoding
     garbage.
@@ -145,6 +146,8 @@ def model_state_layout(version: int) -> dict[str, int]:
     if version <= 3:
         fields += [("stop_line", 28)]
     fields += [("pose", 52), ("calibration", 32)]
+    if version >= 6:
+        fields += [("plan_yaw", 4 * n), ("plan_yaw_rate", 4 * n)]
 
     layout, offset = {}, 0
     for name, size in fields:

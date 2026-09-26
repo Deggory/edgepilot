@@ -23,6 +23,8 @@ void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
     for (int i = 0; i < kTrajectorySize; ++i) {
         state.model_t[i] = model_t_idx(i);
         state.plan[i] = {parsed.plan.points[i].x, parsed.plan.points[i].y, parsed.plan.points[i].z};
+        state.plan_yaw[i] = parsed.plan.yaw[i];
+        state.plan_yaw_rate[i] = parsed.plan.yaw_rate[i];
         for (int lane = 0; lane < 4; ++lane) {
             state.lanes[lane][i] = {
                 parsed.lanes[lane].points[i].x,
@@ -111,6 +113,8 @@ ParsedModelOutput parsed_from_model_state(const ModelState &state)
     parsed.plan.probability = state.plan_probability;
     for (int i = 0; i < kTrajectorySize; ++i) {
         parsed.plan.points[i] = {state.plan[i].x, state.plan[i].y, state.plan[i].z};
+        parsed.plan.yaw[i] = state.plan_yaw[i];
+        parsed.plan.yaw_rate[i] = state.plan_yaw_rate[i];
         for (int lane = 0; lane < 4; ++lane) {
             parsed.lanes[lane].valid = parsed.valid;
             parsed.lanes[lane].probability = state.lane_probabilities[lane];

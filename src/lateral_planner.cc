@@ -282,6 +282,7 @@ struct LateralPlanner::Impl {
     }
 
     lane_planner.update_probabilities(v_ego);
+    if (laneless_mode) return upstream_target(model, v_ego, measured_curvature);
     const double lane_probability = lane_planner.mean_effective_probability();
     bool use_model_path = laneless_mode;
     const bool lane_change_off = lane_change_state == 0;
@@ -393,6 +394,53 @@ struct LateralPlanner::Impl {
       target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
       target.curvatures[i] = static_cast<float>(mpc.nodes()[i].curvature);
     }
+    return target;
+  }
+
+  /* laneless 모드 = openpilot 메인의 get_curvature_from_plan. 차선·MPC·경로 오프셋 없이
+   * 모델 plan의 yaw와 yaw rate를 그대로 목표로 넘긴다. 컨트롤러의 lag_adjusted_curvature가
+   * 같은 식 2·ψ(t_d)/(v·t_d) − ψ̇(0)/v를 t_d = 조향 지연 + 실측 plan 나이에서 적용한다
+   * (메인은 t_d = lateralDelay + 프레임 지연 50 ms + 25 ms). 경로 오프셋은 laneless에서
+   * 위치가 아니라 꾸준한 곡률 편향이 되므로 쓰지 않는다. */
+  LateralTarget upstream_target(const ModelState &model, float v_ego, float measured_curvature) {
+    constexpr double kMinSpeed = 1.0;  // openpilot drive_helpers.MIN_SPEED
+    const double speed = std::max<double>(v_ego, kMinSpeed);
+    std::array<double, kTrajectorySize> t{}, yaw{}, yaw_rate{}, y{};
+    for (int i = 0; i < kTrajectorySize; ++i) {
+      t[i] = model.model_t[i];
+      yaw[i] = model.plan_yaw[i];
+      yaw_rate[i] = model.plan_yaw_rate[i];
+      y[i] = model.plan[i].y;
+    }
+    make_monotonic(t.data(), t.size());
+    LateralTarget target;
+    for (int i = 0; i < kLateralControlN; ++i) {
+      const double ti = model_t_idx_double(i);
+      target.psis[i] = static_cast<float>(interp(ti, t.data(), yaw.data(), t.size()));
+      target.curvatures[i] = static_cast<float>(interp(ti, t.data(), yaw_rate.data(), t.size()) / speed);
+    }
+    target.valid = true;
+    target.capture_timestamp_ns = model.capture_timestamp_ns;
+    target.mpc_solution_valid = true;  // MPC를 쓰지 않는다
+    target.laneless_mode = true;
+    target.lane_left_y_m = static_cast<float>(lane_planner.near_left_y());
+    target.lane_right_y_m = static_cast<float>(lane_planner.near_right_y());
+    target.lane_width_m = static_cast<float>(lane_planner.lane_width());
+    target.lane_left_prob = static_cast<float>(lane_planner.left_prob());
+    target.lane_right_prob = static_cast<float>(lane_planner.right_prob());
+    target.lane_left_std = static_cast<float>(lane_planner.left_std());
+    target.lane_right_std = static_cast<float>(lane_planner.right_std());
+    target.lane_d_prob = 0.0f;
+    target.target_y_m = static_cast<float>(interp(model_t_idx_double(1), t.data(), y.data(), t.size()));
+    target.heading_rad = target.psis[0];
+    target.curvature = target.curvatures[0];
+    target.desire = desire;
+    // 차선 모드로 돌아가면 낡은 MPC 해가 아니라 지금 곡률에서 출발한다.
+    laneless_buffer = false;
+    plan_mix = 1.0;
+    mpc.reset();
+    initial_curvature = measured_curvature;
+    invalid_count = 0;
     return target;
   }
 
