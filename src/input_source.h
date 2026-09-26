@@ -16,7 +16,7 @@ struct Nv12Frame {
     std::vector<uint8_t> data;
 };
 
-/* SCNV12R1 리플레이 파일의 NV12 프레임 소스. k230_modeld의 헤드리스 재생용. */
+/* SCNV12R1 리플레이 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용. */
 class ReplayNv12Source {
 public:
     explicit ReplayNv12Source(const std::string &path);
@@ -39,7 +39,7 @@ private:
     unsigned frames_read_ = 0;
 };
 
-/* v4l2 캡처의 NV12 프레임 소스. k230_camerad가 끝없이 읽으므로 eof가 없다. */
+/* v4l2 캡처의 NV12 프레임 소스. camerad가 끝없이 읽으므로 eof가 없다. */
 class LiveNv12Source {
 public:
     LiveNv12Source(const AppConfig &config, int video_device);

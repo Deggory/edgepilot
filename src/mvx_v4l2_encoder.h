@@ -18,7 +18,7 @@ public:
     size_t size = 0;
     bool codec_config = false;
     bool keyframe = false;
-    const K230RoadAiFrame *frame = nullptr;
+    const RoadAiFrame *frame = nullptr;
   };
   using PacketHandler = std::function<void(const Packet &)>;
   /* 인코더 입력 버퍼를 호출자가 직접 채운다(중간 복사 제거). 목적지는
@@ -33,7 +33,7 @@ public:
   bool open(const char *device, unsigned width, unsigned height,
             unsigned fps, unsigned bitrate);
   void close();
-  bool submit_frame(const K230RoadAiFrame &frame, const FrameFiller &fill,
+  bool submit_frame(const RoadAiFrame &frame, const FrameFiller &fill,
                     const PacketHandler &handler);
   void drain(const PacketHandler &handler);
 
@@ -78,7 +78,7 @@ private:
   std::vector<std::vector<Plane>> raw_buffers_;
   std::vector<Plane> capture_planes_;
   std::deque<unsigned> free_raw_;
-  std::deque<K230RoadAiFrame> pending_frames_;
+  std::deque<RoadAiFrame> pending_frames_;
   uint64_t submitted_frames_ = 0;
   uint64_t encoded_frames_ = 0;
 };

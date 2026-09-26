@@ -22,7 +22,7 @@ namespace {
 
 volatile sig_atomic_t g_stop = 0;
 
-/* SUPERCOMBO_RAW_DUMP: replay 중 모델 raw 출력을 SCODMP1로 남긴다.
+/* EDGEPILOT_RAW_DUMP: replay 중 모델 raw 출력을 SCODMP1로 남긴다.
  * gtest/gtest_model_output_parser가 이 포맷을 읽어 보드 출력과 호스트
  * 기준을 프레임 단위로 비교할 수 있다(모델 교체 검증용). */
 class RawOutputDump
@@ -110,9 +110,9 @@ class EgoStateReader
 public:
     void poll()
     {
-        if (!open_) open_ = sub_.open(kK230ControlStateTopic, sizeof(K230ControlState), false);
+        if (!open_) open_ = sub_.open(kControlStateTopic, sizeof(ControlState), false);
         if (!open_) return;
-        K230ControlState control_state;
+        ControlState control_state;
         if (!sub_.read(&control_state, sizeof(control_state))) return;
         const float ego_speed_kph = control_state.ego_speed_kph > 0.0f
             ? control_state.ego_speed_kph
@@ -124,13 +124,13 @@ public:
     int desire() const { return desire_; }
 
 private:
-    K230LatestChannel sub_;
+    LatestChannel sub_;
     bool open_ = false;
     float v_ego_ = 0.0f;
     int desire_ = 0;
 };
 
-bool publish_output(K230LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
+bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
                     CalibrationService &calibration,
                     uint64_t frame_id, uint64_t capture_timestamp_ns, float model_ms,
                     float v_ego)
@@ -142,13 +142,13 @@ bool publish_output(K230LatestChannel &model_pub, SupercomboModel &model, const 
 
     const ProjectionState projection = calibration.projection();
 
-    K230ModelState state;
-    k230_fill_model_state(state, parsed, projection, calibration.snapshot(),
+    ModelState state;
+    fill_model_state(state, parsed, projection, calibration.snapshot(),
                           frame_id, capture_timestamp_ns, model_ms);
     return model_pub.publish(&state, sizeof(state));
 }
 
-int run_replay(const AppConfig &config, K230LatestChannel &model_pub)
+int run_replay(const AppConfig &config, LatestChannel &model_pub)
 {
     ReplayNv12Source source(config.replay_nv12_path);
     /* 재생 소스 해상도에 맞춘 기본 워프. GPU 워프도 이 크기로 만들어져야
@@ -174,21 +174,21 @@ int run_replay(const AppConfig &config, K230LatestChannel &model_pub)
 
     Nv12Frame frame;
     std::vector<float> raw;
-    RawOutputDump raw_dump(std::getenv("SUPERCOMBO_RAW_DUMP"));
+    RawOutputDump raw_dump(std::getenv("EDGEPILOT_RAW_DUMP"));
     unsigned processed = 0;
     unsigned errors = 0;
     RateWindow window;
 
     while (!g_stop && source.read(frame)) {
-        const uint64_t t0 = k230_now_ns();
+        const uint64_t t0 = monotonic_now_ns();
         const bool ok = model.run_frame_nv12(frame.data.data(), frame.width, frame.height, raw);
-        const uint64_t t1 = k230_now_ns();
+        const uint64_t t1 = monotonic_now_ns();
         if (ok) {
             raw_dump.append(raw);
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             if (!publish_output(model_pub, model, parsed, calibration,
-                                processed, k230_now_ns(), model_ms, 0.0f)) {
+                                processed, monotonic_now_ns(), model_ms, 0.0f)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }
@@ -212,12 +212,12 @@ int run_replay(const AppConfig &config, K230LatestChannel &model_pub)
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 
-int run_live(const AppConfig &config, K230LatestChannel &model_pub,
-             K230LatestChannel &record_frame_pub)
+int run_live(const AppConfig &config, LatestChannel &model_pub,
+             LatestChannel &record_frame_pub)
 {
-    K230LatestChannel frame_sub;
-    K230FrameRing frame_ring;
-    if (!frame_sub.open(kK230RoadAiFrameTopic, sizeof(K230RoadAiFrame), true))
+    LatestChannel frame_sub;
+    FrameRing frame_ring;
+    if (!frame_sub.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true))
         throw std::runtime_error("open roadAiFrame ipc failed");
 
     while (!g_stop && !frame_ring.open(false)) {
@@ -254,14 +254,14 @@ int run_live(const AppConfig &config, K230LatestChannel &model_pub,
                  frame_ring.frame_bytes(), target_fps);
 
     while (!g_stop) {
-        const uint64_t now_ns = k230_now_ns();
+        const uint64_t now_ns = monotonic_now_ns();
         if (next_model_start_ns > now_ns) {
             const uint64_t sleep_us = (next_model_start_ns - now_ns) / 1000ULL;
             if (sleep_us > 0) usleep(static_cast<useconds_t>(sleep_us));
         }
         if (g_stop) break;
 
-        K230RoadAiFrame meta;
+        RoadAiFrame meta;
         if (!frame_sub.read_new(&last_frame_seq, &meta, sizeof(meta), 1000)) {
             std::fprintf(stderr, "modeld: waiting for roadAiFrame\n");
             continue;
@@ -296,11 +296,11 @@ int run_live(const AppConfig &config, K230LatestChannel &model_pub,
             std::fprintf(stderr, "\nmodeld: publish recordFrame failed\n");
         }
 
-        const uint64_t t0 = k230_now_ns();
+        const uint64_t t0 = monotonic_now_ns();
         const bool ok = preload_planes
             ? model.run_frame_preloaded(meta.width, meta.height, raw)
             : model.run_frame_nv12(frame_copy.data(), meta.width, meta.height, raw);
-        const uint64_t t1 = k230_now_ns();
+        const uint64_t t1 = monotonic_now_ns();
         next_model_start_ns = t0 + model_interval_ns;
         if (ok) {
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
@@ -347,18 +347,18 @@ int main(int argc, char *argv[])
 
     try {
         AppConfig config = AppConfig::from_env(argc, argv);
-        K230LatestChannel model_pub;
-        K230LatestChannel record_frame_pub;
-        if (!model_pub.open(kK230ModelStateTopic, sizeof(K230ModelState), true))
+        LatestChannel model_pub;
+        LatestChannel record_frame_pub;
+        if (!model_pub.open(kModelStateTopic, sizeof(ModelState), true))
             throw std::runtime_error("open modelState ipc failed");
-        if (!record_frame_pub.open(kK230RecordFrameTopic, sizeof(K230RoadAiFrame), true))
+        if (!record_frame_pub.open(kRecordFrameTopic, sizeof(RoadAiFrame), true))
             throw std::runtime_error("open recordFrame ipc failed");
 
         if (config.replay_enabled()) return run_replay(config, model_pub);
         return run_live(config, model_pub, record_frame_pub);
     } catch (const std::exception &e) {
         std::fprintf(stderr, "modeld error: %s\n", e.what());
-        std::fprintf(stderr, "%s\n", AppConfig::usage(argc > 0 ? argv[0] : "k230_modeld").c_str());
+        std::fprintf(stderr, "%s\n", AppConfig::usage(argc > 0 ? argv[0] : "modeld").c_str());
         return 1;
     }
 }

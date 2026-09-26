@@ -31,7 +31,7 @@ constexpr unsigned kSensorHeight = 1080;
 
 volatile sig_atomic_t g_stop = 0;
 
-constexpr const char *kDisplayReadyPath = "/tmp/k230_display_ready";
+constexpr const char *kDisplayReadyPath = "/tmp/edgepilot_display_ready";
 constexpr int kPreviewVideoDevice = 1;
 constexpr unsigned kPreviewBufferCount = 8;
 constexpr unsigned kDisplayReadyPreviewFrames = 30;
@@ -97,9 +97,9 @@ public:
     explicit OverlayDisplay(const AppConfig &config)
         : profile_(config.profile)
     {
-        piezo_buzzer_ = piezo_buzzer_create(env_flag("K230_PIEZO_BUZZER", true) ? 1 : 0);
+        piezo_buzzer_ = piezo_buzzer_create(env_flag("EDGEPILOT_PIEZO_BUZZER", true) ? 1 : 0);
         if (!piezo_buzzer_)
-            std::fprintf(stderr, "k230_overlayd: piezo buzzer worker unavailable\n");
+            std::fprintf(stderr, "overlayd: piezo buzzer worker unavailable\n");
         default_projection_ = make_projection_state(config.manual_roll,
                                                     config.manual_pitch,
                                                     config.manual_yaw);
@@ -115,13 +115,13 @@ public:
 
     int run()
     {
-        if (!model_state_sub_.open(kK230ModelStateTopic, sizeof(K230ModelState), true))
+        if (!model_state_sub_.open(kModelStateTopic, sizeof(ModelState), true))
             throw std::runtime_error("open modelState ipc failed");
-        if (!panda_state_sub_.open(kK230PandaStateTopic, sizeof(K230PandaState), true))
+        if (!panda_state_sub_.open(kPandaStateTopic, sizeof(PandaState), true))
             throw std::runtime_error("open pandaState ipc failed");
-        if (!control_state_sub_.open(kK230ControlStateTopic, sizeof(K230ControlState), true))
+        if (!control_state_sub_.open(kControlStateTopic, sizeof(ControlState), true))
             throw std::runtime_error("open controlState ipc failed");
-        if (!manager_state_sub_.open(kK230ManagerStateTopic, sizeof(K230ManagerState), true))
+        if (!manager_state_sub_.open(kManagerStateTopic, sizeof(ManagerState), true))
             throw std::runtime_error("open managerState ipc failed");
 
         display_ = display_init(0);
@@ -167,14 +167,14 @@ public:
         display_->osd_disp_buffer = overlay_buffer_;
 
         std::fprintf(stderr,
-                     "k230_overlayd: display=%ux%u logical=%ux%u preview=/dev/video%d %ux%u buffers=%u rotation=%d overlay=native-direct\n",
+                     "overlayd: display=%ux%u logical=%ux%u preview=/dev/video%d %ux%u buffers=%u rotation=%d overlay=native-direct\n",
                      display_->width, display_->height,
                      rotate_landscape_ ? display_->height : display_->width,
                      rotate_landscape_ ? display_->width : display_->height, kPreviewVideoDevice,
                      context.width, context.height, context.buffer_num,
                      static_cast<int>(context.drm_rotation));
         std::fprintf(stderr,
-                     "k230_overlayd: waiting %u displayed preview frames before ready\n",
+                     "overlayd: waiting %u displayed preview frames before ready\n",
                      kDisplayReadyPreviewFrames);
 
         gettimeofday(&fps_tv_, nullptr);
@@ -198,7 +198,7 @@ private:
         ++poll_count_;
         pending_redraw_ = update_model() || pending_redraw_;
         pending_redraw_ = update_aux_state() || pending_redraw_;
-        pending_redraw_ = update_turn_signal(k230_now_ns()) || pending_redraw_;
+        pending_redraw_ = update_turn_signal(monotonic_now_ns()) || pending_redraw_;
 
         if (displayed && overlay_buffer_) {
             display_buffer *current = nullptr;
@@ -215,7 +215,7 @@ private:
                 }
             }
 
-            const uint64_t draw_now = k230_now_ns();
+            const uint64_t draw_now = monotonic_now_ns();
             const bool overlay_due = last_overlay_draw_ns_ == 0 ||
                 draw_now - last_overlay_draw_ns_ >= kOverlayIntervalNs;
             if (pending_redraw_ && overlay_due) {
@@ -301,7 +301,7 @@ private:
 
     /* 새 스냅샷이면 저장하고 true. */
     template <typename State>
-    static bool poll(K230LatestChannel &channel, State *state, uint64_t *seq)
+    static bool poll(LatestChannel &channel, State *state, uint64_t *seq)
     {
         State candidate;
         uint64_t candidate_seq = *seq;
@@ -317,9 +317,9 @@ private:
         if (!poll(model_state_sub_, &latest_model_state_, &latest_model_seq_)) return false;
         ++model_updates_;
         have_model_state_ = latest_model_state_.valid != 0 &&
-            fresh(latest_model_state_.model_timestamp_ns, k230_now_ns());
-        latest_output_ = k230_parsed_from_model_state(latest_model_state_);
-        latest_projection_ = k230_projection_from_model_state(latest_model_state_);
+            fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
+        latest_output_ = parsed_from_model_state(latest_model_state_);
+        latest_projection_ = projection_from_model_state(latest_model_state_);
         return true;
     }
 
@@ -376,7 +376,7 @@ private:
     /* 최신 스냅샷을 HUD 상태로 옮기고, control 이벤트 카운터로 토스트·부저를 낸다. */
     void refresh_hud_state()
     {
-        const uint64_t now = k230_now_ns();
+        const uint64_t now = monotonic_now_ns();
         const Freshness f = freshness(now);
         have_model_state_ = latest_model_state_.valid != 0 && f.model;
         hud_apply_panda_state(latest_panda_state_, f.panda, &hud_);
@@ -399,17 +399,17 @@ private:
         if (decision.alert == OverlayAlert::none) return false;
         const auto &alert = kAlerts[static_cast<int>(decision.alert)];
         if (decision.alert == OverlayAlert::unable) {
-            const K230ControlState &c = latest_control_state_;
+            const ControlState &c = latest_control_state_;
             std::snprintf(hud_.engage_alert_message, sizeof(hud_.engage_alert_message),
                           "UNABLE TO ENGAGE: %s", engage_block_text(c.engage_reject_block));
             engage_alert_until_ns_ = now + kEngageAlertNs;
             piezo_buzzer_play(piezo_buzzer_, alert.piezo, decision.event_id);
-            std::fprintf(stderr, "k230_overlayd: piezo alert=unable event=%u block=%s\n",
+            std::fprintf(stderr, "overlayd: piezo alert=unable event=%u block=%s\n",
                          decision.event_id, c.engage_reject_block);
             return true;
         }
         piezo_buzzer_play(piezo_buzzer_, alert.piezo, decision.event_id);
-        std::fprintf(stderr, "k230_overlayd: piezo alert=%s event=%u\n", alert.name,
+        std::fprintf(stderr, "overlayd: piezo alert=%s event=%u\n", alert.name,
                      decision.event_id);
         return true;
     }
@@ -429,7 +429,7 @@ private:
         } else if (unavailable && !previous_unavailable_ && !suppressed) {
             const uint32_t event_id = next_piezo_event_id();
             piezo_buzzer_play(piezo_buzzer_, PIEZO_ALERT_UNAVAILABLE, event_id);
-            std::fprintf(stderr, "k230_overlayd: piezo alert=unavailable event=%u\n", event_id);
+            std::fprintf(stderr, "overlayd: piezo alert=unavailable event=%u\n", event_id);
         }
         previous_unavailable_ = unavailable;
     }
@@ -447,30 +447,30 @@ private:
     {
         overlay_buffer_index_ = (overlay_buffer_index_ + 1) % kOverlayBufferCount;
         overlay_buffer_ = overlay_buffers_[overlay_buffer_index_];
-        const uint64_t draw_start = profile_ ? k230_now_ns() : 0;
+        const uint64_t draw_start = profile_ ? monotonic_now_ns() : 0;
         overlay_.draw(overlay_target(overlay_buffer_),
                       have_model_state_ ? latest_output_ : ParsedModelOutput{},
                       have_model_state_ ? latest_projection_ : default_projection_, hud_,
                       rotate_landscape_);
-        if (profile_) overlay_stats_.add(k230_now_ns() - draw_start);
+        if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
 
-        const uint64_t present_start = profile_ ? k230_now_ns() : 0;
+        const uint64_t present_start = profile_ ? monotonic_now_ns() : 0;
         clean(overlay_buffer_);
         display_->osd_disp_buffer = overlay_buffer_;
-        if (profile_) present_stats_.add(k230_now_ns() - present_start);
+        if (profile_) present_stats_.add(monotonic_now_ns() - present_start);
     }
 
     void publish_display_ready()
     {
         FILE *file = std::fopen(kDisplayReadyPath, "w");
         if (!file) {
-            std::perror("k230_overlayd display ready fopen");
+            std::perror("overlayd display ready fopen");
             return;
         }
-        std::fprintf(file, "%llu\n", static_cast<unsigned long long>(k230_now_ns()));
+        std::fprintf(file, "%llu\n", static_cast<unsigned long long>(monotonic_now_ns()));
         std::fclose(file);
         ready_file_written_ = true;
-        std::fprintf(stderr, "k230_overlayd: display ready %s preview_frames=%u\n",
+        std::fprintf(stderr, "overlayd: display ready %s preview_frames=%u\n",
                      kDisplayReadyPath, startup_preview_frames_);
     }
 
@@ -478,10 +478,10 @@ private:
     bool profile_ = false;
     bool rotate_landscape_ = true;
 
-    K230LatestChannel model_state_sub_;
-    K230LatestChannel panda_state_sub_;
-    K230LatestChannel control_state_sub_;
-    K230LatestChannel manager_state_sub_;
+    LatestChannel model_state_sub_;
+    LatestChannel panda_state_sub_;
+    LatestChannel control_state_sub_;
+    LatestChannel manager_state_sub_;
 
     display *display_ = nullptr;
     display_plane *overlay_plane_ = nullptr;
@@ -495,10 +495,10 @@ private:
     uint64_t latest_panda_seq_ = 0;
     uint64_t latest_control_seq_ = 0;
     uint64_t latest_manager_seq_ = 0;
-    K230ModelState latest_model_state_ {};
-    K230PandaState latest_panda_state_ {};
-    K230ControlState latest_control_state_ {};
-    K230ManagerState latest_manager_state_ {};
+    ModelState latest_model_state_ {};
+    PandaState latest_panda_state_ {};
+    ControlState latest_control_state_ {};
+    ManagerState latest_manager_state_ {};
     ParsedModelOutput latest_output_ {};
     ProjectionState latest_projection_ {};
     ProjectionState default_projection_ {};
@@ -540,7 +540,7 @@ int main()
         OverlayDisplay app(config);
         return app.run();
     } catch (const std::exception &e) {
-        std::fprintf(stderr, "k230_overlayd error: %s\n", e.what());
+        std::fprintf(stderr, "overlayd error: %s\n", e.what());
         return 1;
     }
 }

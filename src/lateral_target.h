@@ -10,7 +10,7 @@ constexpr int kLateralControlN = 17;
 
 struct LateralTarget {
     bool valid = false;
-    /* 이 계획의 근거가 된 카메라 프레임 캡처 시각(k230_now_ns 기준).
+    /* 이 계획의 근거가 된 카메라 프레임 캡처 시각(monotonic_now_ns 기준).
      * 컨트롤러가 lag 보상과 staleness gate에 쓴다. 0이면 미상(테스트 등)으로
      * 취급해 나이 보정을 건너뛴다. */
     uint64_t capture_timestamp_ns = 0;

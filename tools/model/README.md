@@ -28,7 +28,7 @@ verification numbers.
   - Imports the ONNX into nncase, applies PTQ calibration, and writes the
     `.kmodel`.
   - On this Mac the practical K230 path is the `linux/amd64` Docker image
-    `supercombo-nncase-k230:2.11.0-sdk`. The build script passes the
+    `edgepilot-nncase-k230:2.11.0-sdk`. The build script passes the
     Rosetta/.NET mitigation flags; without them the compiler spins on the ONNX
     import and then dies inside the .NET JIT.
 
@@ -41,7 +41,7 @@ python3 -m venv ~/Documents/k230/.model-venv
 
 ## Recording-driven helpers
 
-These read `k230_recordd` routes and reproduce the device's input pipeline
+These read `recordd` routes and reproduce the device's input pipeline
 (`recording_reader.py` decodes the route, `model_warp.py` is a numpy port of
 `src/model_input_transform.cc`, `route_frames.py` joins them, and
 `op094_runner.py` drives the model with the same desire/feature history the

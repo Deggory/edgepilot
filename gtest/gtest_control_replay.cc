@@ -983,8 +983,8 @@ TEST(ControlReplay, ColdStartEngageReportsHardBlock) {
 }
 
 /* t=1.0 s에 나온, 60 m 이상 뻗은 조향 가능 plan. */
-K230ModelState usable_model_state() {
-  K230ModelState state;
+ModelState usable_model_state() {
+  ModelState state;
   state.valid = 1;
   state.model_timestamp_ns = 1000000000ULL;
   state.plan_probability = 0.9f;
@@ -999,13 +999,13 @@ K230ModelState usable_model_state() {
 }
 
 // 점 수는 충분하지만 몇 미터로 주저앉은 plan.
-void collapse_plan(K230ModelState *state) {
+void collapse_plan(ModelState *state) {
   for (int i = 0; i < kTrajectorySize; ++i)
     state->plan[i].x = 1.0f + 0.1f * static_cast<float>(i);
 }
 
 TEST(ControlReplay, ModelPathAdapter) {
-  const K230ModelState state = usable_model_state();
+  const ModelState state = usable_model_state();
   const LateralPath path =
       path_from_model_state(state, 1100000000ULL, 250000000ULL);
   // 모델 경로 변환의 유효 판정
@@ -1017,7 +1017,7 @@ TEST(ControlReplay, ModelPathAdapter) {
   ASSERT_GE(path.reach_m, 60.0f);
 
   /* 정차에서 plan이 몇 미터로 주저앉으면 점 수는 충분해도 조향에 못 쓴다. */
-  K230ModelState short_state = state;
+  ModelState short_state = state;
   collapse_plan(&short_state);
   const LateralPath short_path =
       path_from_model_state(short_state, 1100000000ULL, 250000000ULL);
@@ -1030,13 +1030,13 @@ TEST(ControlReplay, ModelPathAdapter) {
  * controls_allowed=0은 절대 유지하지 않는다. */
 TEST(ControlReplay, PandaHealthHold) {
   const uint64_t t0 = 1000000000ULL;
-  K230PandaState ready;
+  PandaState ready;
   ready.timestamp_ns = t0;
   ready.connected = ready.comms_healthy = ready.tx_enabled = 1;
   ready.controls_allowed = 1;
   ready.safety_mode = kExpectedPandaSafetyModel;
   ready.safety_param = kExpectedPandaSafetyParam;
-  K230PandaState unhealthy = ready;
+  PandaState unhealthy = ready;
   unhealthy.comms_healthy = 0;
 
   PandaHealthGate gate;
@@ -1068,7 +1068,7 @@ TEST(ControlReplay, PandaHealthHold) {
 
   PandaHealthGate explicit_off;
   explicit_off.update(ready, t0, false);
-  K230PandaState off = ready;
+  PandaState off = ready;
   off.controls_allowed = 0;
   off.timestamp_ns = t0 + 10000000ULL;
   out = explicit_off.update(off, t0 + 10000000ULL, false);
@@ -1078,7 +1078,7 @@ TEST(ControlReplay, PandaHealthHold) {
   ASSERT_FALSE(out.hold_applied);
   ASSERT_TRUE(out.ready);
   ASSERT_FALSE(out.controls_allowed);
-  K230PandaState gap = off;
+  PandaState gap = off;
   gap.comms_healthy = 0;
   out = explicit_off.update(gap, t0 + 60000000ULL, false);
   // 명시적 off 뒤 상태 공백은 controls를 끈 채로 둔다
@@ -1102,14 +1102,14 @@ TEST(ControlReplay, PandaHealthHold) {
  * 덮고, 모델 freshness 타임아웃은 그대로 하드 게이트다. */
 TEST(ControlReplay, PathInvalidHold) {
   const uint64_t timeout_ns = 250000000ULL;
-  const K230ModelState good = usable_model_state();
+  const ModelState good = usable_model_state();
 
   PathHoldGate gate;
   PathHoldOutput out = gate.update(good, 1100000000ULL, timeout_ns);
   // 쓸 수 있는 plan은 홀드를 그대로 지난다
   ASSERT_TRUE(out.path.usable_for_steering);
   ASSERT_FALSE(out.hold_applied);
-  K230ModelState collapsed = good;
+  ModelState collapsed = good;
   collapsed.model_timestamp_ns = 1050000000ULL;
   collapse_plan(&collapsed);
   out = gate.update(collapsed, 1100000000ULL, timeout_ns);
@@ -1129,7 +1129,7 @@ TEST(ControlReplay, PathInvalidHold) {
 
   PathHoldGate stale_gate;
   stale_gate.update(good, 1100000000ULL, timeout_ns);
-  K230ModelState stale = collapsed;
+  ModelState stale = collapsed;
   stale.model_timestamp_ns = 1000000000ULL;
   out = stale_gate.update(stale, 1400000000ULL, timeout_ns);
   // 낡은 모델은 바로 막고 홀드하지 않는다
@@ -1138,7 +1138,7 @@ TEST(ControlReplay, PathInvalidHold) {
 
   PathHoldGate invalid_gate;
   invalid_gate.update(good, 1100000000ULL, timeout_ns);
-  K230ModelState invalid = good;
+  ModelState invalid = good;
   invalid.valid = 0;
   invalid.model_timestamp_ns = 1120000000ULL;
   out = invalid_gate.update(invalid, 1130000000ULL, timeout_ns);
@@ -1484,7 +1484,7 @@ std::vector<TimedCanFrame> read_can_fixture(const std::string &path) {
  * events/NNN.bin 하나를 이 형식으로 내보낸다. */
 TEST(ControlReplay, CanFixture) {
   if (g_fixture_path == nullptr)
-    GTEST_SKIP() << "gtest_control_replay <fixture.k230can>으로 준 경우만 돈다";
+    GTEST_SKIP() << "gtest_control_replay <fixture.can>으로 준 경우만 돈다";
   const std::vector<TimedCanFrame> records = read_can_fixture(g_fixture_path);
   ASSERT_FALSE(records.empty()) << "CAN 픽스처에 프레임이 없다";
   LateralControllerConfig config;
@@ -1576,7 +1576,7 @@ TEST(ControlReplay, CanFixture) {
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   if (argc > 2) {
-    std::fprintf(stderr, "usage: %s [fixture.k230can]\n", argv[0]);
+    std::fprintf(stderr, "usage: %s [fixture.can]\n", argv[0]);
     return 2;
   }
   if (argc == 2) g_fixture_path = argv[1];

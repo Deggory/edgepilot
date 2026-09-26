@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(supercombo_k230 LANGUAGES C CXX)
+project(edgepilot LANGUAGES C CXX)
 
-option(SUPERCOMBO_BUILD_DIAGNOSTICS "Build standalone benchmark/diagnostic utilities" OFF)
-option(SUPERCOMBO_BUILD_PANDA "Build optional panda USB/CAN bridge" ON)
-option(SUPERCOMBO_BUILD_RUNTIME "Build K230 runtime binaries" ON)
+option(EDGEPILOT_BUILD_DIAGNOSTICS "Build standalone benchmark/diagnostic utilities" OFF)
+option(EDGEPILOT_BUILD_PANDA "Build optional panda USB/CAN bridge" ON)
+option(EDGEPILOT_BUILD_RUNTIME "Build K230 runtime binaries" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,21 +46,21 @@ set(PROJECT_LOCAL_INCLUDES
 set(PROJECT_SYSTEM_INCLUDES)
 
 # 런타임(overlayd)에는 필수, 호스트 검사에서는 hud_snapshot만 쓴다.
-if(SUPERCOMBO_BUILD_RUNTIME)
+if(EDGEPILOT_BUILD_RUNTIME)
   find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 else()
   find_package(OpenCV QUIET COMPONENTS core imgproc imgcodecs)
 endif()
 
 # 호스트에서도 컴파일되는 서브시스템 라이브러리. 각 소스는 정확히 한 곳에만 나열한다.
-function(add_k230_library target)
+function(add_edgepilot_library target)
   add_library(${target} STATIC ${ARGN})
   target_include_directories(${target} PUBLIC ${PROJECT_LOCAL_INCLUDES})
   target_compile_options(${target} PRIVATE ${PROJECT_WARNINGS})
 endfunction()
 
 # 프로세스 공용 코드. glibc는 shm_open이 librt에 있고 macOS는 libc에 있다.
-add_k230_library(common
+add_edgepilot_library(common
   src/app_config.cc
   src/ipc_channels.cc
   src/ipc_messages.cc
@@ -71,9 +71,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(common PUBLIC rt pthread)
 endif()
 
-add_k230_library(utils_json src/utils_json.cc)
+add_edgepilot_library(utils_json src/utils_json.cc)
 
-add_k230_library(control_core
+add_edgepilot_library(control_core
   src/adaptive_cruise.cc
   src/control_holds.cc
   src/control_params.cc
@@ -87,32 +87,32 @@ add_k230_library(control_core
 )
 target_link_libraries(control_core PUBLIC utils_json)
 
-add_k230_library(planning
+add_edgepilot_library(planning
   src/lateral_mpc.cc
   src/lateral_planner.cc
 )
 target_link_libraries(planning PUBLIC control_core common)
 
-add_k230_library(perception
+add_edgepilot_library(perception
   src/calibration_service.cc
   src/model_input_transform.cc
   src/calibration_online.cc
 )
 target_link_libraries(perception PUBLIC common utils_json)
 
-add_k230_library(panda_codec src/panda_can_codec.cc)
+add_edgepilot_library(panda_codec src/panda_can_codec.cc)
 
 # 기록 라이터는 POSIX만 써서 호스트 검사가 디스크 포맷을 본다. 인코더는 V4L2라 recordd에만.
-add_k230_library(recording_writer src/recording_writer.cc)
+add_edgepilot_library(recording_writer src/recording_writer.cc)
 target_link_libraries(recording_writer PUBLIC common)
 
 # 오버레이 상태 매핑·알림 정책은 OpenCV가 없어 호스트 검사가 본다. 렌더러는
 # OpenCV를 쓰므로 OpenCV가 있는 곳에서만 만든다.
-add_k230_library(overlay_state src/overlay_state.cc)
+add_edgepilot_library(overlay_state src/overlay_state.cc)
 target_link_libraries(overlay_state PUBLIC common)
 
 if(OpenCV_FOUND)
-  add_k230_library(overlay src/overlay_renderer.cc)
+  add_edgepilot_library(overlay src/overlay_renderer.cc)
   target_include_directories(overlay SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(overlay PUBLIC overlay_state ${OpenCV_LIBS})
 endif()
@@ -124,13 +124,13 @@ function(add_host_tool target)
   target_compile_options(${target} PRIVATE ${PROJECT_WARNINGS})
 endfunction()
 
-if(SUPERCOMBO_BUILD_RUNTIME)
+if(EDGEPILOT_BUILD_RUNTIME)
   find_package(PkgConfig QUIET)
-  if(SUPERCOMBO_BUILD_PANDA)
+  if(EDGEPILOT_BUILD_PANDA)
     if(PkgConfig_FOUND)
       pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
     else()
-      message(FATAL_ERROR "PkgConfig is required when SUPERCOMBO_BUILD_PANDA=ON")
+      message(FATAL_ERROR "PkgConfig is required when EDGEPILOT_BUILD_PANDA=ON")
     endif()
   endif()
 
@@ -139,7 +139,7 @@ if(SUPERCOMBO_BUILD_RUNTIME)
     "${K230_SYSROOT_INCLUDE_DIR}/libdrm"
     ${OpenCV_INCLUDE_DIRS}
   )
-  if(SUPERCOMBO_BUILD_PANDA)
+  if(EDGEPILOT_BUILD_PANDA)
     list(APPEND PROJECT_SYSTEM_INCLUDES ${LIBUSB_INCLUDE_DIRS})
   endif()
 
@@ -167,10 +167,10 @@ if(SUPERCOMBO_BUILD_RUNTIME)
   endforeach()
 
   # 보드 전용 라이브러리: 시스템 헤더가 필요하다.
-  add_k230_library(mmz src/mmz.c)
+  add_edgepilot_library(mmz src/mmz.c)
   target_include_directories(mmz SYSTEM PUBLIC ${PROJECT_SYSTEM_INCLUDES})
 
-  add_k230_library(capture src/input_source.cc)
+  add_edgepilot_library(capture src/input_source.cc)
   target_include_directories(capture SYSTEM PUBLIC ${PROJECT_SYSTEM_INCLUDES})
 
   # 보드 실행 파일: 시스템 헤더, 링크 경로, 공용 시스템 라이브러리.
@@ -194,43 +194,43 @@ if(SUPERCOMBO_BUILD_RUNTIME)
     )
   endfunction()
 
-  add_executable(k230_camerad src/k230_camerad.cc)
-  configure_k230_target(k230_camerad common capture mmz ${K230_SHARED_LIBS})
+  add_executable(camerad src/camerad.cc)
+  configure_k230_target(camerad common capture mmz ${K230_SHARED_LIBS})
 
-  add_executable(k230_modeld
-    src/k230_modeld.cc
+  add_executable(modeld
+    src/modeld.cc
     src/gpu_warp.cc
     src/supercombo_model.cc
   )
-  configure_k230_target(k230_modeld common perception capture ${NNCASE_STATIC_LIBS} mmz
+  configure_k230_target(modeld common perception capture ${NNCASE_STATIC_LIBS} mmz
     ${K230_SHARED_LIBS} ${K230_VGLITE_LIB})
 
-  add_executable(k230_overlayd
-    src/k230_overlayd.cc
+  add_executable(overlayd
+    src/overlayd.cc
     src/piezo_buzzer.c
     src/system_monitor.cc
   )
-  configure_k230_target(k230_overlayd common overlay mmz ${K230_SHARED_LIBS})
+  configure_k230_target(overlayd common overlay mmz ${K230_SHARED_LIBS})
 
-  add_executable(k230_recordd
-    src/k230_recordd.cc
+  add_executable(recordd
+    src/recordd.cc
     src/mvx_v4l2_encoder.cc
   )
-  configure_k230_target(k230_recordd common recording_writer utils_json)
+  configure_k230_target(recordd common recording_writer utils_json)
 
-  if(SUPERCOMBO_BUILD_PANDA)
-    add_executable(k230_pandad
-      src/k230_pandad.cc
+  if(EDGEPILOT_BUILD_PANDA)
+    add_executable(pandad
+      src/pandad.cc
       src/panda_client.cc
     )
-    configure_k230_target(k230_pandad common panda_codec ${LIBUSB_LIBRARIES})
+    configure_k230_target(pandad common panda_codec ${LIBUSB_LIBRARIES})
 
-    add_executable(k230_controlsd src/k230_controlsd.cc)
-    configure_k230_target(k230_controlsd common control_core planning)
+    add_executable(controlsd src/controlsd.cc)
+    configure_k230_target(controlsd common control_core planning)
   endif()
 endif()
 
-if(SUPERCOMBO_BUILD_DIAGNOSTICS)
+if(EDGEPILOT_BUILD_DIAGNOSTICS)
   # 단위 테스트는 호스트에서만 빌드·실행한다. 교차 빌드에는 gtest를 링크할 pthread도,
   # 테스트를 돌릴 곳도 없다. enable_testing()은 루트에 있어야 ctest가 하위 폴더를 찾는다.
   if(NOT CMAKE_CROSSCOMPILING)
@@ -240,8 +240,8 @@ if(SUPERCOMBO_BUILD_DIAGNOSTICS)
   add_subdirectory(diagnostics)
 endif()
 
-if(SUPERCOMBO_BUILD_RUNTIME)
-  install(TARGETS k230_camerad k230_modeld k230_overlayd k230_recordd
+if(EDGEPILOT_BUILD_RUNTIME)
+  install(TARGETS camerad modeld overlayd recordd
     RUNTIME DESTINATION .
   )
   install(FILES
@@ -249,10 +249,10 @@ if(SUPERCOMBO_BUILD_RUNTIME)
     assets/ui/traffic_go_green_retro-270x155-v3.png
     DESTINATION assets/ui
   )
-  if(SUPERCOMBO_BUILD_PANDA)
-    install(TARGETS k230_pandad k230_controlsd RUNTIME DESTINATION .)
+  if(EDGEPILOT_BUILD_PANDA)
+    install(TARGETS pandad controlsd RUNTIME DESTINATION .)
   endif()
-  install(PROGRAMS scripts/k230_manager.py scripts/k230_param_server.py
+  install(PROGRAMS scripts/manager.py scripts/param_server.py
     scripts/display_control.py DESTINATION .)
   install(FILES scripts/requirements-param-server.txt DESTINATION .)
   install(DIRECTORY models DESTINATION . OPTIONAL FILES_MATCHING PATTERN "*.kmodel")

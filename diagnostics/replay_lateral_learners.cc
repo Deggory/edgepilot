@@ -112,28 +112,28 @@ int main(int argc, char **argv) {
   double first_t = -1.0, last_t = 0.0;
   for (const std::string &path : events) {
     std::ifstream file(path, std::ios::binary);
-    K230EventFileHeader hdr{};
+    EventFileHeader hdr{};
     file.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
     if (!file || std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
     file.seekg(hdr.header_size);
-    K230EventRecordHeader rh{};
+    EventRecordHeader rh{};
     while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-      if (rh.type < 1 || rh.type > static_cast<uint16_t>(K230RecordType::LearnerState) ||
+      if (rh.type < 1 || rh.type > static_cast<uint16_t>(RecordType::LearnerState) ||
           rh.payload_size > (1U << 20))
         break;
       buf.resize(rh.payload_size);
       if (!file.read(buf.data(), rh.payload_size)) break;
       const double record_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
       const double now_s = std::max(record_s, latest_can_s);
-      if (rh.type == static_cast<uint16_t>(K230RecordType::CanRx)) {
+      if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
         latest_can_s = std::max(latest_can_s, record_s);
-        K230RecordedCanBatchHeader batch{};
+        RecordedCanBatchHeader batch{};
         if (rh.payload_size < sizeof(batch)) continue;
         std::memcpy(&batch, buf.data(), sizeof(batch));
         size_t offset = sizeof(batch);
         for (uint32_t i = 0; i < batch.count; ++i) {
-          if (offset + sizeof(K230RecordedCanFrame) > rh.payload_size) break;
-          K230RecordedCanFrame frame{};
+          if (offset + sizeof(RecordedCanFrame) > rh.payload_size) break;
+          RecordedCanFrame frame{};
           std::memcpy(&frame, buf.data() + offset, sizeof(frame));
           offset += sizeof(frame);
           if (frame.data_len > 8) continue;
@@ -146,8 +146,8 @@ int main(int argc, char **argv) {
         continue;
       }
       // 제어 틱(ControlState, 100 Hz)마다 한 번 넣는다. controlsd가 부를 자리와 같다.
-      if (rh.type != static_cast<uint16_t>(K230RecordType::ControlState)) continue;
-      K230ControlState cs{};
+      if (rh.type != static_cast<uint16_t>(RecordType::ControlState)) continue;
+      ControlState cs{};
       std::memcpy(&cs, buf.data(), std::min(sizeof(cs), buf.size()));
       const bool pressed = std::abs(cs.driver_torque) > sp.steering_pressed_threshold;
       pressed_counter = std::clamp(pressed_counter + (pressed ? 1 : -1), 0,

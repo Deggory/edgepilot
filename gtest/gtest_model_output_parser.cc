@@ -1,5 +1,5 @@
 /* supercombo(openpilot v0.9.4) raw 출력 파서와 시간축 입력 규약(desire 펄스, 특징 이력).
- * SCODMP1 덤프(SUPERCOMBO_RAW_DUMP)를 인자로 주면 테스트 대신 첫 프레임을 파싱해 출력한다. */
+ * SCODMP1 덤프(EDGEPILOT_RAW_DUMP)를 인자로 주면 테스트 대신 첫 프레임을 파싱해 출력한다. */
 #include "model_output.h"
 #include "model_temporal.h"
 

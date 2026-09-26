@@ -171,7 +171,7 @@ RecordingWriter::RecordingWriter(std::string root, std::string params_directory,
                                  unsigned bitrate)
     : root_(std::move(root)), params_directory_(std::move(params_directory)),
       width_(width), height_(height), fps_(fps), bitrate_(bitrate) {
-  const char *staging = std::getenv("K230_RECORD_STAGING");
+  const char *staging = std::getenv("EDGEPILOT_RECORD_STAGING");
   staging_root_ = staging && staging[0] != '\0' ? staging : "/tmp/record_staging";
   /* 이전 세션이 route 도중 죽었으면 스테이징 잔여가 tmpfs(램)를 계속
    * 점유한다. 시작할 때 남아 있는 route를 SD로 회수한다. */
@@ -316,7 +316,7 @@ void RecordingWriter::set_codec_config(const uint8_t *data, size_t size) {
   enqueue(std::move(write));
 }
 
-bool RecordingWriter::open_segment(const K230RoadAiFrame &frame) {
+bool RecordingWriter::open_segment(const RoadAiFrame &frame) {
   std::ostringstream number;
   number << std::setw(3) << std::setfill('0') << segment_index_;
   segment_relative_ = "segments/" + number.str();
@@ -334,8 +334,8 @@ bool RecordingWriter::open_segment(const K230RoadAiFrame &frame) {
     std::fwrite(codec_config_.data(), 1, codec_config_.size(), video_file_);
     video_offset_ += codec_config_.size();
   }
-  K230FrameIndexHeader header;
-  header.record_size = sizeof(K230FrameIndexRecord);
+  FrameIndexHeader header;
+  header.record_size = sizeof(FrameIndexRecord);
   header.width = width_;
   header.height = height_;
   header.fps = fps_;
@@ -347,7 +347,7 @@ bool RecordingWriter::open_segment(const K230RoadAiFrame &frame) {
   return true;
 }
 
-void RecordingWriter::write_encoded_frame(const K230RoadAiFrame &frame,
+void RecordingWriter::write_encoded_frame(const RoadAiFrame &frame,
                                            const uint8_t *data, size_t size,
                                            bool keyframe) {
   if (!requested_enabled_.load() || !data || size == 0) return;
@@ -359,7 +359,7 @@ void RecordingWriter::write_encoded_frame(const K230RoadAiFrame &frame,
   enqueue(std::move(write));
 }
 
-void RecordingWriter::write_encoded_frame_impl(const K230RoadAiFrame &frame,
+void RecordingWriter::write_encoded_frame_impl(const RoadAiFrame &frame,
                                                 const uint8_t *data, size_t size,
                                                 bool keyframe) {
   if (!event_file_) return;
@@ -386,7 +386,7 @@ void RecordingWriter::write_encoded_frame_impl(const K230RoadAiFrame &frame,
     std::fprintf(stderr, "recordd: video write failed: %s\n", std::strerror(errno));
     return;
   }
-  K230FrameIndexRecord index;
+  FrameIndexRecord index;
   index.frame_id = frame.frame_id;
   index.capture_timestamp_ns = frame.timestamp_ns;
   index.encode_index = total_video_frames_.load();
@@ -407,7 +407,7 @@ bool RecordingWriter::open_event_chunk(uint64_t now_ns) {
   event_file_ = open_buffered(route_path_ + "/events/" + number.str() + ".bin");
   if (!event_file_) return false;
   event_chunk_start_ns_ = now_ns;
-  K230EventFileHeader header;
+  EventFileHeader header;
   header.route_start_ns = route_start_ns_;
   if (std::fwrite(&header, sizeof(header), 1, event_file_) != 1) {
     std::fclose(event_file_);
@@ -427,7 +427,7 @@ void RecordingWriter::close_event_chunk() {
                       final_route_path_ + "/events/" + number.str() + ".bin");
 }
 
-bool RecordingWriter::write_event_header(K230RecordType type, uint64_t timestamp_ns,
+bool RecordingWriter::write_event_header(RecordType type, uint64_t timestamp_ns,
                                           uint32_t payload_size) {
   if (!event_file_) return false;
   if (timestamp_ns >= event_chunk_start_ns_ &&
@@ -440,30 +440,30 @@ bool RecordingWriter::write_event_header(K230RecordType type, uint64_t timestamp
       return false;
     }
   }
-  K230EventRecordHeader header;
+  EventRecordHeader header;
   header.timestamp_ns = timestamp_ns;
   header.type = static_cast<uint16_t>(type);
   header.payload_size = payload_size;
   return std::fwrite(&header, sizeof(header), 1, event_file_) == 1;
 }
 
-/* 배치를 큐에 넣기 전에 디스크 형식(K230RecordedCanBatchHeader + 프레임)으로
+/* 배치를 큐에 넣기 전에 디스크 형식(RecordedCanBatchHeader + 프레임)으로
  * 직렬화한다. 이후 경로는 상태 스냅샷과 같다. */
-void RecordingWriter::write_can(K230RecordType type, const K230CanBatch &batch) {
+void RecordingWriter::write_can(RecordType type, const CanBatch &batch) {
   if (!requested_enabled_.load() ||
-      (type != K230RecordType::CanRx && type != K230RecordType::CanTx)) return;
-  const uint32_t count = std::min<uint32_t>(batch.count, kK230CanBatchMaxFrames);
+      (type != RecordType::CanRx && type != RecordType::CanTx)) return;
+  const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
   PendingWrite write;
   write.kind = PendingWrite::Kind::Can;
   write.record_type = type;
   write.timestamp_ns = batch.timestamp_ns;
-  write.data.resize(sizeof(K230RecordedCanBatchHeader) + count * sizeof(K230RecordedCanFrame));
-  const K230RecordedCanBatchHeader batch_header{count, batch.dropped};
+  write.data.resize(sizeof(RecordedCanBatchHeader) + count * sizeof(RecordedCanFrame));
+  const RecordedCanBatchHeader batch_header{count, batch.dropped};
   std::memcpy(write.data.data(), &batch_header, sizeof(batch_header));
   uint8_t *out = write.data.data() + sizeof(batch_header);
-  for (uint32_t index = 0; index < count; ++index, out += sizeof(K230RecordedCanFrame)) {
-    const K230CanFrame &source = batch.frames[index];
-    K230RecordedCanFrame recorded;
+  for (uint32_t index = 0; index < count; ++index, out += sizeof(RecordedCanFrame)) {
+    const IpcCanFrame &source = batch.frames[index];
+    RecordedCanFrame recorded;
     recorded.address = source.address;
     recorded.src = source.src;
     recorded.bus_time = source.bus_time;
@@ -475,7 +475,7 @@ void RecordingWriter::write_can(K230RecordType type, const K230CanBatch &batch) 
   enqueue(std::move(write));
 }
 
-void RecordingWriter::write_state(K230RecordType type, uint64_t timestamp_ns,
+void RecordingWriter::write_state(RecordType type, uint64_t timestamp_ns,
                                   const void *data, size_t size) {
   if (!requested_enabled_.load() || !data ||
       size == 0 || size > UINT32_MAX) return;
@@ -488,7 +488,7 @@ void RecordingWriter::write_state(K230RecordType type, uint64_t timestamp_ns,
   enqueue(std::move(write));
 }
 
-void RecordingWriter::write_record_impl(K230RecordType type, uint64_t timestamp_ns,
+void RecordingWriter::write_record_impl(RecordType type, uint64_t timestamp_ns,
                                         const void *data, size_t size) {
   if (!event_file_) return;
   if (!write_event_header(type, timestamp_ns, static_cast<uint32_t>(size))) return;
@@ -516,7 +516,7 @@ void RecordingWriter::write_manifest(bool complete) const {
   if (route_path_.empty()) return;
   std::ofstream manifest(route_path_ + "/manifest.json", std::ios::trunc);
   manifest << "{\n"
-           << "  \"version\": " << kK230RecordingVersion << ",\n"
+           << "  \"version\": " << kRecordingVersion << ",\n"
            << "  \"complete\": " << (complete ? "true" : "false") << ",\n"
            << "  \"video_codec\": \"hevc\",\n"
            << "  \"width\": " << width_ << ",\n"

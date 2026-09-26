@@ -21,7 +21,7 @@ closed-loop 100프레임(런타임 end-to-end)에서 차선 y MAE 0.129→0.102 
 - open-loop 600: 6개 루트의 held-out 구간(보정에 쓰지 않은 세그먼트) 각 100프레임 연속.
   `day_0816`(고속 60 km/h), `day_0830hw`(고속도로), `eve_0830`, `eve_0903`(저녁 시내), `night_0830a`(야간), `night_0901`(야간 정차).
   FP32 러너로 워밍업한 뒤 프레임별 FP32 desire/features_buffer를 주입하므로 변환 오차만 측정한다(`run_kmodel_sequence`, K230MSQ1).
-- closed-loop 100: `eve_0903` 루트 SCNV12 replay를 보드 `k230_modeld`(`SUPERCOMBO_REPLAY_NV12`, `SUPERCOMBO_CALIB_AUTO=0`)로 재생,
+- closed-loop 100: `eve_0903` 루트 SCNV12 replay를 보드 `modeld`(`EDGEPILOT_REPLAY_NV12`, `EDGEPILOT_CALIB_AUTO=0`)로 재생,
   워프·시간 입력·모델을 모두 보드가 처리한 출력을 호스트 FP32와 비교한다.
 - 시뮬레이터(`nncase.simulator.k230.sc`)와 보드 출력은 비트 동일(배포 모델로 확인). 수치는 모두 보드 실측.
 

@@ -44,13 +44,13 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 
 ## 인자를 주면 도는 모드
 
-- `gtest_control_replay <fixture.k230can>`: `ControlReplay.CanFixture`가 녹화한 CAN을
+- `gtest_control_replay <fixture.can>`: `ControlReplay.CanFixture`가 녹화한 CAN을
   컨트롤러에 흘려 목표 곡률을 openpilot 참조식과 대조하고, LKAS/MDPS/CLU11 주기와 토크
   범위를 본다. 인자가 없으면 건너뛴다. 픽스처는 `tools/control/export_can_fixture.py`가
   녹화 `events/NNN.bin` 하나로 만든다. 60초 연속 주행 구간이어야 하며(활성 5900틱 초과,
   토크 > 0) 정차 구간은 실패한다.
 - `gtest_model_output_parser <SCODMP1 덤프>`: 테스트 대신 첫 프레임을 파싱해 출력한다.
-  덤프는 `k230_modeld`를 `SUPERCOMBO_RAW_DUMP`로 돌려 만든다
+  덤프는 `modeld`를 `EDGEPILOT_RAW_DUMP`로 돌려 만든다
   ([런타임 옵션](../docs/runtime-options.md)).
 
 ## 테스트 추가

@@ -11,9 +11,9 @@ their options, and how to build them are listed in
 
 `hud_snapshot` renders the overlay renderer off-line for the idle / standby /
 drive / busy / depart / fault scenarios, writes each `480x800` frame as a
-`K230ARGB` file and prints draw timings. It links OpenCV like `k230_overlayd`,
+`K230ARGB` file and prints draw timings. It links OpenCV like `overlayd`,
 so build it where OpenCV is installed: the board-native CMake build with
-`-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`, or a Linux host.
+`-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`, or a Linux host.
 
 ```sh
 ./hud_snapshot --assets assets/ui --out /tmp/hud
@@ -21,7 +21,7 @@ python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]
 ```
 
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
-`K230ModelState` / `K230ControlState` pair instead of the synthetic scene;
+`ModelState` / `ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
 pair, plus the matching camera frame, from a `recordd` route. The `compose`
 command rotates each frame back to the `800x480` view and, with a camera frame,
@@ -29,18 +29,18 @@ composites it the way the panel shows it.
 
 ## NV12 replay
 
-`k230_modeld` can run headless from a recorded route: replay mode opens neither
+`modeld` can run headless from a recorded route: replay mode opens neither
 the camera nor the display and feeds the same NV12 path as live capture, so it
 validates model execution and online calibration from stored segments.
 
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
 python3 tools/model/make_replay.py --route recordings/<route> --out /tmp/replay_nv12 --frames 120
-scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.111:/root/supercombo_k230/
+scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.111:/root/edgepilot/
 
 # board
-SUPERCOMBO_REPLAY_NV12=/root/supercombo_k230/replay.scnv12 \
-  ./k230_modeld models/supercombo.kmodel 0
+EDGEPILOT_REPLAY_NV12=/root/edgepilot/replay.scnv12 \
+  ./modeld models/supercombo.kmodel 0
 ```
 
 ## Model swap verification
@@ -57,10 +57,10 @@ python tools/model/make_replay.py \
   --rpy "$(python3 -c 'import json;print(",".join(map(str,json.load(open("params/calibration.json"))["rpy_rad"])))')"
 
 # board: same frames through the runtime, dumping raw outputs
-SUPERCOMBO_REPLAY_NV12=/root/verify/replay.scnv12 \
-SUPERCOMBO_RAW_DUMP=/root/verify/board_raw.bin \
-SUPERCOMBO_CALIB_AUTO=0 \
-  ./k230_modeld model/<candidate>.kmodel 0
+EDGEPILOT_REPLAY_NV12=/root/verify/replay.scnv12 \
+EDGEPILOT_RAW_DUMP=/root/verify/board_raw.bin \
+EDGEPILOT_CALIB_AUTO=0 \
+  ./modeld model/<candidate>.kmodel 0
 ```
 
 The `--rpy` value must be the board's stored calibration, because on the board

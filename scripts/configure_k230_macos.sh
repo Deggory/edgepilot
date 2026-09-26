@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # macOS 호스트에서 K230 런타임 교차 빌드를 구성한다. Homebrew의 CMake·LLVM(Clang)과 작업공간의
-# Xuantie sysroot·보드 라이브러리·RISC-V 링커를 쓴다. 경로는 K230_* 환경 변수로 바꿀 수 있다.
+# Xuantie sysroot·보드 라이브러리·RISC-V 링커를 쓴다. 경로는 EDGEPILOT_* 환경 변수로 바꿀 수 있다.
 # 사용: scripts/configure_k230_macos.sh [빌드 디렉터리]   (기본 build/, 이후 cd build && make -j2)
 set -euo pipefail
 
@@ -21,8 +21,8 @@ opencv_dir="${K230_OPENCV_DIR:-${workspace_dir}/third-party/opencv}"
 nncase_dir="${NNCASE_DEPS_DIR:-${repo_dir}/deps}"
 pkg_config="${PKG_CONFIG_EXECUTABLE:-${repo_dir}/tools/target-pkg-config}"
 riscv_ld="${K230_RISCV_LD:-${workspace_dir}/host-tools/binutils-build-riscv/ld/ld-new}"
-panda_build="${SUPERCOMBO_BUILD_PANDA:-ON}"
-diagnostics_build="${SUPERCOMBO_BUILD_DIAGNOSTICS:-OFF}"
+panda_build="${EDGEPILOT_BUILD_PANDA:-ON}"
+diagnostics_build="${EDGEPILOT_BUILD_DIAGNOSTICS:-OFF}"
 
 # Xuantie GCC 버전. 툴체인을 올리면 이 값 하나만 바꾼다.
 gcc_version="${K230_XUANTIE_GCC_VERSION:-$(basename "$(ls -d "${toolchain_dir}"/lib/gcc/riscv64-unknown-linux-gnu/*/ 2>/dev/null | head -1)" 2>/dev/null)}"
@@ -104,6 +104,6 @@ mkdir -p "${build_dir}"
   -DNNCASE_DEPS_DIR="${nncase_dir}" \
   -DOpenCV_DIR="${opencv_dir}/cmake" \
   -DPKG_CONFIG_EXECUTABLE="${pkg_config}" \
-  -DSUPERCOMBO_BUILD_RUNTIME=ON \
-  -DSUPERCOMBO_BUILD_PANDA="${panda_build}" \
-  -DSUPERCOMBO_BUILD_DIAGNOSTICS="${diagnostics_build}"
+  -DEDGEPILOT_BUILD_RUNTIME=ON \
+  -DEDGEPILOT_BUILD_PANDA="${panda_build}" \
+  -DEDGEPILOT_BUILD_DIAGNOSTICS="${diagnostics_build}"

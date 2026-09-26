@@ -25,12 +25,12 @@ int main()
 
     try {
         AppConfig config = AppConfig::from_env_defaults();
-        K230LatestChannel frame_pub;
-        K230FrameRing frame_ring;
+        LatestChannel frame_pub;
+        FrameRing frame_ring;
 
-        if (!frame_pub.open(kK230RoadAiFrameTopic, sizeof(K230RoadAiFrame), true))
+        if (!frame_pub.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true))
             throw std::runtime_error("open roadAiFrame ipc failed");
-        if (!frame_ring.open(true, config.nv12_width, config.nv12_height, kK230FrameSlots))
+        if (!frame_ring.open(true, config.nv12_width, config.nv12_height, kFrameSlots))
             throw std::runtime_error("open road ai frame ring failed");
 
         std::fprintf(stderr, "camerad: opening /dev/video2\n");
@@ -69,9 +69,9 @@ int main()
                 continue;
             }
 
-            K230RoadAiFrame msg;
+            RoadAiFrame msg;
             msg.frame_id = frame_id;
-            msg.timestamp_ns = k230_now_ns();
+            msg.timestamp_ns = monotonic_now_ns();
             msg.slot = slot;
             msg.width = frame.width;
             msg.height = frame.height;

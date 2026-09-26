@@ -177,7 +177,7 @@ SupercomboModel::SupercomboModel(const char *kmodel_file, const AppConfig &confi
  * 물리주소에 직접 묶으므로 복사가 없다. 실패하면 CPU 경로를 그대로 쓴다. */
 void SupercomboModel::setup_gpu(const AppConfig &config)
 {
-    if (env_flag("SUPERCOMBO_WARP_CPU", false))
+    if (env_flag("EDGEPILOT_WARP_CPU", false))
         return;
 
     gpu_ = GpuWarp::create(static_cast<int>(config.nv12_width),
@@ -303,7 +303,7 @@ bool SupercomboModel::run_frame(const uint8_t *nv12, int src_w, int src_h,
         return false;
 
     const bool profile = profile_;
-    const uint64_t t1 = profile ? k230_now_ns() : 0;
+    const uint64_t t1 = profile ? monotonic_now_ns() : 0;
     if (gpu) {
         if (!prepare_images_gpu(nv12)) return false;
     } else {
@@ -312,20 +312,20 @@ bool SupercomboModel::run_frame(const uint8_t *nv12, int src_w, int src_h,
         hrt::sync(input_tensors_[0], sync_op_t::sync_write_back, true).expect("sync input 0 failed");
         hrt::sync(input_tensors_[1], sync_op_t::sync_write_back, true).expect("sync input 1 failed");
     }
-    const uint64_t t2 = profile ? k230_now_ns() : 0;
+    const uint64_t t2 = profile ? monotonic_now_ns() : 0;
 
     if (!write_temporal_inputs()) return false;
-    const uint64_t t3 = profile ? k230_now_ns() : 0;
+    const uint64_t t3 = profile ? monotonic_now_ns() : 0;
 
     run();
-    const uint64_t t4 = profile ? k230_now_ns() : 0;
+    const uint64_t t4 = profile ? monotonic_now_ns() : 0;
     if (!advance_image_history(0) || !advance_image_history(1)) return false;
-    const uint64_t t5 = profile ? k230_now_ns() : 0;
+    const uint64_t t5 = profile ? monotonic_now_ns() : 0;
     if (!copy_outputs(raw_output)) return false;
     temporal_.push_feature_history(raw_output.data(), raw_output.size());
 
     if (profile) {
-        const uint64_t t6 = k230_now_ns();
+        const uint64_t t6 = monotonic_now_ns();
         profile_stats().add(t2 - t1, t3 - t2, t4 - t3, t5 - t4, t6 - t5, t6 - t1);
     }
 

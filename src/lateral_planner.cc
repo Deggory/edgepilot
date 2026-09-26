@@ -81,7 +81,7 @@ public:
     path_offset_m_ = path_offset_m;
   }
 
-  void parse(const K230ModelState &model) {
+  void parse(const ModelState &model) {
     for (int i = 0; i < kTrajectorySize; ++i) {
       lane_t_[i] = model.lane_t[i];
       lane_x_[i] = model.lanes[1][i].x;
@@ -257,7 +257,7 @@ struct LateralPlanner::Impl {
               (steering.wheelbase_m * tire_rear);
   }
 
-  LateralTarget update(const K230ModelState &model,
+  LateralTarget update(const ModelState &model,
                        const VehicleCanState &vehicle, float v_ego,
                        float measured_curvature, bool active,
                        float output_scale) {
@@ -507,7 +507,7 @@ void LateralPlanner::update_params(const SteeringParams &params,
   impl_->update_params(params, driving);
 }
 
-LateralTarget LateralPlanner::update(const K230ModelState &model,
+LateralTarget LateralPlanner::update(const ModelState &model,
                                               const VehicleCanState &vehicle,
                                               float v_ego,
                                               float measured_curvature,

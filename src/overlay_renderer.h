@@ -10,7 +10,7 @@
 #include <string>
 
 /* 깜빡이 애니메이션은 켜진 순간을 0으로 하는 단계 수로 그린다. 단계 진행은
- * k230_overlayd가 시각 기준으로 계산하므로 재그리기 빈도에 영향받지 않는다. */
+ * overlayd가 시각 기준으로 계산하므로 재그리기 빈도에 영향받지 않는다. */
 constexpr int kTurnSignalSteps = 25;
 
 /* ARGB8888 CPU 버퍼. 렌더러는 DRM 헤더 없이 이 뷰만 본다. */

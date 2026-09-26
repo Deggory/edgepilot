@@ -4,17 +4,17 @@
 
 ## Runtime
 
-- `k230_pandad` owns Panda USB through `libusb` and publishes CAN batches to
-  the ordered `/dev/shm/k230_can` shared-memory ring queue.
-- `k230_controlsd` runs the standalone K7 controller at 100 Hz and publishes
-  generated CAN batches to the ordered `/dev/shm/k230_sendcan` ring queue.
-- `k230_pandad` is the final TX gate. `K230_PANDA_TX=0` is the default and
+- `pandad` owns Panda USB through `libusb` and publishes CAN batches to
+  the ordered `/dev/shm/edgepilot_can` shared-memory ring queue.
+- `controlsd` runs the standalone K7 controller at 100 Hz and publishes
+  generated CAN batches to the ordered `/dev/shm/edgepilot_sendcan` ring queue.
+- `pandad` is the final TX gate. `EDGEPILOT_PANDA_TX=0` is the default and
   prevents every generated frame from reaching USB.
 - No openpilot checkout or Python DBC extension is required on the K230 board.
 
 The CAN queues have 64 slots, reject new batches instead of overwriting older
 ones when full, and are drained in sequence order. Producer startup resets its
-own queue generation, and `k230_pandad` drops TX batches older than 100 ms.
+own queue generation, and `pandad` drops TX batches older than 100 ms.
 The one-second daemon logs expose queue depth, full/stale counts, Panda CAN
 errors, blocked frames, heartbeat status, USB retries, and malformed RX batches.
 
@@ -36,7 +36,7 @@ Runtime parameters live in `params/`; see [params/README.md](../params/README.md
 ## Build
 
 Build and upload as in [Build and deploy](build-and-deploy.md). The board image's
-Buildroot configuration must include `BR2_PACKAGE_LIBUSB=y` for `k230_pandad`.
+Buildroot configuration must include `BR2_PACKAGE_LIBUSB=y` for `pandad`.
 
 ## Offline Validation
 
@@ -45,8 +45,8 @@ through the controller (see [gtest/README.md](../gtest/README.md) for why a park
 chunk fails):
 
 ```sh
-python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.k230can
-./build-host/bin/gtest_control_replay drive.k230can
+python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.can
+./build-host/bin/gtest_control_replay drive.can
 ```
 
 The 60.001 second K7 YG HEV fixture contains 43,273 CAN records. The expected
@@ -58,10 +58,10 @@ openpilot reference.
 ## Shadow Run
 
 ```sh
-K230_ENABLE_CONTROL=1 \
-K230_PANDA_TX=0 \
-K230_PANDA_SAFETY=nooutput \
-./scripts/k230_manager.py models/supercombo.kmodel 0
+EDGEPILOT_ENABLE_CONTROL=1 \
+EDGEPILOT_PANDA_TX=0 \
+EDGEPILOT_PANDA_SAFETY=nooutput \
+./scripts/manager.py models/supercombo.kmodel 0
 ```
 
 Use `hyundaiCommunity` only after the connected vehicle fingerprint and Panda
@@ -73,13 +73,13 @@ vehicle report `mdpsBus=1`, `sasBus=1`, and `hyundaiCommunity:0`.
 Vehicle transmission requires every explicit setting below:
 
 ```sh
-K230_ENABLE_CONTROL=1
-K230_PANDA_TX=1
-K230_PANDA_SAFETY=hyundaiCommunity
-K230_PANDA_ENGAGED=1
+EDGEPILOT_ENABLE_CONTROL=1
+EDGEPILOT_PANDA_TX=1
+EDGEPILOT_PANDA_SAFETY=hyundaiCommunity
+EDGEPILOT_PANDA_ENGAGED=1
 ```
 
-Keep `K230_FORCE_ENGAGED=0` in a vehicle. Engagement must come from the
+Keep `EDGEPILOT_FORCE_ENGAGED=0` in a vehicle. Engagement must come from the
 vehicle SET/CANCEL button state. Before any closed-course TX test, verify Panda
 USB RX, ignition, safety mode/param, `controls_allowed`, CAN freshness, checksum
 counters, and zero blocked/error counts in shadow mode.

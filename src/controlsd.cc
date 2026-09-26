@@ -112,31 +112,31 @@ bool load_runtime_params(const std::string &steering_path,
   return true;
 }
 
-bool open_when_ready(K230LatestChannel *channel, const char *topic,
+bool open_when_ready(LatestChannel *channel, const char *topic,
                      size_t size, bool create) {
   while (!g_stop) {
     if (channel->open(topic, size, create)) return true;
-    std::fprintf(stderr, "k230_controlsd: waiting for %s\n", topic);
+    std::fprintf(stderr, "controlsd: waiting for %s\n", topic);
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   return false;
 }
 
-bool open_when_ready(K230CanQueue *queue, const char *topic, bool create) {
+bool open_when_ready(CanQueue *queue, const char *topic, bool create) {
   while (!g_stop) {
-    if (queue->open(topic, kK230CanQueueSlots, create)) return true;
-    std::fprintf(stderr, "k230_controlsd: waiting for %s\n", topic);
+    if (queue->open(topic, kCanQueueSlots, create)) return true;
+    std::fprintf(stderr, "controlsd: waiting for %s\n", topic);
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   return false;
 }
 
-void apply_can_batch(const K230CanBatch &batch, double now_s,
+void apply_can_batch(const CanBatch &batch, double now_s,
                      VehicleCanState *vehicle) {
   if (!batch.valid) return;
-  const uint32_t count = std::min<uint32_t>(batch.count, kK230CanBatchMaxFrames);
+  const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
   for (uint32_t i = 0; i < count; ++i) {
-    const K230CanFrame &frame = batch.frames[i];
+    const IpcCanFrame &frame = batch.frames[i];
     if (frame.flags != 0 || frame.data_len > 8 || frame.src > 7) continue;
     std::array<uint8_t, 8> data = {};
     std::copy_n(frame.data, frame.data_len, data.begin());
@@ -146,8 +146,8 @@ void apply_can_batch(const K230CanBatch &batch, double now_s,
   }
 }
 
-K230CanBatch make_send_batch(const std::vector<CanFrame> &frames) {
-  return k230_make_can_batch(frames, [](K230CanFrame *dst, const CanFrame &src) {
+CanBatch make_send_batch(const std::vector<CanFrame> &frames) {
+  return make_can_batch(frames, [](IpcCanFrame *dst, const CanFrame &src) {
     dst->address = src.address;
     dst->src = src.bus;
     dst->data_len = src.length;
@@ -194,7 +194,7 @@ public:
     std::string error;
     if (!load_runtime_params(steering_path_, driving_path_, adaptive_cruise_path_,
                              &candidate, &adaptive_candidate, &error)) {
-      std::fprintf(stderr, "k230_controlsd: params reload rejected: %s\n",
+      std::fprintf(stderr, "controlsd: params reload rejected: %s\n",
                    error.c_str());
       return false;
     }
@@ -203,7 +203,7 @@ public:
     *adaptive_cruise_config = adaptive_candidate;
     ++generation_;
     std::fprintf(stderr,
-                 "k230_controlsd: params reloaded generation=%u "
+                 "controlsd: params reloaded generation=%u "
                  "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs "
                  "decel=%.1fkph/s\n",
                  generation_, config->driving_params.mdps_speed_spoof_kph,
@@ -245,15 +245,15 @@ struct EngageEvents {
   bool previous_active = false;
 
   void update(const LateralControlResult &result, const VehicleCanState &vehicle,
-              const PandaGateOutput &panda, const K230PandaState &panda_state,
-              const PathHoldOutput &held, const K230ModelState &model,
+              const PandaGateOutput &panda, const PandaState &panda_state,
+              const PathHoldOutput &held, const ModelState &model,
               uint64_t now_ns) {
     if (result.engage_rejected) {
       if (++reject_id == 0) reject_id = 1;
       std::snprintf(reject_block, sizeof(reject_block), "%s",
                     block_reason_name(result.active_block));
       std::fprintf(stderr,
-                   "k230_controlsd: engage rejected block=%s event=%u\n",
+                   "controlsd: engage rejected block=%s event=%u\n",
                    reject_block, reject_id);
     } else if (have_previous && result.engaged != previous_engaged) {
       if (result.engaged) {
@@ -262,7 +262,7 @@ struct EngageEvents {
         if (++disengage_id == 0) disengage_id = 1;
       }
       std::fprintf(stderr,
-                   "k230_controlsd: engaged transition %u->%u "
+                   "controlsd: engaged transition %u->%u "
                    "active=%u block=%s button=%d gear=%d "
                    "panda=%u/%u\n",
                    previous_engaged ? 1U : 0U, result.engaged ? 1U : 0U,
@@ -273,7 +273,7 @@ struct EngageEvents {
     }
     if (have_previous && result.active != previous_active) {
       std::fprintf(stderr,
-                   "k230_controlsd: active transition %u->%u "
+                   "controlsd: active transition %u->%u "
                    "engaged=%u block=%s raw=%s rawPoints=%d rawReachM=%.1f "
                    "pathPoints=%d hold=%u modelAgeMs=%llu panda=%u/%u "
                    "state=%u/%u/%u/%u safety=%u:%u hb=%u fresh=%u\n",
@@ -312,7 +312,7 @@ struct VisionLead {
   float relative_speed_mps = 0.0f;
 };
 
-VisionLead observe_vision_lead(const K230ModelState &model, uint64_t now_ns,
+VisionLead observe_vision_lead(const ModelState &model, uint64_t now_ns,
                                float ego_speed_mps) {
   VisionLead lead;
   lead.model_fresh = model.valid != 0 &&
@@ -328,7 +328,7 @@ VisionLead observe_vision_lead(const K230ModelState &model, uint64_t now_ns,
 
 DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicle,
                                      const LateralControlResult &result,
-                                     const K230ModelState &model, bool model_updated,
+                                     const ModelState &model, bool model_updated,
                                      const VisionLead &lead, float ego_speed_mps) {
   DepartureAlertInput input;
   input.now_s = now_s;
@@ -350,7 +350,7 @@ AdaptiveCruiseInput make_adaptive_input(double now_s, bool enabled,
                                         const VehicleCanState &vehicle,
                                         const LateralControlResult &result,
                                         const PandaGateOutput &panda,
-                                        const K230ModelState &model, bool model_updated,
+                                        const ModelState &model, bool model_updated,
                                         const VisionLead &lead, float ego_speed_kph) {
   AdaptiveCruiseInput input;
   input.now_s = now_s;
@@ -428,7 +428,7 @@ private:
         file.write(job.content.data(), static_cast<std::streamsize>(job.content.size()));
         file.close();
         if (!file || std::rename(temp.c_str(), path.c_str()) != 0) {
-          std::fprintf(stderr, "k230_controlsd: learner write %s failed: %s\n", path.c_str(),
+          std::fprintf(stderr, "controlsd: learner write %s failed: %s\n", path.c_str(),
                        std::strerror(errno));
           std::remove(temp.c_str());
         }
@@ -444,27 +444,27 @@ private:
   std::thread thread_;
 };
 
-K230LearnerState make_learner_state(const LateralLearners &learners,
+LearnerState make_learner_state(const LateralLearners &learners,
                                     const SteeringParams &params, float road_bank_lat_accel) {
   const VehicleParams &v = learners.vehicle_params();
   const TorqueParams &t = learners.torque_params();
   const LiveLateralParams live = learners.live();
-  K230LearnerState state;
-  state.timestamp_ns = k230_now_ns();
-  state.flags = (v.inputs_ok ? kK230LearnerVehicleInputsOk : 0U) |
-                (v.valid ? kK230LearnerVehicleValid : 0U) |
-                (v.sensor_valid ? kK230LearnerSensorValid : 0U) |
-                (v.steer_ratio_valid ? kK230LearnerSteerRatioValid : 0U) |
-                (v.stiffness_factor_valid ? kK230LearnerStiffnessValid : 0U) |
-                (v.angle_offset_average_valid ? kK230LearnerOffsetAverageValid : 0U) |
-                (v.angle_offset_valid ? kK230LearnerOffsetValid : 0U) |
-                (t.inputs_ok ? kK230LearnerTorqueInputsOk : 0U) |
-                (t.valid ? kK230LearnerTorqueValid : 0U) |
-                (live.use_vehicle && params.use_live_vehicle_params ? kK230LearnerUseVehicle : 0U) |
-                (live.use_torque && params.use_live_torque_params ? kK230LearnerUseTorque : 0U) |
-                (learners.vehicle_restored() ? kK230LearnerVehicleRestored : 0U) |
+  LearnerState state;
+  state.timestamp_ns = monotonic_now_ns();
+  state.flags = (v.inputs_ok ? kLearnerVehicleInputsOk : 0U) |
+                (v.valid ? kLearnerVehicleValid : 0U) |
+                (v.sensor_valid ? kLearnerSensorValid : 0U) |
+                (v.steer_ratio_valid ? kLearnerSteerRatioValid : 0U) |
+                (v.stiffness_factor_valid ? kLearnerStiffnessValid : 0U) |
+                (v.angle_offset_average_valid ? kLearnerOffsetAverageValid : 0U) |
+                (v.angle_offset_valid ? kLearnerOffsetValid : 0U) |
+                (t.inputs_ok ? kLearnerTorqueInputsOk : 0U) |
+                (t.valid ? kLearnerTorqueValid : 0U) |
+                (live.use_vehicle && params.use_live_vehicle_params ? kLearnerUseVehicle : 0U) |
+                (live.use_torque && params.use_live_torque_params ? kLearnerUseTorque : 0U) |
+                (learners.vehicle_restored() ? kLearnerVehicleRestored : 0U) |
                 (learners.torque_restore_status() == TorqueRestore::Restored
-                     ? kK230LearnerTorqueRestored : 0U);
+                     ? kLearnerTorqueRestored : 0U);
   state.steer_ratio = static_cast<float>(v.steer_ratio);
   state.stiffness_factor = static_cast<float>(v.stiffness_factor);
   state.roll_rad = static_cast<float>(v.roll_rad);
@@ -495,7 +495,7 @@ K230LearnerState make_learner_state(const LateralLearners &learners,
 }
 
 // overlayd/recordd가 읽는 100 Hz 스냅샷. 필드 순서는 ipc_messages.h가 고정한다.
-K230ControlState make_control_state(const LateralControllerConfig &config,
+ControlState make_control_state(const LateralControllerConfig &config,
                                     const LateralControlResult &result,
                                     const LateralTarget &target,
                                     const VehicleCanState &vehicle,
@@ -503,16 +503,16 @@ K230ControlState make_control_state(const LateralControllerConfig &config,
                                     const DepartureAlertOutput &departure_alert,
                                     const EngageEvents &events, bool radar_lead_fresh,
                                     float ego_speed_kph, double now_s) {
-  K230ControlState state;
-  state.timestamp_ns = k230_now_ns();
+  ControlState state;
+  state.timestamp_ns = monotonic_now_ns();
   state.enabled = config.steering_params.enabled ? 1U : 0U;
   state.engaged = result.engaged ? 1U : 0U;
   state.active = result.active ? 1U : 0U;
   state.should_send = result.should_send ? 1U : 0U;
   state.path_usable = result.path_usable ? 1U : 0U;
   state.hud_flags =
-      (target.laneless_mode ? kK230HudFlagLaneless : 0U) |
-      (result.vehicle_fresh && vehicle.brake_hold ? kK230HudFlagBrakeHold : 0U);
+      (target.laneless_mode ? kHudFlagLaneless : 0U) |
+      (result.vehicle_fresh && vehicle.brake_hold ? kHudFlagBrakeHold : 0U);
   state.seeds_ready = result.seeds_ready ? 1U : 0U;
   state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
   state.steering_fault = vehicle.steering_fault ? 1U : 0U;
@@ -584,7 +584,7 @@ struct TickStats {
            const AdaptiveCruiseOutput &adaptive_cruise,
            const DepartureAlertInput &alert_input) {
     std::fprintf(stderr,
-                 "k230_controlsd: hz=%.3f work_avg_us=%.1f work_max_us=%.1f "
+                 "controlsd: hz=%.3f work_avg_us=%.1f work_max_us=%.1f "
                  "misses=%u can=%u generated=%u errors=%u txFull=%u rxStale=%u "
                  "queue=%llu/%llu params=%u "
                  "engaged=%u active=%u "
@@ -643,7 +643,7 @@ public:
     thread_.join();
   }
 
-  void submit(const K230ModelState &model, const VehicleCanState &vehicle,
+  void submit(const ModelState &model, const VehicleCanState &vehicle,
               float v_ego, float measured_curvature, bool active,
               float output_scale) {
     {
@@ -677,7 +677,7 @@ public:
 
 private:
   struct Request {
-    K230ModelState model;
+    ModelState model;
     VehicleCanState vehicle;
     float v_ego = 0.0f;
     float measured_curvature = 0.0f;
@@ -742,38 +742,38 @@ int main() {
   signal(SIGHUP, reload_signal_handler);
 
   try {
-    K230CanQueue can_sub;
-    K230LatestChannel model_sub;
-    K230LatestChannel panda_state_sub;
-    K230CanQueue sendcan_pub;
-    K230LatestChannel control_state_pub;
-    K230LatestChannel learner_state_pub;
-    if (!open_when_ready(&can_sub, kK230CanTopic, true) ||
-        !open_when_ready(&model_sub, kK230ModelStateTopic, sizeof(K230ModelState), false) ||
-        !open_when_ready(&panda_state_sub, kK230PandaStateTopic,
-                         sizeof(K230PandaState), true) ||
-        !open_when_ready(&sendcan_pub, kK230SendCanTopic, true) ||
-        !open_when_ready(&control_state_pub, kK230ControlStateTopic,
-                         sizeof(K230ControlState), true) ||
-        !open_when_ready(&learner_state_pub, kK230LearnerStateTopic,
-                         sizeof(K230LearnerState), true)) {
+    CanQueue can_sub;
+    LatestChannel model_sub;
+    LatestChannel panda_state_sub;
+    CanQueue sendcan_pub;
+    LatestChannel control_state_pub;
+    LatestChannel learner_state_pub;
+    if (!open_when_ready(&can_sub, kCanTopic, true) ||
+        !open_when_ready(&model_sub, kModelStateTopic, sizeof(ModelState), false) ||
+        !open_when_ready(&panda_state_sub, kPandaStateTopic,
+                         sizeof(PandaState), true) ||
+        !open_when_ready(&sendcan_pub, kSendCanTopic, true) ||
+        !open_when_ready(&control_state_pub, kControlStateTopic,
+                         sizeof(ControlState), true) ||
+        !open_when_ready(&learner_state_pub, kLearnerStateTopic,
+                         sizeof(LearnerState), true)) {
       return 0;
     }
     sendcan_pub.reset();
 
     LateralControllerConfig config;
-    config.force_engaged = env_flag("K230_FORCE_ENGAGED", false);
+    config.force_engaged = env_flag("EDGEPILOT_FORCE_ENGAGED", false);
     AdaptiveCruiseConfig adaptive_cruise_config;
-    const std::string steering_path = k230_param_path("steering.json");
-    const std::string driving_path = k230_param_path("driving.json");
-    const std::string adaptive_cruise_path = k230_param_path("adaptive_cruise.json");
+    const std::string steering_path = param_path("steering.json");
+    const std::string driving_path = param_path("driving.json");
+    const std::string adaptive_cruise_path = param_path("adaptive_cruise.json");
     std::string error;
     if (!load_runtime_params(steering_path, driving_path, adaptive_cruise_path,
                              &config, &adaptive_cruise_config, &error)) {
       throw std::runtime_error(error);
     }
     std::fprintf(stderr,
-                 "k230_controlsd: params steering=%s driving=%s adaptive=%s "
+                 "controlsd: params steering=%s driving=%s adaptive=%s "
                  "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs "
                  "decel=%.1fkph/s\n",
                  steering_path.c_str(), driving_path.c_str(),
@@ -788,17 +788,17 @@ int main() {
     /* paramsd·torqued. 사전값은 시작 때 파라미터로 고정한다. 복원이 거부된 저장은 상류처럼
      * 지운다(torqued는 깨진 캐시만, 튜닝이 바뀐 캐시는 둔다). */
     LearnerStore learner_store;
-    const std::string vehicle_learn_path = k230_param_path("live_parameters.json");
-    const std::string torque_learn_path = k230_param_path("live_torque_parameters.bin");
+    const std::string vehicle_learn_path = param_path("live_parameters.json");
+    const std::string torque_learn_path = param_path("live_torque_parameters.bin");
     const std::string vehicle_learn_json = read_file(vehicle_learn_path);
     const std::string torque_learn_cache = read_file(torque_learn_path);
     LateralLearners learners(config.steering_params, vehicle_learn_json, torque_learn_cache,
-                             static_cast<uint64_t>(k230_now_ns()));
+                             static_cast<uint64_t>(monotonic_now_ns()));
     if (learners.vehicle_restore_rejected()) learner_store.remove(vehicle_learn_path);
     if (learners.torque_restore_status() == TorqueRestore::Corrupt)
       learner_store.remove(torque_learn_path);
     std::fprintf(stderr,
-                 "k230_controlsd: learners paramsd=%s torqued=%s use_vehicle=%u use_torque=%u\n",
+                 "controlsd: learners paramsd=%s torqued=%s use_vehicle=%u use_torque=%u\n",
                  learners.vehicle_restored() ? "restored"
                  : vehicle_learn_json.empty() ? "fresh" : "rejected",
                  learners.torque_restore_status() == TorqueRestore::Restored      ? "restored"
@@ -817,8 +817,8 @@ int main() {
     EngageEvents events;
     TickStats stats;
     VehicleCanState vehicle;
-    K230ModelState model;
-    K230PandaState panda_state;
+    ModelState model;
+    PandaState panda_state;
     LateralTarget lateral_target;
     AdaptiveCruiseOutput adaptive_cruise;
     LateralControlResult last_result;
@@ -837,7 +837,7 @@ int main() {
       next_tick += std::chrono::milliseconds(10);
       const auto work_start = Clock::now();
       const double now_s = std::chrono::duration<double>(work_start - start).count();
-      const uint64_t can_now_ns = k230_now_ns();
+      const uint64_t can_now_ns = monotonic_now_ns();
 
       const bool reload_requested = g_reload_params != 0;
       if (reload_requested) g_reload_params = 0;
@@ -848,14 +848,14 @@ int main() {
         adaptive_cruise_controller.update_config(adaptive_cruise_config);
       }
 
-      K230CanBatch can_batch;
+      CanBatch can_batch;
       while (can_sub.pop(&can_batch)) {
-        if (!k230_can_batch_is_fresh(can_batch, can_now_ns, kMaxCanRxAgeNs)) {
+        if (!can_batch_is_fresh(can_batch, can_now_ns, kMaxCanRxAgeNs)) {
           ++stats.stale_can_batches;
           continue;
         }
         apply_can_batch(can_batch, now_s, &vehicle);
-        stats.can_frames += std::min<uint32_t>(can_batch.count, kK230CanBatchMaxFrames);
+        stats.can_frames += std::min<uint32_t>(can_batch.count, kCanBatchMaxFrames);
       }
       bool model_updated = false;
       uint64_t next_model_seq = model_seq;
@@ -880,7 +880,7 @@ int main() {
 
       /* IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness
        * 판정에는 공유 상태를 읽은 직후의 시간을 사용한다. */
-      const uint64_t now_ns = k230_now_ns();
+      const uint64_t now_ns = monotonic_now_ns();
       const PandaGateOutput panda =
           panda_gate.update(panda_state, now_ns, config.force_engaged);
       const uint64_t model_timeout_ns =
@@ -920,7 +920,7 @@ int main() {
         last_logged_alert_event_id = departure_alert.event_id;
         std::fprintf(
             stderr,
-            "k230_controlsd: departure alert=%s event=%u "
+            "controlsd: departure alert=%s event=%u "
             "visionLead=%.1fm rel=%.1fm/s p=%.2f plan=%.1fm\n",
             departure_alert_name(departure_alert.type),
             departure_alert.event_id,
@@ -930,7 +930,7 @@ int main() {
             alert_input.plan_distance_m);
       }
 
-      const K230ControlState control_state = make_control_state(
+      const ControlState control_state = make_control_state(
           config, last_result, lateral_target, vehicle, adaptive_cruise, departure_alert,
           events, radar_lead_fresh, ego_speed_kph, now_s);
       if (!control_state_pub.publish(&control_state, sizeof(control_state))) {
@@ -938,7 +938,7 @@ int main() {
       }
 
       if (last_result.should_send && !last_result.frames.empty()) {
-        const K230CanBatch send_batch = make_send_batch(last_result.frames);
+        const CanBatch send_batch = make_send_batch(last_result.frames);
         if (!sendcan_pub.push(send_batch)) {
           ++stats.publish_errors;
           ++stats.send_queue_full;
@@ -959,7 +959,7 @@ int main() {
         const VehicleParams &v = learners.vehicle_params();
         const TorqueParams &t = learners.torque_params();
         std::fprintf(stderr,
-                     "k230_controlsd: learners sr=%.2f stiffness=%.2f offset=%.2f/%.2f "
+                     "controlsd: learners sr=%.2f stiffness=%.2f offset=%.2f/%.2f "
                      "roll=%.2f valid=%d | torque points=%d cal=%d%% factor=%.2f/%.2f "
                      "offset=%.3f friction=%.3f/%.3f valid=%d\n",
                      v.steer_ratio, v.stiffness_factor, v.angle_offset_average_deg,
@@ -971,7 +971,7 @@ int main() {
       if (learners.torque_persist_due())
         learner_store.write(torque_learn_path, learners.torque_cache());
       if (learners.vehicle_published()) {
-        const K230LearnerState learner_state =
+        const LearnerState learner_state =
             make_learner_state(learners, config.steering_params, controller.road_bank_lat_accel());
         if (!learner_state_pub.publish(&learner_state, sizeof(learner_state)))
           ++stats.publish_errors;
@@ -1001,10 +1001,10 @@ int main() {
         next_tick = tick_end;
       }
     }
-    std::fprintf(stderr, "k230_controlsd: stopping\n");
+    std::fprintf(stderr, "controlsd: stopping\n");
     return 0;
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "k230_controlsd error: %s\n", error.what());
+    std::fprintf(stderr, "controlsd error: %s\n", error.what());
     return 1;
   }
 }

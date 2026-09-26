@@ -19,7 +19,7 @@ namespace {
 bool scalar_warp_forced()
 {
     static const bool forced = [] {
-        const char *value = std::getenv("SUPERCOMBO_WARP_SCALAR");
+        const char *value = std::getenv("EDGEPILOT_WARP_SCALAR");
         return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
     }();
     return forced;

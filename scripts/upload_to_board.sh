@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # 빌드한 런타임을 보드에 올린다: 실행 파일, 보드용 Python, 모델, UI 스프라이트, 파라미터 기본값.
 # 보드의 params/는 덮어쓰지 않고, 기본값은 params.defaults/에 두어 없는 파일만 채운다.
-# 사용: scripts/upload_to_board.sh [root@보드]   (기본 root@192.168.219.111, 바이너리는 K230_BUILD_DIR/bin)
+# 사용: scripts/upload_to_board.sh [root@보드]   (기본 root@192.168.219.111, 바이너리는 EDGEPILOT_BUILD_DIR/bin)
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
 BOARD="${1:-root@192.168.219.111}"
-DEST="${K230_BOARD_DIR:-/root/supercombo_k230}"
-BUILD_DIR="${K230_BUILD_DIR:-build}"
-BIN_DIR="${K230_BIN_DIR:-${BUILD_DIR}/bin}"
-read -r -a SSH_CMD <<< "${K230_SSH:-ssh}"
-read -r -a SCP_CMD <<< "${K230_SCP:-scp}"
+DEST="${EDGEPILOT_BOARD_DIR:-/root/edgepilot}"
+BUILD_DIR="${EDGEPILOT_BUILD_DIR:-build}"
+BIN_DIR="${EDGEPILOT_BIN_DIR:-${BUILD_DIR}/bin}"
+read -r -a SSH_CMD <<< "${EDGEPILOT_SSH:-ssh}"
+read -r -a SCP_CMD <<< "${EDGEPILOT_SCP:-scp}"
 SSH_OPTIONS=(
   -o StrictHostKeyChecking=no
 )
 
 runtime_files=(
-  "${BIN_DIR}/k230_camerad"
-  "${BIN_DIR}/k230_modeld"
-  "${BIN_DIR}/k230_overlayd"
-  "${BIN_DIR}/k230_recordd"
-  scripts/k230_manager.py
-  scripts/k230_param_server.py
+  "${BIN_DIR}/camerad"
+  "${BIN_DIR}/modeld"
+  "${BIN_DIR}/overlayd"
+  "${BIN_DIR}/recordd"
+  scripts/manager.py
+  scripts/param_server.py
   scripts/display_control.py
   scripts/requirements-param-server.txt
 )
@@ -34,8 +34,8 @@ ui_assets=(
   assets/ui/traffic_go_green_retro-270x155-v3.png
 )
 
-if [ -x "${BIN_DIR}/k230_pandad" ]; then
-  runtime_files+=("${BIN_DIR}/k230_pandad" "${BIN_DIR}/k230_controlsd")
+if [ -x "${BIN_DIR}/pandad" ]; then
+  runtime_files+=("${BIN_DIR}/pandad" "${BIN_DIR}/controlsd")
 fi
 
 for runtime_file in "${runtime_files[@]}"; do
@@ -51,8 +51,14 @@ for ui_asset in "${ui_assets[@]}"; do
   fi
 done
 
+# init 스크립트는 저장소가 가진다. 예전 이미지의 S35supercombo_k230은 멈추고 지우며,
+# 그 설치(/root/supercombo_k230)에 학습된 params가 있으면 새 설치로 한 번 옮긴다.
+"${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" scripts/S35edgepilot "$BOARD:/etc/init.d/S35edgepilot.tmp"
 "${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" \
-  "test -x /etc/init.d/S35supercombo_k230 || { echo 'Missing image-provided /etc/init.d/S35supercombo_k230' >&2; exit 1; }; rm -rf '$DEST/.upload'; mkdir -p '$DEST/.upload' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
+  "chmod 755 /etc/init.d/S35edgepilot.tmp && mv /etc/init.d/S35edgepilot.tmp /etc/init.d/S35edgepilot;
+   if [ -x /etc/init.d/S35supercombo_k230 ]; then /etc/init.d/S35supercombo_k230 stop; rm -f /etc/init.d/S35supercombo_k230; fi;
+   if [ -d /root/supercombo_k230/params ] && [ ! -d '$DEST/params' ]; then mkdir -p '$DEST' && cp -a /root/supercombo_k230/params '$DEST/params'; fi;
+   rm -rf '$DEST/.upload'; mkdir -p '$DEST/.upload' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
 "${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" "${runtime_files[@]}" "$BOARD:$DEST/.upload/"
 "${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "for source in '$DEST/.upload/'*; do mv \"\$source\" '$DEST/'; done"
 "${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "mkdir -p '$DEST/.upload/assets/ui' '$DEST/assets/ui'"

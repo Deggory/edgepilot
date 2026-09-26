@@ -34,8 +34,8 @@ together with the warp benchmark:
 ```sh
 cmake -S . -B build-host \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSUPERCOMBO_BUILD_RUNTIME=OFF \
-  -DSUPERCOMBO_BUILD_DIAGNOSTICS=ON
+  -DEDGEPILOT_BUILD_RUNTIME=OFF \
+  -DEDGEPILOT_BUILD_DIAGNOSTICS=ON
 cmake --build build-host \
   --target gtest_calibration_equivalence bench_input_warp_overhead -j2
 build-host/bin/gtest_calibration_equivalence
@@ -84,7 +84,7 @@ back its own.
 | 12 | 1.3e-6 | 1.1e-6 | 1.3e-8 |
 | 27 | 2.3e-8 | 4.4e-8 | 5.5e-9 |
 
-Solve time on the board (C908, single core, with `k230_modeld` running, so the
+Solve time on the board (C908, single core, with `modeld` running, so the
 minimum is the meaningful figure):
 
 | Solver | min | p50 | p90 |
@@ -191,7 +191,7 @@ low speed: the estimated speed jumped 3.7 -> 1.5 m/s between two frames 0.1 s
 apart. Command jerk rose 1.3-1.8x on the two standstill-heavy segments, and a
 physical acceleration-band clamp (+/-2.5 m/s^2 * t) only recovered half of it.
 Revisit with the model's velocity head (plan knot floats 3-5, currently unparsed),
-which needs `K230ModelState` to grow and the recording version to be bumped.
+which needs `ModelState` to grow and the recording version to be bumped.
 
 ## Host self-tests
 

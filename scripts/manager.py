@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """보드 런타임 감시자. 프로세스를 시작 순서대로 띄우고(camerad는 overlayd의 display-ready를
 기다린다) 죽으면 1초 뒤 다시 띄우며, 1초마다 managerState를 /dev/shm에 낸다. 어떤 프로세스를
-띄울지는 K230_ENABLE_CONTROL·K230_ENABLE_PANDA·K230_ENABLE_PARAM_SERVER가 정한다.
+띄울지는 EDGEPILOT_ENABLE_CONTROL·EDGEPILOT_ENABLE_PANDA·EDGEPILOT_ENABLE_PARAM_SERVER가 정한다.
 
-사용: ./k230_manager.py [supercombo.kmodel] [debug_mode]   (보드의 설치 디렉터리에서)
+사용: ./manager.py [supercombo.kmodel] [debug_mode]   (보드의 설치 디렉터리에서)
 """
 import mmap
 import os
@@ -20,13 +20,13 @@ IPC_MAGIC = 0x4B323349
 IPC_VERSION = 1
 HEADER = struct.Struct("<IIIIQQII")
 HEADER_SIZE = HEADER.size
-# K230ProcessState: 오버레이가 읽는 것은 이름과 running뿐이다.
+# ProcessState: 오버레이가 읽는 것은 이름과 running뿐이다.
 PROCESS = struct.Struct("<16sI")
 MAX_PROCESSES = 7
-# C++ K230ManagerState는 8바이트 정렬이라 배열 뒤에 꼬리 패딩이 붙는다.
+# C++ ManagerState는 8바이트 정렬이라 배열 뒤에 꼬리 패딩이 붙는다.
 _MANAGER_STATE_BODY = 8 + 4 + 4 + PROCESS.size * MAX_PROCESSES
 MANAGER_STATE_SIZE = (_MANAGER_STATE_BODY + 7) // 8 * 8
-DISPLAY_READY_FILE = "/tmp/k230_display_ready"
+DISPLAY_READY_FILE = "/tmp/edgepilot_display_ready"
 DISPLAY_READY_TIMEOUT_MS = 7000
 DEFAULT_KMODEL_PATH = "models/supercombo.kmodel"
 DEFAULT_DEBUG_MODE = "0"
@@ -47,7 +47,7 @@ def env_enabled(name: str, default: bool = False) -> bool:
 
 
 def default_kmodel_path() -> str:
-    override = os.environ.get("K230_KMODEL")
+    override = os.environ.get("EDGEPILOT_KMODEL")
     if override:
         return override
     return DEFAULT_KMODEL_PATH
@@ -114,20 +114,20 @@ class ProcSpec:
 
 def process_specs(kmodel: str, debug: str) -> List[ProcSpec]:
     """시작 순서대로. camerad는 overlayd의 display-ready 신호를 기다린 뒤 뜬다."""
-    enable_control = env_enabled("K230_ENABLE_CONTROL", True)
+    enable_control = env_enabled("EDGEPILOT_ENABLE_CONTROL", True)
     specs = [
-        ProcSpec("k230_overlayd", ["./k230_overlayd"], 10),
-        ProcSpec("k230_camerad", ["./k230_camerad"], 0),
-        ProcSpec("k230_recordd", ["./k230_recordd"], 15),
-        ProcSpec("k230_modeld", ["./k230_modeld", kmodel, debug], -15),
+        ProcSpec("overlayd", ["./overlayd"], 10),
+        ProcSpec("camerad", ["./camerad"], 0),
+        ProcSpec("recordd", ["./recordd"], 15),
+        ProcSpec("modeld", ["./modeld", kmodel, debug], -15),
     ]
-    if env_enabled("K230_ENABLE_PANDA") or enable_control:
-        specs.append(ProcSpec("k230_pandad", ["./k230_pandad"], -10))
+    if env_enabled("EDGEPILOT_ENABLE_PANDA") or enable_control:
+        specs.append(ProcSpec("pandad", ["./pandad"], -10))
     if enable_control:
-        specs.append(ProcSpec("k230_controlsd", ["./k230_controlsd"], -8))
-    if env_enabled("K230_ENABLE_PARAM_SERVER", enable_control):
+        specs.append(ProcSpec("controlsd", ["./controlsd"], -8))
+    if env_enabled("EDGEPILOT_ENABLE_PARAM_SERVER", enable_control):
         server_script = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "k230_param_server.py"
+            os.path.dirname(os.path.abspath(__file__)), "param_server.py"
         )
         specs.append(ProcSpec("param_server", [sys.executable, server_script], 10))
     return specs
@@ -165,21 +165,21 @@ class Manager:
     def __init__(self, argv: List[str]):
         if len(argv) > 3:
             raise ValueError(
-                f"Usage: {argv[0] if argv else 'k230_manager.py'} "
+                f"Usage: {argv[0] if argv else 'manager.py'} "
                 "[supercombo.kmodel] [debug_mode]"
             )
         self.kmodel = argv[1] if len(argv) >= 2 else default_kmodel_path()
         self.debug = argv[2] if len(argv) >= 3 else DEFAULT_DEBUG_MODE
-        os.environ.setdefault("K230_PANDA_TX", "1")
-        os.environ.setdefault("K230_PANDA_ENGAGED", "1")
-        os.environ.setdefault("K230_PANDA_SAFETY", "hyundaiCommunity")
-        os.environ.setdefault("K230_PANDA_SAFETY_PARAM", "0")
+        os.environ.setdefault("EDGEPILOT_PANDA_TX", "1")
+        os.environ.setdefault("EDGEPILOT_PANDA_ENGAGED", "1")
+        os.environ.setdefault("EDGEPILOT_PANDA_SAFETY", "hyundaiCommunity")
+        os.environ.setdefault("EDGEPILOT_PANDA_SAFETY_PARAM", "0")
         app_lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
         os.environ["LD_LIBRARY_PATH"] = app_lib + (
             ":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else ""
         )
         self.shutdown = False
-        self.manager_state = LatestPublisher("/k230_manager_state", MANAGER_STATE_SIZE)
+        self.manager_state = LatestPublisher("/edgepilot_manager_state", MANAGER_STATE_SIZE)
         # 시작 순서 = 상태 테이블 순서. dict는 삽입 순서를 지킨다.
         self.procs: Dict[str, ProcState] = {
             spec.name: ProcState(spec=spec)
@@ -234,7 +234,7 @@ class Manager:
                   flush=True)
 
         for state in self.procs.values():
-            if state.spec.name == "k230_camerad":
+            if state.spec.name == "camerad":
                 self.wait_for_display_ready()
             self.start_proc(state)
             time.sleep(0.3)

@@ -16,28 +16,28 @@ constexpr float kDefaultModelFx = 910.0f;
 constexpr float kDefaultModelFy = 910.0f;
 constexpr float kDefaultModelCx = 256.0f;
 constexpr float kDefaultModelCy = 47.6f;
-constexpr float kK230CameraFx = 1583.3981f;
-constexpr float kK230CameraFy = 1583.7622f;
-constexpr float kK230CameraCx = 954.9441f;
-constexpr float kK230CameraCy = 545.1774f;
+constexpr float kCameraFx = 1583.3981f;
+constexpr float kCameraFy = 1583.7622f;
+constexpr float kCameraCx = 954.9441f;
+constexpr float kCameraCy = 545.1774f;
 constexpr float default_input_warp_fx(unsigned source_width)
 {
-    return kK230CameraFx * static_cast<float>(source_width) /
+    return kCameraFx * static_cast<float>(source_width) /
         static_cast<float>(kDefaultSensorWidth);
 }
 constexpr float default_input_warp_fy(unsigned source_height)
 {
-    return kK230CameraFy * static_cast<float>(source_height) /
+    return kCameraFy * static_cast<float>(source_height) /
         static_cast<float>(kDefaultSensorHeight);
 }
 constexpr float default_input_warp_cx(unsigned source_width)
 {
-    return kK230CameraCx * static_cast<float>(source_width) /
+    return kCameraCx * static_cast<float>(source_width) /
         static_cast<float>(kDefaultSensorWidth);
 }
 constexpr float default_input_warp_cy(unsigned source_height)
 {
-    return kK230CameraCy * static_cast<float>(source_height) /
+    return kCameraCy * static_cast<float>(source_height) /
         static_cast<float>(kDefaultSensorHeight);
 }
 constexpr float kDefaultInputWarpFx = default_input_warp_fx(kDefaultAiWidth);

@@ -4,7 +4,7 @@
 
 #include <cmath>
 
-LateralPath path_from_model_state(const K230ModelState &state,
+LateralPath path_from_model_state(const ModelState &state,
                                   unsigned long long now_ns,
                                   unsigned long long timeout_ns) {
   LateralPath path;

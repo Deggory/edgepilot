@@ -48,14 +48,14 @@ inline std::string env_string(const char *name, const char *fallback = "") {
   return value && value[0] ? value : fallback;
 }
 
-// params 디렉토리 경로 결정 (K230_PARAMS_DIR 재정의 가능)
-inline std::string k230_params_dir() {
-  const char *value = std::getenv("K230_PARAMS_DIR");
+// params 디렉토리 경로 결정 (EDGEPILOT_PARAMS_DIR 재정의 가능)
+inline std::string params_dir() {
+  const char *value = std::getenv("EDGEPILOT_PARAMS_DIR");
   return value && value[0] != '\0' ? std::string(value) : std::string("params");
 }
 
-inline std::string k230_param_path(const char *name) {
-  return k230_params_dir() + "/" + (name ? name : "");
+inline std::string param_path(const char *name) {
+  return params_dir() + "/" + (name ? name : "");
 }
 
 namespace utils_process_detail {

@@ -1,14 +1,14 @@
 #ifndef UTILS_TIME_H
 #define UTILS_TIME_H
 
-/* 런타임 공통 시계는 k230_now_ns 하나다(CLOCK_BOOTTIME). 프로세스 사이를
+/* 런타임 공통 시계는 monotonic_now_ns 하나다(CLOCK_BOOTTIME). 프로세스 사이를
  * 건너가는 타임스탬프는 전부 이 시계로 찍는다. */
 
 #include <cstdint>
 #include <sys/time.h>
 #include <time.h>
 
-inline uint64_t k230_now_ns()
+inline uint64_t monotonic_now_ns()
 {
     timespec ts{};
 #ifdef CLOCK_BOOTTIME

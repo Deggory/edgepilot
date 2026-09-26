@@ -15,7 +15,7 @@ openpilot v0.11의 torqued(라이브 토크 회귀)와 lagd(라이브 지연 추
        정렬 병합으로 신호가 뒤섞인다.
 
 사용 예:
-  python3 fit_lateral_params.py fit /tmp/supercombo_k230.log
+  python3 fit_lateral_params.py fit /tmp/edgepilot.log
   python3 fit_lateral_params.py lag  <route_dir>/events
 """
 
@@ -42,7 +42,7 @@ STEER_BUCKET_BOUNDS = [(-0.5, -0.3), (-0.3, -0.2), (-0.2, -0.1), (-0.1, 0.0),
 MIN_BUCKET_POINTS = [10, 30, 50, 50, 50, 50, 30, 10]  # qlog 스케일(/10)
 STEER_MAX = 384.0
 
-HZ_RE = re.compile(r"k230_controlsd: hz=")
+HZ_RE = re.compile(r"controlsd: hz=")
 
 
 def _field(line, key, cast=float):

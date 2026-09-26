@@ -8,67 +8,67 @@ true.
 
 ## Model and calibration
 
-- `K230_KMODEL=/path/to/supercombo.kmodel`
-  - overrides the model selected by `k230_manager.py`. The runtime targets the
+- `EDGEPILOT_KMODEL=/path/to/supercombo.kmodel`
+  - overrides the model selected by `manager.py`. The runtime targets the
     openpilot v0.9.4 supercombo only: 6 inputs (two uint8 image towers, a
     100-tick desire pulse history, traffic convention, unused nav features, and
-    a 99x128 feature buffer) and 6120 output floats. `k230_modeld` checks that
+    a 99x128 feature buffer) and 6120 output floats. `modeld` checks that
     contract at startup and refuses any other kmodel rather than misreading it,
     logging `Supercombo openpilot-v0.9.4 image dtype=uint8`.
-- `SUPERCOMBO_PROFILE=1`
-  - prints model pipeline averages. `k230_overlayd` also uses this for overlay
+- `EDGEPILOT_PROFILE=1`
+  - prints model pipeline averages. `overlayd` also uses this for overlay
     draw/present timing.
-- `SUPERCOMBO_CALIB_ROLL_DEG`, `SUPERCOMBO_CALIB_PITCH_DEG`,
-  `SUPERCOMBO_CALIB_YAW_DEG`
+- `EDGEPILOT_CALIB_ROLL_DEG`, `EDGEPILOT_CALIB_PITCH_DEG`,
+  `EDGEPILOT_CALIB_YAW_DEG`
   - manual calibration in degrees for both the overlay projection and the model
     input warp. If any value is set, it wins and online calibration is applied to
     neither. Otherwise the saved calibration is restored and pose-based online
     calibration feeds the next frame's input warp, matching openpilot's
     `cameraOdometry -> liveCalibration -> modeld` loop.
-- `SUPERCOMBO_CALIB_AUTO=0`
+- `EDGEPILOT_CALIB_AUTO=0`
   - disables pose-based online overlay calibration and keeps the restored or
     manually supplied projection.
-- `SUPERCOMBO_LOG_CALIB=1`
+- `EDGEPILOT_LOG_CALIB=1`
   - prints the online calibrator status, accepted/rejected sample counts, valid
     block count, rpy, and spread.
 
 ## Input warp
 
-- `SUPERCOMBO_WARP_SCALAR=1`
+- `EDGEPILOT_WARP_SCALAR=1`
   - disables the C908 RVV input-warp kernel for diagnostics and uses the
     bit-exact scalar fallback.
-- `SUPERCOMBO_WARP_CPU=1`
+- `EDGEPILOT_WARP_CPU=1`
   - disables the VGLite GPU warp and returns the whole input warp to the CPU.
     The GPU path also disables itself when VGLite or the tensor's physical
     address is unavailable.
 
 ## Storage and replay
 
-- `K230_PARAMS_DIR=/path/to/params`
+- `EDGEPILOT_PARAMS_DIR=/path/to/params`
   - overrides the shared runtime parameter directory, and is the only way to
     relocate parameter files; there are no per-file overrides. The default is `params/`
     relative to the runtime working directory. Stable online calibration is
     stored atomically in `params/calibration.json` and restored before the first
-    model frame. Manual `SUPERCOMBO_CALIB_*` values take precedence and seed this
+    model frame. Manual `EDGEPILOT_CALIB_*` values take precedence and seed this
     file.
-- `K230_RECORD_ROOT=/path/to/recordings`
+- `EDGEPILOT_RECORD_ROOT=/path/to/recordings`
   - overrides the route output directory. The default is `recordings/` under the
     runtime working directory. Recording is toggled live through the web UI or
     `params/recording.json`; at least 5 GiB and 10% free space is kept.
-- `K230_RECORD_STAGING=/path/to/staging`
+- `EDGEPILOT_RECORD_STAGING=/path/to/staging`
   - overrides the tmpfs staging directory for the active route (default
-    `/tmp/record_staging`). Closed files are moved to `K230_RECORD_ROOT`
+    `/tmp/record_staging`). Closed files are moved to `EDGEPILOT_RECORD_ROOT`
     sequentially by a background thread.
-- `K230_RECORD_CODEC=/dev/video0`
-  - overrides the MVX hardware codec device used by `k230_recordd`.
-- `SUPERCOMBO_REPLAY_NV12=/path/to/replay.scnv12`
-  - when launching `k230_modeld` directly, runs headless from an `SCNV12R1` NV12
+- `EDGEPILOT_RECORD_CODEC=/dev/video0`
+  - overrides the MVX hardware codec device used by `recordd`.
+- `EDGEPILOT_REPLAY_NV12=/path/to/replay.scnv12`
+  - when launching `modeld` directly, runs headless from an `SCNV12R1` NV12
     replay file instead of opening the camera and display. Width, height, and
     frame count are read from the replay header. This is for validating inference
     and online calibration from collected logs.
-- `SUPERCOMBO_MAX_FRAMES=N`
+- `EDGEPILOT_MAX_FRAMES=N`
   - stops after `N` inferred frames. This is mainly useful with replay mode.
-- `SUPERCOMBO_RAW_DUMP=/path/to/dump.bin`
+- `EDGEPILOT_RAW_DUMP=/path/to/dump.bin`
   - during replay, writes every raw model output to an `SCODMP1` file that
     `gtest_model_output_parser` reads. Pair it with a host run over the same
     replay to verify a model swap end to end (warp, temporal inputs, kmodel);
@@ -76,66 +76,66 @@ true.
 
 ## Panda
 
-- `K230_ENABLE_PANDA=1`
-  - manager also starts `k230_pandad`. The binary must have been built with
-    `-DSUPERCOMBO_BUILD_PANDA=ON`.
-- `K230_PANDA_SAFETY=nooutput|silent|elm327|hyundai|hyundaiCommunity|allOutput`
-  - panda safety mode for `k230_pandad`. Its standalone default is `nooutput`;
+- `EDGEPILOT_ENABLE_PANDA=1`
+  - manager also starts `pandad`. The binary must have been built with
+    `-DEDGEPILOT_BUILD_PANDA=ON`.
+- `EDGEPILOT_PANDA_SAFETY=nooutput|silent|elm327|hyundai|hyundaiCommunity|allOutput`
+  - panda safety mode for `pandad`. Its standalone default is `nooutput`;
     the managed full pipeline defaults to `hyundaiCommunity:0`. `hyundai`
     defaults its parameter to `2` (the Hyundai/Kia hybrid path), every other
     mode to `0`; an unknown name falls back to `nooutput`.
   - collected KIA K7 YG HEV logs from the current openpilot fork report
     `safety=hyundaiCommunity:0`, `sccBus=-1`, `mdpsBus=1`, and `sasBus=1`. Use
-    `K230_PANDA_SAFETY=hyundaiCommunity` for shadow/TX experiments unless a newer
+    `EDGEPILOT_PANDA_SAFETY=hyundaiCommunity` for shadow/TX experiments unless a newer
     fingerprint proves otherwise.
-- `K230_PANDA_SAFETY_PARAM=N`
+- `EDGEPILOT_PANDA_SAFETY_PARAM=N`
   - numeric safety parameter passed with the safety mode. Unset takes the mode's
     default; the managed full pipeline sets `0`.
-- `K230_PANDA_TX=1`
-  - allows `k230_pandad` to relay ordered `/dev/shm/k230_sendcan` batches to
+- `EDGEPILOT_PANDA_TX=1`
+  - allows `pandad` to relay ordered `/dev/shm/edgepilot_sendcan` batches to
     panda. Its standalone default is `0`; the managed full pipeline defaults
     to `1`.
-- `K230_PANDA_LOG_CAN=1`
-  - prints every received CAN frame from `k230_pandad`. This is a bus-bringup
+- `EDGEPILOT_PANDA_LOG_CAN=1`
+  - prints every received CAN frame from `pandad`. This is a bus-bringup
     aid only; at full bus load it is far too noisy to leave on.
-- `K230_PANDA_ENGAGED=1`
-  - sends panda heartbeat as engaged, only meaningful with `K230_PANDA_TX=1`. Its
+- `EDGEPILOT_PANDA_ENGAGED=1`
+  - sends panda heartbeat as engaged, only meaningful with `EDGEPILOT_PANDA_TX=1`. Its
     standalone default is disengaged; the managed full pipeline defaults to
     engaged.
-- `K230_PANDA_IDLE_US=5000`
-  - sleep time used by `k230_pandad` when panda returns no CAN frames and no
+- `EDGEPILOT_PANDA_IDLE_US=5000`
+  - sleep time used by `pandad` when panda returns no CAN frames and no
     pending `sendcan` batch exists. This keeps USB-only or parked shadow runs from
-    stealing scheduler time from `k230_modeld`.
+    stealing scheduler time from `modeld`.
 
 ## K7 control
 
-- `K230_ENABLE_CONTROL=1`
-  - manager starts `k230_pandad` and `k230_controlsd`. This is the manager
+- `EDGEPILOT_ENABLE_CONTROL=1`
+  - manager starts `pandad` and `controlsd`. This is the manager
     default. No openpilot checkout or Python native extension is required.
-- `K230_FORCE_ENGAGED=0|1`
+- `EDGEPILOT_FORCE_ENGAGED=0|1`
   - bypasses the SET/CANCEL engage latch for offline replay only. Default is `0`
     and must remain `0` in a vehicle.
 
 ## Parameter server and display
 
-- `K230_ENABLE_PARAM_SERVER=0|1`
+- `EDGEPILOT_ENABLE_PARAM_SERVER=0|1`
   - starts the FastAPI parameter editor with the manager. It defaults to `1` when
-    `K230_ENABLE_CONTROL=1`.
-- `K230_PARAM_HOST=address`, `K230_PARAM_PORT=port`
+    `EDGEPILOT_ENABLE_CONTROL=1`.
+- `EDGEPILOT_PARAM_HOST=address`, `EDGEPILOT_PARAM_PORT=port`
   - select the parameter editor listen address and port. Defaults are
     `0.0.0.0:8080`.
-- `K230_PARAM_DEFAULTS_DIR=/path/to/params.defaults`
+- `EDGEPILOT_PARAM_DEFAULTS_DIR=/path/to/params.defaults`
   - directory the editor reads factory defaults from. The default is
     `params.defaults/` under the runtime working directory; the upload script
     fills it from the repository's `params/`.
 
 ## Piezo alerts
 
-- `K230_PIEZO_BUZZER=0`
+- `EDGEPILOT_PIEZO_BUZZER=0`
   - disables the passive-piezo PWM alerts while preserving LCD alerts. The
     default is enabled; if the board cannot access the PWM/IOMUX interfaces, the
     worker reports the failure and LCD alerts remain active.
-- `K230_PIEZO_PIN=46|47`
+- `EDGEPILOT_PIEZO_PIN=46|47`
   - selects the board piezo pin. The default is pin 46 (`PWM2`, ALT2); pin 47
     selects `PWM3`.
 
@@ -150,7 +150,7 @@ Which events play which tone is described in [Departure alerts](departure-alerts
 
 The tracked JSON files in `params/` are the source of truth for K7 steering,
 driving, vision-cruise, recording, and display configuration. Changes are written
-atomically. Control changes are signaled to `k230_controlsd` and also detected by
+atomically. Control changes are signaled to `controlsd` and also detected by
 its 100 ms fallback poll, while recording and display changes are applied
 directly by their owning processes.
 
@@ -164,12 +164,12 @@ repository copy under `params.defaults/` as a fallback.
 Open the editor at `http://<board-ip>:8080`. It can also be started directly:
 
 ```sh
-python3 scripts/k230_param_server.py --host 0.0.0.0 --port 8080
+python3 scripts/param_server.py --host 0.0.0.0 --port 8080
 ```
 
 > [!WARNING]
 > The editor has no authentication and writes steering parameters that
-> `k230_controlsd` hot-reloads while driving. Expose it only on a trusted vehicle
+> `controlsd` hot-reloads while driving. Expose it only on a trusted vehicle
 > or development network.
 
 ## Production defaults
@@ -177,7 +177,7 @@ python3 scripts/k230_param_server.py --host 0.0.0.0 --port 8080
 - AI capture defaults to `/dev/video2`, `NV12 1280x720`, full sensor crop
   `1920x1080+0+0`.
 - Preview is fixed at `/dev/video1`; the manager waits for
-  `/tmp/k230_display_ready` before opening the AI stream.
+  `/tmp/edgepilot_display_ready` before opening the AI stream.
 - The ready barrier waits for 30 displayed preview frames and times out after
   7000 ms.
 - Child process nice levels are fixed as `camerad=0`, `modeld=-15`,

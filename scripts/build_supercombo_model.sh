@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MODEL_DIR="${REPO_DIR}/models"
-DOCKER_IMAGE="${DOCKER_IMAGE:-supercombo-nncase-k230:2.11.0-sdk}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-edgepilot-nncase-k230:2.11.0-sdk}"
 OPENPILOT_TAG="${OPENPILOT_TAG:-v0.9.4}"
 SOURCE_ONNX="${SOURCE_ONNX:-${MODEL_DIR}/work/supercombo-${OPENPILOT_TAG}.onnx}"
 PTQ_BASE_NPZ="${MODEL_DIR}/ptq/supercombo_calib.npz"

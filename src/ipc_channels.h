@@ -33,10 +33,10 @@ private:
     size_t size_ = 0;
 };
 
-class K230LatestChannel {
+class LatestChannel {
 public:
-    K230LatestChannel() = default;
-    ~K230LatestChannel();
+    LatestChannel() = default;
+    ~LatestChannel();
 
     bool open(const char *name, size_t payload_capacity, bool create);
     void close();
@@ -48,38 +48,38 @@ public:
 private:
     std::string name_;
     ShmRegion region_;
-    K230IpcHeader *header_ = nullptr;
+    IpcHeader *header_ = nullptr;
     uint8_t *payload_ = nullptr;
 };
 
-class K230CanQueue {
+class CanQueue {
 public:
-    K230CanQueue() = default;
-    ~K230CanQueue();
+    CanQueue() = default;
+    ~CanQueue();
 
-    bool open(const char *name, unsigned slot_count = kK230CanQueueSlots,
+    bool open(const char *name, unsigned slot_count = kCanQueueSlots,
               bool create = true);
     void close();
     void reset();
-    bool push(const K230CanBatch &batch);
-    bool pop(K230CanBatch *batch);
+    bool push(const CanBatch &batch);
+    bool pop(CanBatch *batch);
     uint64_t depth() const;
     bool valid() const { return header_ != nullptr; }
 
 private:
     std::string name_;
     ShmRegion region_;
-    K230CanQueueHeader *header_ = nullptr;
-    K230CanBatch *slots_ = nullptr;
+    CanQueueHeader *header_ = nullptr;
+    CanBatch *slots_ = nullptr;
 };
 
-class K230FrameRing {
+class FrameRing {
 public:
-    K230FrameRing() = default;
-    ~K230FrameRing();
+    FrameRing() = default;
+    ~FrameRing();
 
-    bool open(bool create, unsigned width = kK230AiWidth, unsigned height = kK230AiHeight,
-              unsigned slots = kK230FrameSlots);
+    bool open(bool create, unsigned width = kAiWidth, unsigned height = kAiHeight,
+              unsigned slots = kFrameSlots);
     void close();
     bool write_slot(unsigned index, uint64_t frame_id, const uint8_t *source,
                     size_t size);
@@ -98,7 +98,7 @@ public:
 
 private:
     ShmRegion region_;
-    K230FrameRingHeader *header_ = nullptr;
+    FrameRingHeader *header_ = nullptr;
     uint8_t *frames_ = nullptr;
 };
 

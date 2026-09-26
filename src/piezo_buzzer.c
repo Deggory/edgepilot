@@ -121,7 +121,7 @@ static const PiezoSequence kAlerts[PIEZO_ALERT_COUNT] = {
 
 static int parse_pin(void)
 {
-  const char *value = getenv("K230_PIEZO_PIN");
+  const char *value = getenv("EDGEPILOT_PIEZO_PIN");
   if (!value || !*value) return PIEZO_DEFAULT_PIN;
   const int pin = atoi(value);
   return pin == 46 || pin == 47 ? pin : PIEZO_DEFAULT_PIN;
@@ -480,7 +480,7 @@ static void report_unavailable(PiezoBuzzer *buzzer, PiezoAlert alert,
   pthread_mutex_unlock(&buzzer->mutex);
   if (report) {
     fprintf(stderr,
-            "k230_overlayd: piezo buzzer unavailable, continuing with LCD "
+            "overlayd: piezo buzzer unavailable, continuing with LCD "
             "alerts (alert=%s event=%u)\n",
             alert >= 0 && alert < PIEZO_ALERT_COUNT ? kAlerts[alert].name :
                                                        "unknown",

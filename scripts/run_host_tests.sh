@@ -8,12 +8,12 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
-build_dir="${K230_HOST_BUILD_DIR:-build-host}"
+build_dir="${EDGEPILOT_HOST_BUILD_DIR:-build-host}"
 jobs="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
 
 cmake -S . -B "${build_dir}" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSUPERCOMBO_BUILD_RUNTIME=OFF \
-  -DSUPERCOMBO_BUILD_DIAGNOSTICS=ON >/dev/null
+  -DEDGEPILOT_BUILD_RUNTIME=OFF \
+  -DEDGEPILOT_BUILD_DIAGNOSTICS=ON >/dev/null
 cmake --build "${build_dir}" -j"${jobs}" --target host_tests >/dev/null
 ctest --test-dir "${build_dir}" -j"${jobs}" --output-on-failure

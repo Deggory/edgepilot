@@ -29,7 +29,7 @@ apt-get install -y \
 - `libopencv-dev`: OpenCV headers/libraries used by the overlay renderer
 - `curl`, `ca-certificates`: `scripts/fetch_nncase_runtime.sh` download support
 - `git`: fresh clone from GitHub
-- `python3`: `k230_manager.py` and the K7 parameter web server
+- `python3`: `manager.py` and the K7 parameter web server
 - `python3-pip`: FastAPI/uvicorn install
 
 Install the parameter server dependencies:

@@ -142,10 +142,10 @@ private:
 };
 
 // 녹화 차 기준 (dy, dpsi)만큼 벌어진 시뮬 차의 차체 좌표로 옮긴다.
-void transform_model(K230ModelState &ms, float dy, float dpsi) {
+void transform_model(ModelState &ms, float dy, float dpsi) {
   const float c = std::cos(dpsi);
   const float s = std::sin(dpsi);
-  const auto tf = [&](K230IpcPoint &p) {
+  const auto tf = [&](IpcPoint &p) {
     const float x = p.x;
     const float y = p.y - dy;
     p.x = c * x + s * y;
@@ -165,12 +165,12 @@ void transform_model(K230ModelState &ms, float dy, float dpsi) {
 /* 녹화 ModelState를 현재 구조체로 읽는다. v4 이하는 plan 뒤 stds/orientations,
  * v3 이하는 lead 뒤 stop_line이 더 있다. */
 bool decode_model_state(const char *src, uint32_t payload_size, uint32_t version,
-                        K230ModelState *out) {
+                        ModelState *out) {
   const size_t plan_extra = version <= 4 ? 2 * sizeof(out->plan) : 0;
   const size_t lead_extra = version <= 3 ? 28 : 0;
   if (payload_size < sizeof(*out) + plan_extra + lead_extra) return false;
-  const size_t lanes_off = offsetof(K230ModelState, lanes);
-  const size_t pose_off = offsetof(K230ModelState, pose);
+  const size_t lanes_off = offsetof(ModelState, lanes);
+  const size_t pose_off = offsetof(ModelState, pose);
   std::memcpy(out, src, lanes_off);
   std::memcpy(reinterpret_cast<char *>(out) + lanes_off, src + lanes_off + plan_extra,
               pose_off - lanes_off);
@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
                     "lane_y,lane_ok,clamped\n");
 
   Exogenous ex;
-  K230ModelState ms_sim{};
+  ModelState ms_sim{};
   bool have_model = false;
   LateralTarget target{};
   double sim_t = -1.0;
@@ -299,10 +299,10 @@ int main(int argc, char **argv) {
     vehicle.driver_torque = ex.driver_torque;
     vehicle.yaw_rate_valid = false;
 
-    /* plan 나이는 컨트롤러가 k230_now_ns()로 직접 잰다. 캡처 시각을 그만큼
+    /* plan 나이는 컨트롤러가 monotonic_now_ns()로 직접 잰다. 캡처 시각을 그만큼
      * 앞당겨 결정론적으로 만든다. */
     LateralTarget t = target;
-    if (t.valid) t.capture_timestamp_ns = k230_now_ns() -
+    if (t.valid) t.capture_timestamp_ns = monotonic_now_ns() -
         static_cast<uint64_t>(age_s * 1e9);
     const uint64_t path_now_ns = ms_sim.model_timestamp_ns +
         static_cast<uint64_t>(age_s * 1e9);
@@ -391,11 +391,11 @@ int main(int argc, char **argv) {
 
   for (size_t a = 1; a < opt.positional.size(); ++a) {
     std::ifstream f(opt.positional[a], std::ios::binary);
-    K230EventFileHeader hdr{};
+    EventFileHeader hdr{};
     f.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
     if (std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
     f.seekg(hdr.header_size);
-    K230EventRecordHeader rh{};
+    EventRecordHeader rh{};
     std::vector<char> buf;
     while (f.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
       buf.resize(rh.payload_size);
@@ -409,9 +409,9 @@ int main(int argc, char **argv) {
         }
       }
 
-      if (rh.type == static_cast<uint16_t>(K230RecordType::ControlState) &&
-          rh.payload_size >= sizeof(K230ControlState)) {
-        K230ControlState cs{};
+      if (rh.type == static_cast<uint16_t>(RecordType::ControlState) &&
+          rh.payload_size >= sizeof(ControlState)) {
+        ControlState cs{};
         std::memcpy(&cs, buf.data(), sizeof(cs));
         ex.v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
         ex.k_rec = cs.actual_curvature;
@@ -419,9 +419,9 @@ int main(int argc, char **argv) {
         ex.driver_torque = cs.driver_torque;
         ex.apply_rec = cs.apply_torque;
         ex.active_rec = cs.active;
-      } else if (rh.type == static_cast<uint16_t>(K230RecordType::ModelState) &&
-                 rh.payload_size >= sizeof(K230ModelState)) {
-        K230ModelState ms{};
+      } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
+                 rh.payload_size >= sizeof(ModelState)) {
+        ModelState ms{};
         if (!decode_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
         if (sim_t < 0.0) {
           sim_t = rec_t;

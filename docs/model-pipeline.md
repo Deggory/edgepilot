@@ -14,7 +14,7 @@ The model input preparation always uses calibrated homography sampling fused
 with `NV12 -> YUV6` conversion, and writes the current frame directly into the
 second half of each nncase image tensor; after inference, that half is copied to
 the previous-frame half. By default the VGLite 2.5D GPU does the perspective
-sampling (`src/gpu_warp.*`). The CPU path, taken with `SUPERCOMBO_WARP_CPU=1` or
+sampling (`src/gpu_warp.*`). The CPU path, taken with `EDGEPILOT_WARP_CPU=1` or
 when VGLite is unavailable, uses compact fixed-point lookup tables and a C908 RVV
 indexed-gather kernel; it copies the shared camera frame once into a cacheable
 buffer because C908 `vluxei32.v` is not reliable on the `/dev/shm` ring mapping.

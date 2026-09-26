@@ -12,10 +12,10 @@ directories are generated output and are not tracked:
 | `build-host/` | host tests and tools (`scripts/run_host_tests.sh`) |
 
 The default is the real-vehicle build: the Panda USB/CAN bridge and
-`k230_controlsd` are included. `-DSUPERCOMBO_BUILD_PANDA=OFF` builds the
+`controlsd` are included. `-DEDGEPILOT_BUILD_PANDA=OFF` builds the
 camera/model/display processes only; start the manager with
-`K230_ENABLE_CONTROL=0 K230_ENABLE_PANDA=0` in that case.
-`-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON` adds the tools in
+`EDGEPILOT_ENABLE_CONTROL=0 EDGEPILOT_ENABLE_PANDA=0` in that case.
+`-DEDGEPILOT_BUILD_DIAGNOSTICS=ON` adds the tools in
 [diagnostics/](../diagnostics/README.md) without changing the runtime.
 
 Every board build needs `deps/`, which is not tracked.
@@ -50,7 +50,7 @@ brew install cmake llvm pkg-config binutils z3 zstd
 
 ```text
 k230/
-├── supercombo_k230/                # this repository (tools/target-pkg-config lives here)
+├── edgepilot/                # this repository (tools/target-pkg-config lives here)
 │   └── build/                      # generated build output
 ├── toolchain/xuantie-900/          # Xuantie compiler and target sysroot
 ├── host-tools/binutils-build-riscv/ld/ld-new
@@ -64,15 +64,15 @@ individual paths (`K230_XUANTIE_TOOLCHAIN_DIR`, `K230_RISCV_LD`, ...). The scrip
 validates them before configuring. Configure once, then build incrementally:
 
 ```sh
-cd /path/to/k230/supercombo_k230
+cd /path/to/k230/edgepilot
 ./scripts/configure_k230_macos.sh          # optional argument: build directory
 cd build
 cmake ..
 make -j2
 ```
 
-The runtime build produces `k230_camerad`, `k230_modeld`, `k230_overlayd`,
-`k230_recordd`, `k230_pandad`, and `k230_controlsd` in `build/bin/`.
+The runtime build produces `camerad`, `modeld`, `overlayd`,
+`recordd`, `pandad`, and `controlsd` in `build/bin/`.
 
 > [!WARNING]
 > Do not use a generic Ubuntu riscv64 compiler for board binaries: it can link
@@ -84,14 +84,14 @@ The runtime build produces `k230_camerad`, `k230_modeld`, `k230_overlayd`,
 After the packages in [Board setup](board-setup.md) are installed:
 
 ```sh
-cd /root/supercombo_k230
+cd /root/edgepilot
 ./scripts/fetch_nncase_runtime.sh
 cmake -S . -B build-native \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSUPERCOMBO_BUILD_PANDA=ON
+  -DEDGEPILOT_BUILD_PANDA=ON
 cmake --build build-native -j2
-cmake --install build-native --prefix /root/supercombo_k230
-./k230_manager.py
+cmake --install build-native --prefix /root/edgepilot
+./manager.py
 ```
 
 The board GCC assembler does not accept the T-Head mnemonic `dcache.civa`, so
@@ -107,13 +107,13 @@ mnemonic.
 ## Upload to the board
 
 ```sh
-K230_SSH="sshpass -p '<password>' ssh" \
-K230_SCP="sshpass -p '<password>' scp" \
+EDGEPILOT_SSH="sshpass -p '<password>' ssh" \
+EDGEPILOT_SCP="sshpass -p '<password>' scp" \
   scripts/upload_to_board.sh root@192.168.219.111
 ```
 
 The upload script reads binaries from `build/bin` by default. Set
-`K230_BUILD_DIR=build-native` for an on-board build or `K230_BIN_DIR` for a
+`EDGEPILOT_BUILD_DIR=build-native` for an on-board build or `EDGEPILOT_BIN_DIR` for a
 custom binary directory.
 
 Runtime tuning and calibration JSON files already present under `params/` are

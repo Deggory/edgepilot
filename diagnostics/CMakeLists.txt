@@ -22,7 +22,7 @@ if(OpenCV_FOUND)
 endif()
 
 # 보드 전용: nncase 런타임과 K230 라이브러리가 필요하다.
-if(SUPERCOMBO_BUILD_RUNTIME)
+if(EDGEPILOT_BUILD_RUNTIME)
   add_executable(bench_kmodel bench_kmodel.cc)
   configure_k230_target(bench_kmodel ${NNCASE_STATIC_LIBS} mmz ${K230_SHARED_LIBS})
 

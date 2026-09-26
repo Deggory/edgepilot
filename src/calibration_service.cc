@@ -119,8 +119,8 @@ CalibrationService::CalibrationService(const AppConfig &config)
     : auto_enabled_(config.calibration_auto),
       manual_override_(config.manual_calibration),
       log_enabled_(config.log_calibration),
-      params_dir_(k230_params_dir()),
-      calibration_path_(k230_param_path("calibration.json"))
+      params_dir_(params_dir()),
+      calibration_path_(param_path("calibration.json"))
 {
     fixed_rpy_[0] = config.manual_roll;
     fixed_rpy_[1] = config.manual_pitch;

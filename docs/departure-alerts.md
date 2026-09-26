@@ -4,7 +4,7 @@
 
 ## 동작
 
-`k230_controlsd`가 정차 중 두 종류의 이벤트를 판단한다.
+`controlsd`가 정차 중 두 종류의 이벤트를 판단한다.
 
 - 선행 차량 출발: 모델의 vision lead 거리가 기준보다 0.5 m 이상 증가하고
   상대속도가 0.5 m/s를 넘는 상태가 0.3초 유지되면 알린다.
@@ -16,7 +16,7 @@
 
 한 번 정차할 때 하나의 이벤트만 발생한다. 기어가 `D`가 아니거나 가속 페달을
 누르거나 차량이 다시 움직이면 다음 정차 주기를 준비한다. 알림은 engage 여부와
-무관하며 LCD에 3초 동안 표시되고, `k230_overlayd`가 보드의 passive piezo에
+무관하며 LCD에 3초 동안 표시되고, `overlayd`가 보드의 passive piezo에
 짧은 PWM 시퀀스를 한 번 재생한다. 선행 차량 출발과 신호 변경은
 `signal_changed` 시퀀스를 공유한다.
 
@@ -39,7 +39,7 @@ SET edge와 health 응답 사이의 정상적인 비동기 구간이므로 최�
 그 사이 Panda 허가가 들어오면 `engage`만 한 번 알린다. 허가가 끝내 오지 않거나
 Panda 회복 뒤 다른 정적 조건이 남아 있으면 그때 `UNABLE`로 거부한다.
 
-피에조를 끄거나 핀을 바꾸는 환경 변수(`K230_PIEZO_BUZZER`, `K230_PIEZO_PIN`)와
+피에조를 끄거나 핀을 바꾸는 환경 변수(`EDGEPILOT_PIEZO_BUZZER`, `EDGEPILOT_PIEZO_PIN`)와
 IOMUX 요건은 [런타임 옵션](runtime-options.md#piezo-alerts)에 있다.
 
 ## 판단 근거

@@ -71,7 +71,7 @@ private:
     bool write_temporal_inputs();
 
     nncase::runtime::interpreter kmodel_interp_;
-    bool profile_ = false;  // SUPERCOMBO_PROFILE: 30프레임마다 단계별 평균 ms
+    bool profile_ = false;  // EDGEPILOT_PROFILE: 30프레임마다 단계별 평균 ms
     std::vector<std::vector<int>> input_shapes_;
     std::vector<std::vector<int>> output_shapes_;
     std::vector<nncase::runtime::runtime_tensor> input_tensors_;

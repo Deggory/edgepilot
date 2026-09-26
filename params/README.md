@@ -1,12 +1,12 @@
 # K7 YG HEV 파라미터 안내
 
 이 디렉터리에는 KIA K7 YG HEV용 조향 제어, 주행 제한, 비전 크루즈, 기록, 디스플레이 및
-카메라 캘리브레이션 값이 들어 있다. `k230_controlsd`는 세 런타임 JSON
+카메라 캘리브레이션 값이 들어 있다. `controlsd`는 세 런타임 JSON
 변경을 100ms 이내에 감지하고 다음 제어 주기에 즉시 반영한다. 제어 상태와
 PID 상태는 유지되며 engage 여부에 따른 적용 지연은 없다.
 
 기본 경로는 실행 디렉터리의 `params/`이다. 다른 디렉터리를 사용하려면
-`K230_PARAMS_DIR=/path/to/params`를 지정한다.
+`EDGEPILOT_PARAMS_DIR=/path/to/params`를 지정한다.
 
 ## 튜닝 전 주의사항
 
@@ -17,7 +17,7 @@ PID 상태는 유지되며 engage 여부에 따른 적용 지연은 없다.
 - 허용 범위를 벗어난 숫자는 로더가 아래 표의 범위로 제한한다.
 - JSON은 주석을 지원하지 않으므로 설명은 이 문서에서 관리한다.
 - `mdps_speed_spoof_kph`, 토크 부호, 차량 제원은 다른 차량 값으로 임의 변경하지 않는다.
-- 웹 편집기는 `K230_ENABLE_PARAM_SERVER=1`일 때 기본 8080 포트에서 실행된다.
+- 웹 편집기는 `EDGEPILOT_ENABLE_PARAM_SERVER=1`일 때 기본 8080 포트에서 실행된다.
   `실시간 학습` 탭은 paramsd·torqued 학습값을 수동값과 나란히, 최근 10분 추이와 함께 보여준다(읽기 전용, 사용 스위치만 켜고 끈다).
 
 ## recording.json
@@ -162,7 +162,7 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 ## calibration.json
 
 이 파일은 일반 튜닝 파일이 아니라 온라인 카메라 캘리브레이션의 저장 상태다.
-`SUPERCOMBO_CALIB_AUTO=1`일 때 모델 pose와 실제 차량 속도로 갱신된다. 보드나
+`EDGEPILOT_CALIB_AUTO=1`일 때 모델 pose와 실제 차량 속도로 갱신된다. 보드나
 카메라 장착 각도가 달라지거나 카메라 내부 파라미터를 다시 측정하면 기존 값을
 그대로 사용하지 말고 다시 캘리브레이션한다.
 

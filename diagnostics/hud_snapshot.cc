@@ -1,6 +1,6 @@
 /* HUD 스냅샷·타이밍 도구. 렌더러만 떼어 480x800 ARGB 버퍼에 그리고 시나리오별 프레임을
- * K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의 K230ModelState /
- * K230ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성 장면을 쓴다.
+ * K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의 ModelState /
+ * ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성 장면을 쓴다.
  * 호스트와 보드에서 같은 소스로 빌드한다.
  * 사용: hud_snapshot [--assets DIR] [--model model.bin] [--control control.bin]
  *       [--iterations N] [--out PREFIX] [--landscape] */
@@ -128,15 +128,15 @@ int main(int argc, char **argv)
         }
     }
 
-    K230ModelState model_state{};
-    K230ControlState control_state{};
+    ModelState model_state{};
+    ControlState control_state{};
     const bool have_model = !model_path.empty() && read_file(model_path, &model_state, sizeof(model_state));
     const bool have_control = !control_path.empty() && read_file(control_path, &control_state, sizeof(control_state));
     if (!model_path.empty() && !have_model) std::fprintf(stderr, "cannot read %s\n", model_path.c_str());
     if (!control_path.empty() && !have_control) std::fprintf(stderr, "cannot read %s\n", control_path.c_str());
 
-    ParsedModelOutput output = have_model ? k230_parsed_from_model_state(model_state) : synthetic_output();
-    ProjectionState projection = have_model ? k230_projection_from_model_state(model_state)
+    ParsedModelOutput output = have_model ? parsed_from_model_state(model_state) : synthetic_output();
+    ProjectionState projection = have_model ? projection_from_model_state(model_state)
                                             : make_projection_state(0.0f, 0.0f, 0.0f);
 
     OverlayHudState idle;

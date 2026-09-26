@@ -66,7 +66,7 @@ uint64_t file_revision(const std::string &path) {
       static_cast<uint64_t>(status.st_size);
 }
 
-void open_optional_channel(K230LatestChannel &channel, bool *opened,
+void open_optional_channel(LatestChannel &channel, bool *opened,
                            const char *name, size_t size) {
   if (!*opened) *opened = channel.open(name, size, false);
 }
@@ -77,27 +77,27 @@ int main() {
   install_stop_signal_handlers(&g_stop);
 
   try {
-    const std::string config_path = k230_param_path("recording.json");
-    const std::string recording_root = env_string("K230_RECORD_ROOT", "recordings");
-    const std::string codec_device = env_string("K230_RECORD_CODEC", "/dev/video0");
+    const std::string config_path = param_path("recording.json");
+    const std::string recording_root = env_string("EDGEPILOT_RECORD_ROOT", "recordings");
+    const std::string codec_device = env_string("EDGEPILOT_RECORD_CODEC", "/dev/video0");
     const unsigned recording_bitrate =
         read_recording_bitrate(config_path, kRecordingBitrate);
 
-    K230FrameRing frame_ring;
+    FrameRing frame_ring;
     while (!g_stop && !frame_ring.open(false)) {
       std::fprintf(stderr, "recordd: waiting for road AI frame ring\n");
       usleep(250000);
     }
     if (!frame_ring.valid()) return 1;
 
-    K230LatestChannel record_frame_sub;
-    if (!record_frame_sub.open(kK230RecordFrameTopic, sizeof(K230RoadAiFrame), true))
+    LatestChannel record_frame_sub;
+    if (!record_frame_sub.open(kRecordFrameTopic, sizeof(RoadAiFrame), true))
       throw std::runtime_error("open recordFrame IPC failed");
 
-    K230CanQueue can_log_sub;
-    K230CanQueue sendcan_log_sub;
-    if (!can_log_sub.open(kK230CanLogTopic, kK230CanQueueSlots, true) ||
-        !sendcan_log_sub.open(kK230SendCanLogTopic, kK230CanQueueSlots, true)) {
+    CanQueue can_log_sub;
+    CanQueue sendcan_log_sub;
+    if (!can_log_sub.open(kCanLogTopic, kCanQueueSlots, true) ||
+        !sendcan_log_sub.open(kSendCanLogTopic, kCanQueueSlots, true)) {
       throw std::runtime_error("open CAN recording queues failed");
     }
 
@@ -106,7 +106,7 @@ int main() {
                       kRecordingFps, recording_bitrate)) {
       throw std::runtime_error("open MVX hardware encoder failed");
     }
-    RecordingWriter writer(recording_root, k230_params_dir(), frame_ring.width(),
+    RecordingWriter writer(recording_root, params_dir(), frame_ring.width(),
                            frame_ring.height(), kRecordingFps, recording_bitrate);
 
     auto packet_handler = [&writer](const MvxV4l2Encoder::Packet &packet) {
@@ -118,18 +118,18 @@ int main() {
       }
     };
     auto drain_encoder = [&encoder, &packet_handler]() {
-      const uint64_t deadline_ns = k230_now_ns() + 500000000ULL;
+      const uint64_t deadline_ns = monotonic_now_ns() + 500000000ULL;
       while (encoder.submitted_frames() != encoder.encoded_frames() &&
-             k230_now_ns() < deadline_ns) {
+             monotonic_now_ns() < deadline_ns) {
         encoder.drain(packet_handler);
         if (encoder.submitted_frames() != encoder.encoded_frames()) usleep(2000);
       }
     };
 
-    K230LatestChannel model_sub;
-    K230LatestChannel control_sub;
-    K230LatestChannel panda_sub;
-    K230LatestChannel learner_sub;
+    LatestChannel model_sub;
+    LatestChannel control_sub;
+    LatestChannel panda_sub;
+    LatestChannel learner_sub;
     bool model_open = false;
     bool control_open = false;
     bool panda_open = false;
@@ -141,7 +141,7 @@ int main() {
     uint64_t frame_seq = 0;
     uint64_t config_revision = UINT64_MAX;
     uint64_t next_config_poll_ns = 0;
-    uint64_t next_log_ns = k230_now_ns() + 1000000000ULL;
+    uint64_t next_log_ns = monotonic_now_ns() + 1000000000ULL;
     uint64_t selected_frames = 0;
     uint64_t dropped_frames = 0;
     uint64_t stale_frames = 0;
@@ -149,7 +149,7 @@ int main() {
     bool warmed = false;
 
     while (!g_stop) {
-      const uint64_t now_ns = k230_now_ns();
+      const uint64_t now_ns = monotonic_now_ns();
       if (now_ns >= next_config_poll_ns) {
         next_config_poll_ns = now_ns + kConfigPollIntervalNs;
         const uint64_t revision = file_revision(config_path);
@@ -166,12 +166,12 @@ int main() {
       }
 
       const bool need_video_frame = !warmed || writer.requested_enabled();
-      K230RoadAiFrame frame;
+      RoadAiFrame frame;
       if (need_video_frame &&
           record_frame_sub.read_new(&frame_seq, &frame, sizeof(frame), 10)) {
         ++selected_frames;
 
-        const uint64_t frame_now_ns = k230_now_ns();
+        const uint64_t frame_now_ns = monotonic_now_ns();
         const uint64_t age_ns = frame_now_ns >= frame.timestamp_ns
             ? frame_now_ns - frame.timestamp_ns : UINT64_MAX;
         if (frame.slot < frame_ring.slot_count() &&
@@ -206,41 +206,41 @@ int main() {
       if (encoder.submitted_frames() != encoder.encoded_frames())
         encoder.drain(packet_handler);
 
-      K230CanBatch batch;
-      while (can_log_sub.pop(&batch)) writer.write_can(K230RecordType::CanRx, batch);
-      while (sendcan_log_sub.pop(&batch)) writer.write_can(K230RecordType::CanTx, batch);
+      CanBatch batch;
+      while (can_log_sub.pop(&batch)) writer.write_can(RecordType::CanRx, batch);
+      while (sendcan_log_sub.pop(&batch)) writer.write_can(RecordType::CanTx, batch);
 
       if (writer.requested_enabled()) {
-        open_optional_channel(model_sub, &model_open, kK230ModelStateTopic,
-                              sizeof(K230ModelState));
-        open_optional_channel(control_sub, &control_open, kK230ControlStateTopic,
-                              sizeof(K230ControlState));
-        open_optional_channel(panda_sub, &panda_open, kK230PandaStateTopic,
-                              sizeof(K230PandaState));
-        open_optional_channel(learner_sub, &learner_open, kK230LearnerStateTopic,
-                              sizeof(K230LearnerState));
-        K230ModelState model_state;
+        open_optional_channel(model_sub, &model_open, kModelStateTopic,
+                              sizeof(ModelState));
+        open_optional_channel(control_sub, &control_open, kControlStateTopic,
+                              sizeof(ControlState));
+        open_optional_channel(panda_sub, &panda_open, kPandaStateTopic,
+                              sizeof(PandaState));
+        open_optional_channel(learner_sub, &learner_open, kLearnerStateTopic,
+                              sizeof(LearnerState));
+        ModelState model_state;
         if (model_open && model_sub.read_new(&model_seq, &model_state,
                                              sizeof(model_state), 0)) {
-          writer.write_state(K230RecordType::ModelState, model_state.model_timestamp_ns,
+          writer.write_state(RecordType::ModelState, model_state.model_timestamp_ns,
                              &model_state, sizeof(model_state));
         }
-        K230ControlState control_state;
+        ControlState control_state;
         if (control_open && control_sub.read_new(&control_seq, &control_state,
                                                  sizeof(control_state), 0)) {
-          writer.write_state(K230RecordType::ControlState, control_state.timestamp_ns,
+          writer.write_state(RecordType::ControlState, control_state.timestamp_ns,
                              &control_state, sizeof(control_state));
         }
-        K230PandaState panda_state;
+        PandaState panda_state;
         if (panda_open && panda_sub.read_new(&panda_seq, &panda_state,
                                              sizeof(panda_state), 0)) {
-          writer.write_state(K230RecordType::PandaState, panda_state.timestamp_ns,
+          writer.write_state(RecordType::PandaState, panda_state.timestamp_ns,
                              &panda_state, sizeof(panda_state));
         }
-        K230LearnerState learner_state;
+        LearnerState learner_state;
         if (learner_open && learner_sub.read_new(&learner_seq, &learner_state,
                                                  sizeof(learner_state), 0)) {
-          writer.write_state(K230RecordType::LearnerState, learner_state.timestamp_ns,
+          writer.write_state(RecordType::LearnerState, learner_state.timestamp_ns,
                              &learner_state, sizeof(learner_state));
         }
       }

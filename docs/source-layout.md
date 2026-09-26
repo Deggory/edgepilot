@@ -33,7 +33,7 @@
 - `src/gpu_warp.*`
   - the VGLite (2.5D GPU) input warp: the perspective 3x3 and bilinear
     sampling run on the GPU and land directly in the model's input tensor.
-    `SUPERCOMBO_WARP_CPU=1` selects the CPU path in `model_input_transform`
+    `EDGEPILOT_WARP_CPU=1` selects the CPU path in `model_input_transform`
     instead.
 - `src/calibration_service.*`, `src/calibration_online.*`
   - wrap pose-based online calibration, manual override, projection policy, and
@@ -71,7 +71,7 @@
 - `src/control_block.h`
   - the engage/steer block reasons as one table: enum, wire name, HUD label,
     and kind (reject / hard disengage / transient Panda handshake /
-    availability). The controller decides in `BlockReason`, `K230ControlState`
+    availability). The controller decides in `BlockReason`, `ControlState`
     carries the wire name so recordings and the Python readers stay text, and
     `overlay_state` labels it from the same rows. `gtest_overlay_state` proves
     every reason has a label.
@@ -80,7 +80,7 @@
 
 `src/control_holds.*` implements both holds as `PandaHealthGate` and
 `PathHoldGate`; `gtest_control_replay` exercises their boundaries.
-`k230_controlsd` tolerates a single malformed plan frame by holding the last
+`controlsd` tolerates a single malformed plan frame by holding the last
 usable path for at most 150 ms; the normal 250 ms model freshness timeout remains
 a hard safety gate, so a stale or invalid model still removes control. A
 transient Panda health-snapshot gap is similarly limited to 100 ms; a fresh,
@@ -92,34 +92,34 @@ released after that short hold if they persist.
 - `src/ipc_messages.*`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the `K230*State` snapshots with their `static_assert`s, and the
-    `ParsedModelOutput` ↔ `K230ModelState` marshalling. Recording v5 stores
-    `K230ModelState`, `K230ControlState`, and `K230PandaState` as-is, so their
-    offsets are pinned here and tied to `kK230RecordingVersion`. Code that only
+    `ParsedModelOutput` ↔ `ModelState` marshalling. Recording v5 stores
+    `ModelState`, `ControlState`, and `PandaState` as-is, so their
+    offsets are pinned here and tied to `kRecordingVersion`. Code that only
     reads or fills a message includes this and nothing else.
 - `src/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
     and the shared NV12 frame ring, all on one `ShmRegion` (open, size,
     map, close); each channel keeps only its own size policy.
-- `src/k230_overlayd.cc`, `src/k230_camerad.cc`, `src/k230_modeld.cc`
-  - openpilot-style process split. `k230_overlayd` is the direct DRM overlay
-    process; `k230_camerad` and `k230_modeld` keep the camera/model path
+- `src/overlayd.cc`, `src/camerad.cc`, `src/modeld.cc`
+  - openpilot-style process split. `overlayd` is the direct DRM overlay
+    process; `camerad` and `modeld` keep the camera/model path
     independent.
 - `src/overlay_renderer.*`
   - draws the HUD (panels, plan/lane/road-edge ribbons, lead marker, turn
     signals, alerts, traffic-signal sprites) with OpenCV into the CPU ARGB8888
     buffer used by the split DRM overlay process. Stateless apart from the
-    preloaded sprites; the turn-signal phase comes from `k230_overlayd`.
+    preloaded sprites; the turn-signal phase comes from `overlayd`.
 - `src/overlay_state.*`
   - `OverlayHudState`, the `K230*State` → `OverlayHudState` mapping shared by
-    `k230_overlayd` and `hud_snapshot`, the engage-block label table, and
+    `overlayd` and `hud_snapshot`, the engage-block label table, and
     `OverlayAlertEvents`, which turns the controlsd event counters into the one
     piezo/toast alert a frame may play (baseline on first sight, rebaseline on a
     controlsd restart, reject > engage > disengage > departure). No OpenCV, so
     `gtest_overlay_state` pins all of it on the host.
 - `src/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling into `OverlayHudState`, called
-    at 1 Hz by `k230_overlayd`.
-- `src/k230_recordd.cc`, `src/mvx_v4l2_encoder.*`, `src/recording_writer.*`,
+    at 1 Hz by `overlayd`.
+- `src/recordd.cc`, `src/mvx_v4l2_encoder.*`, `src/recording_writer.*`,
   `src/recording_format.h`
   - low-priority data recorder, direct MVX V4L2 M2M encoder, timestamp index,
     compact event log, route segmentation, and storage-reserve guard.
@@ -127,29 +127,29 @@ released after that short hold if they persist.
     (a queue entry is the packet or record bytes, not a 21 KB CAN batch), and
     `StagingMover` is the thread that moves closed files from tmpfs to the SD
     card. `gtest_recording_writer` pins the on-disk layout on the host.
-    `recording_format.h` is the on-disk contract (`kK230RecordingVersion`,
+    `recording_format.h` is the on-disk contract (`kRecordingVersion`,
     the `K230LOG1` / `K230IDX1` headers, record types) that
     `tools/model/recording_reader.py` mirrors.
 - `src/piezo_buzzer.*`
   - the PWM buzzer: one table of tone sequences per `PiezoAlert`, played from
-    a helper thread so `k230_overlayd` never waits on it.
+    a helper thread so `overlayd` never waits on it.
 - `src/mmz.c`
   - the K230 SDK's MMZ (physically contiguous memory) allocator shim behind
-    `k230_camerad`'s capture buffers.
-- `src/panda_client.*`, `src/panda_can_codec.*`, `src/k230_pandad.cc`
+    `camerad`'s capture buffers.
+- `src/panda_client.*`, `src/panda_can_codec.*`, `src/pandad.cc`
   - optional panda USB bridge. It handles USB, health, heartbeat, receive CAN,
     and the final TX gate, but does not generate vehicle control messages.
-- `src/k230_controlsd.cc`
+- `src/controlsd.cc`
   - standalone K7 YG HEV lateral controller using the validated Hyundai CAN bus
     split, torque limits, counters, checksums, 60 kph MDPS helper, and a 20 Hz
     planner worker separated from the 100 Hz control loop.
-- `scripts/k230_manager.py`
+- `scripts/manager.py`
   - minimal supervisor and heartbeat publisher. It is intentionally not a full
     openpilot manager clone. One table in start order decides which processes
-    run (`K230_ENABLE_CONTROL`, `K230_ENABLE_PANDA`, `K230_ENABLE_PARAM_SERVER`)
+    run (`EDGEPILOT_ENABLE_CONTROL`, `EDGEPILOT_ENABLE_PANDA`, `EDGEPILOT_ENABLE_PARAM_SERVER`)
     and with what nice value.
-- `scripts/k230_param_server.py`, `scripts/display_control.py`
-  - the FastAPI parameter editor (`K230_ENABLE_PARAM_SERVER`) and the
+- `scripts/param_server.py`, `scripts/display_control.py`
+  - the FastAPI parameter editor (`EDGEPILOT_ENABLE_PARAM_SERVER`) and the
     backlight/brightness helper it calls.
 
 ## Scripts and tools
@@ -186,11 +186,11 @@ released after that short hold if they persist.
 - `src/utils_process.h`
   - what a process gets from the OS: environment variables (`env_flag` is the
     one boolean convention), the `params/` directory path, and the
-    SIGINT/SIGTERM → stop-flag hookup used by every `k230_*d` main.
+    SIGINT/SIGTERM → stop-flag hookup used by every `*d` main.
 - `src/utils_math.h`
   - clamping, openpilot `interp`, degree/radian conversion.
 - `src/utils_time.h`
-  - `k230_now_ns` (`CLOCK_BOOTTIME`), the clock behind every timestamp that
+  - `monotonic_now_ns` (`CLOCK_BOOTTIME`), the clock behind every timestamp that
     crosses a process boundary, and the freshness predicates for ns and
     CAN-seconds timestamps. Per-process scheduling may still use
     `std::chrono::steady_clock`.

@@ -341,8 +341,8 @@ void MvxV4l2Encoder::drain_capture(const PacketHandler &handler) {
 
     const bool codec_config =
         (buffer.flags & kMvxVendorFlagMask) == kMvxCodecConfigFlag;
-    K230RoadAiFrame frame{};
-    const K230RoadAiFrame *frame_ptr = nullptr;
+    RoadAiFrame frame{};
+    const RoadAiFrame *frame_ptr = nullptr;
     if (!codec_config && buffer.bytesused > 0) {
       if (!pending_frames_.empty()) {
         frame = pending_frames_.front();
@@ -372,7 +372,7 @@ void MvxV4l2Encoder::drain(const PacketHandler &handler) {
   reclaim_raw();
 }
 
-bool MvxV4l2Encoder::submit_frame(const K230RoadAiFrame &frame,
+bool MvxV4l2Encoder::submit_frame(const RoadAiFrame &frame,
                                   const FrameFiller &fill,
                                   const PacketHandler &handler) {
   if (!valid() || !fill || frame.width != width_ || frame.height != height_) {

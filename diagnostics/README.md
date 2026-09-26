@@ -1,7 +1,7 @@
 # 진단 도구
 
 런타임 경로 밖에 두는 분석·재생·벤치 도구다. 기본 빌드에는 들어가지 않고
-`SUPERCOMBO_BUILD_DIAGNOSTICS=ON`일 때 [`CMakeLists.txt`](CMakeLists.txt)가 만든다.
+`EDGEPILOT_BUILD_DIAGNOSTICS=ON`일 때 [`CMakeLists.txt`](CMakeLists.txt)가 만든다.
 단위 테스트는 [`../gtest/`](../gtest/README.md)에 있다.
 
 ## 빌드
@@ -11,13 +11,13 @@
 ```sh
 cmake -S . -B build-host \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSUPERCOMBO_BUILD_RUNTIME=OFF \
-  -DSUPERCOMBO_BUILD_DIAGNOSTICS=ON
+  -DEDGEPILOT_BUILD_RUNTIME=OFF \
+  -DEDGEPILOT_BUILD_DIAGNOSTICS=ON
 cmake --build build-host --target replay_closed_loop -j2
 ```
 
-보드 도구는 `build/`의 교차 빌드에 `-DSUPERCOMBO_BUILD_DIAGNOSTICS=ON`을 더해 만든다.
-`hud_snapshot`은 `k230_overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
+보드 도구는 `build/`의 교차 빌드에 `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`을 더해 만든다.
+`hud_snapshot`은 `overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
 
 ## 도구
 

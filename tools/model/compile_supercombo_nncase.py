@@ -94,7 +94,7 @@ def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--model", required=True, type=Path)
   parser.add_argument("--out", required=True, type=Path)
-  parser.add_argument("--dump-dir", default=Path("dump/supercombo_k230"), type=Path)
+  parser.add_argument("--dump-dir", default=Path("dump/edgepilot"), type=Path)
   parser.add_argument("--target", default="k230")
   parser.add_argument("--no-dump-ir", action="store_true")
   parser.add_argument("--no-dump-asm", action="store_true")

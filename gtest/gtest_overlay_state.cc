@@ -8,9 +8,9 @@
 
 namespace {
 
-K230ControlState control_with_events(uint32_t engage, uint32_t disengage, uint32_t reject,
+ControlState control_with_events(uint32_t engage, uint32_t disengage, uint32_t reject,
                                      uint32_t departure) {
-  K230ControlState c;
+  ControlState c;
   c.engage_event_id = engage;
   c.disengage_event_id = disengage;
   c.engage_reject_event_id = reject;
@@ -33,7 +33,7 @@ TEST(OverlayState, FirstSnapshotIsABaseline) {
 TEST(OverlayState, PriorityAndOneAlertPerFrame) {
   OverlayAlertEvents events;
   events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
-  const K230ControlState burst = control_with_events(6, 4, 3, 2);
+  const ControlState burst = control_with_events(6, 4, 3, 2);
   const auto first = events.update(burst, DepartureAlertType::lead_departed);
   // 같은 프레임에서는 engage 거부가 가장 먼저다
   ASSERT_EQ(first.alert, OverlayAlert::unable);
@@ -57,7 +57,7 @@ TEST(OverlayState, PriorityAndOneAlertPerFrame) {
 TEST(OverlayState, DepartureWaitsForADisplayedType) {
   OverlayAlertEvents events;
   events.update(control_with_events(0, 0, 0, 0), DepartureAlertType::none);
-  const K230ControlState departed = control_with_events(0, 0, 0, 7);
+  const ControlState departed = control_with_events(0, 0, 0, 7);
   ASSERT_EQ(events.update(departed, DepartureAlertType::none).alert, OverlayAlert::none)
       << "표시할 알림 종류가 없으면 출발 id를 소비하지 않는다";
   const auto later = events.update(departed, DepartureAlertType::green_light);
@@ -79,11 +79,11 @@ TEST(OverlayState, ControlsdRestartRebaselines) {
 }
 
 TEST(OverlayState, ControlStateMapping) {
-  K230ControlState c;
+  ControlState c;
   c.enabled = 1;
   c.engaged = 1;
   c.cluster_speed_kph = 63.5f;
-  c.hud_flags = kK230HudFlagLaneless;
+  c.hud_flags = kHudFlagLaneless;
   c.departure_alert_type = static_cast<uint32_t>(DepartureAlertType::green_light);
   c.apply_torque = -120;
   std::snprintf(c.active_block, sizeof(c.active_block), "%s", "not_engaged");

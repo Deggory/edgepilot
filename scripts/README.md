@@ -17,13 +17,13 @@
 환경 변수로 바꿀 수 있는 것:
 
 - `configure_k230_macos.sh`: `K230_WORKSPACE_DIR`, `K230_XUANTIE_TOOLCHAIN_DIR`, `K230_RISCV_LD`,
-  `K230_BOARD_LIBS_DIR`, `SUPERCOMBO_BUILD_PANDA`, `SUPERCOMBO_BUILD_DIAGNOSTICS` 등.
+  `K230_BOARD_LIBS_DIR`, `EDGEPILOT_BUILD_PANDA`, `EDGEPILOT_BUILD_DIAGNOSTICS` 등.
   경로는 구성 전에 모두 있는지 확인한다.
-- `upload_to_board.sh`: `K230_SSH`/`K230_SCP`(예: `sshpass -p ... ssh`), `K230_BUILD_DIR`
-  (기본 `build`), `K230_BIN_DIR`, `K230_BOARD_DIR`(기본 `/root/supercombo_k230`). 보드의
+- `upload_to_board.sh`: `EDGEPILOT_SSH`/`EDGEPILOT_SCP`(예: `sshpass -p ... ssh`), `EDGEPILOT_BUILD_DIR`
+  (기본 `build`), `EDGEPILOT_BIN_DIR`, `EDGEPILOT_BOARD_DIR`(기본 `/root/edgepilot`). 보드의
   `params/`는 덮어쓰지 않고, 기본값은 `params.defaults/`에 두어 없는 파일만 채운다. 보드
-  이미지에 `/etc/init.d/S35supercombo_k230`이 없으면 올리지 않는다.
-- `run_host_tests.sh`: `K230_HOST_BUILD_DIR`(기본 `build-host`), `JOBS`.
+  `scripts/S35edgepilot`을 `/etc/init.d/`에 설치하고, 예전 `S35supercombo_k230`은 멈추고 지우며 그 `params/`를 한 번 옮긴다.
+- `run_host_tests.sh`: `EDGEPILOT_HOST_BUILD_DIR`(기본 `build-host`), `JOBS`.
 - `build_supercombo_model.sh`: `DOCKER_IMAGE`, `OPENPILOT_TAG`, `SOURCE_ONNX`, `PYTHON_BIN`.
 
 자세한 빌드와 배포 절차는 [Build and deploy](../docs/build-and-deploy.md)에 있다.
@@ -32,8 +32,8 @@
 
 | 파일 | 사용 | 하는 일 |
 | --- | --- | --- |
-| `k230_manager.py` | `./k230_manager.py [supercombo.kmodel] [debug_mode]` | 런타임 감시자. 프로세스를 순서대로 띄우고 죽으면 다시 띄운다. 이미지의 `S35supercombo_k230`이 부팅 때 실행한다 |
-| `k230_param_server.py` | `[--host 주소] [--port 포트]` | 파라미터 편집 웹 서버(FastAPI, 기본 `0.0.0.0:8080`). 매니저가 함께 띄운다 |
+| `manager.py` | `./manager.py [supercombo.kmodel] [debug_mode]` | 런타임 감시자. 프로세스를 순서대로 띄우고 죽으면 다시 띄운다. 이미지의 `S35edgepilot`이 부팅 때 실행한다 |
+| `param_server.py` | `[--host 주소] [--port 포트]` | 파라미터 편집 웹 서버(FastAPI, 기본 `0.0.0.0:8080`). 매니저가 함께 띄운다 |
 | `display_control.py` | (모듈) | LCD 백라이트 제어. 파라미터 서버가 `display.json`을 적용할 때 쓴다 |
 | `requirements-param-server.txt` | `python3 -m pip install -r ...` | 파라미터 서버 의존성(fastapi, uvicorn) |
 

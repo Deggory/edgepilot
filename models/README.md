@@ -44,7 +44,7 @@ fl=455) and keeps independent two-frame histories, writing each warped frame
 straight into its nncase tensor. The 128-float feature vector at offset 5990
 is fed back through `features_buffer`; there is no GRU state.
 
-`k230_modeld` verifies this contract at load and refuses any other kmodel, so
+`modeld` verifies this contract at load and refuses any other kmodel, so
 a mismatched model fails loudly instead of being misparsed.
 
 ## Verification

@@ -392,7 +392,7 @@ TEST(CalibrationEquivalence, CalibrationService)
     constexpr const char *kTestParamsDir = "params/work";
     constexpr const char *kTestCalibration = "params/work/calibration.json";
     std::remove(kTestCalibration);
-    setenv("K230_PARAMS_DIR", kTestParamsDir, 1);
+    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
 
     OnlineCalibrator restored_calibrator;
     const float restored_rpy[3] = {0.0f, deg_to_rad(2.0f), deg_to_rad(-0.75f)};
@@ -453,18 +453,18 @@ TEST(CalibrationEquivalence, CalibrationService)
               static_cast<int>(CalibrationStatus::Calibrated))
         << "다시 읽은 보정은 보정 완료 상태다";
 
-    unsetenv("K230_PARAMS_DIR");
+    unsetenv("EDGEPILOT_PARAMS_DIR");
     std::remove(kTestCalibration);
 }
 
 TEST(CalibrationEquivalence, AppConfigEnvFeedback)
 {
-    unsetenv("SUPERCOMBO_CALIB_ROLL_DEG");
-    unsetenv("SUPERCOMBO_CALIB_PITCH_DEG");
-    unsetenv("SUPERCOMBO_CALIB_YAW_DEG");
+    unsetenv("EDGEPILOT_CALIB_ROLL_DEG");
+    unsetenv("EDGEPILOT_CALIB_PITCH_DEG");
+    unsetenv("EDGEPILOT_CALIB_YAW_DEG");
 
-    setenv("SUPERCOMBO_CALIB_PITCH_DEG", "1.25", 1);
-    setenv("SUPERCOMBO_CALIB_YAW_DEG", "-0.75", 1);
+    setenv("EDGEPILOT_CALIB_PITCH_DEG", "1.25", 1);
+    setenv("EDGEPILOT_CALIB_YAW_DEG", "-0.75", 1);
     AppConfig fallback = AppConfig::from_env_defaults();
     EXPECT_TRUE(fallback.manual_calibration)
         << "수동 보정 환경 변수를 주면 수동 모드가 켜진다";
@@ -481,9 +481,9 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
     EXPECT_NEAR(fallback.input_warp_cy, kDefaultInputWarpCy, 1e-5)
         << "ISP 출력 크기로 K230 카메라 cy를 맞춘다";
 
-    unsetenv("SUPERCOMBO_CALIB_ROLL_DEG");
-    unsetenv("SUPERCOMBO_CALIB_PITCH_DEG");
-    unsetenv("SUPERCOMBO_CALIB_YAW_DEG");
+    unsetenv("EDGEPILOT_CALIB_ROLL_DEG");
+    unsetenv("EDGEPILOT_CALIB_PITCH_DEG");
+    unsetenv("EDGEPILOT_CALIB_YAW_DEG");
 }
 
 /* 모델 프레임 → 카메라 영상 투영 행렬의 참조식(openpilot get_warp_matrix 경로를 double로). */

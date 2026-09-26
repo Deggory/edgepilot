@@ -49,19 +49,19 @@
 
 ```mermaid
 flowchart TB
-  camera([camera]) --> camerad[k230_camerad]
-  camerad -->|NV12 ring| modeld["k230_modeld<br/>supercombo · KPU"]
-  modeld -->|modelState| controlsd["k230_controlsd<br/>planner · MPC · torque"]
-  controlsd <-->|"sendcan · CAN RX"| pandad[k230_pandad]
+  camera([camera]) --> camerad[camerad]
+  camerad -->|NV12 ring| modeld["modeld<br/>supercombo · KPU"]
+  modeld -->|modelState| controlsd["controlsd<br/>planner · MPC · torque"]
+  controlsd <-->|"sendcan · CAN RX"| pandad[pandad]
   pandad <--> panda(["Panda · vehicle CAN"])
-  modeld -->|frames| recordd["k230_recordd<br/>HEVC · CAN log"]
-  modeld & controlsd & pandad --> overlayd["k230_overlayd<br/>LCD HUD · piezo"]
+  modeld -->|frames| recordd["recordd<br/>HEVC · CAN log"]
+  modeld & controlsd & pandad --> overlayd["overlayd<br/>LCD HUD · piezo"]
   camera -. preview .-> overlayd
 ```
 
 Each process does one job and talks to the others through `/dev/shm`, keeping
-openpilot's process boundaries without Cap'n Proto/cereal. `k230_manager.py`
-starts and supervises them, and `k230_param_server.py` serves the tuning UI. See
+openpilot's process boundaries without Cap'n Proto/cereal. `manager.py`
+starts and supervises them, and `param_server.py` serves the tuning UI. See
 [Split runtime](docs/runtime.md) for each process.
 
 ## Safety model
@@ -70,20 +70,20 @@ Every layer must agree before steering torque reaches the car:
 
 1. **Panda safety firmware** (`hyundaiCommunity`) enforces the Hyundai torque,
    rate, and driver-override limits and is never bypassed.
-2. **`k230_controlsd` gates** require a fresh model, a valid MPC solution, fresh
+2. **`controlsd` gates** require a fresh model, a valid MPC solution, fresh
    vehicle state, the right gear, a fastened seatbelt, and an explicit driver
    SET press. A failing gate shows its reason on the HUD.
 3. **Controller limits** cap the curvature at openpilot's `0.2 1/m` with a jerk
    limit, rate-limit the torque, and ramp it to zero before the MDPS fault angle.
-4. **`K230_PANDA_TX`** is the final transmit switch; the controller never
+4. **`EDGEPILOT_PANDA_TX`** is the final transmit switch; the controller never
    transmits on its own.
 
 ## Hardware
 
 - 01Studio CanMV K230 with its camera and 3.5-inch 800x480 LCD, flashed with the
   [CanMV-K230 Linux v1.2 image](https://github.com/cwal1220/k230_linux_sdk/releases/tag/v1.2-01studio-20260907.1)
-  (camera and display stack, nncase v2.11.0 runtime, `S35supercombo_k230`
-  service)
+  (camera and display stack, nncase v2.11.0 runtime; its `S35supercombo_k230`
+  service is replaced by `S35edgepilot` on the first upload)
 - a comma Panda on USB
 - a KIA K7 YG HEV
 - optional: the printable [windshield mount](docs/hardware/windshield_mount/README.md)
@@ -105,15 +105,15 @@ Every layer must agree before steering torque reaches the car:
    Or build natively on the board:
 
    ```sh
-   cd /root/supercombo_k230
+   cd /root/edgepilot
    ./scripts/fetch_nncase_runtime.sh
    cmake -S . -B build-native -DCMAKE_BUILD_TYPE=Release
    cmake --build build-native -j2
-   cmake --install build-native --prefix /root/supercombo_k230
+   cmake --install build-native --prefix /root/edgepilot
    ```
 
-3. **Run.** The image's `S35supercombo_k230` service starts `k230_manager.py` at
-   boot; `/etc/init.d/S35supercombo_k230 restart` restarts it. Tune parameters at
+3. **Run.** The `S35edgepilot` service (installed by `upload_to_board.sh`) starts `manager.py` at
+   boot; `/etc/init.d/S35edgepilot restart` restarts it. Tune parameters at
    `http://<board-ip>:8080`.
 4. **Shadow run first.** Verify Panda RX, safety mode, and counters with TX off
    before enabling it; the gates are listed in

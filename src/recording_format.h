@@ -2,20 +2,20 @@
 
 #include <cstdint>
 
-/* v2: K230ModelState에서 소비자가 없던 lateral_target/lateral_plan(308 B)을
+/* v2: ModelState에서 소비자가 없던 lateral_target/lateral_plan(308 B)을
  * 제거해 페이로드가 4384 -> 4076 B로 줄었다. v1 녹화와 호환되지 않는다.
  * v3: 이벤트 로그를 route 단위 events.bin 하나에서 60초 청크 events/NNN.bin
  * 으로 분할했다. route 단위 파일은 CAN 로깅(~0.5 MB/s)만으로 30분이면 988 MB
  * tmpfs 스테이징을 가득 채워 남은 주행의 기록을 전부 죽였다. 레코드/헤더
- * 레이아웃은 v2와 동일하고 각 청크가 K230EventFileHeader로 시작한다.
+ * 레이아웃은 v2와 동일하고 각 청크가 EventFileHeader로 시작한다.
  * v4: openpilot v0.9.4 모델로 옮기면서 그 모델이 내지 않는 stop_line(28 B)을
- * K230ModelState에서 뺐다.
+ * ModelState에서 뺐다.
  * v5: 소비자가 없던 plan_position_stds/plan_orientations(792 B)를
- * K230ModelState에서 뺐다. 페이로드가 4048 -> 3256 B로 줄어 v4 이하 녹화와
+ * ModelState에서 뺐다. 페이로드가 4048 -> 3256 B로 줄어 v4 이하 녹화와
  * 호환되지 않는다. LearnerState(6)는 v5에 더한 타입이라 모르는 리더는 건너뛴다. */
-constexpr uint32_t kK230RecordingVersion = 5;
+constexpr uint32_t kRecordingVersion = 5;
 
-enum class K230RecordType : uint16_t {
+enum class RecordType : uint16_t {
   CanRx = 1,
   CanTx = 2,
   ModelState = 3,
@@ -25,27 +25,27 @@ enum class K230RecordType : uint16_t {
 };
 
 #pragma pack(push, 1)
-struct K230EventFileHeader {
+struct EventFileHeader {
   char magic[8] = {'K', '2', '3', '0', 'L', 'O', 'G', '1'};
-  uint32_t version = kK230RecordingVersion;
-  uint32_t header_size = sizeof(K230EventFileHeader);
+  uint32_t version = kRecordingVersion;
+  uint32_t header_size = sizeof(EventFileHeader);
   uint64_t route_start_ns = 0;
   uint64_t reserved = 0;
 };
 
-struct K230EventRecordHeader {
+struct EventRecordHeader {
   uint64_t timestamp_ns = 0;
   uint16_t type = 0;
   uint16_t flags = 0;
   uint32_t payload_size = 0;
 };
 
-struct K230RecordedCanBatchHeader {
+struct RecordedCanBatchHeader {
   uint32_t count = 0;
   uint32_t dropped = 0;
 };
 
-struct K230RecordedCanFrame {
+struct RecordedCanFrame {
   uint32_t address = 0;
   uint32_t src = 0;
   uint32_t bus_time = 0;
@@ -54,10 +54,10 @@ struct K230RecordedCanFrame {
   uint8_t data[64] = {};
 };
 
-struct K230FrameIndexHeader {
+struct FrameIndexHeader {
   char magic[8] = {'K', '2', '3', '0', 'I', 'D', 'X', '1'};
-  uint32_t version = kK230RecordingVersion;
-  uint32_t header_size = sizeof(K230FrameIndexHeader);
+  uint32_t version = kRecordingVersion;
+  uint32_t header_size = sizeof(FrameIndexHeader);
   uint32_t record_size = 0;
   uint32_t width = 0;
   uint32_t height = 0;
@@ -66,7 +66,7 @@ struct K230FrameIndexHeader {
   uint64_t reserved = 0;
 };
 
-struct K230FrameIndexRecord {
+struct FrameIndexRecord {
   uint64_t frame_id = 0;
   uint64_t capture_timestamp_ns = 0;
   uint64_t encode_index = 0;
@@ -76,6 +76,6 @@ struct K230FrameIndexRecord {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(K230EventRecordHeader) == 16);
-static_assert(sizeof(K230RecordedCanFrame) == 84);
-static_assert(sizeof(K230FrameIndexRecord) == 40);
+static_assert(sizeof(EventRecordHeader) == 16);
+static_assert(sizeof(RecordedCanFrame) == 84);
+static_assert(sizeof(FrameIndexRecord) == 40);
