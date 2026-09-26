@@ -51,12 +51,15 @@ for ui_asset in "${ui_assets[@]}"; do
   fi
 done
 
-# init 스크립트는 저장소가 가진다. 예전 이미지의 S35supercombo_k230은 멈추고 지우며,
+# init 스크립트는 저장소가 가진다. 예전 이미지의 S35supercombo_k230은 지우기만 하고(멈추지 않는다),
 # 그 설치(/root/supercombo_k230)에 학습된 params가 있으면 새 설치로 한 번 옮긴다.
+# 돌고 있는 런타임은 멈추지 않는다: 멈춘 직후 카메라/화면 DMA가 해제된 메모리에 계속 써서
+# 방금 올린 파일과 파일시스템이 깨진 적이 있다(2026-09-26). 파일은 mv로 새 inode가 되므로
+# 도는 프로세스는 옛 파일을 계속 쓰고, 새 런타임은 재부팅 때 뜬다.
 "${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" scripts/S35edgepilot "$BOARD:/etc/init.d/S35edgepilot.tmp"
 "${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" \
   "chmod 755 /etc/init.d/S35edgepilot.tmp && mv /etc/init.d/S35edgepilot.tmp /etc/init.d/S35edgepilot;
-   if [ -x /etc/init.d/S35supercombo_k230 ]; then /etc/init.d/S35supercombo_k230 stop; rm -f /etc/init.d/S35supercombo_k230; fi;
+   rm -f /etc/init.d/S35supercombo_k230;
    if [ -d /root/supercombo_k230/params ] && [ ! -d '$DEST/params' ]; then mkdir -p '$DEST' && cp -a /root/supercombo_k230/params '$DEST/params'; fi;
    rm -rf '$DEST/.upload'; mkdir -p '$DEST/.upload' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
 "${SCP_CMD[@]}" "${SSH_OPTIONS[@]}" "${runtime_files[@]}" "$BOARD:$DEST/.upload/"
@@ -72,3 +75,4 @@ done
   "for name in ${param_files[*]}; do test -e '$DEST/params/'\"\$name\" || cp '$DEST/params.defaults/'\"\$name\" '$DEST/params/'\"\$name\"; done"
 "${SSH_CMD[@]}" "${SSH_OPTIONS[@]}" "$BOARD" "rm -rf '$DEST/.upload'; sync"
 echo "Uploaded runtime files to $BOARD:$DEST"
+echo "Reboot the board to run them (do not restart S35edgepilot; see docs/runtime.md)."

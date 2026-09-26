@@ -1,4 +1,4 @@
-# K230 × openpilot
+# edgepilot · K230
 
 <p align="center">
   <img src="docs/images/k230-openpilot-k7-hero.png"
@@ -14,6 +14,13 @@
 | Board | Vehicle | Model | Control | Runtime |
 | --- | --- | --- | --- | --- |
 | 01Studio CanMV K230 | KIA K7 YG HEV | openpilot v0.9.4 supercombo | lateral (LKAS torque) | C++17 split processes |
+
+This is the `k230` branch of edgepilot, which runs openpilot's driving model and
+lateral control on small embedded boards. [`main`](../../tree/main) is the
+Sipeed MaixCAM2 (AX630C) port, with the same code layout and names. Before the
+rename this code lived in
+[supercombo_k230](https://github.com/cwal1220/supercombo_k230), which is kept
+as a legacy repository.
 
 > [!WARNING]
 > This is experimental vehicle-control software. Keep Panda safety enabled, run
@@ -113,7 +120,8 @@ Every layer must agree before steering torque reaches the car:
    ```
 
 3. **Run.** The `S35edgepilot` service (installed by `upload_to_board.sh`) starts `manager.py` at
-   boot; `/etc/init.d/S35edgepilot restart` restarts it. Tune parameters at
+   boot; `/etc/init.d/S35edgepilot restart` restarts it (after an upload, reboot the board
+   instead; see [Runtime](docs/runtime.md)). Tune parameters at
    `http://<board-ip>:8080`.
 4. **Shadow run first.** Verify Panda RX, safety mode, and counters with TX off
    before enabling it; the gates are listed in

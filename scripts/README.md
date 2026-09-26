@@ -22,7 +22,7 @@
 - `upload_to_board.sh`: `EDGEPILOT_SSH`/`EDGEPILOT_SCP`(예: `sshpass -p ... ssh`), `EDGEPILOT_BUILD_DIR`
   (기본 `build`), `EDGEPILOT_BIN_DIR`, `EDGEPILOT_BOARD_DIR`(기본 `/root/edgepilot`). 보드의
   `params/`는 덮어쓰지 않고, 기본값은 `params.defaults/`에 두어 없는 파일만 채운다. 보드
-  `scripts/S35edgepilot`을 `/etc/init.d/`에 설치하고, 예전 `S35supercombo_k230`은 멈추고 지우며 그 `params/`를 한 번 옮긴다.
+  `scripts/S35edgepilot`을 `/etc/init.d/`에 설치하고, 예전 `S35supercombo_k230`은 지우며(멈추지 않는다) 그 `params/`를 한 번 옮긴다. 돌고 있는 런타임은 멈추지 않으므로 올린 뒤 보드를 재부팅한다.
 - `run_host_tests.sh`: `EDGEPILOT_HOST_BUILD_DIR`(기본 `build-host`), `JOBS`.
 - `build_supercombo_model.sh`: `DOCKER_IMAGE`, `OPENPILOT_TAG`, `SOURCE_ONNX`, `PYTHON_BIN`.
 

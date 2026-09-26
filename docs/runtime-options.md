@@ -124,6 +124,9 @@ true.
 - `EDGEPILOT_PARAM_HOST=address`, `EDGEPILOT_PARAM_PORT=port`
   - select the parameter editor listen address and port. Defaults are
     `0.0.0.0:8080`.
+- `EDGEPILOT_LEARNER_STATE_PATH=/dev/shm/...`
+  - shared-memory file the editor reads the live learner state from (default
+    `/dev/shm/edgepilot_learner_state`, written by `controlsd`).
 - `EDGEPILOT_PARAM_DEFAULTS_DIR=/path/to/params.defaults`
   - directory the editor reads factory defaults from. The default is
     `params.defaults/` under the runtime working directory; the upload script

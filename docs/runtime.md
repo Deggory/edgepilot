@@ -15,9 +15,16 @@ Panda TX enabled, and the FastAPI parameter server enabled. Each setting can
 still be overridden with its environment variable; the model and debug mode can
 also be passed as command-line arguments.
 
-On the board, `/etc/init.d/S35edgepilot` (installed by `scripts/upload_to_board.sh` from `scripts/S35edgepilot`) starts the
-same command automatically, and `scripts/upload_to_board.sh` refuses to deploy
-without it. Manual service controls are:
+On the board, `/etc/init.d/S35edgepilot` starts the same command at boot.
+`scripts/upload_to_board.sh` installs it from `scripts/S35edgepilot`, removes the
+image's old `S35supercombo_k230`, and carries its `params/` over once.
+
+After an upload, **reboot** instead of restarting the service. Stopping the
+runtime can leave the camera/display DMA writing into freed memory. On
+2026-09-26 that corrupted freshly uploaded files and the ext4 root filesystem.
+The upload therefore never stops the running runtime. Replaced files get new
+inodes, so the old processes keep running until the reboot. Manual service
+controls are:
 
 ```sh
 /etc/init.d/S35edgepilot start
