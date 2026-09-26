@@ -203,6 +203,10 @@ if(EDGEPILOT_BUILD_RUNTIME)
   add_executable(camerad src/camerad.cc)
   configure_board_target(camerad common maixcam2_media)
 
+  # 보드 IMU(LSM6DSOW) 기록용. 제어 경로와 무관하고 i2c-dev만 쓴다.
+  add_executable(imud src/imud.cc)
+  configure_board_target(imud common)
+
   # 카메라 내부 파라미터 측정용 스틸 캡처(docs/camcal.md).
   add_executable(camcal src/camcal.cc src/alert_sound.cc)
   target_include_directories(camcal SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -270,7 +274,7 @@ if(EDGEPILOT_BUILD_DIAGNOSTICS)
 endif()
 
 if(EDGEPILOT_BUILD_RUNTIME)
-  install(TARGETS camerad camcal modeld overlayd controlsd recordd replayd
+  install(TARGETS camerad camcal imud modeld overlayd controlsd recordd replayd
     RUNTIME DESTINATION .)
   install(FILES
     assets/ui/traffic_wait_red_retro-270x155-v3.png

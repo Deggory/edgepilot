@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
       /* 8-19 route처럼 tmpfs가 차서 끊긴 파일은 0으로 채워진 구간이 남는다.
        * 재동기화를 시도하지 않고 그 파일을 거기서 끝낸다. */
-      if (rh.type < 1 || rh.type > static_cast<uint16_t>(RecordType::LearnerState) ||
+      if (rh.type < 1 || rh.type > static_cast<uint16_t>(RecordType::Imu) ||
           rh.payload_size > (1U << 20)) {
         std::fprintf(stderr, "%s: truncated at %lld bytes (type=%u len=%u)\n",
                      argv[arg],

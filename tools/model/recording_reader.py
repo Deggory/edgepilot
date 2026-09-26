@@ -28,6 +28,7 @@ RECORD_MODEL_STATE = 3
 RECORD_CONTROL_STATE = 4
 RECORD_PANDA_STATE = 5
 RECORD_LEARNER_STATE = 6
+RECORD_IMU = 7
 
 FRAME_INDEX_RECORD = np.dtype([
     ("frame_id", "<u8"),
@@ -69,6 +70,14 @@ CONTROL_STATE = np.dtype([
 ])
 
 # LearnerState (paramsd/torqued output, 20 Hz). flags bits: ipc_messages.h kLearner*.
+# ImuBatch (src/ipc_messages.h): 16-byte head, then `count` samples (only those are recorded).
+IMU_BATCH_HEAD = struct.Struct("<QII")
+IMU_SAMPLE = np.dtype([
+    ("timestamp_ns", "<u8"), ("accel_mps2", "<f4", 3), ("gyro_rad_s", "<f4", 3),
+    ("temperature_c", "<f4"), ("reserved", "<u4"),
+])
+assert IMU_SAMPLE.itemsize == 40
+
 LEARNER_STATE = np.dtype([
     ("timestamp_ns", "<u8"), ("flags", "<u4"),
     ("steer_ratio", "<f4"), ("stiffness_factor", "<f4"), ("roll_rad", "<f4"),
@@ -388,6 +397,23 @@ def read_route_events(route_dir: Path) -> RouteEvents | None:
 
 def _pad8(size: int) -> int:
     return (8 - size % 8) % 8
+
+
+def read_route_imu(route_dir: Path) -> np.ndarray | None:
+    """All board IMU samples of a route (raw chip axes, gyro bias not removed), or
+    None when the route has no IMU records (recorded before imud existed)."""
+    chunks = []
+    for path in route_event_files(route_dir):
+        if path.stat().st_size <= 32:
+            continue
+        for rec in iter_event_records(path):
+            if rec.type != RECORD_IMU:
+                continue
+            _, count, _ = IMU_BATCH_HEAD.unpack_from(rec.payload, 0)
+            if IMU_BATCH_HEAD.size + count * IMU_SAMPLE.itemsize > len(rec.payload):
+                continue
+            chunks.append(np.frombuffer(rec.payload, IMU_SAMPLE, count, IMU_BATCH_HEAD.size))
+    return np.concatenate(chunks) if chunks else None
 
 
 def read_route_calibration(route_dir: Path) -> np.ndarray | None:

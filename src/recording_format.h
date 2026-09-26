@@ -32,6 +32,7 @@ enum class RecordType : uint16_t {
   ControlState = 4,
   PandaState = 5,
   LearnerState = 6,
+  Imu = 7,
 };
 
 #pragma pack(push, 1)

@@ -25,6 +25,7 @@ runtime_files=(
   "${BIN_DIR}/controlsd"
   "${BIN_DIR}/recordd"
   "${BIN_DIR}/camcal"
+  "${BIN_DIR}/imud"
   scripts/manager.py
   scripts/param_server.py
   scripts/display_control.py

@@ -146,6 +146,21 @@ keeps the AX system open.
 - does not transmit by itself; actual TX still requires `pandad` with
   `EDGEPILOT_PANDA_TX=1`
 
+### `imud`
+
+- reads the board IMU (ST LSM6DSOW on `i2c-1`, address `0x6B`) through
+  `i2c-dev`: accelerometer and gyroscope at 104 Hz, ±4 g and ±250 dps. It does
+  not use libmaixcam_lib, which has no IMU class, or MaixPy, whose import remaps
+  the UART4 pins
+- publishes batches of raw samples to `/dev/shm/edgepilot_imu` every 100 ms.
+  The axes are the chip's and the gyro bias is not removed; `recordd` records
+  them as `Imu` records (`recording_reader.read_route_imu`)
+- is for recording and validation only (camera extrinsics, perception checks
+  against the gyro). Nothing in the control path reads it. If the IMU cannot be
+  opened it retries every 10 s instead of exiting, so a missing IMU neither
+  loops the manager nor marks the runtime unhealthy. It is not started in
+  rehearsal mode
+
 ### `recordd`
 
 - follows the frame `modeld` used (`/dev/shm/edgepilot_record_frame`), copies
@@ -185,6 +200,8 @@ The current version is `5`.
 | `ModelState` | 3256 B |
 | `ControlState` | 240 B |
 | `PandaState` | 96 B |
+| `LearnerState` | 128 B |
+| `Imu` | 16 B + 40 B per sample (about 10 samples every 100 ms) |
 
 Older recordings are not `ModelState`-compatible: version 1 carried 4384 B
 including unused lateral draft fields, versions 2–3 carried 4080 B including the

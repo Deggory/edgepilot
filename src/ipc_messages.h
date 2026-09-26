@@ -24,7 +24,7 @@ constexpr uint32_t kFrameRingVersion = 5;
 constexpr uint32_t kCanQueueMagic = 0x4b435151;
 constexpr uint32_t kCanQueueVersion = 1;
 constexpr unsigned kFrameSlots = 8;
-constexpr unsigned kMaxProcesses = 7;
+constexpr unsigned kMaxProcesses = 8;
 constexpr unsigned kAiWidth = kDefaultAiWidth;
 constexpr unsigned kAiHeight = kDefaultAiHeight;
 constexpr unsigned kAiFrameBytes = kAiWidth * kAiHeight * 3 / 2;
@@ -40,6 +40,7 @@ constexpr char kPandaStateTopic[] = "/edgepilot_panda_state";
 constexpr char kControlStateTopic[] = "/edgepilot_control_state";
 
 constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
+constexpr char kImuTopic[] = "/edgepilot_imu";
 
 constexpr uint32_t kHudFlagLaneless = 1U << 0;
 constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
@@ -164,7 +165,7 @@ struct ManagerState {
     ProcessState processes[kMaxProcesses] = {};
 };
 
-static_assert(sizeof(ManagerState) == 160,
+static_assert(sizeof(ManagerState) == 176,
               "ManagerState layout is shared with the Python manager");
 
 struct IpcCanFrame {
@@ -354,6 +355,31 @@ EDGEPILOT_LEARNER_STATE_AT(bucket_points, 108);
 EDGEPILOT_LEARNER_STATE_AT(reserved, 124);
 #undef EDGEPILOT_LEARNER_STATE_AT
 static_assert(sizeof(LearnerState) == 128, "LearnerState size");
+
+/* 보드 IMU(LSM6DSOW, i2c-1 0x6B) 원시 샘플. imud가 104 Hz로 읽어 100 ms마다 묶어 발행하고
+ * recordd가 RecordType::Imu로 그대로 남긴다. 축은 칩 좌표(보정·회전 없음)이고 자이로
+ * 바이어스도 빼지 않는다: 차량/카메라 축과의 관계와 바이어스는 분석에서 구한다. */
+struct ImuSample {
+    uint64_t timestamp_ns = 0;   // CLOCK_BOOTTIME, 데이터 준비를 본 시각
+    float accel_mps2[3] = {};
+    float gyro_rad_s[3] = {};
+    float temperature_c = 0.0f;
+    uint32_t reserved = 0;
+};
+
+static_assert(sizeof(ImuSample) == 40, "ImuSample layout is shared with the recording reader");
+
+constexpr unsigned kImuBatchMaxSamples = 16;
+
+struct ImuBatch {
+    uint64_t timestamp_ns = 0;   // 발행 시각
+    uint32_t count = 0;
+    uint32_t dropped = 0;        // 누적: 읽기 전에 덮어쓰인 샘플(데이터 준비 두 번 이상 놓침)
+    ImuSample samples[kImuBatchMaxSamples] = {};
+};
+
+static_assert(sizeof(ImuBatch) == 16 + 40 * kImuBatchMaxSamples,
+              "ImuBatch layout is shared with the recording reader");
 
 /* controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이
  * 구조체를 그대로 저장하고 tools/model/recording_reader.py가 위치로 디코드하므로 필드

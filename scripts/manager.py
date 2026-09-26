@@ -31,7 +31,7 @@ HEADER = struct.Struct("<IIIIQQII")
 HEADER_SIZE = HEADER.size
 # ProcessState: 오버레이가 읽는 것은 이름과 running뿐이다.
 PROCESS = struct.Struct("<16sI")
-MAX_PROCESSES = 7
+MAX_PROCESSES = 8
 # C++ ManagerState는 8바이트 정렬이라 배열 뒤에 꼬리 패딩이 붙는다.
 _MANAGER_STATE_BODY = 8 + 4 + 4 + PROCESS.size * MAX_PROCESSES
 MANAGER_STATE_SIZE = (_MANAGER_STATE_BODY + 7) // 8 * 8
@@ -142,6 +142,9 @@ def process_specs(model: str) -> List[ProcSpec]:
         ProcSpec("recordd", ["./recordd"], 15),
         ProcSpec("modeld", ["./modeld", model], -15),
     ]
+    # 보드 IMU 기록(검증용). 없거나 죽어도 주행과 무관하고, 리허설에서는 책상 위라 뺀다.
+    if not replay:
+        specs.append(ProcSpec("imud", ["./imud"], 10))
     # MaixCAM2에서는 Panda USB(Y 케이블) 배선 전이라 명시적으로 켤 때만 띄운다.
     if env_enabled("EDGEPILOT_ENABLE_PANDA") and not replay:
         specs.append(ProcSpec("pandad", ["./pandad"], -10))

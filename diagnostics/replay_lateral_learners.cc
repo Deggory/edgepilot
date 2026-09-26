@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
     file.seekg(hdr.header_size);
     EventRecordHeader rh{};
     while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-      if (rh.type < 1 || rh.type > static_cast<uint16_t>(RecordType::LearnerState) ||
+      if (rh.type < 1 || rh.type > static_cast<uint16_t>(RecordType::Imu) ||
           rh.payload_size > (1U << 20))
         break;
       buf.resize(rh.payload_size);

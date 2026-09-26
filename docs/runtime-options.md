@@ -85,6 +85,11 @@ true.
 directory) and `EDGEPILOT_RECORD_STAGING`; `K230_RECORD_CODEC` (the K230 V4L2 device)
 is gone. `params/recording.json` `enabled` toggles recording.
 
+## IMU
+
+- `EDGEPILOT_IMU_DEV=/dev/i2c-1`, `EDGEPILOT_IMU_ADDR=0x6B`
+  - where `imud` finds the LSM6DSOW. The defaults are the MaixCAM2's.
+
 ## Panda
 
 - `EDGEPILOT_ENABLE_PANDA=1`
