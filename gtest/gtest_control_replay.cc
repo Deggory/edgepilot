@@ -655,6 +655,7 @@ TEST(ControlReplay, KpSpeedSchedule) {
   base.torque_use_angle = true;
   base.angle_offset_deg = 0.0f;
   base.torque_friction = 0.0f;   // P항만 남긴다
+  base.torque_lat_accel_offset = 0.0f;  // 오차가 순수 횡가속도인지 본다
   base.torque_ki = 0.0f;
   /* 조향각 3도를 실제 곡률로 두고 요청 곡률 0을 준다. 오차 = -actual_lat_accel이라
    * 출력은 kp(v) x kf x v^2 x |actual_curvature|에 비례한다. */
@@ -755,6 +756,7 @@ TEST(ControlReplay, LatAccelOffsetShiftsFeedforward) {
   SteeringParams params;
   params.enabled = true;
   params.torque_use_angle = true;
+  params.torque_lat_accel_offset = 0.0f;
   SteeringParams offset_params = params;
   offset_params.torque_lat_accel_offset = 0.25f;
   for (int i = 0; i < 120; ++i) {
@@ -1250,6 +1252,7 @@ TEST(ControlReplay, LiveTorqueParamsMatchUpstreamStructure) {
   params.enabled = true;
   params.torque_use_angle = true;
   params.torque_friction = 0.0f;
+  params.torque_lat_accel_offset = 0.0f;  // 사전값 경로도 절편 없이 비교한다
   params.live_bank_compensation = false;
   const float prior = params.torque_lat_accel_factor;
   auto run = [&](bool use, float factor, float offset, float friction, std::vector<float> *out) {

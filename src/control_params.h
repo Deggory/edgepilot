@@ -26,17 +26,18 @@ struct SteeringParams {
   int steering_pressed_threshold = 150;
 
   /* openpilot 토크 튜닝 그대로(횡가속도 공간). 토크 = (FF + P + I) / 배율 + 마찰.
-   * 배율 2.8은 torqued 실측(2.65~2.95). */
-  float torque_lat_accel_factor = 2.8f;
+   * 배율은 MaixCAM2 torqued 학습값(2026-09-27, 6769점 TLS 2.75; K230 때 2.65~2.95). */
+  float torque_lat_accel_factor = 2.75f;
   // KP_INTERP의 30 m/s 끝점. 나머지 점은 상류 고정값이다.
   float torque_kp = 0.8f;
   float torque_ki = 0.15f;
-  float torque_friction = 0.1f;  // 토크 공간
+  float torque_friction = 0.083f;  // 토크 공간, torqued 학습값(2026-09-27)
   bool torque_use_angle = true;
   int torque_output_sign = -1;
 
-  float steer_ratio = 16.8f;
-  float tire_stiffness_factor = 1.0f;
+  // paramsd 학습값(2026-09-27): 조향비 14.72, 타이어 강성 0.83.
+  float steer_ratio = 14.72f;
+  float tire_stiffness_factor = 0.83f;
   float steer_actuator_delay = 0.34f;
   bool avoid_lkas_fault_enabled = true;
   float avoid_lkas_fault_max_angle_deg = 85.0f;
@@ -45,10 +46,10 @@ struct SteeringParams {
    * 되돌리지 못한다(2026-09-21 실측: 폴트 중 2프레임 컷 34회 모두 1.5초 유지).
    * 길이를 바꿔 되돌아가는 지점을 찾기 위한 실측 파라미터다. */
   int avoid_lkas_fault_cut_frames = 2;
-  float angle_offset_deg = -1.6f;  // paramsd 학습 평균(2026-09-21~23 −1.5~−1.6°)
+  float angle_offset_deg = -1.57f;  // paramsd 학습 평균(2026-09-27; K230 때 −1.5~−1.6°)
   /* openpilot latAccelOffset(m/s^2). 상수 횡가속 편향을 FF에서 뺀다.
    * +y=오른쪽 관례라 양수 = 우측 쏠림 보정. fit 도구 출력을 그대로 넣는다. */
-  float torque_lat_accel_offset = 0.0f;
+  float torque_lat_accel_offset = -0.06f;  // torqued 학습값(2026-09-27)
   /* ESP12 실측으로 추정한 도로 편경사(뱅크)를 FF에서 실시간 보정한다.
    * 켜면 상수 offset이 커버 못 하는 커브별 편경사까지 잡는다. */
   bool live_bank_compensation = true;
