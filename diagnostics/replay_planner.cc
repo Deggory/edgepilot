@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         ModelState ms{};
         if (!decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
         const float v = v_kph / 3.6f;
-        LateralTarget t = planner.update(ms, vehicle, v, measured, true, 0.0f);
+        LateralTarget t = planner.update(ms, vehicle, v, measured, true);
         /* 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이
          * 있어 모델 주기로 한 번만 부르면 5배 과하게 걸린다. plan 나이는 틱마다
          * 늘어난다. */

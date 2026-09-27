@@ -415,7 +415,7 @@ int main(int argc, char **argv) {
         have_model = true;
         VehicleCanState planner_vehicle{};
         target = planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim,
-                                active_prev, 0.0f);
+                                active_prev);
       }
     }
   }

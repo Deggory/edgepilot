@@ -259,8 +259,7 @@ struct LateralPlanner::Impl {
 
   LateralTarget update(const ModelState &model,
                        const VehicleCanState &vehicle, float v_ego,
-                       float measured_curvature, bool active,
-                       float output_scale) {
+                       float measured_curvature, bool active) {
     LateralTarget target;
     if (!model.valid) return target;
 
@@ -270,8 +269,7 @@ struct LateralPlanner::Impl {
     for (size_t i = 0; i < model_road_edge_stds.size(); ++i)
       model_road_edge_stds[i] = model.road_edge_stds[i];
     const double lane_change_prob = model.desire_state[3] + model.desire_state[4];
-    update_lane_change(vehicle, v_ego, measured_curvature, active,
-                       output_scale, lane_change_prob);
+    update_lane_change(vehicle, v_ego, active, lane_change_prob);
     if (desire == 3 || desire == 4)
       lane_planner.scale_near_probability(lane_change_lane_prob);
     std::array<std::array<double, 3>, kTrajectorySize> path{};
@@ -444,9 +442,13 @@ struct LateralPlanner::Impl {
     return target;
   }
 
-  void update_lane_change(const VehicleCanState &vehicle, float v_ego,
-                          float measured_curvature, bool active,
-                          float output_scale, double lane_change_prob) {
+  /* openpilot desire_helper(0.9.4 차선선 페이드 포함)와 같다. 꺼지는 조건은 조향 비활성과 10초
+   * 초과뿐이다. 예전에는 포크에서 온 두 가지가 더 있었다: 출력 0.8 이상이 0.5초 이어지면
+   * 차선 변경 취소(차선이 차를 붙잡아 운전자와 싸우는 바로 그 순간 취소됐다), 속도별로 느린
+   * 차선선 페이드(60 km/h에서 2.5초). 2026-09-27 실차에서 운전자가 핸들을 한참 잡아야 해서
+   * 둘 다 upstream으로 되돌렸다. */
+  void update_lane_change(const VehicleCanState &vehicle, float v_ego, bool active,
+                          double lane_change_prob) {
     const bool one_blinker = vehicle.left_blinker != vehicle.right_blinker;
     const bool below_speed = v_ego < lane_change_min_speed_mps;
     int direction_now = direction;
@@ -468,8 +470,7 @@ struct LateralPlanner::Impl {
 
     if (road_edge_blocked) {
       direction = 0;
-    } else if (!active || lane_change_timer > 10.0 ||
-        (std::fabs(output_scale) >= 0.8f && lane_change_timer > 0.5)) {
+    } else if (!active || lane_change_timer > 10.0) {
       lane_change_state = 0;
       direction = 0;
     } else {
@@ -486,13 +487,6 @@ struct LateralPlanner::Impl {
         lane_change_state = 1;
         direction = direction_now;
         lane_change_lane_prob = 1.0;
-        const double speed_points[4] = {30.0 / 3.6, 60.0 / 3.6,
-                                        80.0 / 3.6, 110.0 / 3.6};
-        const double timing[4] = {0.1, 0.4, 0.6, 0.8};
-        lane_change_adjust = interp(v_ego, speed_points, timing, 4);
-        if ((measured_curvature > 0.0005f && direction == -1) ||
-            (measured_curvature < -0.0005f && direction == 1))
-          lane_change_adjust = std::min(2.0, lane_change_adjust * 1.5);
       } else if (lane_change_state == 1) {
         if (!one_blinker || below_speed) {
           lane_change_state = 0;
@@ -500,8 +494,8 @@ struct LateralPlanner::Impl {
           lane_change_state = 2;
         }
       } else if (lane_change_state == 2) {
-        lane_change_lane_prob = std::max(0.0, lane_change_lane_prob -
-                                               lane_change_adjust * kDtModel);
+        // 0.5초에 걸쳐 차선선을 뺀다(openpilot "fade out over .5s").
+        lane_change_lane_prob = std::max(0.0, lane_change_lane_prob - 2.0 * kDtModel);
         if (lane_change_prob < 0.02 && lane_change_lane_prob < 0.01)
           lane_change_state = 3;
       } else if (lane_change_state == 3) {
@@ -538,7 +532,6 @@ struct LateralPlanner::Impl {
   int desire = 0;
   bool previous_one_blinker = false;
   double lane_change_lane_prob = 1.0;
-  double lane_change_adjust = 2.0;
   double lane_change_timer = 0.0;
   std::array<double, 4> model_lane_probs{};
   std::array<double, 2> model_road_edge_stds{};
@@ -559,8 +552,6 @@ LateralTarget LateralPlanner::update(const ModelState &model,
                                               const VehicleCanState &vehicle,
                                               float v_ego,
                                               float measured_curvature,
-                                              bool active,
-                                              float output_scale) {
-  return impl_->update(model, vehicle, v_ego, measured_curvature, active,
-                       output_scale);
+                                              bool active) {
+  return impl_->update(model, vehicle, v_ego, measured_curvature, active);
 }

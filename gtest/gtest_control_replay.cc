@@ -1539,16 +1539,58 @@ TEST(ControlReplay, LanelessUsesPlanYawLikeUpstream) {
   };
   VehicleCanState vehicle{};
   // 일정 곡률 plan: 2·ψ(t)/(v·t) − ψ̇/v = 2κ − κ = κ
-  LateralTarget turn = planner.update(model_for(0.002f, 0.0f), vehicle, v, 0.0f, true, 0.0f);
+  LateralTarget turn = planner.update(model_for(0.002f, 0.0f), vehicle, v, 0.0f, true);
   ASSERT_TRUE(turn.valid);
   ASSERT_TRUE(turn.laneless_mode);
   ASSERT_TRUE(turn.mpc_solution_valid);
   EXPECT_NEAR(lag_adjusted_curvature(turn, v, 0.0f, 0.34f), 0.002f, 1e-5f) << "일정 곡률 plan은 그 곡률";
   EXPECT_NEAR(lag_adjusted_curvature(turn, v, 0.1f, 0.34f), 0.002f, 1e-5f) << "plan 나이와 무관";
   // yaw가 0이면 plan이 옆으로 0.5 m 떨어져 있고 오프셋이 −0.3이어도 목표는 직진이다
-  LateralTarget straight = planner.update(model_for(0.0f, 0.5f), vehicle, v, 0.0f, true, 0.0f);
+  LateralTarget straight = planner.update(model_for(0.0f, 0.5f), vehicle, v, 0.0f, true);
   EXPECT_NEAR(lag_adjusted_curvature(straight, v, 0.05f, 0.34f), 0.0f, 1e-7f)
       << "위치와 경로 오프셋은 laneless 곡률에 들어가지 않는다";
+}
+
+/* 차선 변경은 openpilot desire_helper와 같다: 깜빡이 + 그 방향 핸들 토크로 시작하고, 모델이
+ * 끝났다고 할 때(lane_change_prob < 0.02)나 10초·비활성으로만 끝난다. 차선선은 0.5초에 뺀다. */
+TEST(ControlReplay, LaneChangeFollowsUpstreamDesireHelper) {
+  SteeringParams steering;
+  DrivingParams driving;
+  LateralPlanner planner(steering, driving);
+  const float v = 20.0f;
+  ModelState ms{};
+  ms.valid = 1;
+  for (int i = 0; i < kTrajectorySize; ++i) {
+    const float t = model_t_idx(i);
+    ms.model_t[i] = t;
+    ms.lane_t[i] = t;
+    ms.plan[i] = {v * t, 0.0f, 0.0f};
+  }
+  ms.desire_state[0] = 1.0f;
+  VehicleCanState vehicle{};
+  LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true);
+  ASSERT_EQ(r.desire, 0);
+  vehicle.left_blinker = true;
+  r = planner.update(ms, vehicle, v, 0.0f, true);
+  EXPECT_EQ(r.desire, 0) << "깜빡이만으로는 시작하지 않는다";
+  vehicle.driver_torque = 300;  // 왼쪽으로 민다
+  r = planner.update(ms, vehicle, v, 0.0f, true);
+  EXPECT_EQ(r.desire, 3) << "깜빡이 방향으로 밀면 laneChangeLeft";
+  // 모델이 차선 변경 중이라고 하는 동안(prob 높음)은 핸들을 놓아도 3초 넘게 이어진다.
+  vehicle.driver_torque = 0;
+  ms.desire_state[0] = 0.1f;
+  ms.desire_state[3] = 0.9f;
+  for (int i = 0; i < 60; ++i) r = planner.update(ms, vehicle, v, 0.0f, true);
+  EXPECT_EQ(r.desire, 3) << "출력이 커져도 취소하지 않는다(예전 출력 0.8 취소 제거)";
+  // 모델이 끝났다고 하면 마무리(차선선을 0.5초에 되살림) 동안은 openpilot 0.9.4 DESIRES처럼
+  // laneChangeLeft를 유지하고, 끝나면 내린다.
+  ms.desire_state[0] = 1.0f;
+  ms.desire_state[3] = 0.0f;
+  vehicle.left_blinker = false;
+  r = planner.update(ms, vehicle, v, 0.0f, true);
+  EXPECT_EQ(r.desire, 3) << "마무리 단계";
+  for (int i = 0; i < 12; ++i) r = planner.update(ms, vehicle, v, 0.0f, true);
+  EXPECT_EQ(r.desire, 0) << "차선선을 되살리면 끝난다";
 }
 
 TEST(ControlReplay, InactiveDesiredTracksActual) {

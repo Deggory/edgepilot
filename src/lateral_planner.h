@@ -23,8 +23,7 @@ public:
 
   LateralTarget update(const ModelState &model,
                        const VehicleCanState &vehicle, float v_ego,
-                       float measured_curvature, bool active,
-                       float output_scale);
+                       float measured_curvature, bool active);
 
 private:
   struct Impl;

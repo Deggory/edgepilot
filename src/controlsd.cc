@@ -646,8 +646,7 @@ public:
   }
 
   void submit(const ModelState &model, const VehicleCanState &vehicle,
-              float v_ego, float measured_curvature, bool active,
-              float output_scale) {
+              float v_ego, float measured_curvature, bool active) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       request_.model = model;
@@ -655,7 +654,6 @@ public:
       request_.v_ego = v_ego;
       request_.measured_curvature = measured_curvature;
       request_.active = active;
-      request_.output_scale = output_scale;
       pending_ = true;
     }
     condition_.notify_one();
@@ -684,7 +682,6 @@ private:
     float v_ego = 0.0f;
     float measured_curvature = 0.0f;
     bool active = false;
-    float output_scale = 0.0f;
   };
 
   void run() {
@@ -716,7 +713,7 @@ private:
       if (!has_request) continue;
       const LateralTarget result = planner_.update(
           request.model, request.vehicle, request.v_ego,
-          request.measured_curvature, request.active, request.output_scale);
+          request.measured_curvature, request.active);
       {
         std::lock_guard<std::mutex> lock(mutex_);
         latest_ = result;
@@ -869,8 +866,7 @@ int main() {
             model, vehicle, vehicle_speed_mps(
                 vehicle, now_s,
                 static_cast<double>(config.driving_params.vehicle_state_timeout_ms) / 1000.0),
-            last_result.actual_curvature, last_result.active,
-            last_result.normalized_output);
+            last_result.actual_curvature, last_result.active);
       }
       uint64_t next_panda_state_seq = panda_state_seq;
       if (panda_state_sub.read(&panda_state, sizeof(panda_state),
