@@ -794,7 +794,7 @@ CALIBRATION_RESET_PATH = os.environ.get("EDGEPILOT_CALIBRATION_RESET_PATH",
 MODEL_CALIBRATION_OFFSET = 3224
 CALIBRATION_STATE = struct.Struct("<Ii3f3f")  # CalibrationState: status, valid_blocks, rpy, spread
 CONTROL_STATE_HEAD = struct.Struct("<QII")  # ControlState: timestamp_ns, enabled, engaged
-CALIBRATION_STATUS = ("uncalibrated", "calibrated", "invalid")
+CALIBRATION_STATUS = ("uncalibrated", "calibrated", "invalid", "recalibrating")
 STATE_STALE_S = 2.0
 
 
@@ -1744,6 +1744,7 @@ HTML = """<!doctype html>
 
     const CALIB_STATUS = {
       calibrated: ["보정 완료", "good"], uncalibrated: ["수렴 중", "warn"], invalid: ["범위 밖", "bad"],
+      recalibrating: ["장착 변경 · 재보정 중", "warn"],
     };
 
     function calibShell() {
@@ -1777,7 +1778,7 @@ HTML = """<!doctype html>
             ["yaw", sgn(y, 2), num(sy, 2), "+ = 왼쪽을 봄"],
             ["roll", sgn(r, 2), num(sr, 2), ""],
           ]),
-          el("div", "live-foot", "시속 24 km 이상 직진 100프레임(약 5초)이 한 블록, 5블록이 모이면 보정 완료. 마운트를 옮겼으면 해제 상태에서 초기화하세요."),
+          el("div", "live-foot", "시속 24 km 이상 직진 100프레임(약 5초)이 한 블록, 5블록이 모이면 보정 완료. 마운트가 yaw 2°·pitch 4°보다 크게 바뀌면 스스로 다시 보정하고, 그보다 작게 옮겼으면 해제 상태에서 초기화하세요."),
         ]);
       }
       const blocked = c && c.engaged;

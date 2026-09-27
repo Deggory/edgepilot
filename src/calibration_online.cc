@@ -11,8 +11,11 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kMinSpeedFilter = 15.0f * 0.44704f;
 constexpr float kMaxVelAngleStd = 0.25f * kPi / 180.0f;
 constexpr float kMaxYawRateFilter = 2.0f * kPi / 180.0f;
-constexpr float kMaxAllowedSpread = 2.0f * kPi / 180.0f;
-constexpr float kSmoothCycles = 400.0f;
+// openpilot calibrationd.py: 블록 사이 편차가 이보다 크면 장착이 바뀐 것으로 본다.
+constexpr float kMaxAllowedYawSpread = 2.0f * kPi / 180.0f;
+constexpr float kMaxAllowedPitchSpread = 4.0f * kPi / 180.0f;
+// 그때 옛 값에서 새 값으로 넘어가는 표본 수(20 Hz에서 0.5초).
+constexpr float kSmoothCycles = 10.0f;
 constexpr float kPitchMin = -0.09074112085129739f;
 constexpr float kPitchMax = 0.14907572052989657f;
 constexpr float kYawMin = -0.06912048084718224f;
@@ -86,6 +89,8 @@ const char *calibration_status_name(CalibrationStatus status)
         return "calibrated";
     case CalibrationStatus::Invalid:
         return "invalid";
+    case CalibrationStatus::Recalibrating:
+        return "recalibrating";
     }
     return "unknown";
 }
@@ -240,18 +245,26 @@ void OnlineCalibrator::update_status()
     }
 
     if (snapshot_.valid_blocks < kInputsNeeded) {
-        snapshot_.status = CalibrationStatus::Uncalibrated;
+        if (snapshot_.status != CalibrationStatus::Recalibrating)
+            snapshot_.status = CalibrationStatus::Uncalibrated;
     } else if (is_calibration_valid(snapshot_.rpy)) {
         snapshot_.status = CalibrationStatus::Calibrated;
     } else {
         snapshot_.status = CalibrationStatus::Invalid;
     }
 
-    const float max_spread = std::max(snapshot_.spread[0], std::max(snapshot_.spread[1], snapshot_.spread[2]));
-    if (snapshot_.status == CalibrationStatus::Calibrated && max_spread > kMaxAllowedSpread) {
+    /* 편차가 크면 장착이 바뀐 것으로 보고 마지막 블록 하나에서 다시 모은다(openpilot과 같이
+     * 1블록, recalibrating). 5블록이 다시 찰 때까지 보정 완료가 아니므로 저장하지 않고
+     * 학습기도 보정을 믿지 않는다. roll은 관측하지 않으므로 보지 않는다. */
+    const bool spread_too_high = snapshot_.spread[1] > kMaxAllowedPitchSpread ||
+                                 snapshot_.spread[2] > kMaxAllowedYawSpread;
+    if (snapshot_.status == CalibrationStatus::Calibrated && spread_too_high) {
         const int last_block = (block_idx_ + kInputsWanted - 1) % kInputsWanted;
         float smooth_from[3] = {snapshot_.rpy[0], snapshot_.rpy[1], snapshot_.rpy[2]};
-        reset_to_rpy(block_rpys_[last_block], kInputsNeeded, smooth_from);
+        float last_rpy[3] = {block_rpys_[last_block][0], block_rpys_[last_block][1],
+                             block_rpys_[last_block][2]};
+        reset_to_rpy(last_rpy, 1, smooth_from);
+        snapshot_.status = CalibrationStatus::Recalibrating;
     }
 }
 

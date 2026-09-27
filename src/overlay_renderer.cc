@@ -390,6 +390,7 @@ const char *calibration_status_text(const OverlayHudState &hud)
 {
     if (!hud.calibration_available) return "--";
     if (hud.calibration_status == 1) return "OK";
+    if (hud.calibration_status == 3) return "RECAL";  // 장착 변경을 감지해 다시 모으는 중
     return hud.calibration_status == 2 ? "BAD" : "WAIT";
 }
 

@@ -14,6 +14,7 @@ enum class CalibrationStatus {
     Uncalibrated = 0,
     Calibrated = 1,
     Invalid = 2,
+    Recalibrating = 3,  // 장착이 바뀐 것으로 보고 마지막 블록부터 다시 모으는 중
 };
 
 const char *calibration_status_name(CalibrationStatus status);

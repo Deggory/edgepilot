@@ -35,7 +35,9 @@ constexpr double kPi = 3.14159265358979323846264338327950288;
 constexpr double kMinSpeedFilter = 15.0 * 0.44704;
 constexpr double kMaxVelAngleStd = 0.25 * kPi / 180.0;
 constexpr double kMaxYawRateFilter = 2.0 * kPi / 180.0;
-constexpr double kMaxAllowedSpread = 2.0 * kPi / 180.0;
+constexpr double kMaxAllowedYawSpread = 2.0 * kPi / 180.0;
+constexpr double kMaxAllowedPitchSpread = 4.0 * kPi / 180.0;
+constexpr double kSmoothCycles = 10.0;
 constexpr double kPitchMin = -0.09074112085129739;
 constexpr double kPitchMax = 0.14907572052989657;
 constexpr double kYawMin = -0.06912048084718224;
@@ -219,24 +221,26 @@ struct RefCalibrator {
         }
 
         if (valid_blocks < kInputsNeeded) {
-            status = CalibrationStatus::Uncalibrated;
+            if (status != CalibrationStatus::Recalibrating) status = CalibrationStatus::Uncalibrated;
         } else if (is_valid(rpy)) {
             status = CalibrationStatus::Calibrated;
         } else {
             status = CalibrationStatus::Invalid;
         }
 
-        const double max_spread = std::max(spread[0], std::max(spread[1], spread[2]));
-        if (status == CalibrationStatus::Calibrated && max_spread > kMaxAllowedSpread) {
+        const bool spread_too_high = spread[1] > kMaxAllowedPitchSpread || spread[2] > kMaxAllowedYawSpread;
+        if (status == CalibrationStatus::Calibrated && spread_too_high) {
             const int last_block = (block_idx + kInputsWanted - 1) % kInputsWanted;
             const double smooth_from[3] = {rpy[0], rpy[1], rpy[2]};
-            reset(rpys[last_block], kInputsNeeded, smooth_from);
+            const double last_rpy[3] = {rpys[last_block][0], rpys[last_block][1], rpys[last_block][2]};
+            reset(last_rpy, 1, smooth_from);
+            status = CalibrationStatus::Recalibrating;
         }
     }
 
     bool update(const PoseObservation &pose, double v_ego = 20.0)
     {
-        old_rpy_weight = std::max(0.0, old_rpy_weight - 1.0 / 400.0);
+        old_rpy_weight = std::max(0.0, old_rpy_weight - 1.0 / kSmoothCycles);
 
         const double trans[3] = {pose.trans[0], pose.trans[1], pose.trans[2]};
         const double rot[3] = {pose.rot[0], pose.rot[1], pose.rot[2]};
@@ -378,6 +382,68 @@ TEST(CalibrationEquivalence, OnlineCalibrator)
         << "보정 뒤에도 trans 표준편차가 큰 표본은 버린다";
     EXPECT_FALSE(ref.update(uncertain)) << "참조식도 보정 뒤 trans 표준편차가 큰 표본을 버린다";
     compare_snapshot(actual.snapshot(), ref, "uncertain_after_calib");
+}
+
+TEST(CalibrationEquivalence, MountChangeRecalibratesLikeUpstream)
+{
+    const double zero[3] = {};
+    RefCalibrator ref;
+    ref.reset(zero, 0);
+    OnlineCalibrator actual;
+    const PoseObservation still = make_pose(20.0f, 0.0f, 0.0f);  // 현재 보정과 맞는 관측
+    for (int i = 0; i < 6 * kBlockSize; ++i) {
+        actual.update(still, 20.0f);
+        ref.update(still);
+    }
+    ASSERT_EQ(static_cast<int>(actual.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated));
+
+    // pitch 3도: openpilot 문턱(4도) 아래라 그대로 보정 완료로 섞인다.
+    const float pitch3 = -20.0f * std::tan(static_cast<float>(3.0 * kPi / 180.0));
+    const PoseObservation pitched = make_pose(20.0f, 0.0f, pitch3);
+    for (int i = 0; i < kBlockSize; ++i) {
+        actual.update(pitched, 20.0f);
+        ref.update(pitched);
+    }
+    compare_snapshot(actual.snapshot(), ref, "pitch_3deg");
+    EXPECT_EQ(static_cast<int>(actual.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated))
+        << "pitch 편차 3도는 장착 변경으로 보지 않는다";
+
+    // yaw 2도를 넘는 편차는 장착 변경: 마지막 블록 하나에서 다시 모은다.
+    OnlineCalibrator yawed_actual;
+    RefCalibrator yawed_ref;
+    yawed_ref.reset(zero, 0);
+    for (int i = 0; i < 6 * kBlockSize; ++i) {
+        yawed_actual.update(still, 20.0f);
+        yawed_ref.update(still);
+    }
+    const float yaw3 = 20.0f * std::tan(static_cast<float>(3.0 * kPi / 180.0));
+    const PoseObservation yawed = make_pose(20.0f, yaw3, 0.0f);
+    bool recalibrating = false;
+    for (int i = 0; i < kBlockSize && !recalibrating; ++i) {
+        yawed_actual.update(yawed, 20.0f);
+        yawed_ref.update(yawed);
+        recalibrating = yawed_actual.snapshot().status == CalibrationStatus::Recalibrating;
+    }
+    compare_snapshot(yawed_actual.snapshot(), yawed_ref, "yaw_3deg");
+    ASSERT_TRUE(recalibrating) << "yaw 편차가 2도를 넘으면 recalibrating";
+    EXPECT_EQ(yawed_actual.snapshot().valid_blocks, 1) << "openpilot처럼 1블록에서 다시 시작";
+    EXPECT_GT(yawed_actual.snapshot().rpy[2], deg_to_rad(2.0f)) << "새 장착의 yaw로 옮겨 간다";
+
+    // block_idx가 0부터 다시 세므로 openpilot도 새 블록 5개가 다 차야 보정 완료다.
+    for (int i = 0; i < 4 * kBlockSize; ++i) {
+        yawed_actual.update(still, 20.0f);
+        yawed_ref.update(still);
+    }
+    compare_snapshot(yawed_actual.snapshot(), yawed_ref, "recalibrating_4_blocks");
+    EXPECT_EQ(static_cast<int>(yawed_actual.snapshot().status),
+              static_cast<int>(CalibrationStatus::Recalibrating)) << "5블록 전에는 recalibrating";
+    for (int i = 0; i < kBlockSize; ++i) {
+        yawed_actual.update(still, 20.0f);
+        yawed_ref.update(still);
+    }
+    compare_snapshot(yawed_actual.snapshot(), yawed_ref, "recalibrated");
+    EXPECT_EQ(static_cast<int>(yawed_actual.snapshot().status),
+              static_cast<int>(CalibrationStatus::Calibrated)) << "5블록이 다시 차면 보정 완료";
 }
 
 ParsedModelOutput parsed_from_pose(const PoseObservation &pose)
