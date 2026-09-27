@@ -96,11 +96,13 @@ constexpr int kAlertBottomMargin = 58;
 constexpr int kAlertTitleY = 8;
 constexpr int kAlertDetailY = 36;
 // 토크 바: 알림 상자 바로 위, 화면 가운데. 알림이 떠도 가리지 않는다.
-constexpr int kTorqueBarW = 360;
-constexpr int kTorqueBarCompactW = 300;
-constexpr int kTorqueBarH = 8;
-constexpr int kTorqueBarGap = 12;
-constexpr int kTorqueBarTickH = 16;
+constexpr int kTorqueBarW = 460;
+constexpr int kTorqueBarCompactW = 400;
+constexpr int kTorqueBarH = 14;
+constexpr int kTorqueBarGap = 14;
+constexpr int kTorqueBarOutline = 2;
+constexpr int kTorqueBarTickH = 26;     // 가운데 눈금
+constexpr int kTorqueBarEndTickH = 20;  // 양 끝(최대 토크) 눈금
 
 /* TPMS 패널: 두 열, 단위는 제목줄 배지. */
 constexpr float kTpmsLowBar = 2.2f;
@@ -1008,24 +1010,36 @@ void draw_torque_bar(BitmapHud &ui, const OverlayHudState &hud)
     if (!hud.controller_engaged) return;
     const int w = ui.width() <= 640 ? kTorqueBarCompactW : kTorqueBarW;
     const int cx = ui.width() / 2;
+    const int x0 = cx - w / 2;
     const int y = ui.height() - kAlertBottomMargin - kTorqueBarGap - kTorqueBarH;
     const float fraction = hud.controller_active ? hud.steer_torque_fraction : 0.0f;
     const float magnitude = std::fabs(fraction);
+    // 밝은 노면에서도 보이게 짙은 테두리를 두르고 바탕을 회색으로 채운다.
     const uint32_t track = hud.controller_active
-        ? lerp_color(argb(70, 255, 255, 255), argb(128, 255, 255, 255), (magnitude - 0.5f) * 2.0f)
-        : argb(40, 255, 255, 255);
-    ui.fill_rect(cx - w / 2 - 1, y - 1, w + 2, kTorqueBarH + 2, kShadow);
-    ui.fill_rect(cx - w / 2, y, w, kTorqueBarH, track);
+        ? lerp_color(argb(150, 120, 128, 136), argb(190, 150, 158, 166), (magnitude - 0.5f) * 2.0f)
+        : argb(110, 90, 96, 102);
+    ui.fill_rect(x0 - kTorqueBarOutline, y - kTorqueBarOutline, w + 2 * kTorqueBarOutline,
+                 kTorqueBarH + 2 * kTorqueBarOutline, argb(210, 0, 0, 0));
+    ui.fill_rect(x0, y, w, kTorqueBarH, track);
     const int length = static_cast<int>(std::lround(magnitude * static_cast<float>(w / 2)));
     if (length > 0) {
         const float heat = (magnitude - 0.75f) * 4.0f;  // 0.75 → 1.0에서 0 → 1
-        const uint32_t color = heat < 0.5f
-            ? lerp_color(kWhite, argb(240, 255, 200, 0), heat * 2.0f)
-            : lerp_color(argb(240, 255, 200, 0), argb(245, 255, 115, 0), heat * 2.0f - 1.0f);
+        const uint32_t white = argb(255, 255, 255, 255);
+        const uint32_t yellow = argb(255, 255, 205, 0);
+        const uint32_t orange = argb(255, 255, 110, 0);
+        const uint32_t color = heat < 0.5f ? lerp_color(white, yellow, heat * 2.0f)
+                                           : lerp_color(yellow, orange, heat * 2.0f - 1.0f);
         // 양수(왼쪽 조향)는 가운데에서 왼쪽으로 찬다.
         ui.fill_rect(fraction > 0.0f ? cx - length : cx, y, length, kTorqueBarH, color);
     }
-    ui.fill_rect(cx - 1, y + kTorqueBarH / 2 - kTorqueBarTickH / 2, 2, kTorqueBarTickH, kDim);
+    const int mid_y = y + kTorqueBarH / 2;
+    for (int end_x : {x0 - kTorqueBarOutline, x0 + w}) {
+        ui.fill_rect(end_x - 1, mid_y - kTorqueBarEndTickH / 2 - 1, kTorqueBarOutline + 2,
+                     kTorqueBarEndTickH + 2, argb(210, 0, 0, 0));
+        ui.fill_rect(end_x, mid_y - kTorqueBarEndTickH / 2, kTorqueBarOutline, kTorqueBarEndTickH, kWhite);
+    }
+    ui.fill_rect(cx - 3, mid_y - kTorqueBarTickH / 2 - 1, 6, kTorqueBarTickH + 2, argb(210, 0, 0, 0));
+    ui.fill_rect(cx - 2, mid_y - kTorqueBarTickH / 2, 4, kTorqueBarTickH, argb(255, 255, 255, 255));
 }
 
 void draw_alert(BitmapHud &ui, const OverlayHudState &hud, const ParsedModelOutput &output)
