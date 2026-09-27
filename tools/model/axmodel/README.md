@@ -18,5 +18,10 @@ MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmod
    `models/supercombo.axmodel`로 넣고 `models/manifest.sha256`을 갱신하면
    `scripts/upload_to_board.sh`가 보드로 보낸다.
 
+보정 데이터의 desire에는 펄스가 들어 있어야 한다(`make_core_data.py`). 예전 모델은 전부 0으로
+보정해 desire 입력 범위가 [0, 0]이었고, NPU 모델이 차선 변경 명령에 전혀 반응하지 않았다
+(2026-09-27: 보드에서 펄스를 넣어도 laneChangeLeft 확률 0.00, 새 모델은 0.99이고 desire가 없을 때
+출력은 같다, plan y 차이 0.0006 m).
+
 참고: Elu는 Pulsar2 6.0/7.0 모두 U16에서 잘못 컴파일돼서(0.9.4 모델) master 모델로 옮겼다.
 보드 NPU 추론은 코어 하나에서 약 15.5 ms다.

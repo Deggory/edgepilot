@@ -8,6 +8,11 @@ AI-ISP denoiser always uses the other. It is built with
 `scripts/upload_to_board.sh` puts it on the board as
 `/root/edgepilot/models/supercombo.axmodel`.
 
+The desire input is calibrated with one-hot pulses (half the samples carry one).
+The first build calibrated it with zeros only, so its range was [0, 0] and the
+NPU model ignored every lane-change desire; the rebuild of 2026-09-27 reacts
+like openpilot (laneChangeLeft 0.99 after a pulse) and is otherwise identical.
+
 Also tracked are the calibration data the axmodel build uses, and the records of
 the K230 v0.9.4 model.
 
