@@ -139,11 +139,7 @@ private:
   // 노이즈가 있는 운전자 조향 토크를 openpilot 방식으로 필터링한다.
   bool update_steering_pressed(int driver_torque);
 
-  // 운전자 조향 토크 감지 타이머를 openpilot K7 방식으로 갱신한다.
-  void update_driver_steering_guard(const VehicleCanState &vehicle_state);
 
-  // 운전자 조향 중 요청 토크 fade 비율을 반환한다.
-  float driver_torque_scale() const;
 
   // 제어 내부 상태를 초기값으로 되돌린다.
   void reset_control_state();
@@ -194,7 +190,6 @@ private:
   int cut_steer_frames_ = 0;
   bool cut_steer_ = false;
   int steering_pressed_counter_ = 0;
-  int driver_steering_torque_above_timer_ = 100;
   // 라이브 편경사 추정: bank = lat실측 + yaw_rate*v, 2초 저역통과, 직선에서만 갱신
   float road_bank_lat_accel_ = 0.0f;
   bool road_bank_init_ = false;

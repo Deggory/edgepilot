@@ -672,6 +672,32 @@ TEST(ControlReplay, SteerSaturatedWarnsWhenTurnExceedsLimit) {
   EXPECT_FALSE(run(-60.0f)) << "크기로 비교한다(상류와 같음)";
 }
 
+/* openpilot처럼 운전자가 핸들을 잡아도 요청 토크를 줄이지 않는다. 2026-09-27 고속도로 램프:
+ * 같은 방향으로 거들자 예전 1초 페이드가 토크를 0으로 만들었다. 운전자와 반대 방향 토크만
+ * panda와 같은 운전자 클램프가 줄인다. */
+TEST(ControlReplay, DriverTorqueDoesNotFadeRequest) {
+  LateralControllerConfig config;
+  config.force_engaged = true;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  LateralController controller(config);
+  LateralTarget target = replay_target();
+  for (int i = 0; i < kLateralControlN; ++i) {
+    target.curvatures[i] = -0.004f;
+    target.psis[i] = -0.004f * 17.0f * model_t_idx(i);
+  }
+  LateralControlResult r;
+  for (int tick = 0; tick < 300; ++tick) {
+    const double t = 1.0 + 0.01 * tick;
+    VehicleCanState vehicle = ready_vehicle(t);
+    vehicle.driver_torque = 300;  // 2초 넘게 170 위
+    r = controller.update(replay_path(), target, vehicle, t, tick);
+  }
+  ASSERT_TRUE(r.active && r.steering_pressed);
+  EXPECT_EQ(r.desired_torque, static_cast<int>(std::lround(r.normalized_output * 384.0f)))
+      << "요청 토크는 컨트롤러 출력 그대로다";
+  EXPECT_GT(std::abs(r.desired_torque), 20) << "커브 요청이 남아 있다";
+}
+
 TEST(ControlReplay, FixedMaxCurvature) {
   LateralControllerConfig config;
   config.force_engaged = true;

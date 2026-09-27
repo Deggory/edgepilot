@@ -48,7 +48,6 @@ constexpr JsonIntField<DrivingParams> kDrivingInts[] = {
     {"model_timeout_ms", 50, 2000, &DrivingParams::model_timeout_ms},
     {"vehicle_state_timeout_ms", 50, 2000, &DrivingParams::vehicle_state_timeout_ms},
     {"inactive_release_ms", 0, 5000, &DrivingParams::inactive_release_ms},
-    {"driver_torque_threshold", 0, 500, &DrivingParams::driver_torque_threshold},
 };
 constexpr JsonFloatField<DrivingParams> kDrivingFloats[] = {
     {"mdps_speed_spoof_kph", 30.0f, 100.0f, &DrivingParams::mdps_speed_spoof_kph},

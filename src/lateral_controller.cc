@@ -257,7 +257,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
         steering_pressed, steer_rate_limited_ || above_fault_angle, control_params,
         vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_lat_accel_, live);
     result.desired_torque = static_cast<int>(std::lround(
-        static_cast<float>(raw_torque) * driver_torque_scale() * angle_scale));
+        static_cast<float>(raw_torque) * angle_scale));
     result.actual_curvature = torque_controller_.actual_curvature();
     result.actual_curvature_vm = torque_controller_.actual_curvature_vm();
     result.actual_curvature_yaw = torque_controller_.actual_curvature_yaw();
@@ -328,7 +328,6 @@ LateralControlResult LateralController::update(const LateralPath &path,
     last_torque_ = 0;
     steer_rate_limited_ = false;
   }
-  update_driver_steering_guard(vehicle_state);
   return result;
 }
 
@@ -391,32 +390,6 @@ bool LateralController::update_steering_pressed(int driver_torque) {
 }
 
 // 운전자 조향 토크 감지 타이머를 openpilot K7 방식으로 갱신한다.
-void LateralController::update_driver_steering_guard(
-    const VehicleCanState &vehicle_state) {
-  /* 속도 제한 없이 건다. 30 km/h 위에서 fade가 꺼져 있으면 운전자와 부호가
-   * 반대인 요청을 panda 운전자 클램프가 통째로 자른다(2026-09-21 실측:
-   * 급락 프레임의 61%가 클램프, 그 절반이 30 km/h 위). */
-  const bool driver_steering_torque_above =
-      std::abs(vehicle_state.driver_torque) > config_.driving_params.driver_torque_threshold;
-  if (driver_steering_torque_above) {
-    driver_steering_torque_above_timer_ =
-        std::max(0, driver_steering_torque_above_timer_ - 1);
-  } else {
-    driver_steering_torque_above_timer_ =
-        std::min(100, driver_steering_torque_above_timer_ + 5);
-  }
-}
-
-// 운전자 조향 중 요청 토크 fade 비율을 반환한다.
-float LateralController::driver_torque_scale() const {
-  if (driver_steering_torque_above_timer_ >= 0 &&
-      driver_steering_torque_above_timer_ < 100) {
-    return clamp_float(static_cast<float>(driver_steering_torque_above_timer_) / 100.0f,
-                       0.0f, 1.0f);
-  }
-  return 1.0f;
-}
-
 // 제어 내부 상태를 초기값으로 되돌린다.
 void LateralController::reset_control_state() {
   last_torque_ = 0;
@@ -425,7 +398,6 @@ void LateralController::reset_control_state() {
   fault_angle_frames_ = 0;
   cut_steer_frames_ = 0;
   cut_steer_ = false;
-  driver_steering_torque_above_timer_ = 100;
   torque_controller_.reset();
 }
 
