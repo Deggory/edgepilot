@@ -8,7 +8,8 @@ runtime does on the CPU; the core keeps only the network:
   big_input_imgs  [1,12,128,256]  same for wide
   desire          [1,25,8]        5 Hz max-pooled desire history
   features_buffer [1,24,512]      5 Hz feature history
-  traffic_convention [1,2]   (action_t is dangling in the release graph; dropped)
+  traffic_convention [1,2]   (action_t only feeds an unused Cast in the release graph; dropped,
+                             and the script stops if a newer graph starts to use it)
   -> outputs [1,2576]
 
 fp16 weights/casts are promoted to fp32 (Pulsar2 quantizes from fp32).
@@ -23,6 +24,27 @@ tmp = dst + ".tmp.onnx"
 cut = {"_unsafe_view": "input_imgs", "_unsafe_view_1": "big_input_imgs", "transpose": "desire",
        "transpose_1": "features_buffer", "traffic_convention": "traffic_convention"}
 m = onnx.shape_inference.infer_shapes(onnx.load(src))
+
+
+def reaches_outputs(graph, name):
+    """Whether tensor `name` feeds any graph output."""
+    outputs, frontier, seen = {o.name for o in graph.output}, [name], set()
+    while frontier:
+        t = frontier.pop()
+        if t in outputs:
+            return True
+        seen.add(t)
+        for n in graph.node:
+            if t in n.input:
+                frontier.extend(o for o in n.output if o not in seen)
+    return False
+
+
+# The release graph feeds action_t (the lateral/longitudinal delay openpilot's modeld
+# passes in) into one Cast whose result nothing reads, so the core drops it. A model
+# that starts to use it needs a new core input and runtime support: stop here.
+if any(i.name == "action_t" for i in m.graph.input) and reaches_outputs(m.graph, "action_t"):
+    sys.exit("action_t now feeds the outputs: add it as a core input and feed it at runtime")
 onnx.save(m, tmp)
 utils.extract_model(tmp, tmp, list(cut), ["outputs"])
 m = onnx.load(tmp)

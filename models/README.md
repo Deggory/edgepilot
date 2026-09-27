@@ -39,6 +39,13 @@ traffic_convention  [1, 2]             float
 -> outputs          [1, 2576]          float
 ```
 
+The release graph (sha256 `65a08adc…`, the same model openpilot master ships as of
+2026-09-23) also takes `action_t`, the lateral/longitudinal delay openpilot's modeld
+feeds in, but it only goes into a Cast nothing reads, so it cannot change the
+outputs and the core drops it. The delay is applied after the model instead, in
+the laneless curvature law and the torque controller, as openpilot does.
+`extract_core.py` stops if a newer graph starts to use it.
+
 Both image towers are active: the runtime warps one `1280x720` NV12 frame
 through two calibrated virtual cameras (`medmodel` fl=910 and `sbigmodel`
 fl=455) and keeps a 5-frame history per tower. The queues the released ONNX
