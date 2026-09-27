@@ -97,7 +97,7 @@ keeps the AX system open.
   50 ms clock
 - HUD content: center speed, left `OPENPILOT`/`CONTROL`/`DRIVE`/`TPMS` panels,
   right `SYSTEM`/`HEALTH`/`CALIBRATION`/`LEAD` panels, a centered status
-  alert, and above it a steering torque bar while engaged (openpilot's mici UI
+  alert, and below it at the bottom edge a steering torque bar while engaged (openpilot's mici UI
   torque bar: sent torque / 384 from the center toward the turn, white, then
   yellow to orange above 75%), filled with camera/model/HUD FPS, inference time,
   CPU/temperature/memory/storage, process health, Panda state, vehicle speed,

@@ -92,14 +92,15 @@ constexpr int kAutoHoldY = 350;
 constexpr int kAutoHoldTextY = 10;
 constexpr int kAlertW = 520;
 constexpr int kAlertH = 50;
-constexpr int kAlertBottomMargin = 58;
+// 알림 상자 위쪽 끝의 화면 아래로부터 거리. 맨 아래 토크 바 위에 온다.
+constexpr int kAlertBottomMargin = 80;
 constexpr int kAlertTitleY = 8;
 constexpr int kAlertDetailY = 36;
-// 토크 바: 알림 상자 바로 위, 화면 가운데. 알림이 떠도 가리지 않는다.
+// 토크 바: 화면 맨 아래 가운데. 알림 상자는 그 위라 서로 가리지 않는다.
 constexpr int kTorqueBarW = 460;
 constexpr int kTorqueBarCompactW = 400;
 constexpr int kTorqueBarH = 14;
-constexpr int kTorqueBarGap = 14;
+constexpr int kTorqueBarBottomMargin = 6;  // 화면 아래 끝에서 바 아래 끝까지
 constexpr int kTorqueBarOutline = 2;
 constexpr int kTorqueBarTickH = 26;     // 가운데 눈금
 constexpr int kTorqueBarEndTickH = 20;  // 양 끝(최대 토크) 눈금
@@ -1011,7 +1012,7 @@ void draw_torque_bar(BitmapHud &ui, const OverlayHudState &hud)
     const int w = ui.width() <= 640 ? kTorqueBarCompactW : kTorqueBarW;
     const int cx = ui.width() / 2;
     const int x0 = cx - w / 2;
-    const int y = ui.height() - kAlertBottomMargin - kTorqueBarGap - kTorqueBarH;
+    const int y = ui.height() - kTorqueBarBottomMargin - kTorqueBarH;
     const float fraction = hud.controller_active ? hud.steer_torque_fraction : 0.0f;
     const float magnitude = std::fabs(fraction);
     // 밝은 노면에서도 보이게 짙은 테두리를 두르고 바탕을 회색으로 채운다.
