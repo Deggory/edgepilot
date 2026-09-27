@@ -19,6 +19,10 @@ enum class BlockKind : uint8_t {
    * 정차에서는 plan 도달거리가 짧아 path가 상시 무효라, 거부로 치면 정차 중
    * engage가 불가능해진다. */
   Availability,
+  /* openpilot의 SOFT_DISABLE. engage 요청은 거부하고, engage 중에 생기면 경고를 띄운 채
+   * 3초 더 조향한 뒤 해제한다(운전자가 넘겨받을 시간). 목록 맨 끝에서만 판정하므로
+   * 앞선 차단 사유를 가리지 않는다. */
+  SoftDisable,
 };
 
 // ControlStale은 컨트롤러가 내지 않는다. 스냅샷이 오래됐을 때 overlay가 대신 쓴다.
@@ -45,6 +49,9 @@ enum class BlockKind : uint8_t {
   X(PathInvalid,        "path_invalid",         "PATH INVALID",    BlockKind::Availability) \
   X(LateralPlanInvalid, "lateral_plan_invalid", "PLAN INVALID",    BlockKind::Reject)       \
   X(LateralPlanStale,   "lateral_plan_stale",   "PLAN STALE",      BlockKind::Reject)       \
+  X(CalibrationIncomplete, "calibration_incomplete", "CALIBRATING",  BlockKind::SoftDisable) \
+  X(CalibrationRecalibrating, "calibration_recalibrating", "RECALIBRATING", BlockKind::SoftDisable) \
+  X(CalibrationInvalid, "calibration_invalid",  "CALIB INVALID",   BlockKind::SoftDisable)  \
   X(ControlStale,       "control_stale",        "CONTROL STALE",   BlockKind::Reject)
 
 enum class BlockReason : uint8_t {

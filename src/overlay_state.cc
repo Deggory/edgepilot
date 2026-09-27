@@ -35,6 +35,8 @@ void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState 
     hud->right_blinker = fresh && c.right_blinker != 0;
     hud->cruise_active = fresh && c.cruise_active != 0;
     hud->brake_hold = fresh && (c.hud_flags & kHudFlagBrakeHold) != 0;
+    hud->soft_disabling = fresh && (c.hud_flags & kHudFlagSoftDisabling) != 0;
+    hud->steer_saturated = fresh && (c.hud_flags & kHudFlagSteerSaturated) != 0;
     hud->gear = fresh ? c.gear : 0;
     hud->cluster_speed_kph = fresh ? c.cluster_speed_kph : 0.0f;
     hud->ego_speed_kph = fresh ? c.ego_speed_kph : 0.0f;

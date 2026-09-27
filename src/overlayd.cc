@@ -360,13 +360,33 @@ private:
     {
         OverlayAlertEvents::Decision decision;
         if (f.control) decision = alert_events_.update(latest_control_state_, hud_.departure_alert_type);
-        const bool played = play_alert(decision, now);
+        bool played = play_alert(decision, now);
         if (now >= engage_alert_until_ns_) hud_.engage_alert_message[0] = '\0';
+        played = play_take_control_alert(played) || played;
         play_availability_alert(f, played);
+    }
+
+    /* 해제 예고와 조향 한계 경고는 켜지는 순간 한 번 울린다. 해제 자체는 disengage
+     * 이벤트가 따로 울린다. 같은 프레임에 다른 알림이 울렸으면 다음 프레임으로 미룬다. */
+    bool play_take_control_alert(bool suppressed)
+    {
+        const bool soft = hud_.soft_disabling, saturated = hud_.steer_saturated;
+        const bool rising = (soft && !previous_soft_disabling_) ||
+                            (saturated && !previous_steer_saturated_);
+        if (suppressed) return false;
+        previous_soft_disabling_ = soft;
+        previous_steer_saturated_ = saturated;
+        if (!rising) return false;
+        sound_.play(AlertSoundId::unable);
+        std::fprintf(stderr, "overlayd: alert=take_control soft_disable=%d steer_saturated=%d block=%s\n",
+                     soft ? 1 : 0, saturated ? 1 : 0, hud_.active_block);
+        return true;
     }
 
     OverlayRenderer overlay_;
     AlertSound sound_;
+    bool previous_soft_disabling_ = false;
+    bool previous_steer_saturated_ = false;
     int test_sounds_played_ = 0;
     bool profile_ = false;
 

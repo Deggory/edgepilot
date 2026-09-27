@@ -512,7 +512,9 @@ ControlState make_control_state(const LateralControllerConfig &config,
   state.path_usable = result.path_usable ? 1U : 0U;
   state.hud_flags =
       (target.laneless_mode ? kHudFlagLaneless : 0U) |
-      (result.vehicle_fresh && vehicle.brake_hold ? kHudFlagBrakeHold : 0U);
+      (result.vehicle_fresh && vehicle.brake_hold ? kHudFlagBrakeHold : 0U) |
+      (result.soft_disabling ? kHudFlagSoftDisabling : 0U) |
+      (result.steer_saturated ? kHudFlagSteerSaturated : 0U);
   state.seeds_ready = result.seeds_ready ? 1U : 0U;
   state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
   state.steering_fault = vehicle.steering_fault ? 1U : 0U;
@@ -954,6 +956,7 @@ int main() {
                       last_result.active, last_result.apply_torque, last_result.steering_pressed);
       controller.set_live_params(learners.live(), learners.vehicle_valid(),
                                  model.calibration.status == 1U);
+      controller.set_calibration_status(model.calibration.status);
       if (learners.vehicle_persist_due()) {
         learner_store.write(vehicle_learn_path, learners.vehicle_persist_json());
         const VehicleParams &v = learners.vehicle_params();

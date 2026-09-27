@@ -27,6 +27,8 @@ struct OverlayHudState {
     int turn_signal_step = 0;
     bool cruise_active = false;
     bool brake_hold = false;
+    bool soft_disabling = false;   // 3초 뒤 해제 예고(active_block이 사유)
+    bool steer_saturated = false;  // 커브가 조향 한계를 넘음
     bool services_healthy = false;
     bool network_connected = false;
     unsigned panda_faults = 0;

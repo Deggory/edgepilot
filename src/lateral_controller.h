@@ -27,15 +27,22 @@ constexpr float kMaxLateralAccel = 3.3f;
 /* lag 보상에 더하는 plan 나이의 상한. 이 이상 낡은 plan은 staleness gate가
  * 별도로 차단한다. */
 constexpr float kMaxPlanAgeCompS = 0.25f;
+// openpilot selfdrived SOFT_DISABLE_TIME: 해제 전 경고를 띄운 채 조향을 유지하는 시간.
+constexpr double kSoftDisableS = 3.0;
+/* openpilot LatControl 포화 판정. steerLimitTimer는 opendbc hyundai 값, 속도 하한은
+ * sat_check_min_speed. */
+constexpr float kSteerLimitTimerS = 0.4f;
+constexpr float kSatCheckMinSpeedMps = 10.0f;
 
 /* lateral MPC plan을 actuator delay + plan 나이만큼 앞에서 읽은 곡률. 상류에선 modeld의
  * action.desiredCurvature 자리다. */
 float lag_adjusted_curvature(const LateralTarget &target, float speed_mps, float plan_age_s,
                              float steer_actuator_delay_s);
 
-/* openpilot drive_helpers.clip_curvature: 직전 출력 기준 횡저크, 횡가속(롤만큼 이동), 최대 곡률. */
+/* openpilot drive_helpers.clip_curvature: 직전 출력 기준 횡저크, 횡가속(롤만큼 이동), 최대 곡률.
+ * limited가 있으면 횡가속·최대 곡률 한계에 걸렸는지 적는다(저크 제한은 치지 않는다, 상류와 같음). */
 float clip_curvature(float speed_mps, float prev_curvature, float new_curvature,
-                     float roll_rad = 0.0f);
+                     float roll_rad = 0.0f, bool *limited = nullptr);
 
 // 둘을 잇는다. plan이 무효면 0. 컨트롤러와 replay_planner가 같은 구현을 쓴다.
 float lag_adjusted_desired_curvature(const LateralTarget &target, float speed_mps,
@@ -74,6 +81,10 @@ struct LateralControlResult {
   int apply_torque = 0;
   bool steering_pressed = false;
   bool cut_steer_temp = false;
+  // 해제 예고: 캘리브레이션 같은 SoftDisable 사유로 3초 뒤 해제된다. 조향은 계속한다.
+  bool soft_disabling = false;
+  // openpilot steerSaturated: 커브가 조향 한계를 넘어 목표 곡률을 못 따라간다.
+  bool steer_saturated = false;
   BlockReason active_block = BlockReason::None;
   std::vector<CanFrame> frames;
 };
@@ -91,6 +102,11 @@ public:
    * 차량 값을 쓰는 중 vehicle_valid가 거짓이고 캘리브가 끝났으면 차단한다
    * (상류 paramsdTemporaryError). */
   void set_live_params(const LiveLateralParams &live, bool vehicle_valid, bool calibrated);
+
+  /* modeld 온라인 캘리브레이션 상태(CalibrationStatus: 0 미완료, 1 완료, 2 범위 밖,
+   * 3 재보정). 완료가 아니면 openpilot처럼 engage를 막고 engage 중이면 경고 후 해제한다.
+   * 기본값은 완료라 단위 테스트와 리플레이 도구는 영향이 없다. */
+  void set_calibration_status(uint32_t status) { calibration_status_ = status; }
 
   // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
   LateralControlResult update(const LateralPath &path,
@@ -151,6 +167,11 @@ private:
   LiveLateralParams live_{};
   bool live_vehicle_valid_ = true;
   bool live_calibrated_ = false;
+  uint32_t calibration_status_ = 1;
+  double soft_disable_start_s_ = -1.0;
+  // openpilot LatControl.sat_time와 selfdrived의 최근 핸들 조작 시각
+  float sat_time_ = 0.0f;
+  double last_steering_pressed_s_ = -1000.0;
   bool engaged_ = false;
   /* clip_curvature의 직전 출력. 비활성 중엔 상류 controlsd처럼 실제 곡률을 따라가
    * 재활성 때 거기서 한계 안으로 출발한다. */

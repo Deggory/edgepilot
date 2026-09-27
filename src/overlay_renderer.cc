@@ -552,12 +552,18 @@ struct Alert {
     bool empty() const { return title.empty(); }
 };
 
-/* 우선순위: engage 거부 토스트 > 조향 결함 > panda 결함 > 서비스 대기 > 출발 감지. */
+/* 우선순위: engage 거부 토스트 > 해제 예고 > 조향 결함 > panda 결함 > 조향 한계 >
+ * 서비스 대기 > 출발 감지. */
 Alert select_alert(const OverlayHudState &hud)
 {
     if (hud.engage_alert_message[0] != '\0') return {hud.engage_alert_message, kOrange, false};
+    if (hud.soft_disabling) {
+        const char *label = engage_block_label(hud.active_block);
+        return {std::string("TAKE CONTROL: ") + (label ? label : "DISENGAGING"), kRed, false};
+    }
     if (hud.steering_fault) return {"STEERING FAULT", kRed, false};
     if (hud.panda_faults != 0) return {"PANDA FAULT", kRed, false};
+    if (hud.steer_saturated) return {"TAKE CONTROL: TURN EXCEEDS LIMIT", kOrange, false};
     if (!hud.services_healthy) return {"WAITING FOR SERVICES", kOrange, false};
     if (hud.departure_alert_type == DepartureAlertType::lead_departed)
         return {"LEAD VEHICLE MOVING", kGreen, true};

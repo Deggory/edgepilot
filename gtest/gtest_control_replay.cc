@@ -567,6 +567,111 @@ TEST(ControlReplay, EngageAllowedWithUnavailablePath) {
   ASSERT_FALSE(door.engaged);
 }
 
+/* openpilot calibrationIncomplete/Recalibrating/Invalid(SOFT_DISABLE + NO_ENTRY). */
+TEST(ControlReplay, CalibrationGatesEngageAndSoftDisables) {
+  LateralControllerConfig config;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  LateralController controller(config);
+  VehicleCanState vehicle = ready_vehicle(1.0);
+  auto press_set = [&](double t) {
+    vehicle = ready_vehicle(t);
+    vehicle.clu_button = 2;
+    controller.update(replay_path(), replay_target(), vehicle, t, 0, true, true);
+    vehicle = ready_vehicle(t + 0.01);
+    return controller.update(replay_path(), replay_target(), vehicle, t + 0.01, 1, true, true);
+  };
+
+  controller.set_calibration_status(0);
+  const auto rejected = press_set(1.0);
+  EXPECT_TRUE(rejected.engage_rejected) << "캘리브레이션 미완료면 engage를 거부한다";
+  EXPECT_FALSE(rejected.engaged);
+  EXPECT_EQ(rejected.active_block, BlockReason::CalibrationIncomplete);
+
+  controller.set_calibration_status(1);
+  const auto engaged = press_set(2.0);
+  ASSERT_TRUE(engaged.engaged && engaged.active);
+
+  // engage 중 재보정: 경고를 띄운 채 3초 조향하고 해제한다.
+  controller.set_calibration_status(3);
+  LateralControlResult r;
+  double t = 2.02;
+  for (; t < 2.02 + 2.9; t += 0.01) {
+    vehicle = ready_vehicle(t);
+    r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+    ASSERT_TRUE(r.engaged && r.active && r.soft_disabling) << "해제 예고 중에는 조향을 유지한다 t=" << t;
+    ASSERT_EQ(r.active_block, BlockReason::CalibrationRecalibrating);
+  }
+  for (; t < 2.02 + 3.2; t += 0.01) {
+    vehicle = ready_vehicle(t);
+    r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+  }
+  EXPECT_FALSE(r.engaged) << "3초가 지나면 해제한다";
+  EXPECT_FALSE(r.active);
+  EXPECT_FALSE(r.soft_disabling);
+
+  // 3초 안에 보정이 돌아오면 해제하지 않고 타이머도 처음부터 다시 센다.
+  controller.set_calibration_status(1);
+  ASSERT_TRUE(press_set(10.0).engaged);
+  controller.set_calibration_status(2);
+  for (t = 10.02; t < 11.5; t += 0.01) {
+    vehicle = ready_vehicle(t);
+    r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+  }
+  EXPECT_TRUE(r.soft_disabling);
+  EXPECT_EQ(r.active_block, BlockReason::CalibrationInvalid);
+  controller.set_calibration_status(1);
+  vehicle = ready_vehicle(t);
+  r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+  EXPECT_TRUE(r.engaged && r.active && !r.soft_disabling);
+}
+
+TEST(ControlReplay, ClipCurvatureReportsAccelLimit) {
+  bool limited = true;
+  clip_curvature(20.0f, 0.0f, 0.001f, 0.0f, &limited);
+  EXPECT_FALSE(limited);
+  // 저크 한계만 물면 limited가 아니다(상류 clip_curvature와 같음).
+  clip_curvature(20.0f, 0.0f, 0.005f, 0.0f, &limited);
+  EXPECT_FALSE(limited);
+  // 횡가속 3.3 m/s² 한계: 20 m/s에서 0.00825 1/m
+  clip_curvature(20.0f, 0.0082f, 0.0095f, 0.0f, &limited);
+  EXPECT_TRUE(limited);
+}
+
+/* openpilot steerSaturated: 목표 횡가속이 한계에 잘려 0.4초 넘게 포화이고, 실제가 목표의
+ * 1/1.2에 못 미치는 커브에서만 경고한다. */
+TEST(ControlReplay, SteerSaturatedWarnsWhenTurnExceedsLimit) {
+  LateralControllerConfig config;
+  config.force_engaged = true;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  LateralTarget target = replay_target();
+  for (int i = 0; i < kLateralControlN; ++i) {  // 20 m/s에서 횡가속 8 m/s² 요구
+    target.curvatures[i] = 0.02f;
+    target.psis[i] = 0.02f * 17.0f * model_t_idx(i);
+  }
+  // 실제 곡률은 상류처럼 조향각(차량 모델)에서 나온다(torque_use_angle).
+  auto run = [&](float steering_angle_deg) {
+    LateralController controller(config);
+    LateralControlResult r;
+    bool warned = false;
+    for (int tick = 0; tick < 400; ++tick) {
+      const double t = 1.0 + 0.01 * tick;
+      VehicleCanState vehicle = ready_vehicle(t);
+      vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 72.0f;
+      vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 72.0f;
+      vehicle.cluster_speed_raw = 75.0f;
+      vehicle.yaw_rate_valid = true;
+      vehicle.steering_angle_deg = steering_angle_deg;
+      r = controller.update(replay_path(), target, vehicle, t, tick);
+      warned = warned || r.steer_saturated;
+    }
+    return warned;
+  };
+  EXPECT_TRUE(run(0.0f)) << "한계에 잘린 커브를 못 따라가면 경고한다";
+  // 조향각 60도면 20 m/s에서 횡가속이 한계(3.3 m/s²)를 넘는다: 목표/실제 < 1.2 → 경고 없음
+  EXPECT_FALSE(run(60.0f)) << "잘린 목표를 따라가고 있으면 경고하지 않는다";
+  EXPECT_FALSE(run(-60.0f)) << "크기로 비교한다(상류와 같음)";
+}
+
 TEST(ControlReplay, FixedMaxCurvature) {
   LateralControllerConfig config;
   config.force_engaged = true;

@@ -44,6 +44,8 @@ constexpr char kImuTopic[] = "/edgepilot_imu";
 
 constexpr uint32_t kHudFlagLaneless = 1U << 0;
 constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
+constexpr uint32_t kHudFlagSoftDisabling = 1U << 2;   // 3초 뒤 해제 예고(active_block이 사유)
+constexpr uint32_t kHudFlagSteerSaturated = 1U << 3;  // 커브가 조향 한계를 넘음
 constexpr char kRoadAiFrameRing[] = "/edgepilot_road_ai";
 constexpr unsigned kCanBatchMaxFrames = 256;
 constexpr unsigned kCanQueueSlots = 64;

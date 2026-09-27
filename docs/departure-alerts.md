@@ -40,6 +40,18 @@ Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정�
 `engage`만 한 번 알린다. 허가가 끝내 오지 않거나 Panda 회복 뒤 다른 정적 조건이
 남아 있으면 그때 `UNABLE`로 거부한다.
 
+조향을 넘겨받으라는 경고(`overlayd: alert=take_control`)는 켜지는 순간 `unable` 소리를 한 번
+내고, 켜져 있는 동안 LCD 하단에 띄운다. openpilot의 두 알림에 대응한다.
+
+- `TAKE CONTROL: CALIBRATING / RECALIBRATING / CALIB INVALID`: 카메라 캘리브레이션이
+  완료 상태가 아니다. 이 상태에서는 engage를 거부한다(`UNABLE TO ENGAGE: CALIBRATING`).
+  engage 중에 이 상태가 되면(마운트 변경 감지 등) 경고를 띄운 채 3초 더 조향하고
+  해제한다(openpilot의 soft disable). 3초 안에 완료로 돌아오면 해제하지 않는다.
+- `TAKE CONTROL: TURN EXCEEDS LIMIT`(openpilot steerSaturated): 시속 36 km 이상에서
+  목표 곡률이 횡가속 한계(3.3 m/s²)에 잘리거나 출력이 한계에 붙은 채 0.4초 넘게 이어지고,
+  목표 횡가속이 1 m/s²를 넘으며 실제의 1.2배 이상인데, 최근 2초 안에 핸들을 잡지 않았을
+  때다. 2026-09-25~27 실차 3회 주행에서는 한 번도 해당하지 않았다.
+
 K230의 피에조 환경 변수(`K230_PIEZO_BUZZER`, `K230_PIEZO_PIN`)는 없어졌고, 대신
 `EDGEPILOT_ALERT_SOUND=0`(끄기), `EDGEPILOT_ALERT_VOLUME`(0~100, 기본 70), `EDGEPILOT_ALERT_PCM`
 (ALSA 장치, 기본 `plughw:0,1`)를 쓴다.
