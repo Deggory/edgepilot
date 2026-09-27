@@ -149,6 +149,9 @@ struct ModelState {
  * kRecordingVersion도 함께 올려야 한다. */
 static_assert(sizeof(ModelState) == 3256,
               "ModelState layout is shared with the recording reader");
+// param_server.py(MODEL_CALIBRATION_OFFSET)가 이 위치에서 보정 상태를 읽는다.
+static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationState) == 32,
+              "ModelState.calibration is read by param_server.py");
 
 struct ProcessState {
     char name[16] = {};

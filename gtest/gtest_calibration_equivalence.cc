@@ -18,6 +18,8 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include <time.h>
+#include <unistd.h>
 
 namespace {
 
@@ -453,6 +455,58 @@ TEST(CalibrationEquivalence, CalibrationService)
               static_cast<int>(CalibrationStatus::Calibrated))
         << "다시 읽은 보정은 보정 완료 상태다";
 
+    unsetenv("EDGEPILOT_PARAMS_DIR");
+    std::remove(kTestCalibration);
+}
+
+TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
+{
+    constexpr const char *kTestParamsDir = "params/work";
+    constexpr const char *kTestCalibration = "params/work/calibration.json";
+    constexpr const char *kResetRequest = "params/work/calibration_reset";
+    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
+    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", kResetRequest, 1);
+    std::remove(kResetRequest);
+
+    AppConfig manual_config;
+    manual_config.manual_calibration = true;
+    manual_config.manual_pitch = deg_to_rad(2.3f);
+    { CalibrationService seed(manual_config); }  // pitch 2.3도, 5블록을 저장해 둔다
+
+    AppConfig auto_config;
+    auto_config.calibration_auto = true;
+    auto_config.manual_calibration = false;
+    const ParsedModelOutput no_pose{};
+    {
+        CalibrationService service(auto_config);
+        ASSERT_EQ(service.snapshot().valid_blocks, 5) << "저장된 보정으로 시작한다";
+        service.update(no_pose, 0.0f);
+        EXPECT_EQ(service.snapshot().valid_blocks, 5) << "요청이 없으면 그대로다";
+
+        std::FILE *request = std::fopen(kResetRequest, "w");
+        ASSERT_NE(request, nullptr);
+        std::fclose(request);
+        // 요청은 1초에 한 번 본다. 첫 update에서 이미 봤으므로 간격을 넘겨 다시 부른다.
+        for (int i = 0; i < 12 && service.snapshot().valid_blocks != 0; ++i) {
+            struct timespec pause = {0, 100'000'000};
+            nanosleep(&pause, nullptr);
+            service.update(no_pose, 0.0f);
+        }
+        EXPECT_EQ(service.snapshot().valid_blocks, 0) << "초기화하면 블록이 없다";
+        EXPECT_EQ(static_cast<int>(service.snapshot().status),
+                  static_cast<int>(CalibrationStatus::Uncalibrated));
+        float rpy[3] = {1.0f, 1.0f, 1.0f};
+        service.input_rpy(rpy);
+        EXPECT_NEAR(rpy[1], 0.0f, 1e-7) << "모델 입력도 0에서 다시 시작한다";
+        EXPECT_NE(access(kResetRequest, F_OK), 0) << "요청 파일은 한 번 쓰고 지운다";
+    }  // 저장 스레드가 끝날 때까지 기다린다
+    EXPECT_NE(access(kTestCalibration, F_OK), 0) << "저장된 보정 파일을 지운다";
+    {
+        CalibrationService restarted(auto_config);
+        EXPECT_EQ(restarted.snapshot().valid_blocks, 0) << "재시작해도 예전 값을 다시 읽지 않는다";
+    }
+
+    unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
     unsetenv("EDGEPILOT_PARAMS_DIR");
     std::remove(kTestCalibration);
 }

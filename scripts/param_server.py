@@ -648,11 +648,12 @@ def boottime_ns() -> int:
     return time.clock_gettime_ns(clock)
 
 
-class LearnerStateReader:
-    """controlsd의 /edgepilot_learner_state를 읽기 전용으로 연다. 파일이 다시 만들어지면 새로 연다."""
+class IpcReader:
+    """LatestChannel 하나를 읽기 전용으로 연다. 파일이 다시 만들어지면 새로 연다."""
 
-    def __init__(self, path: str = LEARNER_STATE_PATH):
+    def __init__(self, path: str, payload_size: int):
         self.path = path
+        self.payload_size = payload_size
         self._map: mmap.mmap | None = None
         self._inode = None
 
@@ -670,22 +671,37 @@ class LearnerStateReader:
             os.close(fd)
         self._inode = inode
 
-    def read(self) -> tuple[int, int, Dict[str, Any]] | None:
-        """(seq, 발행 시각 ns, 상태). 아직 없거나 쓰는 중이면 None."""
+    def read_payload(self) -> tuple[int, int, bytes] | None:
+        """(seq, 발행 시각 ns, 앞쪽 payload_size 바이트). 아직 없거나 쓰는 중이면 None."""
         try:
             self._reopen_if_needed()
             assert self._map is not None
             for _ in range(4):
                 magic, _, _, _, seq, stamp, size, _ = IPC_HEADER.unpack_from(self._map, 0)
-                if magic != IPC_MAGIC or seq == 0 or seq & 1 or size < LEARNER_STATE.size:
+                if magic != IPC_MAGIC or seq == 0 or seq & 1 or size < self.payload_size:
                     return None
-                payload = self._map[IPC_HEADER.size:IPC_HEADER.size + LEARNER_STATE.size]
+                payload = self._map[IPC_HEADER.size:IPC_HEADER.size + self.payload_size]
                 if IPC_HEADER.unpack_from(self._map, 0)[4] == seq:
-                    return seq, stamp, decode_learner_state(payload)
+                    return seq, stamp, payload
             return None
         except (OSError, ValueError, struct.error):
             self._map = None
             return None
+
+
+class LearnerStateReader(IpcReader):
+    """controlsd의 /edgepilot_learner_state."""
+
+    def __init__(self, path: str = LEARNER_STATE_PATH):
+        super().__init__(path, LEARNER_STATE.size)
+
+    def read(self) -> tuple[int, int, Dict[str, Any]] | None:
+        """(seq, 발행 시각 ns, 상태). 아직 없거나 쓰는 중이면 None."""
+        latest = self.read_payload()
+        if latest is None:
+            return None
+        seq, stamp, payload = latest
+        return seq, stamp, decode_learner_state(payload)
 
 
 def learner_trend_row(state: Dict[str, Any]) -> list[float]:
@@ -765,6 +781,73 @@ class LearnerMonitor:
             result["state"] = state
             result["trend_row"] = learner_trend_row(state)
         return result
+
+
+# ---------------------------------------------------------------- 카메라 캘리브레이션 초기화
+
+MODEL_STATE_PATH = os.environ.get("EDGEPILOT_MODEL_STATE_PATH", "/dev/shm/edgepilot_model_state")
+CONTROL_STATE_PATH = os.environ.get("EDGEPILOT_CONTROL_STATE_PATH", "/dev/shm/edgepilot_control_state")
+# modeld의 CalibrationService가 1초마다 이 파일을 보고, 있으면 지우고 처음부터 다시 수렴한다.
+CALIBRATION_RESET_PATH = os.environ.get("EDGEPILOT_CALIBRATION_RESET_PATH",
+                                        "/dev/shm/edgepilot_calibration_reset")
+# offsetof(ModelState, calibration). check_param_server.py가 ipc_messages.h와 대조한다.
+MODEL_CALIBRATION_OFFSET = 3224
+CALIBRATION_STATE = struct.Struct("<Ii3f3f")  # CalibrationState: status, valid_blocks, rpy, spread
+CONTROL_STATE_HEAD = struct.Struct("<QII")  # ControlState: timestamp_ns, enabled, engaged
+CALIBRATION_STATUS = ("uncalibrated", "calibrated", "invalid")
+STATE_STALE_S = 2.0
+
+
+class CalibrationControl:
+    """modeld가 발행한 보정 상태를 보여 주고, 해제 상태에서만 초기화를 요청한다.
+
+    openpilot의 Reset Calibration과 같이 결합 중에는 받지 않는다. 학습값(paramsd·torqued)은
+    CAN 요레이트로 배우므로 카메라 장착과 무관해 그대로 둔다."""
+
+    def __init__(self, model_path: str = MODEL_STATE_PATH, control_path: str = CONTROL_STATE_PATH,
+                 request_path: str = CALIBRATION_RESET_PATH):
+        self.model = IpcReader(model_path, MODEL_CALIBRATION_OFFSET + CALIBRATION_STATE.size)
+        self.control = IpcReader(control_path, CONTROL_STATE_HEAD.size)
+        self.request_path = Path(request_path)
+
+    def engaged(self) -> bool:
+        """controlsd가 살아 있고 결합 중이면 True. controlsd가 없거나 멈췄으면 조향도 없다."""
+        latest = self.control.read_payload()
+        if latest is None:
+            return False
+        _, stamp, payload = latest
+        if (boottime_ns() - stamp) * 1e-9 > STATE_STALE_S:
+            return False
+        _, _, engaged = CONTROL_STATE_HEAD.unpack(payload)
+        return bool(engaged)
+
+    def status(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "available": False,
+            "engaged": self.engaged(),
+            "reset_pending": self.request_path.exists(),
+        }
+        latest = self.model.read_payload()
+        if latest is None:
+            return result
+        _, stamp, payload = latest
+        status, valid_blocks, *values = CALIBRATION_STATE.unpack_from(payload, MODEL_CALIBRATION_OFFSET)
+        result.update({
+            "available": True,
+            "age_s": max(0.0, (boottime_ns() - stamp) * 1e-9),
+            "status": CALIBRATION_STATUS[status] if status < len(CALIBRATION_STATUS) else str(status),
+            "valid_blocks": valid_blocks,
+            "rpy_deg": [round(math.degrees(v), 3) for v in values[:3]],
+            "spread_deg": [round(math.degrees(v), 3) for v in values[3:]],
+        })
+        return result
+
+    def request_reset(self) -> Dict[str, Any]:
+        if self.engaged():
+            raise PermissionError("결합 중에는 초기화할 수 없습니다. 먼저 해제하세요.")
+        self.request_path.parent.mkdir(parents=True, exist_ok=True)
+        self.request_path.touch()
+        return self.status()
 
 
 HTML = """<!doctype html>
@@ -955,6 +1038,8 @@ HTML = """<!doctype html>
       color: #e5e9ec; cursor: pointer; text-align: left; font-size: 13px; font-weight: 700;
     }
     .adopt-button:hover { background: #2d3338; }
+    .adopt-button.danger { border-color: #6b3a3a; color: #f3b0b0; }
+    .adopt-button.danger:hover { background: #331f1f; }
     .adopt-button small { display: block; color: #7f8991; font-size: 11px; font-weight: 500; }
     .learner-note { margin: 9px 0 0; padding: 6px 9px; border-radius: 5px; font-size: 12px; line-height: 1.45; }
     .learner-note.ignored { background: #24292d; color: var(--muted); }
@@ -1657,6 +1742,69 @@ HTML = """<!doctype html>
       return card;
     }
 
+    const CALIB_STATUS = {
+      calibrated: ["보정 완료", "good"], uncalibrated: ["수렴 중", "warn"], invalid: ["범위 밖", "bad"],
+    };
+
+    function calibShell() {
+      const card = el("article", "live-card");
+      const head = el("div", "live-head");
+      const badges = el("span", "live-badges");
+      head.append(el("h3", "live-title", "카메라 캘리브레이션"), badges);
+      const body = el("div");
+      const button = el("button", "adopt-button danger");
+      button.type = "button";
+      const row = el("div", "adopt-row");
+      row.appendChild(button);
+      card.append(head, body, row);
+      const shell = {card, badges, body, button, data: null};
+      button.addEventListener("click", () => resetCalibration(shell));
+      return shell;
+    }
+
+    function calibCard(shell, c) {
+      shell.data = c;
+      if (!c || !c.available) {
+        fillShell(shell, [["상태 없음", "muted"]], [el("div", "live-foot", "modeld가 보정 상태를 발행하지 않습니다.")]);
+      } else {
+        const [label, tone] = CALIB_STATUS[c.status] || [c.status, "muted"];
+        const badges = [[label, tone], [`블록 ${c.valid_blocks}/50`, c.valid_blocks >= 5 ? "accent" : "muted"]];
+        if (c.age_s > 2) badges.push([`${Math.round(c.age_s)}초 전`, "bad"]);
+        const [r, p, y] = c.rpy_deg, [sr, sp, sy] = c.spread_deg;
+        fillShell(shell, badges, [
+          liveTable(["", "현재 (°)", "블록 편차 (°)", ""], [
+            ["pitch", sgn(p, 2), num(sp, 2), "+ = 아래를 봄"],
+            ["yaw", sgn(y, 2), num(sy, 2), "+ = 왼쪽을 봄"],
+            ["roll", sgn(r, 2), num(sr, 2), ""],
+          ]),
+          el("div", "live-foot", "시속 24 km 이상 직진 100프레임(약 5초)이 한 블록, 5블록이 모이면 보정 완료. 마운트를 옮겼으면 해제 상태에서 초기화하세요."),
+        ]);
+      }
+      const blocked = c && c.engaged;
+      shell.button.replaceChildren(document.createTextNode(c && c.reset_pending ? "초기화 요청됨 · modeld 대기 중" : "캘리브레이션 초기화"),
+        el("small", "", blocked ? "결합 중에는 초기화할 수 없습니다" : "저장된 보정을 지우고 처음부터 다시 수렴합니다"));
+      shell.button.disabled = Boolean(blocked);
+    }
+
+    async function resetCalibration(shell) {
+      const c = shell.data;
+      const now = c && c.available ? `현재 pitch ${sgn(c.rpy_deg[1], 2)}° · yaw ${sgn(c.rpy_deg[2], 2)}° · 블록 ${c.valid_blocks}` : "현재 상태 없음";
+      if (!window.confirm(["카메라 캘리브레이션을 초기화할까요?", now, "",
+          "저장된 값(calibration.json)을 지우고 0°에서 다시 수렴합니다.",
+          "수렴할 때까지(시속 24 km 이상 직진 약 30초) 조향이 부정확할 수 있습니다. 학습값은 그대로 둡니다."].join("\\n"))) return;
+      shell.button.disabled = true;
+      try {
+        const response = await fetch("/api/calibration/reset", {method: "POST"});
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail || response.statusText);
+        setMessage("캘리브레이션 초기화를 요청했습니다");
+        calibCard(shell, body);
+      } catch (error) {
+        setMessage(`초기화 실패: ${error.message}`, true);
+        shell.button.disabled = false;
+      }
+    }
+
     function learnerSection(title, children, grid = true) {
       const section = el("section", "section");
       section.appendChild(el("h2", "section-title", title));
@@ -1669,6 +1817,7 @@ HTML = """<!doctype html>
     function updateLearners(data) {
       if (!learnerPanel) return;
       const panel = learnerPanel;
+      calibCard(panel.calib, data.calibration);
       if (!data.available) {
         panel.notice.replaceChildren(el("div", "empty", "학습 상태가 없습니다. controlsd가 실행 중인지 확인하세요."));
         return;
@@ -1714,9 +1863,10 @@ HTML = """<!doctype html>
       const vehicle = liveShell("paramsd · 차량 값", "use_live_vehicle_params", ADOPT.vehicle);
       const torque = liveShell("torqued · 토크 값", "use_live_torque_params", ADOPT.torque);
       const trendSection = learnerSection("최근 10분 추이", []);
-      learnerPanel = {notice: el("div"), vehicle, torque, trends: trendSection.querySelector(".param-list")};
+      const calib = calibShell();
+      learnerPanel = {notice: el("div"), calib, vehicle, torque, trends: trendSection.querySelector(".param-list")};
       sections.append(learnerPanel.notice, learnerSection("학습값 · 오른쪽 스위치로 제어에 사용", [vehicle.card, torque.card]),
-                      trendSection);
+                      learnerSection("카메라 장착", [calib.card]), trendSection);
       if (learnerTimer) return;
       learnerTimer = window.setInterval(pollLearners, 1000);
       try {
@@ -1810,12 +1960,14 @@ HTML = """<!doctype html>
 
 
 def create_app(store: ParamStore | None = None,
-               learner_monitor: LearnerMonitor | None = None) -> "FastAPI":
+               learner_monitor: LearnerMonitor | None = None,
+               calibration: CalibrationControl | None = None) -> "FastAPI":
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
 
     param_store = store or ParamStore(display_controller=DisplayBacklight())
     monitor = learner_monitor or LearnerMonitor()
+    calibration_control = calibration or CalibrationControl()
     application = FastAPI(title="K7 parameter server", docs_url="/docs")
 
     @application.on_event("startup")
@@ -1839,7 +1991,18 @@ def create_app(store: ParamStore | None = None,
 
     @application.get("/api/learners")
     def get_learners() -> Dict[str, Any]:
-        return monitor.snapshot(param_store.read_group("steering"))
+        result = monitor.snapshot(param_store.read_group("steering"))
+        result["calibration"] = calibration_control.status()
+        return result
+
+    @application.post("/api/calibration/reset")
+    def reset_calibration() -> Dict[str, Any]:
+        try:
+            return calibration_control.request_reset()
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.get("/api/learners/trend")
     def get_learner_trend() -> Dict[str, Any]:

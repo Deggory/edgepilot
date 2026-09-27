@@ -14,12 +14,14 @@
 #include <iomanip>
 #include <iterator>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 
 constexpr int kPersistVersion = 1;
 constexpr auto kPersistInterval = std::chrono::seconds(60);
 constexpr float kPersistDeltaRad = 0.01f * 3.14159265358979323846f / 180.0f;
+constexpr auto kResetPollInterval = std::chrono::seconds(1);
 
 struct StoredCalibration {
     float rpy[3] = {};
@@ -120,7 +122,9 @@ CalibrationService::CalibrationService(const AppConfig &config)
       manual_override_(config.manual_calibration),
       log_enabled_(config.log_calibration),
       params_dir_(params_dir()),
-      calibration_path_(param_path("calibration.json"))
+      calibration_path_(param_path("calibration.json")),
+      reset_request_path_(env_string("EDGEPILOT_CALIBRATION_RESET_PATH",
+                                     "/dev/shm/edgepilot_calibration_reset"))
 {
     fixed_rpy_[0] = config.manual_roll;
     fixed_rpy_[1] = config.manual_pitch;
@@ -198,7 +202,13 @@ void CalibrationService::persist_loop()
         const PersistJob job = persist_job_;
         persist_pending_ = false;
         lock.unlock();
-        if (save_stored_calibration(params_dir_, calibration_path_, job.rpy, job.snapshot))
+        if (job.remove) {
+            if (std::remove(calibration_path_.c_str()) == 0 || errno == ENOENT)
+                std::fprintf(stderr, "calibration: removed %s\n", calibration_path_.c_str());
+            else
+                std::fprintf(stderr, "calibration: remove %s failed: %s\n",
+                             calibration_path_.c_str(), std::strerror(errno));
+        } else if (save_stored_calibration(params_dir_, calibration_path_, job.rpy, job.snapshot))
             std::fprintf(stderr,
                          "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) validBlocks=%d\n",
                          calibration_path_.c_str(), rad_to_deg(job.rpy[0]),
@@ -229,8 +239,52 @@ const char *CalibrationService::mode_name(const OnlineCalibrator::Snapshot &snap
         : "auto-pose-unvalid";
 }
 
+/* 웹 편집기(param_server)의 "캘리브레이션 초기화"는 요청 파일을 만들기만 한다. 마운트를
+ * 바꾼 뒤 SSH 없이 처음부터 다시 수렴시키려는 것이다. 모델 루프에서 1초에 한 번 tmpfs의
+ * 파일 하나를 확인할 뿐이라 비용은 없다. 주행 중 초기화는 param_server가 해제 상태에서만
+ * 받는다(openpilot의 Reset Calibration처럼). */
+void CalibrationService::poll_reset_request()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_reset_poll_ < kResetPollInterval) return;
+    last_reset_poll_ = now;
+    if (access(reset_request_path_.c_str(), F_OK) != 0) return;
+    if (unlink(reset_request_path_.c_str()) != 0 && errno != ENOENT) {
+        std::fprintf(stderr, "calibration: unlink %s failed: %s\n",
+                     reset_request_path_.c_str(), std::strerror(errno));
+        return;
+    }
+    if (!can_apply_online()) {
+        std::fprintf(stderr, "calibration: reset request ignored (manual calibration)\n");
+        return;
+    }
+    reset_online();
+}
+
+void CalibrationService::reset_online()
+{
+    calibrator_ = OnlineCalibrator();
+    calibrator_.output_rpy(online_rpy_);
+    last_snapshot_ = calibrator_.snapshot();
+    projection_ = make_projection_state(online_rpy_[0], online_rpy_[1], online_rpy_[2]);
+    restored_ = false;
+    has_persisted_ = false;
+    copy_rpy(persisted_rpy_, online_rpy_);
+    last_valid_blocks_ = -1;
+    {
+        // 아직 쓰지 않은 저장이 있으면 버리고, 파일을 지운다. 새 값은 다시 수렴하면 저장된다.
+        std::lock_guard<std::mutex> lock(persist_mutex_);
+        persist_job_ = PersistJob{};
+        persist_job_.remove = true;
+        persist_pending_ = true;
+    }
+    persist_cv_.notify_one();
+    std::fprintf(stderr, "calibration: reset requested, recalibrating from scratch\n");
+}
+
 void CalibrationService::update(const ParsedModelOutput &output, float v_ego)
 {
+    poll_reset_request();
     if (!can_apply_online()) return;
     if (!output.has_pose) return;
 

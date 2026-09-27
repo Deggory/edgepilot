@@ -31,6 +31,8 @@ private:
     void maybe_persist(const OnlineCalibrator::UpdateResult &result);
     void set_fixed_projection();
     void persist_loop();
+    void poll_reset_request();
+    void reset_online();
 
     bool auto_enabled_ = true;
     bool manual_override_ = false;
@@ -42,6 +44,8 @@ private:
     float persisted_rpy_[3] = {};
     std::string params_dir_;
     std::string calibration_path_;
+    std::string reset_request_path_;
+    std::chrono::steady_clock::time_point last_reset_poll_{};
 
     OnlineCalibrator calibrator_;
     OnlineCalibrator::Snapshot last_snapshot_{};
@@ -57,6 +61,7 @@ private:
     struct PersistJob {
         float rpy[3] = {};
         OnlineCalibrator::Snapshot snapshot{};
+        bool remove = false;  // 초기화: 저장 파일을 지운다
     };
     std::mutex persist_mutex_;
     std::condition_variable persist_cv_;
