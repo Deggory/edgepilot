@@ -55,6 +55,8 @@ struct OverlayHudState {
     float normalized_output = 0.0f;
     int desired_torque = 0;
     int apply_torque = 0;
+    // 보낸 토크 / 최대 토크(-1..1, + = 왼쪽). 토크 바가 그린다.
+    float steer_torque_fraction = 0.0f;
     int driver_torque = 0;
     float cpu_percent = 0.0f;
     float memory_percent = 0.0f;

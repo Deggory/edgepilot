@@ -136,7 +136,7 @@ def load_frame(path: Path) -> np.ndarray:
     native = pixels.reshape(height, width, 4)  # B, G, R, A
     if (width, height) == (LOGICAL[1], LOGICAL[0]):
         logical = np.rot90(native, 1)  # logical (lx, ly) -> native (row lx, col 479 - ly)
-    elif (width, height) == LOGICAL:
+    elif (width, height) == LOGICAL or width > height:  # K230 가로, MaixCAM2 640x480
         logical = native
     else:
         raise ValueError(f"{path}: unexpected size {width}x{height}")

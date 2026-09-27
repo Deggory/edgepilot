@@ -1,6 +1,7 @@
 #include "overlay_state.h"
 
 #include "control_block.h"
+#include "control_params.h"
 #include "utils_math.h"
 
 #include <algorithm>
@@ -60,6 +61,12 @@ void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState 
     hud->normalized_output = fresh ? c.normalized_output : 0.0f;
     hud->desired_torque = fresh ? c.desired_torque : 0;
     hud->apply_torque = fresh ? c.apply_torque : 0;
+    /* steer_max는 panda가 강제하는 고정값이라 런타임에서 바뀌지 않는다(control_params.h).
+     * 녹화로 확인한 부호: apply_torque 양수 = 왼쪽 조향(조향각·모델 plan과 같은 방향). */
+    hud->steer_torque_fraction = fresh
+        ? std::clamp(static_cast<float>(c.apply_torque) / static_cast<float>(SteeringParams{}.steer_max),
+                     -1.0f, 1.0f)
+        : 0.0f;
     hud->driver_torque = fresh ? c.driver_torque : 0;
     std::snprintf(hud->active_block, sizeof(hud->active_block), "%s",
                   fresh ? c.active_block : "control_stale");

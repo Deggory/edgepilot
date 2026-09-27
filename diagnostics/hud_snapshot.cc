@@ -178,6 +178,7 @@ int main(int argc, char **argv)
         drive.steering_angle_deg = -3.0f;
         drive.desired_torque = 4;
         drive.apply_torque = 4;
+        drive.steer_torque_fraction = 4.0f / 384.0f;
         drive.driver_torque = 19;
         drive.tpms_valid = true;
         drive.tpms_pressure_fl = drive.tpms_pressure_fr = 36.0f;
@@ -200,6 +201,15 @@ int main(int argc, char **argv)
     OverlayHudState fault = drive;
     fault.steering_fault = true;
 
+    OverlayHudState torque = drive;  // 오른쪽 조향 45%
+    torque.apply_torque = torque.desired_torque = -173;
+    torque.steer_torque_fraction = -0.45f;
+
+    OverlayHudState saturated = drive;  // 왼쪽 조향 95% + 조향 한계 경고
+    saturated.apply_torque = saturated.desired_torque = 365;
+    saturated.steer_torque_fraction = 0.95f;
+    saturated.steer_saturated = true;
+
     OverlayHudState standby = drive;
     standby.controller_engaged = standby.controller_active = false;
     standby.cruise_active = false;
@@ -213,6 +223,8 @@ int main(int argc, char **argv)
         {"busy", true, busy},
         {"depart", true, depart},
         {"fault", true, fault},
+        {"torque", true, torque},
+        {"saturated", true, saturated},
     };
 
     const uint32_t width = maixcam2 ? 640 : landscape ? 800 : 480;

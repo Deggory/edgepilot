@@ -95,6 +95,12 @@ constexpr int kAlertH = 50;
 constexpr int kAlertBottomMargin = 58;
 constexpr int kAlertTitleY = 8;
 constexpr int kAlertDetailY = 36;
+// 토크 바: 알림 상자 바로 위, 화면 가운데. 알림이 떠도 가리지 않는다.
+constexpr int kTorqueBarW = 360;
+constexpr int kTorqueBarCompactW = 300;
+constexpr int kTorqueBarH = 8;
+constexpr int kTorqueBarGap = 12;
+constexpr int kTorqueBarTickH = 16;
 
 /* TPMS 패널: 두 열, 단위는 제목줄 배지. */
 constexpr float kTpmsLowBar = 2.2f;
@@ -563,7 +569,7 @@ Alert select_alert(const OverlayHudState &hud)
     }
     if (hud.steering_fault) return {"STEERING FAULT", kRed, false};
     if (hud.panda_faults != 0) return {"PANDA FAULT", kRed, false};
-    if (hud.steer_saturated) return {"TAKE CONTROL: TURN EXCEEDS LIMIT", kOrange, false};
+    if (hud.steer_saturated) return {"TURN EXCEEDS STEER LIMIT", kOrange, false};
     if (!hud.services_healthy) return {"WAITING FOR SERVICES", kOrange, false};
     if (hud.departure_alert_type == DepartureAlertType::lead_departed)
         return {"LEAD VEHICLE MOVING", kGreen, true};
@@ -982,6 +988,46 @@ void draw_tpms_panel(BitmapHud &ui, const OverlayHudState &hud)
     }
 }
 
+uint32_t lerp_color(uint32_t a, uint32_t b, float t)
+{
+    t = std::clamp(t, 0.0f, 1.0f);
+    uint32_t out = 0;
+    for (int shift = 0; shift < 32; shift += 8) {
+        const float ca = static_cast<float>((a >> shift) & 0xff);
+        const float cb = static_cast<float>((b >> shift) & 0xff);
+        out |= static_cast<uint32_t>(std::lround(ca + (cb - ca) * t)) << shift;
+    }
+    return out;
+}
+
+/* openpilot mici UI의 토크 바(selfdrive/ui/mici/onroad/torque_bar.py): 가운데에서 조향
+ * 방향으로 보낸 토크 / 최대 토크만큼 찬다. 75%를 넘으면 흰색에서 노랑·주황으로 바뀐다.
+ * engage 중에만 그리고, 조향을 쉬는 동안(active 아님)은 흐린 바탕만 보인다. */
+void draw_torque_bar(BitmapHud &ui, const OverlayHudState &hud)
+{
+    if (!hud.controller_engaged) return;
+    const int w = ui.width() <= 640 ? kTorqueBarCompactW : kTorqueBarW;
+    const int cx = ui.width() / 2;
+    const int y = ui.height() - kAlertBottomMargin - kTorqueBarGap - kTorqueBarH;
+    const float fraction = hud.controller_active ? hud.steer_torque_fraction : 0.0f;
+    const float magnitude = std::fabs(fraction);
+    const uint32_t track = hud.controller_active
+        ? lerp_color(argb(70, 255, 255, 255), argb(128, 255, 255, 255), (magnitude - 0.5f) * 2.0f)
+        : argb(40, 255, 255, 255);
+    ui.fill_rect(cx - w / 2 - 1, y - 1, w + 2, kTorqueBarH + 2, kShadow);
+    ui.fill_rect(cx - w / 2, y, w, kTorqueBarH, track);
+    const int length = static_cast<int>(std::lround(magnitude * static_cast<float>(w / 2)));
+    if (length > 0) {
+        const float heat = (magnitude - 0.75f) * 4.0f;  // 0.75 → 1.0에서 0 → 1
+        const uint32_t color = heat < 0.5f
+            ? lerp_color(kWhite, argb(240, 255, 200, 0), heat * 2.0f)
+            : lerp_color(argb(240, 255, 200, 0), argb(245, 255, 115, 0), heat * 2.0f - 1.0f);
+        // 양수(왼쪽 조향)는 가운데에서 왼쪽으로 찬다.
+        ui.fill_rect(fraction > 0.0f ? cx - length : cx, y, length, kTorqueBarH, color);
+    }
+    ui.fill_rect(cx - 1, y + kTorqueBarH / 2 - kTorqueBarTickH / 2, 2, kTorqueBarTickH, kDim);
+}
+
 void draw_alert(BitmapHud &ui, const OverlayHudState &hud, const ParsedModelOutput &output)
 {
     const Alert alert = select_alert(hud);
@@ -1032,6 +1078,7 @@ void draw_hud(const Frame &frame, const OverlayHudState &hud,
     draw_traffic_signal(frame, hud, sprites);
     draw_auto_hold(ui, hud);
     draw_tpms_panel(ui, hud);
+    draw_torque_bar(ui, hud);
     draw_alert(ui, hud, output);
 }
 

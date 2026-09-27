@@ -47,7 +47,7 @@ Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정�
   완료 상태가 아니다. 이 상태에서는 engage를 거부한다(`UNABLE TO ENGAGE: CALIBRATING`).
   engage 중에 이 상태가 되면(마운트 변경 감지 등) 경고를 띄운 채 3초 더 조향하고
   해제한다(openpilot의 soft disable). 3초 안에 완료로 돌아오면 해제하지 않는다.
-- `TAKE CONTROL: TURN EXCEEDS LIMIT`(openpilot steerSaturated): 시속 36 km 이상에서
+- `TURN EXCEEDS STEER LIMIT`(openpilot steerSaturated): 시속 36 km 이상에서
   목표 곡률이 횡가속 한계(3.3 m/s²)에 잘리거나 출력이 한계에 붙은 채 0.4초 넘게 이어지고,
   목표 횡가속이 1 m/s²를 넘으며 실제의 1.2배 이상인데, 최근 2초 안에 핸들을 잡지 않았을
   때다. 2026-09-25~27 실차 3회 주행에서는 한 번도 해당하지 않았다.

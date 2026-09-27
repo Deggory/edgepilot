@@ -96,8 +96,10 @@ keeps the AX system open.
   model; lanes and path are anti-aliased; the turn-signal animation has its own
   50 ms clock
 - HUD content: center speed, left `OPENPILOT`/`CONTROL`/`DRIVE`/`TPMS` panels,
-  right `SYSTEM`/`HEALTH`/`CALIBRATION`/`LEAD` panels, and a centered status
-  alert, filled with camera/model/HUD FPS, inference time,
+  right `SYSTEM`/`HEALTH`/`CALIBRATION`/`LEAD` panels, a centered status
+  alert, and above it a steering torque bar while engaged (openpilot's mici UI
+  torque bar: sent torque / 384 from the center toward the turn, white, then
+  yellow to orange above 75%), filled with camera/model/HUD FPS, inference time,
   CPU/temperature/memory/storage, process health, Panda state, vehicle speed,
   steering torque, and K7 control state
 - loads the traffic-signal PNG sprites from `assets/ui` next to the executable
