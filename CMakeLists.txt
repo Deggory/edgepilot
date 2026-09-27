@@ -197,7 +197,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
     src/system_monitor.cc
   )
   target_include_directories(overlayd SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-  configure_board_target(overlayd common overlay maixcam2_media)
+  configure_board_target(overlayd common overlay maixcam2_media utils_json)
   target_link_options(overlayd PRIVATE "-Wl,-rpath-link,${AX_OPENCV_DIR}/opencv_lib")
 
   add_executable(camerad src/camerad.cc)

@@ -1,4 +1,5 @@
 {
   "enabled": true,
-  "brightness_percent": 100
+  "brightness_percent": 100,
+  "alert_volume_percent": 70
 }

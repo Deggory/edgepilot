@@ -404,8 +404,19 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "화면이 어두워집니다. 완전히 끄려면 전원 스위치를 사용합니다.",
             control="slider",
         ),
+        "alert_volume_percent": param_meta(
+            "알림음 크기", "소리", "%", 1, 0, 100,
+            "보드 스피커로 내는 알림음(engage·해제·경고·출발 알림)의 크기입니다. overlayd가 "
+            "1초 안에 반영하고, 바꿀 때마다 확인음을 한 번 냅니다.",
+            "알림음이 커집니다.",
+            "알림음이 작아집니다. 0%면 소리를 내지 않습니다.",
+            control="slider",
+        ),
     },
 }
+
+# 백라이트 하드웨어에 적용하는 display 항목. 나머지(알림음)는 overlayd가 파일에서 읽는다.
+BACKLIGHT_KEYS = ("enabled", "brightness_percent")
 
 
 def configured_paths() -> Dict[str, Path]:
@@ -544,7 +555,7 @@ class ParamStore:
             if unknown:
                 raise KeyError(", ".join(unknown))
             document.update(values)
-            if group == "display":
+            if group == "display" and any(key in values for key in BACKLIGHT_KEYS):
                 if self.display_controller is None:
                     raise ValueError("display backlight control is unavailable")
                 self.display_controller.apply(document)
@@ -1103,7 +1114,7 @@ HTML = """<!doctype html>
     <button class="group-tab" data-group="driving" type="button">주행 제한</button>
     <button class="group-tab" data-group="adaptive_cruise" type="button">비전 크루즈</button>
     <button class="group-tab" data-group="recording" type="button">주행 기록</button>
-    <button class="group-tab" data-group="display" type="button">디스플레이</button>
+    <button class="group-tab" data-group="display" type="button">기기 설정</button>
     <button class="group-tab" data-group="learners" type="button">실시간 학습</button>
   </nav>
   <main>
@@ -1144,12 +1155,12 @@ HTML = """<!doctype html>
         "버튼 송신", "기타",
       ],
       recording: ["기록"],
-      display: ["백라이트"],
+      display: ["백라이트", "소리"],
     };
     const groupNotes = {
       adaptive_cruise: "변경값은 즉시 적용됩니다. 이 기능은 순정 크루즈 버튼만 조절하며 브레이크를 직접 제어하지 않습니다.",
       recording: "기록은 모델 입력과 같은 1280x720 프레임을 사용합니다. 영상·CAN·상태·파라미터가 한 경로에 함께 저장됩니다.",
-      display: "전원을 꺼도 영상 파이프라인은 계속 동작합니다. 밝기 값은 다음에 켤 때 그대로 복원됩니다.",
+      display: "화면을 꺼도 영상 파이프라인은 계속 동작하고, 밝기 값은 다음에 켤 때 그대로 복원됩니다. 알림음 크기는 1초 안에 반영되고 확인음이 한 번 납니다.",
       learners: "paramsd·torqued는 항상 계산하고 기록합니다. 제어에는 스위치를 켠 쪽만 씁니다. 1초마다 갱신하고 추이는 최근 10분입니다.",
     };
     // 학습 스위치는 학습값을 보면서 켜도록 실시간 학습 탭에만 둔다
@@ -1172,7 +1183,7 @@ HTML = """<!doctype html>
         dot.classList.toggle("online", online);
         connection.title = display.error || `백라이트 모드: ${display.mode}`;
         status.textContent = online
-          ? (saved ? "디스플레이 적용됨" : "백라이트 연결됨")
+          ? (saved ? "기기 설정 적용됨" : "백라이트 연결됨")
           : "백라이트 제어 오류";
         return;
       }

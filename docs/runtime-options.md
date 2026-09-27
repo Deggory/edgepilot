@@ -169,7 +169,8 @@ alert time. The amplifier stays on, so the first note is not cut. Latency is
 under 0.1 s. A new alert interrupts the one playing.
 
 - `EDGEPILOT_ALERT_SOUND=0` turns the sounds off (default on)
-- `EDGEPILOT_ALERT_VOLUME` 0–100, default 70
+- `EDGEPILOT_ALERT_VOLUME` 0–100, default 70; `alert_volume_percent` in
+  `params/display.json` (web 기기 설정) overrides it at runtime
 - `EDGEPILOT_ALERT_PCM` ALSA device, default `plughw:0,1`
 
 To check the speaker at the desk, run `pkill -USR1 -x overlayd`. Each

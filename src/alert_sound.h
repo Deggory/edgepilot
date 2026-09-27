@@ -11,8 +11,9 @@
  * 앰프가 계속 켜져 있어 첫 음이 잘리지 않는다. 파이프와 ALSA 버퍼를 작게 잡아 지연은
  * 0.1초 안쪽이다. 새 알림은 재생 중인 알림을 끊는다. aplay가 죽으면 소리 스레드가 다시
  * 띄운다.
- * 환경: EDGEPILOT_ALERT_SOUND=0이면 끈다, EDGEPILOT_ALERT_VOLUME(0~100, 기본 70),
- * EDGEPILOT_ALERT_PCM(ALSA 장치, 기본 plughw:0,1). */
+ * 크기는 웹 기기 설정(params/display.json의 alert_volume_percent)으로 실행 중에 바꾼다.
+ * 환경: EDGEPILOT_ALERT_SOUND=0이면 끈다, EDGEPILOT_ALERT_VOLUME(0~100, 기본 70: 설정
+ * 파일에 값이 없을 때의 크기), EDGEPILOT_ALERT_PCM(ALSA 장치, 기본 plughw:0,1). */
 
 #include <atomic>
 #include <cstdint>
@@ -33,6 +34,9 @@ public:
     // 스레드에 알리기만 하고 곧바로 돌아온다.
     void play(AlertSoundId id);
     bool enabled() const { return enabled_; }
+    // 0~100. 다음 20 ms 조각부터 적용된다.
+    void set_volume_percent(float percent);
+    float volume_percent() const { return volume_.load() * 100.0f; }
 
 private:
     void loop();
@@ -43,6 +47,7 @@ private:
     std::string pcm_;
     std::vector<std::vector<int16_t>> clips_;  // 알림별 인터리브 스테레오 샘플
     std::atomic<int> pending_{-1};
+    std::atomic<float> volume_{0.7f};  // 0~1, clips_(100% 크기)에 곱한다
     std::atomic<bool> stop_{false};
     pid_t player_ = -1;
     int pipe_fd_ = -1;

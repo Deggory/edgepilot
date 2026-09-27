@@ -94,8 +94,9 @@ AlertSound::AlertSound() : pcm_(env_string("EDGEPILOT_ALERT_PCM", "plughw:0,1"))
     }
     // aplay가 죽어 파이프가 끊겨도 프로세스가 SIGPIPE로 끝나지 않게 한다(write가 EPIPE를 돌려준다).
     signal(SIGPIPE, SIG_IGN);
-    const double gain = std::clamp(env_float("EDGEPILOT_ALERT_VOLUME", 70.0f), 0.0f, 100.0f) / 100.0 * 0.6;
-    for (const auto &melody : kMelodies) clips_.push_back(render(melody, gain));
+    set_volume_percent(env_float("EDGEPILOT_ALERT_VOLUME", 70.0f));
+    // 100% 크기로 한 번 만들어 두고 재생할 때 volume_을 곱한다(0.6은 클리핑 여유).
+    for (const auto &melody : kMelodies) clips_.push_back(render(melody, 0.6));
     enabled_ = true;
     thread_ = std::thread(&AlertSound::loop, this);
 }
@@ -105,6 +106,11 @@ AlertSound::~AlertSound()
     stop_ = true;
     if (thread_.joinable()) thread_.join();
     stop_player();
+}
+
+void AlertSound::set_volume_percent(float percent)
+{
+    if (std::isfinite(percent)) volume_ = std::clamp(percent, 0.0f, 100.0f) / 100.0f;
 }
 
 void AlertSound::play(AlertSoundId id)
@@ -158,6 +164,7 @@ void AlertSound::stop_player()
 void AlertSound::loop()
 {
     const std::vector<int16_t> silence(kChunkFrames * kChannels, 0);
+    std::vector<int16_t> scaled(silence.size());
     const std::vector<int16_t> *clip = nullptr;
     size_t position = 0;
     while (!stop_) {
@@ -177,6 +184,12 @@ void AlertSound::loop()
             data = clip->data() + position;
             position += samples;
             if (position >= clip->size()) clip = nullptr;
+            const float volume = volume_.load();
+            if (volume < 1.0f) {
+                for (size_t i = 0; i < samples; ++i)
+                    scaled[i] = static_cast<int16_t>(std::lround(static_cast<float>(data[i]) * volume));
+                data = scaled.data();
+            }
         }
         // aplay가 실시간으로 읽으므로 이 write가 스레드의 박자를 맞춘다.
         if (!write_all(pipe_fd_, data, samples)) {

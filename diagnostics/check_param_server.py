@@ -115,6 +115,21 @@ class ParamStoreTest(unittest.TestCase):
         self.assertEqual(controller.applied, [{"enabled": True, "brightness_percent": 35}])
         self.assertEqual(store.read_group("display")["brightness_percent"], 35)
 
+    def test_alert_volume_update_leaves_backlight_alone(self):
+        self.paths["display"].write_text(
+            json.dumps({"enabled": True, "brightness_percent": 80, "alert_volume_percent": 70}),
+            encoding="utf-8")
+        controller = FakeDisplayController()
+        store = ParamStore(self.paths, self.store.notifier, display_controller=controller)
+        controller.applied.clear()
+        result = store.update("display", {"alert_volume_percent": 30})
+        self.assertEqual(result["params"]["alert_volume_percent"], 30)
+        self.assertEqual(result["notified_pids"], [])
+        self.assertEqual(controller.applied, [], "volume is read by overlayd, not the backlight")
+        store.update("display", {"brightness_percent": 60})
+        self.assertEqual(controller.applied[-1]["brightness_percent"], 60)
+        self.assertEqual(json.loads(self.paths["display"].read_text())["alert_volume_percent"], 30)
+
     def test_display_pwm_duty_scales_by_board_maximum(self):
         self.assertEqual(duty_cycle_ns(100), 95_000)
         self.assertEqual(duty_cycle_ns(51), 48_450)

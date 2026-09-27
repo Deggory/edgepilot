@@ -9,15 +9,22 @@
 #include "projection.h"
 #include "system_monitor.h"
 #include "maix_display.h"
+#include "utils_json.h"
 
 #include <linux/videodev2.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <opencv2/core.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <fstream>
 #include <iterator>
+#include <thread>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -83,6 +90,59 @@ struct StageStats {
         count = 0;
         return avg;
     }
+};
+
+/* 웹 기기 설정의 알림음 크기(params/display.json의 alert_volume_percent)를 1초마다 보고
+ * 바뀌면 적용한 뒤 확인음을 한 번 낸다. SD가 녹화로 바쁠 때 stat/open이 몇 초씩 막힐 수
+ * 있어 화면 루프가 아닌 자기 스레드에서 읽는다. 값이 없으면 시작 크기(EDGEPILOT_ALERT_VOLUME)를
+ * 그대로 둔다. */
+class SoundSettingsWatcher {
+public:
+    explicit SoundSettingsWatcher(AlertSound *sound)
+        : sound_(sound), path_(param_path("display.json"))
+    {
+        if (sound_->enabled()) thread_ = std::thread(&SoundSettingsWatcher::loop, this);
+    }
+    ~SoundSettingsWatcher()
+    {
+        stop_ = true;
+        if (thread_.joinable()) thread_.join();
+    }
+    SoundSettingsWatcher(const SoundSettingsWatcher &) = delete;
+    SoundSettingsWatcher &operator=(const SoundSettingsWatcher &) = delete;
+
+private:
+    void loop()
+    {
+        bool first = true;
+        struct timespec last_mtime = {};
+        while (!stop_) {
+            struct stat st {};
+            if (stat(path_.c_str(), &st) == 0 &&
+                (first || st.st_mtim.tv_sec != last_mtime.tv_sec ||
+                 st.st_mtim.tv_nsec != last_mtime.tv_nsec)) {
+                last_mtime = st.st_mtim;
+                std::ifstream file(path_);
+                const std::string text((std::istreambuf_iterator<char>(file)),
+                                       std::istreambuf_iterator<char>());
+                float percent = 0.0f;
+                if (parse_json_float_value(text, "alert_volume_percent", &percent) &&
+                    std::fabs(percent - sound_->volume_percent()) > 0.5f) {
+                    sound_->set_volume_percent(percent);
+                    std::fprintf(stderr, "\noverlayd: alert volume %.0f%%\n", sound_->volume_percent());
+                    if (!first) sound_->play(AlertSoundId::engage);  // 바꾼 크기를 들려준다
+                }
+                first = false;
+            }
+            for (int i = 0; i < 10 && !stop_; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    AlertSound *sound_;
+    std::string path_;
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
 };
 
 class OverlayDisplay {
@@ -385,6 +445,7 @@ private:
 
     OverlayRenderer overlay_;
     AlertSound sound_;
+    SoundSettingsWatcher sound_settings_{&sound_};  // sound_ 뒤에 선언해야 먼저 멈춘다
     bool previous_soft_disabling_ = false;
     bool previous_steer_saturated_ = false;
     int test_sounds_played_ = 0;
