@@ -1593,6 +1593,40 @@ TEST(ControlReplay, LaneChangeFollowsUpstreamDesireHelper) {
   EXPECT_EQ(r.desire, 0) << "차선선을 되살리면 끝난다";
 }
 
+/* path_offset_m은 차선 중심에만 적용된다. 차선이 없어 모델 경로로 넘어가면(교차로) 적용하지
+ * 않는다: 차 기준인 모델 경로에 더하면 위치 고정점 없이 차가 오프셋 쪽으로 계속 밀린다. */
+TEST(ControlReplay, PathOffsetOnlyShiftsLanePath) {
+  SteeringParams steering;
+  steering.path_offset_m = -0.3f;
+  DrivingParams driving;
+  LateralPlanner planner(steering, driving);
+  const float v = 15.0f;
+  auto model_for = [&](float lane_prob) {
+    ModelState ms{};
+    ms.valid = 1;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+      const float t = model_t_idx(i);
+      ms.model_t[i] = t;
+      ms.lane_t[i] = t;
+      ms.plan[i] = {v * t, 0.0f, 0.0f};
+      ms.lanes[1][i] = {v * t, -1.75f, 0.0f};
+      ms.lanes[2][i] = {v * t, 1.75f, 0.0f};
+    }
+    ms.lane_probabilities[1] = ms.lane_probabilities[2] = lane_prob;
+    ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;
+    ms.desire_state[0] = 1.0f;
+    return ms;
+  };
+  VehicleCanState vehicle{};
+  LateralTarget r;
+  for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.99f), vehicle, v, 0.0f, true);
+  ASSERT_FALSE(r.laneless_mode);
+  EXPECT_NEAR(r.target_y_m, -0.3f, 0.03f) << "차선이 보이면 차선 중심에서 오프셋만큼";
+  for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.0f), vehicle, v, 0.0f, true);
+  ASSERT_TRUE(r.laneless_mode);
+  EXPECT_NEAR(r.target_y_m, 0.0f, 0.01f) << "모델 경로로 넘어가면 오프셋을 더하지 않는다";
+}
+
 TEST(ControlReplay, InactiveDesiredTracksActual) {
   LateralControllerConfig config;
   config.force_engaged = true;

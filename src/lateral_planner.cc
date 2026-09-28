@@ -154,12 +154,18 @@ public:
     const double half_width = std::min(4.0, lane_width_) * 0.5;
     const double denominator = left_prob_eff_ + right_prob_eff_ + 0.0001;
 
+    /* 경로 오프셋은 차선 중심에만 더한다(openpilot이 camera_offset을 차선선에만 더하듯).
+     * 모델 경로는 차 기준이라 거기에 더하면 매 프레임 "지금 가려는 곳의 8 cm 옆"이 목표가
+     * 되어 위치 고정점이 없다. 모델의 중앙 복원력이 약해(차선 1 m 벗어날 때 plan 0.28 m)
+     * 교차로 랜리스 인계 때 차가 오프셋의 몇 배만큼 계속 밀렸다(2026-09-29 실차: 좌측 쏠림).
+     * 이렇게 하면 실제 적용량은 차선 가중치 d_prob x (1 - plan_mix)를 따라 줄어든다. */
     std::array<double, kTrajectorySize> lane_path_y{};
     for (int i = 0; i < kTrajectorySize; ++i) {
       const double from_left = left_y_[i] + half_width;
       const double from_right = right_y_[i] - half_width;
       lane_path_y[i] =
-          (left_prob_eff_ * from_left + right_prob_eff_ * from_right) / denominator;
+          (left_prob_eff_ * from_left + right_prob_eff_ * from_right) / denominator +
+          path_offset_m_;
     }
 
     std::array<double, kTrajectorySize> valid_t{};
@@ -179,12 +185,6 @@ public:
       }
     }
     return path;
-  }
-
-  void apply_path_offset(
-      std::array<std::array<double, 3>, kTrajectorySize> *path) const {
-    if (!path) return;
-    for (auto &point : *path) point[1] += path_offset_m_;
   }
 
   // 랜리스 전환 판정값. 블렌드와 같은 유효 확률을 써서 두 판정이 어긋나지 않게 한다.
@@ -311,7 +311,6 @@ struct LateralPlanner::Impl {
       for (int i = 0; i < kTrajectorySize; ++i)
         path[i][1] = plan_mix * path[i][1] + (1.0 - plan_mix) * blended[i][1];
     }
-    lane_planner.apply_path_offset(&path);
 
     std::array<double, kTrajectorySize> distance{};
     std::array<double, kTrajectorySize> path_y{};
