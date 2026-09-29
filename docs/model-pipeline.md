@@ -66,7 +66,12 @@ three queues stay aligned.
 
 The warp is a calibrated pinhole homography per view (medmodel focal 910,
 sbigmodel focal 455, both from one camera, like openpilot's single-camera
-path), followed by packing into the YUV6 plane order
+path). It is openpilot's `get_warp_matrix`, a pure rotation about the camera
+center: `K · view_from_device · R(rpy) · inv(K_model · view_from_device)`. (The
+first port used the ground-plane homography of openpilot 0.8 and earlier, which
+rotated about the road point 1.22 m below the camera and misplaced the near
+road by ~1.3 px per degree of pitch.) The warp is followed by packing into the
+YUV6 plane order
 (`Y00, Y10, Y01, Y11, U, V`) at 128x256.
 
 - **GDC (default).** `platform/maixcam2/maix_gdc_warp.*` runs `AX_IVPS_Dewarp`

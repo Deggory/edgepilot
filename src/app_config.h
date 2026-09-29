@@ -90,7 +90,6 @@ struct AppConfig {
     float input_warp_fy = kDefaultInputWarpFy;
     float input_warp_cx = kDefaultInputWarpCx;
     float input_warp_cy = kDefaultInputWarpCy;
-    float input_warp_height = 1.22f;
 
     static AppConfig from_env(int argc, char *argv[]);
     static AppConfig from_env_defaults();

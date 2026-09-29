@@ -69,7 +69,6 @@ private:
     float fy_ = kDefaultInputWarpFy;
     float cx_ = kDefaultInputWarpCx;
     float cy_ = kDefaultInputWarpCy;
-    float height_ = 1.22f;
     float roll_ = 0.0f;
     float pitch_ = 0.0f;
     float yaw_ = 0.0f;

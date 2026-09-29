@@ -42,7 +42,6 @@ ModelInputTransform::ModelInputTransform(const AppConfig &config, ModelFrame mod
       fy_(config.input_warp_fy),
       cx_(config.input_warp_cx),
       cy_(config.input_warp_cy),
-      height_(config.input_warp_height),
       roll_(config.manual_roll),
       pitch_(config.manual_pitch),
       yaw_(config.manual_yaw),
@@ -82,61 +81,37 @@ uint8_t ModelInputTransform::sample(const uint8_t *base, const SampleMap &map,
 
 void ModelInputTransform::projection_matrix(float *projection) const
 {
-    // Same model-frame inverses used by openpilot modeld.update_calibration().
-    const float ground_from_medmodel_frame[9] = {
-        0.00000000e+00f, 0.00000000e+00f, 1.00000000e+00f,
-       -1.09890110e-03f, 0.00000000e+00f, 2.81318681e-01f,
-       -1.84808520e-20f, 9.00738606e-04f, -4.28751576e-02f,
-    };
-    const float ground_from_sbigmodel_frame[9] = {
-        0.00000000e+00f,  7.31372216e-19f,  1.00000000e+00f,
-       -2.19780220e-03f,  4.11497335e-19f,  5.62637363e-01f,
-       -5.46146580e-20f,  1.80147721e-03f, -2.73464241e-01f,
-    };
+    /* openpilot get_warp_matrix(common/transformations/model.py, 0.9.4 modeld도 같다):
+     *   camera_from_calib = K · view_from_device · device_from_calib(rpy)
+     *   calib_from_model  = inv(K_model · view_from_device)
+     * 카메라 중심에서의 순수 회전이다. 예전 구현은 openpilot 0.8 이하의 지면 homography(카메라
+     * 높이 1.22 m 아래 지면 점을 축으로 회전)라 pitch·roll이 있으면 가까운 노면이 어긋났다
+     * (pitch 1°에 최대 1.3 px, roll 1°에 3.6 px, 모델 이미지 기준). rpy가 0이면 둘은 같다. */
+    const bool big = model_frame_ == ModelFrame::SmallBigModel;
+    const float model_f = big ? 455.0f : 910.0f;             // sbigmodel_fl / medmodel_fl
+    const float model_cx = 256.0f;                            // 0.5 * 512
+    const float model_cy = big ? 0.5f * (256.0f + 47.6f) : 47.6f;  // MEDMODEL_CY = 47.6
     const float k[9] = {
         fx_, 0.0f, cx_,
         0.0f, fy_, cy_,
         0.0f, 0.0f, 1.0f,
     };
-
+    // view_from_device: 행이 (0,1,0), (0,0,1), (1,0,0). 역행렬은 전치다.
+    const float view[9] = {0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+    const float view_t[9] = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const float model_k_inv[9] = {
+        1.0f / model_f, 0.0f, -model_cx / model_f,
+        0.0f, 1.0f / model_f, -model_cy / model_f,
+        0.0f, 0.0f, 1.0f,
+    };
     float rot[9];
     rotation_from_rpy(roll_, pitch_, yaw_, rot);
 
-    float device_from_road[9];
-    for (int row = 0; row < 3; ++row) {
-        device_from_road[row * 3 + 0] = rot[row * 3 + 0];
-        device_from_road[row * 3 + 1] = -rot[row * 3 + 1];
-        device_from_road[row * 3 + 2] = -rot[row * 3 + 2];
-    }
-
-    // view_from_device = [[0,1,0],[0,0,1],[1,0,0]]
-    float view_from_road[9];
-    for (int col = 0; col < 3; ++col) {
-        view_from_road[0 * 3 + col] = device_from_road[1 * 3 + col];
-        view_from_road[1 * 3 + col] = device_from_road[2 * 3 + col];
-        view_from_road[2 * 3 + col] = device_from_road[0 * 3 + col];
-    }
-
-    float extrinsic[12] = {
-        view_from_road[0], view_from_road[1], view_from_road[2], 0.0f,
-        view_from_road[3], view_from_road[4], view_from_road[5], height_,
-        view_from_road[6], view_from_road[7], view_from_road[8], 0.0f,
-    };
-
-    float camera_frame_from_road[12];
-    matmul34(k, extrinsic, camera_frame_from_road);
-
-    float camera_frame_from_ground[9];
-    for (int row = 0; row < 3; ++row) {
-        camera_frame_from_ground[row * 3 + 0] = camera_frame_from_road[row * 4 + 0];
-        camera_frame_from_ground[row * 3 + 1] = camera_frame_from_road[row * 4 + 1];
-        camera_frame_from_ground[row * 3 + 2] = camera_frame_from_road[row * 4 + 3];
-    }
-
-    const float *ground_from_model_frame = model_frame_ == ModelFrame::SmallBigModel
-        ? ground_from_sbigmodel_frame
-        : ground_from_medmodel_frame;
-    matmul3(camera_frame_from_ground, ground_from_model_frame, projection);
+    float kv[9], kvr[9], kvrvt[9];
+    matmul3(k, view, kv);
+    matmul3(kv, rot, kvr);
+    matmul3(kvr, view_t, kvrvt);
+    matmul3(kvrvt, model_k_inv, projection);
 }
 
 void ModelInputTransform::build_sample_map(const float *projection, int src_w, int src_h,

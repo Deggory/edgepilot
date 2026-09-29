@@ -617,62 +617,38 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
     unsetenv("EDGEPILOT_CALIB_YAW_DEG");
 }
 
-/* 모델 프레임 → 카메라 영상 투영 행렬의 참조식(openpilot get_warp_matrix 경로를 double로). */
+/* 모델 프레임 → 카메라 영상 투영 행렬의 참조식. openpilot common/transformations/model.py의
+ * get_warp_matrix를 double로 옮겼다: intrinsics @ view_frame_from_device_frame @ rot_from_euler(rpy)
+ * @ inv(model_intrinsics @ view_frame_from_device_frame). */
 void projection_reference(float roll, float pitch, float yaw, float fx, float fy, float cx, float cy,
-                          float height, double *projection,
-                          ModelFrame model_frame = ModelFrame::MedModel)
+                          double *projection, ModelFrame model_frame = ModelFrame::MedModel)
 {
-    const double ground_from_medmodel_frame[9] = {
-        0.00000000e+00, 0.00000000e+00, 1.00000000e+00,
-       -1.09890110e-03, 0.00000000e+00, 2.81318681e-01,
-       -1.84808520e-20, 9.00738606e-04, -4.28751576e-02,
-    };
-    const double ground_from_sbigmodel_frame[9] = {
-        0.00000000e+00,  7.31372216e-19,  1.00000000e+00,
-       -2.19780220e-03,  4.11497335e-19,  5.62637363e-01,
-       -5.46146580e-20,  1.80147721e-03, -2.73464241e-01,
-    };
-    const double k[9] = {
-        fx, 0.0, cx,
-        0.0, fy, cy,
+    const bool big = model_frame == ModelFrame::SmallBigModel;
+    const double model_f = big ? 455.0 : 910.0;
+    const double model_k[9] = {
+        model_f, 0.0, 256.0,
+        0.0, model_f, big ? 0.5 * (256.0 + 47.6) : 47.6,
         0.0, 0.0, 1.0,
     };
+    const double view[9] = {0, 1, 0, 0, 0, 1, 1, 0, 0};
+    const double k[9] = {fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0};
     const double rpy[3] = {roll, pitch, yaw};
     double rot[9];
     rot_from_euler_ref(rpy, rot);
-
-    double device_from_road[9];
-    for (int row = 0; row < 3; ++row) {
-        device_from_road[row * 3 + 0] = rot[row * 3 + 0];
-        device_from_road[row * 3 + 1] = -rot[row * 3 + 1];
-        device_from_road[row * 3 + 2] = -rot[row * 3 + 2];
-    }
-
-    double view_from_road[9];
-    for (int col = 0; col < 3; ++col) {
-        view_from_road[0 * 3 + col] = device_from_road[1 * 3 + col];
-        view_from_road[1 * 3 + col] = device_from_road[2 * 3 + col];
-        view_from_road[2 * 3 + col] = device_from_road[0 * 3 + col];
-    }
-
-    const double extrinsic[12] = {
-        view_from_road[0], view_from_road[1], view_from_road[2], 0.0,
-        view_from_road[3], view_from_road[4], view_from_road[5], height,
-        view_from_road[6], view_from_road[7], view_from_road[8], 0.0,
+    double kv[9], kvr[9], mkv[9];
+    matmul3d(k, view, kv);
+    matmul3d(kv, rot, kvr);
+    matmul3d(model_k, view, mkv);
+    // mkv의 역행렬(여인수 전개)
+    const double *m = mkv;
+    const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                       m[2] * (m[3] * m[7] - m[4] * m[6]);
+    const double inv[9] = {
+        (m[4] * m[8] - m[5] * m[7]) / det, (m[2] * m[7] - m[1] * m[8]) / det, (m[1] * m[5] - m[2] * m[4]) / det,
+        (m[5] * m[6] - m[3] * m[8]) / det, (m[0] * m[8] - m[2] * m[6]) / det, (m[2] * m[3] - m[0] * m[5]) / det,
+        (m[3] * m[7] - m[4] * m[6]) / det, (m[1] * m[6] - m[0] * m[7]) / det, (m[0] * m[4] - m[1] * m[3]) / det,
     };
-    double camera_frame_from_road[12];
-    matmul34d(k, extrinsic, camera_frame_from_road);
-
-    double camera_frame_from_ground[9];
-    for (int row = 0; row < 3; ++row) {
-        camera_frame_from_ground[row * 3 + 0] = camera_frame_from_road[row * 4 + 0];
-        camera_frame_from_ground[row * 3 + 1] = camera_frame_from_road[row * 4 + 1];
-        camera_frame_from_ground[row * 3 + 2] = camera_frame_from_road[row * 4 + 3];
-    }
-    const double *ground_from_model_frame = model_frame == ModelFrame::SmallBigModel
-        ? ground_from_sbigmodel_frame
-        : ground_from_medmodel_frame;
-    matmul3d(camera_frame_from_ground, ground_from_model_frame, projection);
+    matmul3d(kvr, inv, projection);
 }
 
 // Y 평면 투영을 UV 평면(scale 0.5)으로 옮긴다
@@ -866,8 +842,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     camera_transform.projection_matrix(camera_projection);
     projection_reference(0.0, 0.0, 0.0, camera_config.input_warp_fx,
                          camera_config.input_warp_fy, camera_config.input_warp_cx,
-                         camera_config.input_warp_cy, camera_config.input_warp_height,
-                         camera_reference);
+                         camera_config.input_warp_cy, camera_reference);
     for (int i = 0; i < 9; ++i)
         EXPECT_NEAR(camera_projection[i], camera_reference[i], 1e-4)
             << "기본 투영은 MaixCAM2 카메라 내부 파라미터를 쓴다";
@@ -878,18 +853,19 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     sbig_camera_transform.projection_matrix(sbig_camera_projection);
     projection_reference(0.0, 0.0, 0.0, camera_config.input_warp_fx,
                          camera_config.input_warp_fy, camera_config.input_warp_cx,
-                         camera_config.input_warp_cy, camera_config.input_warp_height,
-                         sbig_camera_reference, ModelFrame::SmallBigModel);
+                         camera_config.input_warp_cy, sbig_camera_reference, ModelFrame::SmallBigModel);
     for (int i = 0; i < 9; ++i)
         EXPECT_NEAR(sbig_camera_projection[i], sbig_camera_reference[i], 1e-4)
             << "sbig 투영은 openpilot 가상 카메라를 쓴다";
 
-    const std::array<std::array<float, 3>, 5> cases = {{
+    const std::array<std::array<float, 3>, 7> cases = {{
         {{0.0f, 0.0f, 0.0f}},
         {{0.0f, deg_to_rad(1.5f), 0.0f}},
         {{0.0f, deg_to_rad(-1.5f), 0.0f}},
         {{0.0f, 0.0f, deg_to_rad(1.0f)}},
         {{0.0f, deg_to_rad(1.1f), deg_to_rad(-0.8f)}},
+        {{deg_to_rad(1.0f), 0.0f, 0.0f}},
+        {{deg_to_rad(-2.0f), deg_to_rad(2.5f), deg_to_rad(1.5f)}},
     }};
 
     for (const auto &rpy : cases) {
@@ -903,7 +879,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
         transform.projection_matrix(actual);
         projection_reference(rpy[0], rpy[1], rpy[2], config.input_warp_fx,
                              config.input_warp_fy, config.input_warp_cx,
-                             config.input_warp_cy, config.input_warp_height, expected);
+                             config.input_warp_cy, expected);
         for (int i = 0; i < 9; ++i) {
             const double tolerance = std::max(1e-4, std::fabs(expected[i]) * 1e-5);
             EXPECT_NEAR(actual[i], expected[i], tolerance) << "투영 행렬";
@@ -942,8 +918,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     double projection_y[9];
     projection_reference(0.0f, pitch_config.manual_pitch, pitch_config.manual_yaw,
                          pitch_config.input_warp_fx, pitch_config.input_warp_fy,
-                         pitch_config.input_warp_cx, pitch_config.input_warp_cy,
-                         pitch_config.input_warp_height, projection_y);
+                         pitch_config.input_warp_cx, pitch_config.input_warp_cy, projection_y);
     warp_pack_opencl_ref(nv12.data(), kModelW, kModelH, projection_y, ref.data());
     DiffStats warp_diff = diff_stats(ref, warped);
     EXPECT_LT(warp_diff.mean, 1.0) << "워프 평균 절대 오차(openpilot OpenCL 참조 대비)";
@@ -954,8 +929,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     sbig_pitched.nv12_to_yuv6_warped(nv12.data(), kModelW, kModelH, sbig_warped);
     projection_reference(0.0f, pitch_config.manual_pitch, pitch_config.manual_yaw,
                          pitch_config.input_warp_fx, pitch_config.input_warp_fy,
-                         pitch_config.input_warp_cx, pitch_config.input_warp_cy,
-                         pitch_config.input_warp_height, projection_y,
+                         pitch_config.input_warp_cx, pitch_config.input_warp_cy, projection_y,
                          ModelFrame::SmallBigModel);
     warp_pack_opencl_ref(nv12.data(), kModelW, kModelH, projection_y, sbig_ref.data());
     DiffStats sbig_warp_diff = diff_stats(sbig_ref, sbig_warped);
