@@ -4,6 +4,8 @@
 #include "model_output.h"
 #include "model_temporal.h"
 
+#include "model_output_assembly.h"
+
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cmath>
@@ -205,4 +207,38 @@ int main(int argc, char *argv[])
         std::cout << " lead_x=" << lead.x << " lead_y=" << lead.y;
     std::cout << "\n";
     return 0;
+}
+
+
+/* 헤드를 나눈 axmodel 출력(split_outputs.py)을 모으면 2576 레이아웃의 모든 칸이 정확히 한 번씩
+ * 제자리에 온다. 각 출력에 "가야 할 칸 번호"를 채워 확인한다. */
+TEST(ModelOutputParser, SplitOutputsReassembleLayout)
+{
+    using namespace model_output_assembly;
+    std::vector<float> raw(kModelOutputFloats, -1.0f);
+    std::vector<int> hits(kModelOutputFloats, 0);
+    int total = 0;
+    for (const Part &part : kParts) {
+        std::vector<float> src(part.count);
+        for (int i = 0; i < part.count; ++i) {
+            int target = part.offset + i;
+            if (part.piece == Piece::PlanMotion)
+                target = part.offset + (i / kPlanMotionWidth) * model_output_assembly::kPlanWidth + i % kPlanMotionWidth;
+            else if (part.piece == Piece::PlanOrient)
+                target = part.offset + (i / kPlanOrientWidth) * model_output_assembly::kPlanWidth + kPlanMotionWidth +
+                         i % kPlanOrientWidth;
+            src[i] = static_cast<float>(target);
+            ++hits[target];
+        }
+        place(part, src.data(), raw.data());
+        total += part.count;
+    }
+    EXPECT_EQ(total, kModelOutputFloats - 2) << "패딩 두 칸을 뺀 전부";
+    for (int i = 0; i < kModelOutputFloats - 2; ++i) {
+        ASSERT_EQ(hits[i], 1) << "칸 " << i;
+        ASSERT_EQ(raw[i], static_cast<float>(i)) << "칸 " << i;
+    }
+    // plan yaw(knot 20, 열 11)는 방향 출력에서 온다
+    EXPECT_EQ(raw[model_output_layout::kPlanOffset + 20 * 15 + 11],
+              static_cast<float>(model_output_layout::kPlanOffset + 20 * 15 + 11));
 }

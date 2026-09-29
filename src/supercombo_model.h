@@ -57,6 +57,9 @@ private:
 
     AxEngineSession session_;
     int index_[kInputCount] = {};
+    /* 출력 헤드를 나눈 axmodel이면 model_output_assembly::kParts 순서대로 세션 출력 번호,
+     * 예전 단일 출력(2576) axmodel이면 비어 있다. */
+    std::vector<int> output_parts_;
     bool profile_ = false;  // EDGEPILOT_PROFILE: 30프레임마다 단계별 평균 ms
     ModelInputTransform input_transform_;
     ModelInputTransform big_input_transform_;

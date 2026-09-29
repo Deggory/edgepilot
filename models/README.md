@@ -41,8 +41,15 @@ big_input_imgs      [1, 12, 128, 256]  uint8   wide tower, frames t-4 and t
 desire              [1, 25, 8]         float   5 Hz max-pooled desire history
 features_buffer     [1, 24, 512]       float   5 Hz hidden-state history
 traffic_convention  [1, 2]             float
--> outputs          [1, 2576]          float
+-> 15 outputs (out_meta ... out_desire_state), reassembled into the openpilot
+   [2576] layout by src/model_output_assembly.h
 ```
+
+The heads are separate outputs (tools/model/axmodel/split_outputs.py) so each
+gets its own U16 range. With the original single [1, 2576] output every value
+was quantized to one step of about 0.007, which reduced the plan yaw to a few
+levels and made laneless steering jump by about 0.6 m/s^2 per step. The runtime
+still accepts a single-output axmodel.
 
 The release graph (sha256 `65a08adc…`, the same model openpilot master ships as of
 2026-09-23) also takes `action_t`, the lateral/longitudinal delay openpilot's modeld

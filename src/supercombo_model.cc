@@ -1,5 +1,7 @@
 #include "supercombo_model.h"
 
+#include "model_output_assembly.h"
+
 #include "utils_process.h"
 #include "utils_time.h"
 
@@ -45,7 +47,7 @@ SupercomboModel::SupercomboModel(const char *model_file, const AppConfig &config
         {SupercomboTemporalState::kFeatureInputTicks * kModelFeatureLen, AxEngineSession::DataType::Float32, 4},
         {2, AxEngineSession::DataType::Float32, 4},
     };
-    if (session_.inputs().size() != kInputCount || session_.outputs().size() != 1)
+    if (session_.inputs().size() != kInputCount)
         throw std::runtime_error("not an openpilot master supercombo axmodel: " +
                                  std::to_string(session_.inputs().size()) + " inputs");
     for (int i = 0; i < kInputCount; ++i) {
@@ -58,10 +60,33 @@ SupercomboModel::SupercomboModel(const char *model_file, const AppConfig &config
             throw std::runtime_error(std::string("axmodel input ") + kInputNames[i] + " is " +
                                      shape_string(t.shape) + ", not the master contract");
     }
-    const auto &out = session_.outputs()[0];
-    if (out.count() != kModelOutputFloats || out.dtype != AxEngineSession::DataType::Float32)
-        throw std::runtime_error("axmodel output is " + shape_string(out.shape) +
-                                 ", expected [1," + std::to_string(kModelOutputFloats) + "] float");
+    /* 출력은 두 가지를 받는다: 예전의 단일 [1,2576](모든 값이 한 눈금으로 양자화됨), 또는
+     * 헤드를 나눈 출력들(split_outputs.py, 이름으로 찾아 제자리에 모은다). */
+    if (session_.outputs().size() == 1) {
+        const auto &out = session_.outputs()[0];
+        if (out.count() != kModelOutputFloats || out.dtype != AxEngineSession::DataType::Float32)
+            throw std::runtime_error("axmodel output is " + shape_string(out.shape) +
+                                     ", expected [1," + std::to_string(kModelOutputFloats) + "] float");
+    } else {
+        using model_output_assembly::kParts;
+        if (session_.outputs().size() != static_cast<size_t>(model_output_assembly::kPartCount))
+            throw std::runtime_error("axmodel has " + std::to_string(session_.outputs().size()) +
+                                     " outputs, expected 1 or " +
+                                     std::to_string(model_output_assembly::kPartCount));
+        for (const auto &part : kParts) {
+            int found = -1;
+            for (size_t i = 0; i < session_.outputs().size(); ++i)
+                if (session_.outputs()[i].name == part.name) found = static_cast<int>(i);
+            if (found < 0) throw std::runtime_error(std::string("axmodel lacks output ") + part.name);
+            const auto &out = session_.outputs()[found];
+            if (out.count() != static_cast<size_t>(part.count) ||
+                out.dtype != AxEngineSession::DataType::Float32)
+                throw std::runtime_error(std::string("axmodel output ") + part.name + " is " +
+                                         shape_string(out.shape) + ", expected " +
+                                         std::to_string(part.count) + " float");
+            output_parts_.push_back(found);
+        }
+    }
 
     // traffic convention은 이 차에서 상수라 한 번만 쓴다.
     std::memcpy(session_.input<float>(index_[kTraffic]), temporal_.traffic_convention().data(),
@@ -231,7 +256,14 @@ bool SupercomboModel::infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_ou
     const uint64_t t3 = monotonic_now_ns();
 
     raw_output.resize(kModelOutputFloats);
-    std::memcpy(raw_output.data(), session_.output<float>(0), sizeof(float) * kModelOutputFloats);
+    if (output_parts_.empty()) {
+        std::memcpy(raw_output.data(), session_.output<float>(0), sizeof(float) * kModelOutputFloats);
+    } else {
+        std::fill(raw_output.begin(), raw_output.end(), 0.0f);  // 끝의 패딩 두 칸
+        for (int i = 0; i < model_output_assembly::kPartCount; ++i)
+            model_output_assembly::place(model_output_assembly::kParts[i],
+                                         session_.output<float>(output_parts_[i]), raw_output.data());
+    }
     temporal_.push_feature_history(raw_output.data(), raw_output.size());
     const uint64_t t4 = monotonic_now_ns();
 

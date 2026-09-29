@@ -8,6 +8,12 @@ MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmod
    `python3 extract_core.py driving_supercombo.onnx core_fp32.onnx`
    Pulsar2가 받지 못하는 연산(opset-20 Cast, GatherND, Where(-inf) 마스크, 2D LpNorm)을
    같은 값의 연산으로 바꾸고 fp16을 fp32로 올린다.
+   이어서 출력 헤드를 나눈다(onnx 필요):
+   `python3 split_outputs.py core_fp32.onnx core_split.onnx`
+   원래 코어는 헤드 13개를 Concat 하나로 이어 내보내서, Pulsar2가 전체를 U16 눈금 하나(약 0.007)로
+   양자화했다. plan yaw·yaw rate가 0 아니면 ±0.007로 나와 laneless 곡률이 계단마다 약 0.6 m/s²씩
+   뛰었다. 헤드마다 출력으로 내보내고 plan은 위치·방향·표준편차로 나눈다. 런타임이
+   `src/model_output_assembly.h`로 다시 모은다. 변환 설정의 `input`은 `core_split.onnx`다.
 2. 보정·평가 데이터(onnxruntime 필요):
    `python3 make_core_data.py` → `calib/*.tar`, `eval/`. PTQ 샘플은 `models/ptq`,
    평가 묶음은 `QEXP094_DIR`(K230 0.9.4 평가, 저장소 밖)에서 읽는다.
@@ -17,6 +23,9 @@ MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmod
    uint8(`input_processors`)이다. 결과 `build/core.axmodel`을 저장소의
    `models/supercombo.axmodel`로 넣고 `models/manifest.sha256`을 갱신하면
    `scripts/upload_to_board.sh`가 보드로 보낸다.
+
+2026-09-29 분할 빌드(보드, 평가 552프레임, fp32 대비): laneless 목표 횡가속 오차 평균 0.109 → 0.054 m/s²
+(p95 0.35 → 0.22), yaw 서로 다른 값 12 → 568개, 차선·선행차·plan 위치는 그대로다.
 
 보정 데이터의 desire에는 펄스가 들어 있어야 한다(`make_core_data.py`). 예전 모델은 전부 0으로
 보정해 desire 입력 범위가 [0, 0]이었고, NPU 모델이 차선 변경 명령에 전혀 반응하지 않았다
