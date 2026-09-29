@@ -51,10 +51,10 @@ int main()
         unsigned errors = 0;
         uint64_t window_start = monotonic_now_ns();
         uint64_t window_frames = 0;
-        /* 센서 캡처(VI 하드웨어 PTS)부터 프레임이 링에 들어오기까지의 지연. modeld와
-         * controlsd가 plan 나이를 여기서 찍은 시각부터 재므로, 이 구간은 나이에 들어가지
-         * 않는다(openpilot은 frame EOF부터 잰다). 10초마다 분포를 남긴다. */
+        /* 센서 캡처(VI 하드웨어 PTS)부터 프레임이 링에 들어오기까지의 지연. 캡처 시각을
+         * 이만큼 앞당겨 발행한다. 10초마다 분포를 남긴다. */
         std::vector<uint64_t> ages_us, pop_ages_us;
+        constexpr uint64_t kMaxCaptureAgeUs = 200000;  // 이보다 오래됐다고 나오면 PTS를 믿지 않는다
         uint64_t age_window_start = window_start;
         std::fprintf(stderr, "camerad: MaixCAM2 VI %ux%u NV12, 20 fps sensor, CMM ring\n",
                      config.nv12_width, config.nv12_height);
@@ -64,8 +64,12 @@ int main()
             frame_ring.begin_write(slot);
             uint64_t age_us = 0, pop_age_us = 0;
             const bool got = camera.read_to(slots[slot].phys, 1000, &age_us, &pop_age_us);
-            const uint64_t capture_ns = monotonic_now_ns();
-            if (got && age_us > 0 && age_us < 1000000) {
+            /* 캡처 시각은 센서가 찍은 시각(VI 하드웨어 PTS)으로 둔다. openpilot처럼 plan 나이를
+             * 센서 기준으로 재야 지연 보정이 맞는다. 링에 들어오기까지 약 24 ms가 걸려서, 여기서
+             * 현재 시각을 찍으면 그만큼 plan이 새것으로 보였다. PTS를 못 읽으면 현재 시각이다. */
+            uint64_t capture_ns = monotonic_now_ns();
+            if (got && age_us > 0 && age_us < kMaxCaptureAgeUs) {
+                capture_ns -= age_us * 1000ULL;
                 ages_us.push_back(age_us);
                 pop_ages_us.push_back(pop_age_us);
             }
