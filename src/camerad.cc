@@ -7,6 +7,7 @@
 
 #include <signal.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
@@ -50,14 +51,24 @@ int main()
         unsigned errors = 0;
         uint64_t window_start = monotonic_now_ns();
         uint64_t window_frames = 0;
+        /* 센서 캡처(VI 하드웨어 PTS)부터 프레임이 링에 들어오기까지의 지연. modeld와
+         * controlsd가 plan 나이를 여기서 찍은 시각부터 재므로, 이 구간은 나이에 들어가지
+         * 않는다(openpilot은 frame EOF부터 잰다). 10초마다 분포를 남긴다. */
+        std::vector<uint64_t> ages_us, pop_ages_us;
+        uint64_t age_window_start = window_start;
         std::fprintf(stderr, "camerad: MaixCAM2 VI %ux%u NV12, 20 fps sensor, CMM ring\n",
                      config.nv12_width, config.nv12_height);
 
         while (!g_stop) {
             const unsigned slot = static_cast<unsigned>(frame_id % frame_ring.slot_count());
             frame_ring.begin_write(slot);
-            const bool got = camera.read_to(slots[slot].phys);
+            uint64_t age_us = 0, pop_age_us = 0;
+            const bool got = camera.read_to(slots[slot].phys, 1000, &age_us, &pop_age_us);
             const uint64_t capture_ns = monotonic_now_ns();
+            if (got && age_us > 0 && age_us < 1000000) {
+                ages_us.push_back(age_us);
+                pop_ages_us.push_back(pop_age_us);
+            }
             frame_ring.end_write(slot, got ? frame_id : UINT64_MAX);
             if (!got) {
                 ++errors;
@@ -88,6 +99,20 @@ int main()
                 std::fflush(stderr);
                 window_start = now;
                 window_frames = 0;
+            }
+            if (now - age_window_start >= 10000000000ULL && !ages_us.empty()) {
+                auto pct = [](std::vector<uint64_t> v, double q) {
+                    std::sort(v.begin(), v.end());
+                    return v[std::min(v.size() - 1, static_cast<size_t>(q * v.size()))] / 1000.0;
+                };
+                std::fprintf(stderr,
+                             "\ncamerad: capture latency ms (HW PTS -> ring) p50 %.1f p95 %.1f max %.1f"
+                             " | at VI pop p50 %.1f p95 %.1f (n=%zu)\n",
+                             pct(ages_us, 0.5), pct(ages_us, 0.95), pct(ages_us, 1.0),
+                             pct(pop_ages_us, 0.5), pct(pop_ages_us, 0.95), ages_us.size());
+                ages_us.clear();
+                pop_ages_us.clear();
+                age_window_start = now;
             }
         }
         std::fprintf(stderr, "\ncamerad done frames=%llu errors=%u\n",

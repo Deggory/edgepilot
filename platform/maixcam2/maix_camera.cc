@@ -2,6 +2,7 @@
 
 #include "ax_middleware.hpp"
 #include "maix_app.hpp"
+#include "ax_sys_api.h"
 
 #include <linux/videodev2.h>
 
@@ -96,12 +97,16 @@ uint32_t MaixCamera::fourcc() const
     return nv12_ ? V4L2_PIX_FMT_NV12 : V4L2_PIX_FMT_NV21;
 }
 
-bool MaixCamera::read_to(unsigned long long dst_phys, int timeout_ms)
+bool MaixCamera::read_to(unsigned long long dst_phys, int timeout_ms, uint64_t *age_us,
+                         uint64_t *pop_age_us)
 {
     Frame *frame = impl_->vi_ptr->pop(impl_->channel, timeout_ms);
     if (!frame) return false;
     AX_VIDEO_FRAME_T src = {};
     frame->get_video_frame(&src);
+    AX_U64 now_pts = 0;
+    if (pop_age_us && AX_SYS_GetCurPTS(&now_pts) == 0 && now_pts >= src.u64PTS)
+        *pop_age_us = now_pts - src.u64PTS;
     AX_VIDEO_FRAME_T dst = {};
     dst.u32Width = width_;
     dst.u32Height = height_;
@@ -115,6 +120,8 @@ bool MaixCamera::read_to(unsigned long long dst_phys, int timeout_ms)
     attr.eSclInput = AX_IVPS_SCL_INPUT_SHARE;
     attr.tAspectRatio.eMode = AX_IVPS_ASPECT_RATIO_STRETCH;
     const bool ok = AX_IVPS_CropResizeTdp(&src, &dst, &attr) == 0;
+    if (age_us && AX_SYS_GetCurPTS(&now_pts) == 0 && now_pts >= src.u64PTS)
+        *age_us = now_pts - src.u64PTS;
     delete frame;
     return ok;
 }
