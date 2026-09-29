@@ -135,16 +135,19 @@ int main() {
     LatestChannel panda_sub;
     LatestChannel learner_sub;
     LatestChannel imu_sub;
+    LatestChannel localization_sub;
     bool model_open = false;
     bool control_open = false;
     bool panda_open = false;
     bool learner_open = false;
     bool imu_open = false;
+    bool localization_open = false;
     uint64_t model_seq = 0;
     uint64_t control_seq = 0;
     uint64_t panda_seq = 0;
     uint64_t learner_seq = 0;
     uint64_t imu_seq = 0;
+    uint64_t localization_seq = 0;
     uint64_t frame_seq = 0;
     uint64_t config_revision = UINT64_MAX;
     uint64_t next_config_poll_ns = 0;
@@ -223,6 +226,8 @@ int main() {
         open_optional_channel(learner_sub, &learner_open, kLearnerStateTopic,
                               sizeof(LearnerState));
         open_optional_channel(imu_sub, &imu_open, kImuTopic, sizeof(ImuBatch));
+        open_optional_channel(localization_sub, &localization_open, kLocalizationStateTopic,
+                              sizeof(LocalizationState));
         ModelState model_state;
         if (model_open && model_sub.read_new(&model_seq, &model_state,
                                              sizeof(model_state), 0)) {
@@ -253,6 +258,12 @@ int main() {
             imu_batch.count > 0 && imu_batch.count <= kImuBatchMaxSamples) {
           writer.write_state(RecordType::Imu, imu_batch.timestamp_ns, &imu_batch,
                              offsetof(ImuBatch, samples) + imu_batch.count * sizeof(ImuSample));
+        }
+        LocalizationState localization;
+        if (localization_open && localization_sub.read_new(&localization_seq, &localization,
+                                                           sizeof(localization), 0)) {
+          writer.write_state(RecordType::Localization, localization.timestamp_ns, &localization,
+                             sizeof(localization));
         }
       }
 

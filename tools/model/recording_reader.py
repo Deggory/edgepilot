@@ -29,6 +29,7 @@ RECORD_CONTROL_STATE = 4
 RECORD_PANDA_STATE = 5
 RECORD_LEARNER_STATE = 6
 RECORD_IMU = 7
+RECORD_LOCALIZATION = 8
 
 FRAME_INDEX_RECORD = np.dtype([
     ("frame_id", "<u8"),
@@ -77,6 +78,18 @@ IMU_SAMPLE = np.dtype([
     ("temperature_c", "<f4"), ("reserved", "<u4"),
 ])
 assert IMU_SAMPLE.itemsize == 40
+
+# LocalizationState (locationd, ~20 Hz). flags bits: ipc_messages.h kLocalization*.
+LOCALIZATION_STATE = np.dtype([
+    ("timestamp_ns", "<u8"), ("flags", "<u4"), ("lag_status", "<u4"),
+    ("orientation_calib", "<f4", 3), ("orientation_std", "<f4", 3),
+    ("angular_velocity_calib", "<f4", 3), ("angular_velocity_calib_std", "<f4", 3),
+    ("velocity_device", "<f4", 3), ("velocity_device_std", "<f4", 3),
+    ("acceleration_calib", "<f4", 3),
+    ("lateral_delay_s", "<f4"), ("lag_estimate_s", "<f4"), ("lag_estimate_std_s", "<f4"),
+    ("lag_valid_blocks", "<i4"), ("lag_cal_perc", "<i4"), ("lag_points", "<u4"), ("reserved", "<u4"),
+])
+assert LOCALIZATION_STATE.itemsize == 128
 
 LEARNER_STATE = np.dtype([
     ("timestamp_ns", "<u8"), ("flags", "<u4"),
@@ -417,6 +430,18 @@ def read_route_imu(route_dir: Path) -> np.ndarray | None:
                 continue
             chunks.append(np.frombuffer(rec.payload, IMU_SAMPLE, count, IMU_BATCH_HEAD.size))
     return np.concatenate(chunks) if chunks else None
+
+
+def read_route_localization(route_dir: Path) -> np.ndarray | None:
+    """All locationd outputs of a route, or None when it has none (recorded before locationd)."""
+    rows = []
+    for path in route_event_files(route_dir):
+        if path.stat().st_size <= 32:
+            continue
+        for rec in iter_event_records(path):
+            if rec.type == RECORD_LOCALIZATION and len(rec.payload) == LOCALIZATION_STATE.itemsize:
+                rows.append(np.frombuffer(rec.payload, LOCALIZATION_STATE, 1)[0])
+    return np.array(rows, dtype=LOCALIZATION_STATE) if rows else None
 
 
 def read_route_calibration(route_dir: Path) -> np.ndarray | None:

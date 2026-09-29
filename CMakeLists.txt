@@ -96,6 +96,10 @@ target_link_libraries(perception PUBLIC common utils_json)
 
 add_edgepilot_library(panda_codec src/panda_can_codec.cc)
 
+# locationd·lagd 이식. 하드웨어에 의존하지 않아 호스트에서 녹화를 재생해 검사한다.
+add_edgepilot_library(localization src/location_estimator.cc src/lateral_lag.cc src/localization_pipeline.cc)
+target_link_libraries(localization PUBLIC utils_json common)
+
 # 기록 라이터는 POSIX만 써서 호스트 검사가 디스크 포맷을 본다. 인코더(VENC)는 recordd에만.
 add_edgepilot_library(recording_writer src/recording_writer.cc)
 target_link_libraries(recording_writer PUBLIC common)
@@ -207,6 +211,10 @@ if(EDGEPILOT_BUILD_RUNTIME)
   add_executable(imud src/imud.cc)
   configure_board_target(imud common)
 
+  # 자세 칼만 필터 + 조향 지연 추정(상류 locationd·lagd). 지금은 관찰 전용이다.
+  add_executable(locationd src/locationd.cc)
+  configure_board_target(locationd common localization)
+
   # 카메라 내부 파라미터 측정용 스틸 캡처(docs/camcal.md).
   add_executable(camcal src/camcal.cc src/alert_sound.cc)
   target_include_directories(camcal SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -274,7 +282,7 @@ if(EDGEPILOT_BUILD_DIAGNOSTICS)
 endif()
 
 if(EDGEPILOT_BUILD_RUNTIME)
-  install(TARGETS camerad camcal imud modeld overlayd controlsd recordd replayd
+  install(TARGETS camerad camcal imud locationd modeld overlayd controlsd recordd replayd
     RUNTIME DESTINATION .)
   install(FILES
     assets/ui/traffic_wait_red_retro-270x155-v3.png

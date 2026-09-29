@@ -17,3 +17,6 @@ if(OpenCV_FOUND)
   target_include_directories(hud_snapshot SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(hud_snapshot PRIVATE overlay)
 endif()
+
+add_host_tool(replay_localization replay_localization.cc)
+target_link_libraries(replay_localization PRIVATE localization control_core)

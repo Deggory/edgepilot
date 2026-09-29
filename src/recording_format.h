@@ -33,7 +33,9 @@ enum class RecordType : uint16_t {
   PandaState = 5,
   LearnerState = 6,
   Imu = 7,
+  Localization = 8,
 };
+constexpr uint16_t kLastRecordType = static_cast<uint16_t>(RecordType::Localization);
 
 #pragma pack(push, 1)
 struct EventFileHeader {

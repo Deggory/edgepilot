@@ -788,6 +788,52 @@ class LearnerMonitor:
         return result
 
 
+# ---------------------------------------------------------------- locationd(자세·조향 지연)
+
+LOCALIZATION_STATE_PATH = os.environ.get("EDGEPILOT_LOCALIZATION_STATE_PATH", "/dev/shm/edgepilot_localization")
+# LocalizationState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ 크기와 대조한다.
+LOCALIZATION_FIELDS = (
+    ("timestamp_ns", "Q"), ("flags", "I"), ("lag_status", "I"),
+    ("orientation_calib", "3f"), ("orientation_std", "3f"),
+    ("angular_velocity_calib", "3f"), ("angular_velocity_calib_std", "3f"),
+    ("velocity_device", "3f"), ("velocity_device_std", "3f"), ("acceleration_calib", "3f"),
+    ("lateral_delay_s", "f"), ("lag_estimate_s", "f"), ("lag_estimate_std_s", "f"),
+    ("lag_valid_blocks", "i"), ("lag_cal_perc", "i"), ("lag_points", "I"), ("reserved", "I"),
+)
+LOCALIZATION_STATE = struct.Struct("<" + "".join(fmt for _, fmt in LOCALIZATION_FIELDS))
+LOCALIZATION_FLAGS = (  # ipc_messages.h kLocalization* 비트 순서
+    "filter_valid", "inputs_ok", "sensors_ok", "posenet_ok", "calib_valid", "lag_restored",
+)
+
+
+def decode_localization_state(payload: bytes) -> Dict[str, Any]:
+    values = list(LOCALIZATION_STATE.unpack(payload[:LOCALIZATION_STATE.size]))
+    state: Dict[str, Any] = {}
+    for name, fmt in LOCALIZATION_FIELDS:
+        count = int(fmt[:-1]) if len(fmt) > 1 else 1
+        state[name] = values[:count] if count > 1 else values[0]
+        del values[:count]
+    state["flags"] = {name: bool(state["flags"] >> bit & 1) for bit, name in enumerate(LOCALIZATION_FLAGS)}
+    del state["reserved"]
+    return state
+
+
+class LocalizationReader(IpcReader):
+    """locationd의 /edgepilot_localization."""
+
+    def __init__(self, path: str = LOCALIZATION_STATE_PATH):
+        super().__init__(path, LOCALIZATION_STATE.size)
+
+    def snapshot(self, steering: Dict[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {"available": False, "initial_lag": steering.get("steer_actuator_delay")}
+        latest = self.read_payload()
+        if latest is not None:
+            _, stamp, payload = latest
+            result.update(available=True, age_s=max(0.0, (boottime_ns() - stamp) * 1e-9),
+                          state=decode_localization_state(payload))
+        return result
+
+
 # ---------------------------------------------------------------- 카메라 캘리브레이션 초기화
 
 MODEL_STATE_PATH = os.environ.get("EDGEPILOT_MODEL_STATE_PATH", "/dev/shm/edgepilot_model_state")
@@ -1811,6 +1857,42 @@ HTML = """<!doctype html>
       }
     }
 
+    function lagShell() {
+      const card = el("article", "live-card");
+      const head = el("div", "live-head");
+      const badges = el("span", "live-badges");
+      head.append(el("h3", "live-title", "lagd · 조향 지연 (관찰 전용)"), badges);
+      const body = el("div");
+      card.append(head, body);
+      return {card, badges, body};
+    }
+
+    const LAG_STATUS = {0: ["추정 전", "warn"], 1: ["추정됨", "good"], 2: ["무효", "bad"]};
+
+    function lagCard(shell, loc) {
+      if (!loc || !loc.available) {
+        fillShell(shell, [["상태 없음", "muted"]], [el("div", "live-foot", "locationd가 발행하지 않습니다(IMU·locationd 확인).")]);
+        return;
+      }
+      const s = loc.state, flags = s.flags;
+      const poseOk = flags.filter_valid && flags.inputs_ok && flags.sensors_ok && flags.posenet_ok;
+      const badges = [LAG_STATUS[s.lag_status] || [String(s.lag_status), "muted"],
+        [`블록 ${s.lag_valid_blocks}/5`, s.lag_valid_blocks >= 5 ? "accent" : "muted"],
+        poseOk ? ["자세 정상", "good"] : ["자세 무효", "bad"], ["섀도", "muted"]];
+      if (loc.age_s > 2) badges.push([`${Math.round(loc.age_s)}초 전`, "bad"]);
+      const ms = v => `${Math.round(v * 1000)} ms`;
+      fillShell(shell, badges, [
+        liveTable(["항목", "값", "비교", ""], [
+          ["쓸 지연", ms(s.lateral_delay_s), `수동 ${ms(loc.initial_lag || 0)}`, "추정 전에는 수동값"],
+          ["진행 평균", `${ms(s.lag_estimate_s)} ±${ms(s.lag_estimate_std_s)}`, `창 안 점 ${s.lag_points}`, "블록 사이 0.1 s 넘으면 무효"],
+          ["요레이트", `${sgn(deg(s.angular_velocity_calib[2]), 2)}°/s`, `±${num(deg(s.angular_velocity_calib_std[2]), 2)}`, "+ = 오른쪽"],
+          ["도로 롤 · 피치", `${sgn(deg(s.orientation_calib[0]), 2)}° · ${sgn(deg(s.orientation_calib[1]), 2)}°`, "", "IMU 중력"],
+        ]),
+        el("div", "live-foot",
+          `목표 곡률 → 실제 요레이트 지연(상류 lagd). 시속 40 km 이상, 조향 중·핸들 비조작·비포화 구간만 쓰고 100점마다 한 블록. 1분마다 저장 · ${flags.lag_restored ? "이번 시동에 복원" : "새로 시작"}`),
+      ]);
+    }
+
     function learnerSection(title, children, grid = true) {
       const section = el("section", "section");
       section.appendChild(el("h2", "section-title", title));
@@ -1824,6 +1906,7 @@ HTML = """<!doctype html>
       if (!learnerPanel) return;
       const panel = learnerPanel;
       calibCard(panel.calib, data.calibration);
+      lagCard(panel.lag, data.localization);
       if (!data.available) {
         panel.notice.replaceChildren(el("div", "empty", "학습 상태가 없습니다. controlsd가 실행 중인지 확인하세요."));
         return;
@@ -1870,9 +1953,10 @@ HTML = """<!doctype html>
       const torque = liveShell("torqued · 토크 값", "use_live_torque_params", ADOPT.torque);
       const trendSection = learnerSection("최근 10분 추이", []);
       const calib = calibShell();
-      learnerPanel = {notice: el("div"), calib, vehicle, torque, trends: trendSection.querySelector(".param-list")};
+      const lag = lagShell();
+      learnerPanel = {notice: el("div"), calib, lag, vehicle, torque, trends: trendSection.querySelector(".param-list")};
       sections.append(learnerPanel.notice, learnerSection("학습값 · 오른쪽 스위치로 제어에 사용", [vehicle.card, torque.card]),
-                      learnerSection("카메라 장착", [calib.card]), trendSection);
+                      learnerSection("카메라 장착 · 조향 지연", [calib.card, lag.card]), trendSection);
       if (learnerTimer) return;
       learnerTimer = window.setInterval(pollLearners, 1000);
       try {
@@ -1967,13 +2051,15 @@ HTML = """<!doctype html>
 
 def create_app(store: ParamStore | None = None,
                learner_monitor: LearnerMonitor | None = None,
-               calibration: CalibrationControl | None = None) -> "FastAPI":
+               calibration: CalibrationControl | None = None,
+               localization: LocalizationReader | None = None) -> "FastAPI":
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
 
     param_store = store or ParamStore(display_controller=DisplayBacklight())
     monitor = learner_monitor or LearnerMonitor()
     calibration_control = calibration or CalibrationControl()
+    localization_reader = localization or LocalizationReader()
     application = FastAPI(title="K7 parameter server", docs_url="/docs")
 
     @application.on_event("startup")
@@ -1997,8 +2083,10 @@ def create_app(store: ParamStore | None = None,
 
     @application.get("/api/learners")
     def get_learners() -> Dict[str, Any]:
-        result = monitor.snapshot(param_store.read_group("steering"))
+        steering = param_store.read_group("steering")
+        result = monitor.snapshot(steering)
         result["calibration"] = calibration_control.status()
+        result["localization"] = localization_reader.snapshot(steering)
         return result
 
     @application.post("/api/calibration/reset")

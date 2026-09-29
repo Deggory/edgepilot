@@ -24,7 +24,7 @@ constexpr uint32_t kFrameRingVersion = 5;
 constexpr uint32_t kCanQueueMagic = 0x4b435151;
 constexpr uint32_t kCanQueueVersion = 1;
 constexpr unsigned kFrameSlots = 8;
-constexpr unsigned kMaxProcesses = 8;
+constexpr unsigned kMaxProcesses = 12;
 constexpr unsigned kAiWidth = kDefaultAiWidth;
 constexpr unsigned kAiHeight = kDefaultAiHeight;
 constexpr unsigned kAiFrameBytes = kAiWidth * kAiHeight * 3 / 2;
@@ -41,6 +41,7 @@ constexpr char kControlStateTopic[] = "/edgepilot_control_state";
 
 constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
 constexpr char kImuTopic[] = "/edgepilot_imu";
+constexpr char kLocalizationStateTopic[] = "/edgepilot_localization";
 
 constexpr uint32_t kHudFlagLaneless = 1U << 0;
 constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
@@ -173,7 +174,7 @@ struct ManagerState {
     ProcessState processes[kMaxProcesses] = {};
 };
 
-static_assert(sizeof(ManagerState) == 176,
+static_assert(sizeof(ManagerState) == 256,
               "ManagerState layout is shared with the Python manager");
 
 struct IpcCanFrame {
@@ -388,6 +389,37 @@ struct ImuBatch {
 
 static_assert(sizeof(ImuBatch) == 16 + 40 * kImuBatchMaxSamples,
               "ImuBatch layout is shared with the recording reader");
+
+/* locationd 출력: 자세 칼만 필터(상류 livePose)와 조향 지연 추정(상류 liveDelay).
+ * IMU 묶음마다(약 20 Hz) 발행하고 recordd가 RecordType::Localization으로 그대로 남긴다.
+ * 보정(차량) 좌표계는 x 앞, y 오른쪽, z 아래라 요레이트는 오른쪽 회전이 양수(곡률 관례와 같다). */
+constexpr uint32_t kLocalizationFilterValid = 1U << 0;
+constexpr uint32_t kLocalizationInputsOk = 1U << 1;
+constexpr uint32_t kLocalizationSensorsOk = 1U << 2;
+constexpr uint32_t kLocalizationPosenetOk = 1U << 3;
+constexpr uint32_t kLocalizationCalibValid = 1U << 4;
+constexpr uint32_t kLocalizationLagRestored = 1U << 5;
+
+struct LocalizationState {
+    uint64_t timestamp_ns = 0;             // 추정 시각 = 마지막 IMU 샘플 시각(CLOCK_BOOTTIME)
+    uint32_t flags = 0;
+    uint32_t lag_status = 0;               // LateralLagStatus: 0 미추정, 1 추정, 2 무효
+    float orientation_calib[3] = {};       // roll(오른쪽 아래 +), pitch, yaw
+    float orientation_std[3] = {};         // 기기 좌표계 표준편차
+    float angular_velocity_calib[3] = {};  // rad/s
+    float angular_velocity_calib_std[3] = {};
+    float velocity_device[3] = {};         // m/s
+    float velocity_device_std[3] = {};
+    float acceleration_calib[3] = {};      // m/s², 중력 제외
+    float lateral_delay_s = 0.0f;          // 쓸 지연: 추정되면 추정, 아니면 초기값
+    float lag_estimate_s = 0.0f;           // 진행 중 블록 포함 평균
+    float lag_estimate_std_s = 0.0f;
+    int32_t lag_valid_blocks = 0;
+    int32_t lag_cal_perc = 0;
+    uint32_t lag_points = 0;               // 창 안의 조건 만족 점 수
+    uint32_t reserved = 0;
+};
+static_assert(sizeof(LocalizationState) == 128, "LocalizationState layout is shared with the recording reader");
 
 /* controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이
  * 구조체를 그대로 저장하고 tools/model/recording_reader.py가 위치로 디코드하므로 필드

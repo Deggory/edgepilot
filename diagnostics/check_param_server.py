@@ -22,6 +22,9 @@ from scripts.param_server import (
     LEARNER_STATE,
     LearnerMonitor,
     LearnerStateReader,
+    LOCALIZATION_FIELDS,
+    LOCALIZATION_STATE,
+    LocalizationReader,
     PARAM_METADATA,
     ParamStore,
     boottime_ns,
@@ -344,6 +347,43 @@ class CalibrationControlTest(unittest.TestCase):
 
     def test_page_has_reset_button(self):
         self.assertIn("/api/calibration/reset", HTML)
+
+
+class LocalizationStateTest(unittest.TestCase):
+    def test_layout_matches_cpp_size(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        size = int(re.search(r"sizeof\(LocalizationState\) == (\d+)", source).group(1))
+        self.assertEqual(LOCALIZATION_STATE.size, size)
+        flags = re.findall(r"constexpr uint32_t kLocalization(\w+) = 1U << (\d+);", source)
+        self.assertEqual([int(bit) for _, bit in flags], list(range(len(flags))))
+
+    def test_reader_decodes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "edgepilot_localization"
+            reader = LocalizationReader(str(path))
+            self.assertFalse(reader.snapshot({})["available"])
+            fields = []
+            values = {"flags": 0b100001, "lag_status": 1, "lateral_delay_s": 0.42, "lag_valid_blocks": 6,
+                      "angular_velocity_calib": [0.0, 0.0, 0.1]}
+            for name, fmt in LOCALIZATION_FIELDS:
+                default = [0.0] * int(fmt[:-1]) if len(fmt) > 1 else 0
+                value = values.get(name, default)
+                fields.extend(value if isinstance(value, list) else [value])
+            payload = LOCALIZATION_STATE.pack(*fields)
+            header = IPC_HEADER.pack(IPC_MAGIC, 1, LOCALIZATION_STATE.size, 0, 2, boottime_ns(), len(payload), 0)
+            path.write_bytes(header + payload)
+            result = reader.snapshot({"steer_actuator_delay": 0.34})
+            self.assertTrue(result["available"])
+            self.assertEqual(result["initial_lag"], 0.34)
+            state = result["state"]
+            self.assertAlmostEqual(state["lateral_delay_s"], 0.42, places=5)
+            self.assertEqual(state["lag_valid_blocks"], 6)
+            self.assertAlmostEqual(state["angular_velocity_calib"][2], 0.1, places=5)
+            self.assertTrue(state["flags"]["filter_valid"] and state["flags"]["lag_restored"])
+            self.assertFalse(state["flags"]["inputs_ok"])
+
+    def test_page_has_lag_card(self):
+        self.assertIn("lagd · 조향 지연", HTML)
 
 
 if __name__ == "__main__":
