@@ -389,7 +389,6 @@ bool LateralController::update_steering_pressed(int driver_torque) {
   return steering_pressed_counter_ > kSteeringPressedMinCount;
 }
 
-// 운전자 조향 토크 감지 타이머를 openpilot K7 방식으로 갱신한다.
 // 제어 내부 상태를 초기값으로 되돌린다.
 void LateralController::reset_control_state() {
   last_torque_ = 0;

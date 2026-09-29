@@ -139,8 +139,6 @@ private:
   // 노이즈가 있는 운전자 조향 토크를 openpilot 방식으로 필터링한다.
   bool update_steering_pressed(int driver_torque);
 
-
-
   // 제어 내부 상태를 초기값으로 되돌린다.
   void reset_control_state();
 

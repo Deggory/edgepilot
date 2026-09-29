@@ -282,11 +282,10 @@ struct LateralPlanner::Impl {
     lane_planner.update_probabilities(v_ego);
     if (laneless_mode) return upstream_target(model, v_ego, measured_curvature);
     const double lane_probability = lane_planner.mean_effective_probability();
-    bool use_model_path = laneless_mode;
+    // 여기부터는 Lane 모드다(laneless 모드는 위에서 upstream_target으로 끝난다).
+    bool use_model_path = false;
     const bool lane_change_off = lane_change_state == 0;
-    if (laneless_mode) {
-      laneless_buffer = false;
-    } else if (lane_probability < 0.3 && lane_change_off) {
+    if (lane_probability < 0.3 && lane_change_off) {
       use_model_path = true;
       laneless_buffer = true;
     // 복귀 문턱을 openpilot의 0.5에서 0.4로 내렸다. 교차로 후 차선

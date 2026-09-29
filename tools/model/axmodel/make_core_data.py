@@ -57,9 +57,12 @@ feats = np.stack(keep["features_buffer"]); rng = np.random.default_rng(0)
 # desire는 0/1 원-핫 펄스다. 전부 0으로 보정하면 MinMax 범위가 [0, 0]이 되어 NPU 모델이 펄스를
 # 못 보고(2026-09-27 실차: 차선 변경 desire_state가 끝내 0), 차선 변경을 스스로 하지 않는다.
 # 절반은 0, 절반은 25칸 중 한 칸에 펄스 하나(주로 차선 변경 3·4)를 넣어 범위를 [0, 1]로 잡는다.
+# 전용 생성기를 써서 features 표본(rng)을 건드리지 않는다. 이 순서가 배포 axmodel의 보정 데이터다.
+desire_rng = np.random.default_rng(0)
 desire_cal = np.zeros((len(road), 25, 8), np.float32)
 for i in range(1, len(road), 2):
-    desire_cal[i, rng.integers(0, 25), rng.choice([1, 2, 3, 4, 5, 6], p=[0.1, 0.1, 0.3, 0.3, 0.1, 0.1])] = 1.0
+    d = desire_rng.choice([1, 2, 3, 4, 5, 6], p=[0.1, 0.1, 0.3, 0.3, 0.1, 0.1])
+    desire_cal[i, desire_rng.integers(0, 25), d] = 1.0
 cal = {"input_imgs": road.astype(np.float32), "big_input_imgs": wide.astype(np.float32),
        "desire": desire_cal,
        "features_buffer": feats[rng.integers(0, len(feats), len(road))],
