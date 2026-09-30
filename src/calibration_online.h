@@ -40,6 +40,8 @@ public:
     OnlineCalibrator();
 
     UpdateResult update(const PoseObservation &pose, float v_ego);
+    /* 저장된 보정으로 시작한다(openpilot reset). 블록 수를 그대로 써서 5 미만이면 미보정이다.
+     * rpy가 유효하면 true. */
     bool restore(const float rpy[3], int valid_blocks, const float spread[3] = nullptr);
     Snapshot snapshot() const;
     void output_rpy(float rpy[3]) const;

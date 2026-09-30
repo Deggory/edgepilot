@@ -166,12 +166,16 @@ OnlineCalibrator::UpdateResult OnlineCalibrator::update(const PoseObservation &p
 bool OnlineCalibrator::restore(const float rpy[3], int valid_blocks, const float spread[3])
 {
     if (!rpy || !finite3(rpy) || !is_calibration_valid(rpy)) return false;
-    reset_to_rpy(rpy, std::max(kInputsNeeded, valid_blocks));
+    /* openpilot calibrationd reset(rpy_init, valid_blocks)와 같이 저장된 블록 수를 그대로 쓴다.
+     * 5블록 미만(저장소 기본값은 0)이면 rpy는 출발점일 뿐 미보정이고, 직진 5블록이 모일 때까지
+     * 결합이 막힌다. 예전에는 5블록으로 올려 기본값을 보정 완료로 믿었다(2026-10-01 laneless
+     * 0.2 m 치우침). */
+    reset_to_rpy(rpy, std::max(0, valid_blocks));
     if (spread && finite3(spread)) {
         for (int i = 0; i < 3; ++i)
             snapshot_.spread[i] = std::max(0.0f, spread[i]);
     }
-    return snapshot_.status == CalibrationStatus::Calibrated;
+    return true;
 }
 
 OnlineCalibrator::Snapshot OnlineCalibrator::snapshot() const

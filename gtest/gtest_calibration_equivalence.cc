@@ -631,6 +631,53 @@ TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
     std::remove(kTestCalibration);
 }
 
+/* openpilot과 같이 저장된 블록 수를 그대로 쓴다: 5 미만(저장소 기본값 0)이면 rpy는 출발점일 뿐
+ * 미보정이고, 직진 5블록이 모여야 보정 완료다. */
+TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated)
+{
+    const float stored[3] = {0.0f, deg_to_rad(-1.0f), deg_to_rad(-1.12f)};
+    OnlineCalibrator calibrator;
+    ASSERT_TRUE(calibrator.restore(stored, 0));
+    EXPECT_EQ(calibrator.snapshot().valid_blocks, 0);
+    EXPECT_EQ(static_cast<int>(calibrator.snapshot().status), static_cast<int>(CalibrationStatus::Uncalibrated));
+    float out[3] = {};
+    calibrator.output_rpy(out);
+    EXPECT_NEAR(out[2], stored[2], 1e-7) << "모델 입력은 저장된 rpy에서 출발한다";
+    for (int i = 0; i < 5 * 100; ++i) calibrator.update(make_pose(), 20.0f);
+    EXPECT_EQ(calibrator.snapshot().valid_blocks, 5);
+    EXPECT_EQ(static_cast<int>(calibrator.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated));
+
+    OnlineCalibrator converged;
+    ASSERT_TRUE(converged.restore(stored, 12));
+    EXPECT_EQ(static_cast<int>(converged.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated));
+
+    // 서비스: 저장소 기본값 같은 파일(valid_blocks 0)로 시작하면 미보정
+    constexpr const char *kDir = "params/work_uncalibrated";
+    constexpr const char *kFile = "params/work_uncalibrated/calibration.json";
+    mkdir("params", 0755);
+    mkdir(kDir, 0755);
+    {
+        std::FILE *f = std::fopen(kFile, "w");
+        ASSERT_NE(f, nullptr);
+        std::fprintf(f, "{\n  \"version\": 1,\n  \"rpy_rad\": [0, %.9f, %.9f],\n  \"spread_rad\": [0, 0, 0],\n"
+                        "  \"valid_blocks\": 0\n}\n", stored[1], stored[2]);
+        std::fclose(f);
+    }
+    setenv("EDGEPILOT_PARAMS_DIR", kDir, 1);
+    AppConfig auto_config;
+    auto_config.calibration_auto = true;
+    auto_config.manual_calibration = false;
+    {
+        CalibrationService service(auto_config);
+        EXPECT_EQ(static_cast<int>(service.snapshot().status), static_cast<int>(CalibrationStatus::Uncalibrated));
+        float rpy[3] = {};
+        service.input_rpy(rpy);
+        EXPECT_NEAR(rpy[2], stored[2], 1e-6);
+    }
+    unsetenv("EDGEPILOT_PARAMS_DIR");
+    std::remove(kFile);
+}
+
 TEST(CalibrationEquivalence, AppConfigEnvFeedback)
 {
     unsetenv("EDGEPILOT_CALIB_ROLL_DEG");
