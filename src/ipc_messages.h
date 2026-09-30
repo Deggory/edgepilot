@@ -399,6 +399,11 @@ constexpr uint32_t kLocalizationSensorsOk = 1U << 2;
 constexpr uint32_t kLocalizationPosenetOk = 1U << 3;
 constexpr uint32_t kLocalizationCalibValid = 1U << 4;
 constexpr uint32_t kLocalizationLagRestored = 1U << 5;
+// input_flags: 거부 누적이 한도를 넘은 입력(inputs_ok를 떨어뜨린 것)과 차속 가드
+constexpr uint32_t kLocalizationInvalidAccel = 1U << 0;
+constexpr uint32_t kLocalizationInvalidGyro = 1U << 1;
+constexpr uint32_t kLocalizationInvalidCamera = 1U << 2;
+constexpr uint32_t kLocalizationCameraGuarded = 1U << 3;
 
 struct LocalizationState {
     uint64_t timestamp_ns = 0;             // 추정 시각 = 마지막 IMU 샘플 시각(CLOCK_BOOTTIME)
@@ -417,7 +422,7 @@ struct LocalizationState {
     int32_t lag_valid_blocks = 0;
     int32_t lag_cal_perc = 0;
     uint32_t lag_points = 0;               // 창 안의 조건 만족 점 수
-    uint32_t reserved = 0;
+    uint32_t input_flags = 0;              // kLocalizationInvalid*, kLocalizationCameraGuarded
 };
 static_assert(sizeof(LocalizationState) == 128, "LocalizationState layout is shared with the recording reader");
 

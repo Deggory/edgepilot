@@ -91,6 +91,14 @@ struct LivePoseEstimate {
     bool sensors_ok = false;
 };
 
+/* 입력별 받음·거부 누적 수(사유별). locationd 로그와 재생 도구가 어느 입력이 inputs_ok를
+ * 떨어뜨리는지 보는 데 쓴다. */
+struct LocationInputCounters {
+    uint64_t accel_ok = 0, accel_timestamp = 0, accel_sanity = 0, accel_filter = 0;
+    uint64_t gyro_ok = 0, gyro_timestamp = 0, gyro_sanity = 0, gyro_cross_check = 0, gyro_filter = 0;
+    uint64_t camera_ok = 0, camera_timestamp = 0, camera_sanity = 0, camera_filter = 0, camera_speed_guard = 0;
+};
+
 /* locationd.LocationEstimator + main 루프의 입력 검사. 입력은 시각 순서로 넣어야 한다
  * (카메라 주행거리는 캡처 시각을 주면 내부에서 0.1초 당겨 되감아 넣는다). */
 class LocationEstimator {
@@ -99,7 +107,14 @@ public:
 
     /* 보드 IMU 한 샘플(칩 좌표 그대로). 칩 축(y 위, z 뒤, x 오른쪽)을 기기 좌표계로 돌린다. */
     void handle_imu(double t, const float accel_chip[3], const float gyro_chip[3]);
-    void handle_car_speed(double speed_mps) { car_speed_ = std::fabs(speed_mps); }
+    /* 차속(CAN). valid면 카메라 주행거리를 차속과 대조한다(상류에 없는 가드: 정차 중 모델이
+     * 가짜 움직임을 내면 자이로 교차검사가 자이로를 버리고 자세·바이어스가 틀어진다). */
+    void handle_car_speed(double t, double speed_mps, bool valid)
+    {
+        car_speed_ = std::fabs(speed_mps);
+        car_speed_t_ = t;
+        car_speed_valid_ = valid;
+    }
     // 온라인 캘리브레이션 rpy(보정 → 기기 회전)
     void handle_calibration(const double rpy[3]);
     /* 모델 pose(보정 좌표계). t_capture는 근거 프레임의 센서 캡처 시각. */
@@ -108,6 +123,10 @@ public:
 
     LivePoseEstimate estimate(double now) const;
     const PoseKalman &filter() const { return kf_; }
+    const LocationInputCounters &counters() const { return counters_; }
+    // 0 가속도, 1 자이로, 2 카메라: 거부 누적이 한도를 넘었으면 해당 비트
+    uint32_t invalid_service_mask() const;
+    bool camera_guarded() const { return camera_guarded_; }
 
     static constexpr double kCamOdoPoseDelay = 0.1;
 
@@ -118,7 +137,13 @@ private:
     void finite_check(double t);
 
     PoseKalman kf_;
+    bool car_speed_ok(double t) const;
+
     double car_speed_ = 0.0;
+    double car_speed_t_ = -1.0;
+    bool car_speed_valid_ = false;
+    bool camera_guarded_ = false;  // 마지막 카메라 관측이 차속 가드로 빠졌다
+    LocationInputCounters counters_;
     std::array<double, 9> device_from_calib_{1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::array<double, 2> camodo_yawrate_{0.0, 10.0};  // 평균, 표준편차
     std::array<double, 40> posenet_stds_{};

@@ -48,7 +48,7 @@ int main(int argc, char **argv)
     std::FILE *csv = std::fopen(argv[1], "w");
     if (!csv) return 1;
     std::fprintf(csv, "t,v,can_yaw_right,loc_yaw_right,loc_yaw_std,loc_roll,loc_pitch,flags,loc_vx,"
-                      "lag_status,lateral_delay,lag_estimate,lag_std,lag_blocks,lag_points\n");
+                      "lag_status,lateral_delay,lag_estimate,lag_std,lag_blocks,lag_points,input_flags\n");
 
     LocalizationPipeline pipeline;
     VehicleCanState vehicle{};
@@ -100,11 +100,11 @@ int main(int argc, char **argv)
                 const double v = (vehicle.wheel_speed_rl_kph + vehicle.wheel_speed_rr_kph) / 7.2;
                 // K7 ESP12 요레이트는 제어 관례와 반대(왼쪽 양수)
                 const double can_yaw = -vehicle.yaw_rate_rad_s;
-                std::fprintf(csv, "%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%.6f,%u,%.3f,%u,%.3f,%.3f,%.3f,%d,%u\n",
+                std::fprintf(csv, "%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%.6f,%u,%.3f,%u,%.3f,%.3f,%.3f,%d,%u,%u\n",
                              o.timestamp_ns * 1e-9, v, can_yaw, o.angular_velocity_calib[2],
                              o.angular_velocity_calib_std[2], o.orientation_calib[0], o.orientation_calib[1], o.flags,
                              o.velocity_device[0], o.lag_status, o.lateral_delay_s, o.lag_estimate_s,
-                             o.lag_estimate_std_s, o.lag_valid_blocks, o.lag_points);
+                             o.lag_estimate_std_s, o.lag_valid_blocks, o.lag_points, o.input_flags);
                 const uint32_t ok = kLocalizationFilterValid | kLocalizationInputsOk | kLocalizationSensorsOk |
                                     kLocalizationPosenetOk;
                 if ((o.flags & ok) == ok && v > 5.0 && vehicle.yaw_rate_valid)
@@ -116,6 +116,14 @@ int main(int argc, char **argv)
     std::printf("outputs %ld\n", outputs);
     std::printf("yaw rate  locationd vs CAN (n=%.0f): corr %.4f  slope %.4f  mean diff %.5f rad/s\n", yaw_stats.n,
                 yaw_stats.corr(), yaw_stats.slope(), yaw_stats.mean_diff());
+    const LocationInputCounters &c = pipeline.estimator().counters();
+    std::printf("inputs: accel ok %llu rejected %llu | gyro ok %llu cross %llu other %llu | camera ok %llu "
+                "ts %llu sanity %llu filter %llu speed_guard %llu\n",
+                (unsigned long long)c.accel_ok, (unsigned long long)(c.accel_timestamp + c.accel_sanity + c.accel_filter),
+                (unsigned long long)c.gyro_ok, (unsigned long long)c.gyro_cross_check,
+                (unsigned long long)(c.gyro_timestamp + c.gyro_sanity + c.gyro_filter), (unsigned long long)c.camera_ok,
+                (unsigned long long)c.camera_timestamp, (unsigned long long)c.camera_sanity,
+                (unsigned long long)c.camera_filter, (unsigned long long)c.camera_speed_guard);
     const LateralLagOutput o = pipeline.lag().output();
     std::printf("lagd: valid blocks %d, status %u, lateral_delay %.3f s, estimate %.3f +- %.3f\n", o.valid_blocks,
                 static_cast<unsigned>(o.status), o.lateral_delay, o.estimate, o.estimate_std);

@@ -25,7 +25,7 @@ namespace {
 volatile sig_atomic_t g_stop = 0;
 
 constexpr uint64_t kPersistIntervalNs = 60'000'000'000ULL;
-constexpr uint64_t kLogIntervalNs = 30'000'000'000ULL;
+constexpr uint64_t kLogIntervalNs = 10'000'000'000ULL;
 
 std::string read_file(const std::string &path)
 {
@@ -85,6 +85,10 @@ int main()
     unsigned long long batches = 0, published = 0;
     std::string last_saved = lag_cache;
     LocalizationState last{};
+    LocationInputCounters last_counters;
+    const auto d = [](uint64_t now_count, uint64_t before) {
+        return static_cast<unsigned long long>(now_count - before);
+    };
 
     auto persist = [&]() {
         const std::string json = pipeline.lag().cache_json();
@@ -124,11 +128,27 @@ int main()
         if (now >= next_log_ns) {
             next_log_ns = now + kLogIntervalNs;
             std::fprintf(stderr,
-                         "locationd: batches=%llu published=%llu flags=0x%x yaw=%.4f roll=%.2fdeg "
-                         "lag status=%u delay=%.3f est=%.3f+-%.3f blocks=%d points=%u\n",
-                         batches, published, last.flags, last.angular_velocity_calib[2],
-                         last.orientation_calib[0] * 57.29578f, last.lag_status, last.lateral_delay_s,
-                         last.lag_estimate_s, last.lag_estimate_std_s, last.lag_valid_blocks, last.lag_points);
+                         "locationd: batches=%llu published=%llu flags=0x%x inputs=0x%x yaw=%.4f roll=%.2fdeg "
+                         "pitch=%.2fdeg v=%.1f lag status=%u delay=%.3f est=%.3f+-%.3f blocks=%d points=%u\n",
+                         batches, published, last.flags, last.input_flags, last.angular_velocity_calib[2],
+                         last.orientation_calib[0] * 57.29578f, last.orientation_calib[1] * 57.29578f,
+                         last.velocity_device[0], last.lag_status, last.lateral_delay_s, last.lag_estimate_s,
+                         last.lag_estimate_std_s, last.lag_valid_blocks, last.lag_points);
+            // 지난 로그 이후 입력별 받음/거부(사유별)
+            const LocationInputCounters &c = pipeline.estimator().counters();
+            const LocationInputCounters &p = last_counters;
+            std::fprintf(stderr,
+                         "locationd: inputs accel ok=%llu ts=%llu sanity=%llu filter=%llu | gyro ok=%llu ts=%llu "
+                         "sanity=%llu cross=%llu filter=%llu | camera ok=%llu ts=%llu sanity=%llu filter=%llu "
+                         "speed_guard=%llu\n",
+                         d(c.accel_ok, p.accel_ok), d(c.accel_timestamp, p.accel_timestamp),
+                         d(c.accel_sanity, p.accel_sanity), d(c.accel_filter, p.accel_filter),
+                         d(c.gyro_ok, p.gyro_ok), d(c.gyro_timestamp, p.gyro_timestamp),
+                         d(c.gyro_sanity, p.gyro_sanity), d(c.gyro_cross_check, p.gyro_cross_check),
+                         d(c.gyro_filter, p.gyro_filter), d(c.camera_ok, p.camera_ok),
+                         d(c.camera_timestamp, p.camera_timestamp), d(c.camera_sanity, p.camera_sanity),
+                         d(c.camera_filter, p.camera_filter), d(c.camera_speed_guard, p.camera_speed_guard));
+            last_counters = c;
         }
     }
     persist();

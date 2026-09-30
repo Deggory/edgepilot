@@ -798,12 +798,13 @@ LOCALIZATION_FIELDS = (
     ("angular_velocity_calib", "3f"), ("angular_velocity_calib_std", "3f"),
     ("velocity_device", "3f"), ("velocity_device_std", "3f"), ("acceleration_calib", "3f"),
     ("lateral_delay_s", "f"), ("lag_estimate_s", "f"), ("lag_estimate_std_s", "f"),
-    ("lag_valid_blocks", "i"), ("lag_cal_perc", "i"), ("lag_points", "I"), ("reserved", "I"),
+    ("lag_valid_blocks", "i"), ("lag_cal_perc", "i"), ("lag_points", "I"), ("input_flags", "I"),
 )
 LOCALIZATION_STATE = struct.Struct("<" + "".join(fmt for _, fmt in LOCALIZATION_FIELDS))
 LOCALIZATION_FLAGS = (  # ipc_messages.h kLocalization* 비트 순서
     "filter_valid", "inputs_ok", "sensors_ok", "posenet_ok", "calib_valid", "lag_restored",
 )
+LOCALIZATION_INPUT_FLAGS = ("accel_invalid", "gyro_invalid", "camera_invalid", "camera_guarded")
 
 
 def decode_localization_state(payload: bytes) -> Dict[str, Any]:
@@ -814,7 +815,8 @@ def decode_localization_state(payload: bytes) -> Dict[str, Any]:
         state[name] = values[:count] if count > 1 else values[0]
         del values[:count]
     state["flags"] = {name: bool(state["flags"] >> bit & 1) for bit, name in enumerate(LOCALIZATION_FLAGS)}
-    del state["reserved"]
+    state["input_flags"] = {name: bool(state["input_flags"] >> bit & 1)
+                            for bit, name in enumerate(LOCALIZATION_INPUT_FLAGS)}
     return state
 
 
@@ -1879,6 +1881,10 @@ HTML = """<!doctype html>
       const badges = [LAG_STATUS[s.lag_status] || [String(s.lag_status), "muted"],
         [`블록 ${s.lag_valid_blocks}/5`, s.lag_valid_blocks >= 5 ? "accent" : "muted"],
         poseOk ? ["자세 정상", "good"] : ["자세 무효", "bad"], ["섀도", "muted"]];
+      const inputs = s.input_flags;
+      for (const [key, label] of [["accel_invalid", "가속도 거부"], ["gyro_invalid", "자이로 거부"], ["camera_invalid", "카메라 거부"]])
+        if (inputs[key]) badges.push([label, "warn"]);
+      if (inputs.camera_guarded) badges.push(["카메라≠차속", "muted"]);
       if (loc.age_s > 2) badges.push([`${Math.round(loc.age_s)}초 전`, "bad"]);
       const ms = v => `${Math.round(v * 1000)} ms`;
       fillShell(shell, badges, [

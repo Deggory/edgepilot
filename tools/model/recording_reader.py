@@ -87,7 +87,7 @@ LOCALIZATION_STATE = np.dtype([
     ("velocity_device", "<f4", 3), ("velocity_device_std", "<f4", 3),
     ("acceleration_calib", "<f4", 3),
     ("lateral_delay_s", "<f4"), ("lag_estimate_s", "<f4"), ("lag_estimate_std_s", "<f4"),
-    ("lag_valid_blocks", "<i4"), ("lag_cal_perc", "<i4"), ("lag_points", "<u4"), ("reserved", "<u4"),
+    ("lag_valid_blocks", "<i4"), ("lag_cal_perc", "<i4"), ("lag_points", "<u4"), ("input_flags", "<u4"),
 ])
 assert LOCALIZATION_STATE.itemsize == 128
 

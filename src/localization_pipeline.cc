@@ -18,9 +18,9 @@ LocalizationPipeline::LocalizationPipeline(const LateralLagConfig &lag_config) :
 void LocalizationPipeline::on_control(const ControlState &control)
 {
     const double v = std::isfinite(control.ego_speed_kph) ? control.ego_speed_kph / 3.6 : 0.0;
-    estimator_.handle_car_speed(v);
     ControlSample s;
     s.t = static_cast<double>(control.timestamp_ns) * 1e-9;
+    estimator_.handle_car_speed(s.t, v, control.vehicle_fresh != 0 && std::isfinite(control.ego_speed_kph));
     s.active = control.active != 0;
     s.pressed = std::abs(control.driver_torque) > kSteeringPressedTorque;
     s.saturated = std::fabs(control.normalized_output) >= 0.999f;
@@ -142,5 +142,7 @@ bool LocalizationPipeline::on_imu(const ImuBatch &batch, double now_s, Localizat
     o.lag_valid_blocks = lag.valid_blocks;
     o.lag_cal_perc = lag.cal_perc;
     o.lag_points = static_cast<uint32_t>(lag_.okay_points());
+    o.input_flags = estimator_.invalid_service_mask() |
+                    (estimator_.camera_guarded() ? kLocalizationCameraGuarded : 0U);
     return true;
 }

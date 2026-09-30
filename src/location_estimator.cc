@@ -25,6 +25,13 @@ constexpr double kCamOdoTransStdMult = 4.0;
 constexpr double kImuFrequency = 104.0;         // imud ODR
 constexpr double kCameraFrequency = 20.0;
 constexpr double kSensorAliveS = 0.1;
+// 차속 가드(상류에 없음): 카메라 전진 속도와 CAN 차속 차이가 이보다 크면 관측을 쓰지 않는다.
+// 2026-09-27 재생에서 모델/바퀴 속도 비 중앙값 0.967.
+constexpr double kCamSpeedErrAbs = 2.0;     // m/s
+constexpr double kCamSpeedErrRel = 0.3;
+constexpr double kStoppedSpeed = 0.3;       // m/s, 이하면 정차
+constexpr double kStoppedMaxRotation = 0.05;  // rad/s, 정차 중 카메라 회전 한도
+constexpr double kCarSpeedMaxAgeS = 1.0;
 
 using Vec3 = PoseKalman::Vec3;
 using Mat3 = std::array<double, 9>;
@@ -377,6 +384,8 @@ void LocationEstimator::handle_imu(double t, const float accel_chip[3], const fl
     last_imu_t_ = t;
 
     if (!timestamp_ok(t)) {
+        ++counters_.gyro_timestamp;
+        ++counters_.accel_timestamp;
         note_result(kGyro, false);
         note_result(kAccel, false);
         return;
@@ -385,16 +394,22 @@ void LocationEstimator::handle_imu(double t, const float accel_chip[3], const fl
     const bool gyro_valid = std::fabs((gyro[2] - bias_z) - camodo_yawrate_[0]) <
                             kYawrateCrossErrCheckFactor * camodo_yawrate_[1];
     if (norm(gyro) >= kRotationSanityCheck || !gyro_valid) {
+        ++(gyro_valid ? counters_.gyro_sanity : counters_.gyro_cross_check);
         note_result(kGyro, false);
     } else {
-        note_result(kGyro, kf_.predict_and_observe(t, PoseKalman::Kind::Gyro, gyro,
-                                                   PoseKalman::default_noise(PoseKalman::Kind::Gyro)));
+        const bool ok = kf_.predict_and_observe(t, PoseKalman::Kind::Gyro, gyro,
+                                                PoseKalman::default_noise(PoseKalman::Kind::Gyro));
+        ++(ok ? counters_.gyro_ok : counters_.gyro_filter);
+        note_result(kGyro, ok);
     }
     if (norm(accel) >= kAccelSanityCheck) {
+        ++counters_.accel_sanity;
         note_result(kAccel, false);
     } else {
-        note_result(kAccel, kf_.predict_and_observe(t, PoseKalman::Kind::Accel, accel,
-                                                    PoseKalman::default_noise(PoseKalman::Kind::Accel)));
+        const bool ok = kf_.predict_and_observe(t, PoseKalman::Kind::Accel, accel,
+                                                PoseKalman::default_noise(PoseKalman::Kind::Accel));
+        ++(ok ? counters_.accel_ok : counters_.accel_filter);
+        note_result(kAccel, ok);
     }
     finite_check(t);
 }
@@ -411,6 +426,7 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
 {
     const double t = t_capture - kCamOdoPoseDelay;
     if (!timestamp_ok(t)) {
+        ++counters_.camera_timestamp;
         note_result(kCamera, false);
         return;
     }
@@ -423,9 +439,23 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
         *std::min_element(trans_calib_std.begin(), trans_calib_std.end()) <= kMinStdSanityCheck ||
         norm(rot_calib_std) > 10 * kRotationSanityCheck || norm(trans_calib_std) > 10 * kTransSanityCheck ||
         !std::isfinite(norm(rot_device) + norm(trans_device))) {
+        ++counters_.camera_sanity;
         note_result(kCamera, false);
         return;
     }
+    /* 차속 가드: 모델이 차속과 다른 움직임을 말하면(정차 중 가짜 움직임 등) 관측을 버린다.
+     * 입력 이상으로 세지 않고(inputs_ok 유지), 교차검사 기준도 풀어 자이로가 버려지지 않게 한다. */
+    if (car_speed_ok(t)) {
+        const double speed_err = std::fabs(static_cast<double>(trans[0]) - car_speed_);
+        const bool fake_rotation = car_speed_ <= kStoppedSpeed && norm(rot_device) > kStoppedMaxRotation;
+        if (speed_err > std::max(kCamSpeedErrAbs, kCamSpeedErrRel * car_speed_) || fake_rotation) {
+            ++counters_.camera_speed_guard;
+            camera_guarded_ = true;
+            camodo_yawrate_ = {0.0, 10.0};
+            return;
+        }
+    }
+    camera_guarded_ = false;
     seen_camera_ = true;
     std::rotate(posenet_stds_.begin(), posenet_stds_.begin() + 1, posenet_stds_.end());
     posenet_stds_.back() = trans_calib_std[0];
@@ -444,8 +474,22 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
     const bool ok_trans =
         kf_.predict_and_observe(t, PoseKalman::Kind::CameraTranslation, trans_device, trans_noise);
     camodo_yawrate_ = {rot_device[2], rot_device_std[2]};
+    ++(ok_rot && ok_trans ? counters_.camera_ok : counters_.camera_filter);
     note_result(kCamera, ok_rot && ok_trans);
     finite_check(t);
+}
+
+bool LocationEstimator::car_speed_ok(double t) const
+{
+    return car_speed_valid_ && car_speed_t_ >= 0.0 && std::fabs(t - car_speed_t_) <= kCarSpeedMaxAgeS;
+}
+
+uint32_t LocationEstimator::invalid_service_mask() const
+{
+    uint32_t mask = 0;
+    for (int s = 0; s < kServiceCount; ++s)
+        if (invalid_[s] >= invalid_threshold_[s]) mask |= 1U << s;
+    return mask;
 }
 
 LivePoseEstimate LocationEstimator::estimate(double now) const

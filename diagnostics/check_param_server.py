@@ -25,6 +25,8 @@ from scripts.param_server import (
     LOCALIZATION_FIELDS,
     LOCALIZATION_STATE,
     LocalizationReader,
+    LOCALIZATION_FLAGS,
+    LOCALIZATION_INPUT_FLAGS,
     PARAM_METADATA,
     ParamStore,
     boottime_ns,
@@ -355,7 +357,10 @@ class LocalizationStateTest(unittest.TestCase):
         size = int(re.search(r"sizeof\(LocalizationState\) == (\d+)", source).group(1))
         self.assertEqual(LOCALIZATION_STATE.size, size)
         flags = re.findall(r"constexpr uint32_t kLocalization(\w+) = 1U << (\d+);", source)
-        self.assertEqual([int(bit) for _, bit in flags], list(range(len(flags))))
+        state_flags = [int(bit) for name, bit in flags if not name.startswith(("Invalid", "CameraGuarded"))]
+        input_flags = [int(bit) for name, bit in flags if name.startswith(("Invalid", "CameraGuarded"))]
+        self.assertEqual(state_flags, list(range(len(LOCALIZATION_FLAGS))))
+        self.assertEqual(input_flags, list(range(len(LOCALIZATION_INPUT_FLAGS))))
 
     def test_reader_decodes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -363,7 +368,7 @@ class LocalizationStateTest(unittest.TestCase):
             reader = LocalizationReader(str(path))
             self.assertFalse(reader.snapshot({})["available"])
             fields = []
-            values = {"flags": 0b100001, "lag_status": 1, "lateral_delay_s": 0.42, "lag_valid_blocks": 6,
+            values = {"flags": 0b100001, "lag_status": 1, "input_flags": 0b1010, "lateral_delay_s": 0.42, "lag_valid_blocks": 6,
                       "angular_velocity_calib": [0.0, 0.0, 0.1]}
             for name, fmt in LOCALIZATION_FIELDS:
                 default = [0.0] * int(fmt[:-1]) if len(fmt) > 1 else 0
@@ -381,6 +386,8 @@ class LocalizationStateTest(unittest.TestCase):
             self.assertAlmostEqual(state["angular_velocity_calib"][2], 0.1, places=5)
             self.assertTrue(state["flags"]["filter_valid"] and state["flags"]["lag_restored"])
             self.assertFalse(state["flags"]["inputs_ok"])
+            self.assertTrue(state["input_flags"]["gyro_invalid"] and state["input_flags"]["camera_guarded"])
+            self.assertFalse(state["input_flags"]["camera_invalid"])
 
     def test_page_has_lag_card(self):
         self.assertIn("lagd · 조향 지연", HTML)

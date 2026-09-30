@@ -134,9 +134,9 @@ TEST(Localization, PoseKalmanTracksYawRate)
     const float stds[3] = {0.1f, 0.1f, 0.1f};
     const double calib[3] = {0, 0, 0};
     loc.handle_calibration(calib);
-    loc.handle_car_speed(v);
     for (int i = 0; i < 104 * 30; ++i) {
         const double t = 20.0 + i / 104.0;
+        loc.handle_car_speed(t, v, true);
         loc.handle_imu(t, accel_chip, gyro_chip);
         if (i % 5 == 0) loc.handle_camera_odometry(t + 0.05, trans, rot, stds, stds);
     }
@@ -200,6 +200,7 @@ PipelineRun run_pipeline(double batch_s, double true_lag, double seconds)
             ControlState cs{};
             cs.timestamp_ns = static_cast<uint64_t>(next_control * 1e9);
             cs.active = 1;
+            cs.vehicle_fresh = 1;
             cs.ego_speed_kph = static_cast<float>(v * 3.6);
             cs.desired_curvature = static_cast<float>(kappa(next_control));
             pipeline.on_control(cs);
@@ -250,7 +251,51 @@ TEST(Localization, PipelineOutputsPoseAndLagIndependentOfImuBatching)
         // 묶음 주기와 무관하게 점은 20 Hz 격자라 지연이 같아야 한다
         EXPECT_NEAR(run.lag.lateral_delay, 0.3, 0.03);
         EXPECT_EQ(run.last.lag_valid_blocks, run.lag.valid_blocks);
+        EXPECT_EQ(run.last.input_flags, 0U) << "맞는 카메라는 차속 가드에 걸리지 않는다";
     }
+}
+
+/* 정차 중 모델이 가짜 움직임(2026-09-29 책상: 전진 15 m/s, 요 −0.25 rad/s)을 내도, CAN 차속이
+ * 0이면 카메라를 쓰지 않아 자세가 IMU 중력 기울기에 머물고 입력도 정상으로 남는다.
+ * 차속을 모르면(상류와 같이) 가드가 없고 자세가 틀어진다. */
+TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
+{
+    const float accel[3] = {0.16f, 9.76f, 0.08f}, gyro[3] = {0.0396f, 0.0157f, -0.0222f};  // 보드 책상 실측
+    const float rot_std[3] = {0.0009f, 0.0009f, 0.0009f}, trans_std[3] = {0.05f, 0.05f, 0.05f};
+    const double calib[3] = {0, 0, 0};
+    auto run = [&](bool speed_known, double *roll, double *pitch, bool *inputs_ok, uint64_t *guarded) {
+        LocationEstimator loc;
+        loc.handle_calibration(calib);
+        for (int i = 0; i < 104 * 240; ++i) {
+            const double t = 10.0 + i / 104.0;
+            const bool fake = t >= 70.0 && t < 190.0;
+            loc.handle_car_speed(t, 0.0, speed_known);
+            loc.handle_imu(t, accel, gyro);
+            if (i % 5 == 0) {
+                const float trans[3] = {fake ? 15.0f : 0.0f, 0, 0};
+                const float rot[3] = {fake ? 0.015f : 0.0f, fake ? 0.029f : 0.0f, fake ? -0.25f : 0.0f};
+                loc.handle_camera_odometry(t + 0.1, trans, rot, trans_std, rot_std);
+            }
+        }
+        const LivePoseEstimate p = loc.estimate(10.0 + 240.0);
+        *roll = p.orientation_ned[0] * 180.0 / kPi;
+        *pitch = p.orientation_ned[1] * 180.0 / kPi;
+        *inputs_ok = p.inputs_ok;
+        *guarded = loc.counters().camera_speed_guard;
+    };
+    // 칩 가속도의 중력 기울기: 기기 (−z, x, −y) = (−0.08, 0.16, −9.76)
+    const double true_roll = std::atan2(-0.16, 9.76) * 180.0 / kPi, true_pitch = std::asin(-0.08 / 9.81) * 180.0 / kPi;
+    double roll, pitch;
+    bool inputs_ok;
+    uint64_t guarded;
+    run(true, &roll, &pitch, &inputs_ok, &guarded);
+    EXPECT_NEAR(roll, true_roll, 0.5);
+    EXPECT_NEAR(pitch, true_pitch, 0.5);
+    EXPECT_TRUE(inputs_ok);
+    EXPECT_NEAR(static_cast<double>(guarded), 120.0 * 104.0 / 5.0, 5.0);  // 가짜 구간의 카메라 관측 전부
+    run(false, &roll, &pitch, &inputs_ok, &guarded);
+    EXPECT_EQ(guarded, 0U);
+    EXPECT_GT(std::hypot(roll - true_roll, pitch - true_pitch), 3.0) << "가드가 없으면 틀어진다(책상 현상)";
 }
 
 }  // namespace
