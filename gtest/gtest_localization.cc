@@ -108,6 +108,7 @@ TEST(Localization, PoseKalmanConvergesAtRest)
     const float zero[3] = {0, 0, 0}, small[3] = {0.05f, 0.05f, 0.05f};
     const double calib[3] = {0, 0, 0};
     loc.handle_calibration(calib);
+    loc.set_imu_extrinsic(calib);  // 칩 축만 본다
     for (int i = 0; i < 104 * 60; ++i) {
         const double t = 10.0 + i / 104.0;
         loc.handle_imu(t, accel_chip, gyro_chip);
@@ -134,6 +135,7 @@ TEST(Localization, PoseKalmanTracksYawRate)
     const float stds[3] = {0.1f, 0.1f, 0.1f};
     const double calib[3] = {0, 0, 0};
     loc.handle_calibration(calib);
+    loc.set_imu_extrinsic(calib);
     for (int i = 0; i < 104 * 30; ++i) {
         const double t = 20.0 + i / 104.0;
         loc.handle_car_speed(t, v, true);
@@ -266,6 +268,7 @@ TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
     auto run = [&](bool speed_known, double *roll, double *pitch, bool *inputs_ok, uint64_t *guarded) {
         LocationEstimator loc;
         loc.handle_calibration(calib);
+        loc.set_imu_extrinsic(calib);
         for (int i = 0; i < 104 * 240; ++i) {
             const double t = 10.0 + i / 104.0;
             const bool fake = t >= 70.0 && t < 190.0;
@@ -296,6 +299,41 @@ TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
     run(false, &roll, &pitch, &inputs_ok, &guarded);
     EXPECT_EQ(guarded, 0U);
     EXPECT_GT(std::hypot(roll - true_roll, pitch - true_pitch), 3.0) << "가드가 없으면 틀어진다(책상 현상)";
+}
+
+/* 외부 회전: 칩이 카메라 대비 앞 2.2°·오른쪽 1.0° 기운 보드를 수평에 두면, 원시 가속도는 그만큼
+ * 기운 중력을 보이지만 기본 외부 회전을 적용한 추정은 수평이다. */
+TEST(Localization, ImuExtrinsicLevelsTiltedChip)
+{
+    const double r = LocationEstimator::kDefaultImuExtrinsicRpy[0], p = LocationEstimator::kDefaultImuExtrinsicRpy[1];
+    const double g = 9.81;
+    // 기기(수평) 중력 측정 (0,0,−g)을 IMU 좌표로: imu = device_from_imuᵀ · device
+    const double cr = std::cos(r), sr = std::sin(r), cp = std::cos(p), sp = std::sin(p);
+    // euler_rotate(r,p,0)ᵀ의 셋째 열 × (−g)
+    const double ix = -g * (-sp), iy = -g * (cp * sr), iz = -g * (cp * cr);
+    // 기기 → 칩: chip = (y, −z, −x)
+    const float accel_chip[3] = {static_cast<float>(iy), static_cast<float>(-iz), static_cast<float>(-ix)};
+    const float zero[3] = {0, 0, 0}, small[3] = {0.05f, 0.05f, 0.05f};
+    const double calib[3] = {0, 0, 0};
+    for (const bool apply : {true, false}) {
+        LocationEstimator loc;
+        loc.handle_calibration(calib);
+        if (!apply) loc.set_imu_extrinsic(calib);
+        for (int i = 0; i < 104 * 60; ++i) {
+            const double t = 10.0 + i / 104.0;
+            loc.handle_imu(t, accel_chip, zero);
+            if (i % 5 == 0) loc.handle_camera_odometry(t + 0.02, zero, zero, small, small);
+        }
+        const LivePoseEstimate e = loc.estimate(70.0);
+        SCOPED_TRACE(apply);
+        if (apply) {
+            EXPECT_NEAR(e.orientation_ned[0], 0.0, 0.1 * kPi / 180.0);
+            EXPECT_NEAR(e.orientation_ned[1], 0.0, 0.1 * kPi / 180.0);
+        } else {
+            EXPECT_NEAR(e.orientation_ned[0], r, 0.15 * kPi / 180.0) << "보정 없으면 칩 기울기가 그대로";
+            EXPECT_NEAR(e.orientation_ned[1], p, 0.15 * kPi / 180.0);
+        }
+    }
 }
 
 }  // namespace

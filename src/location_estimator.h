@@ -117,6 +117,10 @@ public:
     }
     // 온라인 캘리브레이션 rpy(보정 → 기기 회전)
     void handle_calibration(const double rpy[3]);
+    /* IMU 외부 회전(칩 축을 기기 축으로 바꾼 뒤, 기기 ← IMU) rpy(rad). 기본값은 보드 실측
+     * (kDefaultImuExtrinsicRpy). 검사는 0으로 두고 칩 축만 본다. */
+    void set_imu_extrinsic(const double rpy[3]);
+    static const double kDefaultImuExtrinsicRpy[3];
     /* 모델 pose(보정 좌표계). t_capture는 근거 프레임의 센서 캡처 시각. */
     void handle_camera_odometry(double t_capture, const float trans[3], const float rot[3],
                                 const float trans_std[3], const float rot_std[3]);
@@ -145,6 +149,7 @@ private:
     bool camera_guarded_ = false;  // 마지막 카메라 관측이 차속 가드로 빠졌다
     LocationInputCounters counters_;
     std::array<double, 9> device_from_calib_{1, 0, 0, 0, 1, 0, 0, 0, 1};
+    std::array<double, 9> device_from_imu_{1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::array<double, 2> camodo_yawrate_{0.0, 10.0};  // 평균, 표준편차
     std::array<double, 40> posenet_stds_{};
     std::array<double, kServiceCount> invalid_{};

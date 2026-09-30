@@ -342,8 +342,18 @@ bool PoseKalman::predict_and_observe(double t, Kind kind, const Vec3 &z, const V
 
 // ---------------------------------------------------------------- LocationEstimator
 
+/* MaixCAM2 IMU 칩이 카메라 대비 기울어 붙어 있다(2026-09-27, 2026-10-01 녹화의 선회 중 자이로
+ * 회전축 대 카메라 pose 회전축, tools/calib/estimate_imu_extrinsic.py):
+ *   pitch(IMU 앞이 들림): 축 기울기 차 +2.15/+2.37°, Wahba +1.96/+2.22° → +2.2°
+ *   roll(IMU 오른쪽이 내려감): +0.20/+1.38°, Wahba +0.57/+1.81° → +1.0°(모델 pose의 롤 성분
+ *     오차가 커서 ±0.6° 정도 불확실)
+ *   yaw는 수직축 선회로 관측되지 않아 0.
+ * 보정하지 않으면 평지에서 roll·pitch가 약 +1°/+2.2°로 나온다. */
+const double LocationEstimator::kDefaultImuExtrinsicRpy[3] = {1.0 * kPi / 180.0, 2.2 * kPi / 180.0, 0.0};
+
 LocationEstimator::LocationEstimator() : kf_(kMaxFilterRewindTime)
 {
+    set_imu_extrinsic(kDefaultImuExtrinsicRpy);
     posenet_stds_.fill(kPosenetStdInitial);
     const double freq[kServiceCount] = {kImuFrequency, kImuFrequency, kCameraFrequency};
     for (int s = 0; s < kServiceCount; ++s) {
@@ -378,8 +388,9 @@ void LocationEstimator::handle_imu(double t, const float accel_chip[3], const fl
     /* MaixCAM2 LSM6DSOW 칩 축: y 위, z 뒤, x 오른쪽(2026-09-27 녹화로 확인: 정차 중 중력이 +y,
      * 가속 때 −z, 좌회전 원심 반응이 −x, 자이로 y가 CAN 요레이트와 상관 0.93·배율 1.00).
      * 기기 좌표계(x 앞, y 오른쪽, z 아래)로: (−z, x, −y). */
-    const Vec3 gyro = {-gyro_chip[2], gyro_chip[0], -gyro_chip[1]};
-    const Vec3 accel = {-accel_chip[2], accel_chip[0], -accel_chip[1]};
+    // 그 뒤 칩이 카메라 대비 기운 만큼 돌린다(set_imu_extrinsic).
+    const Vec3 gyro = mul(device_from_imu_, Vec3{-gyro_chip[2], gyro_chip[0], -gyro_chip[1]});
+    const Vec3 accel = mul(device_from_imu_, Vec3{-accel_chip[2], accel_chip[0], -accel_chip[1]});
     seen_imu_ = true;
     last_imu_t_ = t;
 
@@ -412,6 +423,11 @@ void LocationEstimator::handle_imu(double t, const float accel_chip[3], const fl
         note_result(kAccel, ok);
     }
     finite_check(t);
+}
+
+void LocationEstimator::set_imu_extrinsic(const double rpy[3])
+{
+    device_from_imu_ = euler_rotate(rpy[0], rpy[1], rpy[2]);
 }
 
 void LocationEstimator::handle_calibration(const double rpy[3])
