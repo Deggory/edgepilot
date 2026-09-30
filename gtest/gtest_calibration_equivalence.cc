@@ -8,6 +8,7 @@
 #include "calibration_online.h"
 
 #include <gtest/gtest.h>
+#include <sys/stat.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -570,6 +571,59 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
     {
         CalibrationService restarted(auto_config);
         EXPECT_EQ(restarted.snapshot().valid_blocks, 0) << "재시작해도 예전 값을 다시 읽지 않는다";
+    }
+
+    unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
+    unsetenv("EDGEPILOT_PARAMS_DIR");
+    std::remove(kTestCalibration);
+}
+
+/* 초기화 뒤 다시 수렴한 보정은 저장된다(2026-10-01: 초기화의 삭제 표시가 남아 저장 대신 파일을
+ * 지웠고, 재시작하면 저장소 기본값이 복원돼 laneless가 0.2 m 치우쳤다). */
+TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
+{
+    // ctest가 병렬로 돌리므로 ResetRequestRecalibratesFromScratch와 다른 디렉터리를 쓴다.
+    constexpr const char *kTestParamsDir = "params/work_reset_save";
+    constexpr const char *kTestCalibration = "params/work_reset_save/calibration.json";
+    constexpr const char *kResetRequest = "params/work_reset_save/calibration_reset";
+    mkdir("params", 0755);
+    mkdir(kTestParamsDir, 0755);
+    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
+    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", kResetRequest, 1);
+    std::remove(kResetRequest);
+
+    AppConfig manual_config;
+    manual_config.manual_calibration = true;
+    manual_config.manual_pitch = deg_to_rad(2.3f);
+    { CalibrationService seed(manual_config); }
+
+    AppConfig auto_config;
+    auto_config.calibration_auto = true;
+    auto_config.manual_calibration = false;
+    {
+        CalibrationService service(auto_config);
+        const ParsedModelOutput no_pose{};
+        service.update(no_pose, 0.0f);
+        std::FILE *request = std::fopen(kResetRequest, "w");
+        ASSERT_NE(request, nullptr);
+        std::fclose(request);
+        for (int i = 0; i < 12 && service.snapshot().valid_blocks != 0; ++i) {
+            struct timespec pause = {0, 100'000'000};
+            nanosleep(&pause, nullptr);
+            service.update(no_pose, 0.0f);
+        }
+        ASSERT_EQ(service.snapshot().valid_blocks, 0);
+        // 직진 5블록(500프레임)으로 다시 보정 완료
+        ParsedModelOutput straight{};
+        straight.has_pose = true;
+        straight.pose = make_pose();
+        for (int i = 0; i < 5 * 100; ++i) service.update(straight, 20.0f);
+        ASSERT_EQ(static_cast<int>(service.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated));
+    }  // 저장 스레드가 끝날 때까지 기다린다
+    EXPECT_EQ(access(kTestCalibration, F_OK), 0) << "다시 수렴한 보정을 저장한다";
+    {
+        CalibrationService restarted(auto_config);
+        EXPECT_EQ(restarted.snapshot().valid_blocks, 5) << "재시작하면 새 보정으로 시작한다";
     }
 
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");

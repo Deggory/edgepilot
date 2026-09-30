@@ -313,6 +313,9 @@ void CalibrationService::maybe_persist(const OnlineCalibrator::UpdateResult &res
         std::lock_guard<std::mutex> lock(persist_mutex_);
         copy_rpy(persist_job_.rpy, online_rpy_);
         persist_job_.snapshot = result.snapshot;
+        // 초기화가 남긴 삭제 표시를 지운다. 두면 초기화 뒤 저장이 매번 파일 삭제가 되어,
+        // 재시작하면 저장소 기본값(upload_to_board.sh가 빈 자리에 채움)으로 돌아간다.
+        persist_job_.remove = false;
         persist_pending_ = true;
     }
     persist_cv_.notify_one();
