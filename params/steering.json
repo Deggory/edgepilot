@@ -24,5 +24,6 @@
   "min_steer_speed_mps": 1.0,
   "live_bank_compensation": true,
   "use_live_vehicle_params": true,
-  "use_live_torque_params": true
+  "use_live_torque_params": true,
+  "use_live_delay": false
 }

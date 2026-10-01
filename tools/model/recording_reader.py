@@ -104,7 +104,7 @@ LEARNER_STATE = np.dtype([
     ("total_bucket_points", "<i4"), ("cal_perc", "<i4"),
     ("road_bank_lat_accel", "<f4"),
     ("prior_steer_ratio", "<f4"), ("prior_lat_accel_factor", "<f4"), ("prior_friction", "<f4"),
-    ("bucket_points", "<i2", (8,)), ("reserved", "<u4"),
+    ("bucket_points", "<i2", (8,)), ("plan_delay_s", "<f4"),
 ])
 
 # The head of ModelState (frame_id ..). Only the fields these tools need are

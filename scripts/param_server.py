@@ -202,6 +202,15 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "increase": "켜면 학습값을 씁니다.",
             "decrease": "끄면 조향 탭의 수동 토크 값을 씁니다.",
         },
+        "use_live_delay": {
+            "label": "lagd 조향 지연 사용",
+            "section": "실시간 학습",
+            "description": "주행 중 추정한 조향 지연(목표 곡률 → 실제 요레이트, openpilot lagd)을 "
+            "목표 곡률을 읽는 경로 지연에 씁니다. 추정이 확정(5블록)된 뒤에만 적용되고, 그 전에는 "
+            "steer_actuator_delay를 씁니다. 토크 컨트롤러·torqued는 계속 steer_actuator_delay를 씁니다.",
+            "increase": "켜면 확정된 추정 지연을 씁니다(길수록 커브를 일찍 꺾습니다).",
+            "decrease": "끄면 steer_actuator_delay를 씁니다.",
+        },
         "torque_lat_accel_offset": param_meta(
             "횡가속 편향 보정", "차량 중심 보정", "m/s²", 0.01, -1.0, 1.0,
             "장착 롤 오차 등이 만드는 상수 횡가속 편향을 feed-forward에서 "
@@ -624,13 +633,13 @@ LEARNER_FIELDS = (
     ("decay", "f"), ("max_resets", "f"), ("total_bucket_points", "i"), ("cal_perc", "i"),
     ("road_bank_lat_accel", "f"),
     ("prior_steer_ratio", "f"), ("prior_lat_accel_factor", "f"), ("prior_friction", "f"),
-    ("bucket_points", "8h"), ("reserved", "I"),
+    ("bucket_points", "8h"), ("plan_delay_s", "f"),
 )
 LEARNER_STATE = struct.Struct("<" + "".join(fmt for _, fmt in LEARNER_FIELDS))
 LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
     "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
-    "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored",
+    "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored", "use_delay",
 )
 LEARNER_HISTORY_S = 600
 GRAVITY = 9.81
@@ -644,7 +653,6 @@ def decode_learner_state(payload: bytes) -> Dict[str, Any]:
         state[name] = values[:count] if count > 1 else values[0]
         del values[:count]
     state["flags"] = {name: bool(state["flags"] >> bit & 1) for bit, name in enumerate(LEARNER_FLAGS)}
-    del state["reserved"]
     return state
 
 
@@ -779,6 +787,7 @@ class LearnerMonitor:
             "fixed": fixed_lateral_values(steering),
             "use_live_vehicle_params": steering.get("use_live_vehicle_params"),
             "use_live_torque_params": steering.get("use_live_torque_params"),
+            "use_live_delay": steering.get("use_live_delay"),
         }
         if latest is not None:
             _, stamp, state = latest
@@ -1206,7 +1215,7 @@ HTML = """<!doctype html>
       learners: "paramsd·torqued는 항상 계산하고 기록합니다. 제어에는 스위치를 켠 쪽만 씁니다. 1초마다 갱신하고 추이는 최근 10분입니다.",
     };
     // 학습 스위치는 학습값을 보면서 켜도록 실시간 학습 탭에만 둔다
-    const hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params"]};
+    const hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params", "use_live_delay"]};
 
     function setConnection(pids, saved = false, recording = false) {
       const online = pids.length > 0;
@@ -1525,6 +1534,8 @@ HTML = """<!doctype html>
         notes.push(["torqued 학습값 사용 중 · 사전값과 허용 폭(배율 ±30%, 마찰 ±50%)으로만 쓰입니다.", "prior"]);
       if (key === "torque_lat_accel_factor" || key === "torque_friction")
         notes.push(["바꾸면 controlsd 다음 시작 때 torqued 학습이 처음부터 다시 시작됩니다.", "reset"]);
+      if (steering.use_live_delay === true && key === "steer_actuator_delay")
+        notes.push(["lagd 지연 사용 중 · 추정이 확정되면 경로 지연에는 추정값을 쓰고, 이 값은 확정 전 대체값과 토크 컨트롤러·torqued에 쓰입니다.", "prior"]);
       return notes;
     }
 
@@ -1861,9 +1872,18 @@ HTML = """<!doctype html>
 
     function lagShell() {
       const card = el("article", "live-card");
+      card.dataset.group = "steering";
       const head = el("div", "live-head");
       const badges = el("span", "live-badges");
-      head.append(el("h3", "live-title", "lagd · 조향 지연 (관찰 전용)"), badges);
+      head.append(el("h3", "live-title", "lagd · 조향 지연"), badges);
+      const steering = snapshot.params.steering;
+      if ("use_live_delay" in steering) {
+        const meta = snapshot.metadata.steering.use_live_delay || genericMeta("use_live_delay", steering.use_live_delay);
+        const toggle = createToggleControl("use_live_delay", steering.use_live_delay, meta, card);
+        toggle.classList.add("mini");
+        toggle.title = meta.label;
+        head.append(toggle, el("div", "card-status"));
+      }
       const body = el("div");
       card.append(head, body);
       return {card, badges, body};
@@ -1871,7 +1891,7 @@ HTML = """<!doctype html>
 
     const LAG_STATUS = {0: ["추정 전", "warn"], 1: ["추정됨", "good"], 2: ["무효", "bad"]};
 
-    function lagCard(shell, loc) {
+    function lagCard(shell, loc, learner) {
       if (!loc || !loc.available) {
         fillShell(shell, [["상태 없음", "muted"]], [el("div", "live-foot", "locationd가 발행하지 않습니다(IMU·locationd 확인).")]);
         return;
@@ -1880,7 +1900,8 @@ HTML = """<!doctype html>
       const poseOk = flags.filter_valid && flags.inputs_ok && flags.sensors_ok && flags.posenet_ok;
       const badges = [LAG_STATUS[s.lag_status] || [String(s.lag_status), "muted"],
         [`블록 ${s.lag_valid_blocks}/5`, s.lag_valid_blocks >= 5 ? "accent" : "muted"],
-        poseOk ? ["자세 정상", "good"] : ["자세 무효", "bad"], ["섀도", "muted"]];
+        poseOk ? ["자세 정상", "good"] : ["자세 무효", "bad"],
+        learner && learner.flags.use_delay ? ["제어에 사용 중", "accent"] : ["섀도", "muted"]];
       const inputs = s.input_flags;
       for (const [key, label] of [["accel_invalid", "가속도 거부"], ["gyro_invalid", "자이로 거부"], ["camera_invalid", "카메라 거부"]])
         if (inputs[key]) badges.push([label, "warn"]);
@@ -1890,6 +1911,7 @@ HTML = """<!doctype html>
       fillShell(shell, badges, [
         liveTable(["항목", "값", "비교", ""], [
           ["쓸 지연", ms(s.lateral_delay_s), `수동 ${ms(loc.initial_lag || 0)}`, "추정 전에는 수동값"],
+          ["경로 지연(적용)", learner && learner.plan_delay_s > 0 ? ms(learner.plan_delay_s) : "–", "", "스위치를 켜고 확정되면 추정값"],
           ["진행 평균", `${ms(s.lag_estimate_s)} ±${ms(s.lag_estimate_std_s)}`, `창 안 점 ${s.lag_points}`, "블록 사이 0.1 s 넘으면 무효"],
           ["요레이트", `${sgn(deg(s.angular_velocity_calib[2]), 2)}°/s`, `±${num(deg(s.angular_velocity_calib_std[2]), 2)}`, "+ = 오른쪽"],
           ["도로 롤 · 피치", `${sgn(deg(s.orientation_calib[0]), 2)}° · ${sgn(deg(s.orientation_calib[1]), 2)}°`, "", "IMU 중력"],
@@ -1912,7 +1934,7 @@ HTML = """<!doctype html>
       if (!learnerPanel) return;
       const panel = learnerPanel;
       calibCard(panel.calib, data.calibration);
-      lagCard(panel.lag, data.localization);
+      lagCard(panel.lag, data.localization, data.available ? data.state : null);
       if (!data.available) {
         panel.notice.replaceChildren(el("div", "empty", "학습 상태가 없습니다. controlsd가 실행 중인지 확인하세요."));
         return;

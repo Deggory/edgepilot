@@ -315,6 +315,7 @@ constexpr uint32_t kLearnerUseVehicle = 1U << 9;   // 스위치 적용 후 실�
 constexpr uint32_t kLearnerUseTorque = 1U << 10;
 constexpr uint32_t kLearnerVehicleRestored = 1U << 11;
 constexpr uint32_t kLearnerTorqueRestored = 1U << 12;
+constexpr uint32_t kLearnerUseDelay = 1U << 13;    // 경로 지연에 lagd 추정 사용 중
 
 struct LearnerState {
     uint64_t timestamp_ns = 0;
@@ -345,7 +346,7 @@ struct LearnerState {
     float prior_lat_accel_factor = 0.0f;
     float prior_friction = 0.0f;
     int16_t bucket_points[8] = {};
-    uint32_t reserved = 0;
+    float plan_delay_s = 0.0f;  // 실제 쓴 경로 지연(lagd 사용 중이면 추정값). 예전 기록은 0
 };
 /* recordd가 그대로 저장하고 tools/model/recording_reader.py LEARNER_STATE와
  * scripts/param_server.py LEARNER_FIELDS가 위치로 읽는다(check_param_server.py가 대조). */
@@ -361,7 +362,7 @@ EDGEPILOT_LEARNER_STATE_AT(total_bucket_points, 84);
 EDGEPILOT_LEARNER_STATE_AT(road_bank_lat_accel, 92);
 EDGEPILOT_LEARNER_STATE_AT(prior_steer_ratio, 96);
 EDGEPILOT_LEARNER_STATE_AT(bucket_points, 108);
-EDGEPILOT_LEARNER_STATE_AT(reserved, 124);
+EDGEPILOT_LEARNER_STATE_AT(plan_delay_s, 124);
 #undef EDGEPILOT_LEARNER_STATE_AT
 static_assert(sizeof(LearnerState) == 128, "LearnerState size");
 

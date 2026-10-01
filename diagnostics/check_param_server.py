@@ -287,7 +287,7 @@ class LearnerStateTest(unittest.TestCase):
         # HTML은 일반 문자열이라 JS의 \n을 두 번 이스케이프해야 한다(아니면 스크립트 전체가 죽는다)
         self.assertIn('lines.join("\\n")', HTML)
         # 학습 스위치는 실시간 학습 탭에만 있다(조향 탭에서 숨김)
-        self.assertIn('hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params"]}', HTML)
+        self.assertIn('hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params", "use_live_delay"]}', HTML)
 
 
 

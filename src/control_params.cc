@@ -15,6 +15,7 @@ constexpr JsonBoolField<SteeringParams> kSteeringBools[] = {
     {"live_bank_compensation", &SteeringParams::live_bank_compensation},
     {"use_live_vehicle_params", &SteeringParams::use_live_vehicle_params},
     {"use_live_torque_params", &SteeringParams::use_live_torque_params},
+    {"use_live_delay", &SteeringParams::use_live_delay},
 };
 constexpr JsonIntField<SteeringParams> kSteeringInts[] = {
     {"steering_pressed_threshold", 0, 500, &SteeringParams::steering_pressed_threshold},

@@ -3,6 +3,7 @@
 #include "adaptive_cruise.h"
 #include "control_holds.h"
 #include "lateral_controller.h"
+#include "lateral_lag.h"
 #include "lateral_learners.h"
 #include "lateral_path.h"
 #include "lateral_planner.h"
@@ -445,7 +446,8 @@ private:
 };
 
 LearnerState make_learner_state(const LateralLearners &learners,
-                                    const SteeringParams &params, float road_bank_lat_accel) {
+                                    const SteeringParams &params, float road_bank_lat_accel,
+                                    bool live_delay_in_use, float plan_delay_s) {
   const VehicleParams &v = learners.vehicle_params();
   const TorqueParams &t = learners.torque_params();
   const LiveLateralParams live = learners.live();
@@ -464,7 +466,8 @@ LearnerState make_learner_state(const LateralLearners &learners,
                 (live.use_torque && params.use_live_torque_params ? kLearnerUseTorque : 0U) |
                 (learners.vehicle_restored() ? kLearnerVehicleRestored : 0U) |
                 (learners.torque_restore_status() == TorqueRestore::Restored
-                     ? kLearnerTorqueRestored : 0U);
+                     ? kLearnerTorqueRestored : 0U) |
+                (live_delay_in_use ? kLearnerUseDelay : 0U);
   state.steer_ratio = static_cast<float>(v.steer_ratio);
   state.stiffness_factor = static_cast<float>(v.stiffness_factor);
   state.roll_rad = static_cast<float>(v.roll_rad);
@@ -491,6 +494,7 @@ LearnerState make_learner_state(const LateralLearners &learners,
   state.prior_friction = static_cast<float>(learners.torque_estimator().tuning().friction);
   for (int i = 0; i < TorqueEstimator::kBuckets; ++i)
     state.bucket_points[i] = static_cast<int16_t>(learners.torque_estimator().bucket_size(i));
+  state.plan_delay_s = plan_delay_s;
   return state;
 }
 
@@ -747,6 +751,9 @@ int main() {
     CanQueue sendcan_pub;
     LatestChannel control_state_pub;
     LatestChannel learner_state_pub;
+    LatestChannel localization_sub;
+    bool localization_open = false;
+    double next_localization_open_s = 0.0;
     if (!open_when_ready(&can_sub, kCanTopic, true) ||
         !open_when_ready(&model_sub, kModelStateTopic, sizeof(ModelState), false) ||
         !open_when_ready(&panda_state_sub, kPandaStateTopic,
@@ -875,6 +882,20 @@ int main() {
         panda_state_seq = next_panda_state_seq;
       }
       lateral_target = lateral_planner.latest();
+      /* lagd(locationd) 추정 지연. locationd가 없어도 제어는 그대로라 붙을 때까지 1초마다
+       * 다시 열어 본다. 확정(5블록)이고 2초 안의 값만 쓴다. */
+      if (!localization_open && now_s >= next_localization_open_s) {
+        localization_open = localization_sub.open(kLocalizationStateTopic, sizeof(LocalizationState), false);
+        next_localization_open_s = now_s + 1.0;
+      }
+      if (localization_open) {
+        LocalizationState localization;
+        const bool fresh = localization_sub.read(&localization, sizeof(localization)) &&
+                           monotonic_now_ns() - localization.timestamp_ns < 2'000'000'000ULL;
+        controller.set_live_delay(localization.lateral_delay_s,
+                                  fresh && localization.lag_status ==
+                                      static_cast<uint32_t>(LateralLagStatus::Estimated));
+      }
 
       /* IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness
        * 판정에는 공유 상태를 읽은 직후의 시간을 사용한다. */
@@ -971,7 +992,8 @@ int main() {
         learner_store.write(torque_learn_path, learners.torque_cache());
       if (learners.vehicle_published()) {
         const LearnerState learner_state =
-            make_learner_state(learners, config.steering_params, controller.road_bank_lat_accel());
+            make_learner_state(learners, config.steering_params, controller.road_bank_lat_accel(),
+                               controller.live_delay_in_use(), controller.plan_delay_s());
         if (!learner_state_pub.publish(&learner_state, sizeof(learner_state)))
           ++stats.publish_errors;
       }

@@ -64,6 +64,21 @@ void LateralController::set_live_params(const LiveLateralParams &live, bool vehi
   live_calibrated_ = calibrated;
 }
 
+void LateralController::set_live_delay(float delay_s, bool valid) {
+  live_delay_s_ = delay_s;
+  live_delay_valid_ = valid && std::isfinite(delay_s);
+}
+
+bool LateralController::live_delay_in_use() const {
+  return config_.steering_params.use_live_delay && live_delay_valid_;
+}
+
+float LateralController::plan_delay_s() const {
+  // lagd 지연 범위(lateral_lag.h min_lag~max_lag)
+  return live_delay_in_use() ? clamp_float(live_delay_s_, 0.15f, 0.65f)
+                             : config_.steering_params.steer_actuator_delay;
+}
+
 LiveLateralParams LateralController::live_params() const {
   LiveLateralParams live = live_;
   live.use_vehicle = live_.use_vehicle && config_.steering_params.use_live_vehicle_params;
@@ -222,7 +237,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
   /* 상류 controlsd: 활성이면 plan, 비활성이면 실제 곡률을 클립에 넣는다. 재활성 때 목표가
    * 실제 곡률에서 한계 안으로 출발하고, 비활성 중의 잘못된 plan 값이 넘어오지 않는다. */
   const float requested_curvature = result.active
-      ? lag_adjusted_curvature(target, speed_mps, plan_age_s, control_params.steer_actuator_delay)
+      ? lag_adjusted_curvature(target, speed_mps, plan_age_s, plan_delay_s())
       : torque_controller_.estimate_actual_curvature(speed_mps, vehicle_state.steering_angle_deg,
                                                      control_params, vehicle_state.yaw_rate_rad_s,
                                                      yaw_rate_valid, live);

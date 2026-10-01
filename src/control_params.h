@@ -57,6 +57,9 @@ struct SteeringParams {
    * 롤 보정이 live_bank_compensation을 대신한다. */
   bool use_live_vehicle_params = false;
   bool use_live_torque_params = false;
+  /* lagd(locationd) 조향 지연 사용. 켜고 lagd가 확정(5블록)되면 경로 지연(목표 곡률을 읽는
+   * 시점)에 추정값을 쓴다. 토크 컨트롤러·torqued는 steer_actuator_delay를 그대로 쓴다(1단계). */
+  bool use_live_delay = false;
   float mass_kg = 1816.0f;
   float wheelbase_m = 2.855f;
   float center_to_front_ratio = 0.4f;

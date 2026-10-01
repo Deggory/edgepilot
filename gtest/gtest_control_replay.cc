@@ -1829,3 +1829,26 @@ int main(int argc, char **argv) {
   return RUN_ALL_TESTS();
 }
 
+
+// lagd 지연: 스위치를 켜고 확정된 값이 있을 때만 경로 지연을 바꾼다(범위 0.15~0.65 s).
+TEST(ControlReplay, LiveDelaySwitch) {
+  LateralControllerConfig config;
+  config.steering_params.steer_actuator_delay = 0.34f;
+  LateralController controller(config);
+  controller.set_live_delay(0.44f, true);
+  EXPECT_FALSE(controller.live_delay_in_use()) << "스위치가 꺼져 있으면 쓰지 않는다";
+  EXPECT_FLOAT_EQ(controller.plan_delay_s(), 0.34f);
+
+  config.steering_params.use_live_delay = true;
+  LateralController on(config);
+  EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.34f) << "추정이 오기 전에는 수동값";
+  on.set_live_delay(0.44f, true);
+  EXPECT_TRUE(on.live_delay_in_use());
+  EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.44f);
+  on.set_live_delay(0.44f, false);
+  EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.34f) << "확정 전·오래된 값은 쓰지 않는다";
+  on.set_live_delay(0.9f, true);
+  EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.65f);
+  on.set_live_delay(std::nanf(""), true);
+  EXPECT_FALSE(on.live_delay_in_use());
+}

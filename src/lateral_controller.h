@@ -107,6 +107,12 @@ public:
    * 3 재보정). 완료가 아니면 openpilot처럼 engage를 막고 engage 중이면 경고 후 해제한다.
    * 기본값은 완료라 단위 테스트와 리플레이 도구는 영향이 없다. */
   void set_calibration_status(uint32_t status) { calibration_status_ = status; }
+  /* lagd 추정 지연. valid는 확정(5블록)이고 신선할 때. use_live_delay가 켜져 있으면 경로
+   * 지연에 쓴다. */
+  void set_live_delay(float delay_s, bool valid);
+  bool live_delay_in_use() const;
+  // 목표 곡률을 읽는 경로 지연: lagd 사용 중이면 추정값(0.15~0.65 s), 아니면 steer_actuator_delay
+  float plan_delay_s() const;
 
   // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
   LateralControlResult update(const LateralPath &path,
@@ -161,6 +167,8 @@ private:
   LiveLateralParams live_{};
   bool live_vehicle_valid_ = true;
   bool live_calibrated_ = false;
+  float live_delay_s_ = 0.0f;
+  bool live_delay_valid_ = false;
   uint32_t calibration_status_ = 1;
   double soft_disable_start_s_ = -1.0;
   // openpilot LatControl.sat_time와 selfdrived의 최근 핸들 조작 시각
