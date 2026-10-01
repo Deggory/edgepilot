@@ -7,10 +7,14 @@
  * --upstream-schedule: 조향각·속도를 상류처럼 20 Hz로만 관측(기본은 런타임과 같은 매 틱).
  * --fit-all: torqued 적합에 점 전부(기본은 상류처럼 2000점 무작위).
  * --torque-cache: 있으면 복원하고 저장 틱마다 덮어쓴다(상류 LiveTorqueParameters).
- * --steering: 녹화 당시 파라미터(사전값·지연·토크 튜닝). 없으면 코드 기본값이라 보드와 다를 수 있다. */
+ * --steering: 녹화 당시 파라미터(사전값·지연·토크 튜닝). 없으면 코드 기본값이라 보드와 다를 수 있다.
+ * --vehicle-json: paramsd 저장값(route/params/live_parameters.json)으로 시작한다(보드와 같게).
+ * --locationd-roll: 도로 롤을 ESP 횡가속 대신 기록된 locationd 롤로 관측한다(상류 paramsd·torqued).
+ * 끝에 결합 직진 구간의 조향각 기반 곡률(학습값 차량 모델) − 요레이트 곡률 평균을 출력한다. */
 #include "control_params.h"
 #include "ipc_messages.h"
 #include "lateral_learners.h"
+#include "lateral_torque.h"
 #include "recording_format.h"
 #include "vehicle_can.h"
 
@@ -40,8 +44,8 @@ constexpr int kSteeringPressedMinCount = 5;  // lateral_controller.cc와 같다
 
 int main(int argc, char **argv) {
   std::string inputs_path, outputs_path, torque_inputs_path, torque_outputs_path, torque_cache_path;
-  std::string steering_path;
-  bool fit_all = false;
+  std::string steering_path, vehicle_json_path;
+  bool fit_all = false, locationd_roll = false, locationd_yaw = false;
   VehicleParamsOptions options;
   std::vector<std::string> events;
   for (int i = 1; i < argc; ++i) {
@@ -54,6 +58,9 @@ int main(int argc, char **argv) {
     else if (arg == "--torque-outputs" && i + 1 < argc) torque_outputs_path = argv[++i];
     else if (arg == "--torque-cache" && i + 1 < argc) torque_cache_path = argv[++i];
     else if (arg == "--steering" && i + 1 < argc) steering_path = argv[++i];
+    else if (arg == "--vehicle-json" && i + 1 < argc) vehicle_json_path = argv[++i];
+    else if (arg == "--locationd-roll") locationd_roll = true;
+    else if (arg == "--locationd-yaw") locationd_yaw = true;
     else if (arg.rfind("--", 0) == 0) {
       events.clear();
       break;
@@ -83,7 +90,23 @@ int main(int argc, char **argv) {
     std::ifstream f(torque_cache_path, std::ios::binary);
     cache.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
   }
-  LateralLearners learners(sp, std::string(), cache, 1, options);
+  std::string vehicle_json;
+  if (!vehicle_json_path.empty()) {
+    std::ifstream f(vehicle_json_path, std::ios::binary);
+    vehicle_json.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+  }
+  LateralLearners learners(sp, vehicle_json, cache, 1, options);
+  if (!vehicle_json.empty())
+    std::printf("paramsd 저장값: %s\n", learners.vehicle_restored() ? "복원" : "거부");
+  // 결합 직진 구간의 곡률 대조: 학습값 차량 모델(조향각) − 요레이트(바이어스 제거)
+  TorqueController curvature_model;
+  SteeringParams angle_params = sp;
+  angle_params.torque_use_angle = true;
+  double curv_diff_sum = 0.0, curv_angle_sum = 0.0, curv_yaw_sum = 0.0, roll_sum = 0.0;
+  long curv_n = 0;
+  double loc_yaw_right = 0.0, curv_diff_loc_sum = 0.0;
+  bool loc_yaw_ok = false;
+  long curv_loc_n = 0;
   if (!cache.empty())
     std::printf("torqued 캐시 %zu B: %s\n", cache.size(),
                 learners.torque_restore_status() == TorqueRestore::Restored      ? "복원"
@@ -145,6 +168,18 @@ int main(int argc, char **argv) {
         }
         continue;
       }
+      if (rh.type == static_cast<uint16_t>(RecordType::Localization)) {
+        LocalizationState loc{};
+        std::memcpy(&loc, buf.data(), std::min(sizeof(loc), buf.size()));
+        const uint32_t ok = kLocalizationFilterValid | kLocalizationInputsOk | kLocalizationSensorsOk |
+                            kLocalizationPosenetOk;
+        learners.set_localizer_roll(locationd_roll, loc.orientation_calib[0], loc.orientation_std[0],
+                                    (loc.flags & ok) == ok);
+        learners.set_localizer_yaw_rate(locationd_yaw, loc.angular_velocity_calib[2], (loc.flags & ok) == ok);
+        loc_yaw_right = loc.angular_velocity_calib[2];
+        loc_yaw_ok = (loc.flags & ok) == ok;
+        continue;
+      }
       // 제어 틱(ControlState, 100 Hz)마다 한 번 넣는다. controlsd가 부를 자리와 같다.
       if (rh.type != static_cast<uint16_t>(RecordType::ControlState)) continue;
       ControlState cs{};
@@ -156,6 +191,23 @@ int main(int argc, char **argv) {
                       pressed_counter > kSteeringPressedMinCount);
 
       const VehicleParamsInput &in = learners.last_vehicle_input();
+      const LiveLateralParams live = learners.live();
+      if (cs.active && in.inputs_fresh && in.yaw_rate_valid && in.speed_mps > 12.0 &&
+          std::fabs(cs.desired_curvature) < 3e-4f && live.use_vehicle) {
+        const double angle_curv = curvature_model.estimate_actual_curvature(
+            static_cast<float>(in.speed_mps), static_cast<float>(in.steering_angle_deg), angle_params, 0.0f, false,
+            live);
+        const double yaw_curv = -in.yaw_rate_rad_s / in.speed_mps;  // ESP12 좌측 양수 → 우측 양수
+        curv_diff_sum += angle_curv - yaw_curv;
+        curv_angle_sum += angle_curv;
+        curv_yaw_sum += yaw_curv;
+        roll_sum += live.roll_rad;
+        ++curv_n;
+        if (loc_yaw_ok) {
+          curv_diff_loc_sum += angle_curv - loc_yaw_right / in.speed_mps;
+          ++curv_loc_n;
+        }
+      }
       if (in_file) {
         const InputRow row{in.t_s, in.steering_angle_deg, in.speed_mps, in.yaw_rate_rad_s,
                            in.lat_accel_mps2, in.inputs_fresh ? 1 : 0, in.gear,
@@ -211,6 +263,13 @@ int main(int argc, char **argv) {
               p.steer_ratio_std, p.stiffness_factor, p.angle_offset_average_deg,
               p.angle_offset_deg, p.roll_rad * 180.0 / 3.14159265358979323846, p.valid,
               learners.yaw_bias_rad_s() * 180.0 / 3.14159265358979323846);
+  if (curv_n > 0)
+    std::printf("결합 직진 %ld틱: 조향각 곡률 %+.3fe-4, 요레이트 곡률 %+.3fe-4, 차이 %+.3fe-4 1/m | 평균 롤 %+.3f도\n",
+                curv_n, curv_angle_sum / curv_n * 1e4, curv_yaw_sum / curv_n * 1e4, curv_diff_sum / curv_n * 1e4,
+                roll_sum / curv_n * 180.0 / 3.14159265358979323846);
+  if (curv_loc_n > 0)
+    std::printf("  조향각 곡률 − locationd 요레이트 곡률 %+.3fe-4 1/m (%ld틱)\n", curv_diff_loc_sum / curv_loc_n * 1e4,
+                curv_loc_n);
   const TorqueParams &q = learners.torque_params();
   std::printf("torqued: 점 %d (진행 %d%%) valid %d | 원시 배율 %.3f 절편 %+.3f 마찰 %.3f | "
               "필터 배율 %.3f 절편 %+.3f 마찰 %.3f (사전 %.3f/%.3f) decay %.1f\n",

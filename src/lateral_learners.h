@@ -77,6 +77,12 @@ struct VehicleParamsInput {
   double yaw_rate_rad_s = 0.0;  // 바이어스 제거 후
   bool lat_accel_valid = false;
   double lat_accel_mps2 = 0.0;  // 비력(가속도계), 좌측 양수
+  /* 상류 paramsd처럼 locationd 자세 롤로 도로 롤을 관측한다(given이면 ESP 횡가속 대신).
+   * 오른쪽이 낮으면 양수. valid는 locationd 자세·센서 정상. */
+  bool localizer_roll_given = false;
+  bool localizer_roll_valid = false;
+  double localizer_roll_rad = 0.0;
+  double localizer_roll_std_rad = 0.0;
 };
 
 /* vehicleParameters 메시지. */
@@ -346,6 +352,21 @@ public:
 
   // 대조 도구용: 이번 틱에 넣은 입력과 추정기
   const VehicleParamsInput &last_vehicle_input() const { return last_vehicle_input_; }
+  /* locationd 롤(상류 paramsd·torqued의 롤 출처). use가 켜져 있으면 다음 update부터 ESP 횡가속
+   * 대신 쓴다. */
+  void set_localizer_roll(bool use, double roll_rad, double std_rad, bool valid) {
+    use_localizer_roll_ = use;
+    localizer_roll_rad_ = roll_rad;
+    localizer_roll_std_rad_ = std_rad;
+    localizer_roll_valid_ = valid;
+  }
+  /* locationd 요레이트(보정 좌표계, 우측 양수). use면 ESP12 요레이트·자체 바이어스 추정 대신
+   * 쓴다(상류 paramsd·torqued는 livePose 각속도를 쓴다). */
+  void set_localizer_yaw_rate(bool use, double yaw_rate_right_rad_s, bool valid) {
+    use_localizer_yaw_ = use;
+    localizer_yaw_right_ = yaw_rate_right_rad_s;
+    localizer_yaw_valid_ = valid;
+  }
   const TorqueEstimatorInput &last_torque_input() const { return last_torque_input_; }
   TorqueEstimator &torque_estimator() { return torque_; }
   const TorqueEstimator &torque_estimator() const { return torque_; }
@@ -366,5 +387,9 @@ private:
   bool vehicle_published_ = false;
   bool torque_published_ = false;
   VehicleParamsInput last_vehicle_input_{};
+  bool use_localizer_roll_ = false, localizer_roll_valid_ = false;
+  bool use_localizer_yaw_ = false, localizer_yaw_valid_ = false;
+  double localizer_yaw_right_ = 0.0;
+  double localizer_roll_rad_ = 0.0, localizer_roll_std_rad_ = 0.0;
   TorqueEstimatorInput last_torque_input_{};
 };

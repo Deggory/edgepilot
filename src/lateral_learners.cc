@@ -228,7 +228,15 @@ void VehicleParamsLearner::handle_device_motion(const VehicleParamsInput &in) {
 
   const double centripetal = in.speed_mps * yaw_rate;
   double roll = 0.0, roll_std = rad(10.0);
-  if (in.lat_accel_valid && in.speed_mps > kRollMinSpeed &&
+  if (in.localizer_roll_given) {
+    // 상류 paramsd: 자세 롤(표준편차 nan이면 1°), 유효하면 표준편차 2배로 관측, 아니면 0(10°)
+    const double loc_std = std::isfinite(in.localizer_roll_std_rad) ? in.localizer_roll_std_rad : rad(1.0);
+    if (in.localizer_roll_valid && loc_std < kRollStdMax && in.localizer_roll_rad > kRollMin &&
+        in.localizer_roll_rad < kRollMax) {
+      roll = in.localizer_roll_rad;
+      roll_std = 2.0 * loc_std;
+    }
+  } else if (in.lat_accel_valid && in.speed_mps > kRollMinSpeed &&
       std::fabs(centripetal) < kRollMaxCentripetal) {
     const double candidate = std::asin(clip((in.lat_accel_mps2 - centripetal) / kGravity, -1.0, 1.0));
     if (kRollStd < kRollStdMax && candidate > kRollMin && candidate < kRollMax) {
@@ -805,8 +813,16 @@ void LateralLearners::update(const VehicleCanState &vehicle, double now_s, doubl
   in.gear = vehicle.gear;
   in.yaw_rate_valid = esp_fresh && vehicle.yaw_rate_valid;
   in.yaw_rate_rad_s = bias_.update(now_s, in.speed_mps, in.yaw_rate_valid, vehicle.yaw_rate_rad_s);
+  if (use_localizer_yaw_) {
+    in.yaw_rate_valid = localizer_yaw_valid_;
+    in.yaw_rate_rad_s = -localizer_yaw_right_;  // 좌측 양수(ESP12 관례)로
+  }
   in.lat_accel_valid = esp_fresh && vehicle.lat_accel_valid;
   in.lat_accel_mps2 = -vehicle.lat_accel_mps2;  // 반전 저장돼 있다
+  in.localizer_roll_given = use_localizer_roll_;
+  in.localizer_roll_valid = localizer_roll_valid_;
+  in.localizer_roll_rad = localizer_roll_rad_;
+  in.localizer_roll_std_rad = localizer_roll_std_rad_;
   last_vehicle_input_ = in;
   vehicle_published_ = vehicle_.update(in);
   const VehicleParams &vp = vehicle_.params();
@@ -831,6 +847,11 @@ void LateralLearners::update(const VehicleCanState &vehicle, double now_s, doubl
   tin.pose_valid = in.yaw_rate_valid;
   tin.yaw_rate_rad_s = -in.yaw_rate_rad_s;
   tin.roll_rad = vp.roll_rad;
+  if (use_localizer_roll_) {
+    // 상류 torqued는 자세 롤을 그대로 쓰고, 자세가 무효면 점을 쓰지 않는다
+    tin.roll_rad = localizer_roll_rad_;
+    tin.pose_valid = tin.pose_valid && localizer_roll_valid_;
+  }
   last_torque_input_ = tin;
   torque_published_ = torque_.update(tin);
   const TorqueParams &tp = torque_.params();
