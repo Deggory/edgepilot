@@ -932,6 +932,11 @@ HTML = """<!doctype html>
       --good: #4bc78d;
       --warn: #efb85b;
       --bad: #ed7474;
+          /* 버튼 공통: 아이콘·조정·토글·학습값 저장 버튼이 같이 쓴다 */
+      --btn-bg: #262b2f;
+      --btn-bg-hover: #31373c;
+      --btn-border: #515960;
+      --btn-radius: 6px;
     }
     * { box-sizing: border-box; }
     body { margin: 0; min-width: 320px; background: #101214; }
@@ -953,11 +958,11 @@ HTML = """<!doctype html>
     .dot.online { background: var(--good); }
     .icon-button {
       width: 44px; height: 44px; margin-left: auto; padding: 0;
-      border: 1px solid #4a5157; border-radius: 6px;
-      background: #262b2f; color: #fff; font-size: 24px; line-height: 1;
+      border: 1px solid var(--btn-border); border-radius: var(--btn-radius);
+      background: var(--btn-bg); color: #fff; font-size: 24px; line-height: 1;
       cursor: pointer;
     }
-    .icon-button:hover { background: #31373c; }
+    .icon-button:hover { background: var(--btn-bg-hover); }
     .group-tabs {
       position: sticky; top: 64px; z-index: 4;
       display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1031,11 +1036,11 @@ HTML = """<!doctype html>
       gap: 8px; height: 50px;
     }
     .adjust-button {
-      border: 1px solid #515960; border-radius: 6px;
-      background: #293036; color: #fff; cursor: pointer;
+      border: 1px solid var(--btn-border); border-radius: var(--btn-radius);
+      background: var(--btn-bg); color: #fff; cursor: pointer;
       font-size: 28px; font-weight: 500; line-height: 1;
     }
-    .adjust-button:hover { background: #363e44; }
+    .adjust-button:hover { background: var(--btn-bg-hover); }
     .value-wrap { position: relative; min-width: 0; }
     .value-input {
       width: 100%; height: 50px; padding: 5px 9px 17px;
@@ -1051,8 +1056,8 @@ HTML = """<!doctype html>
     .toggle-control {
       display: flex; align-items: center; justify-content: space-between;
       width: 100%; height: 50px; padding: 0 14px;
-      border: 1px solid #515960; border-radius: 6px;
-      background: #24292d; color: #d7dce0; cursor: pointer; font-weight: 750;
+      border: 1px solid var(--btn-border); border-radius: var(--btn-radius);
+      background: var(--btn-bg); color: #d7dce0; cursor: pointer; font-weight: 750;
     }
     .toggle {
       position: relative; width: 52px; height: 28px;
@@ -1093,16 +1098,22 @@ HTML = """<!doctype html>
     .live-badges { display: flex; flex-wrap: wrap; gap: 7px; }
     .toggle-control.mini { width: auto; height: 36px; gap: 10px; margin-left: auto; padding: 0 10px; font-size: 13px; }
     .live-head .card-status { flex-basis: 100%; min-height: 0; margin: 0; }
-    .adopt-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .adopt-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .adopt-button {
-      flex: 1 1 140px; min-height: 46px; padding: 6px 10px;
-      border: 1px solid #515960; border-radius: 6px; background: #24292d;
-      color: #e5e9ec; cursor: pointer; text-align: left; font-size: 13px; font-weight: 700;
+      display: flex; align-items: center; gap: 10px;
+      flex: 1 1 160px; min-height: 50px; padding: 7px 12px;
+      border: 1px solid var(--btn-border); border-radius: var(--btn-radius);
+      background: var(--btn-bg); color: #e5e9ec; cursor: pointer;
+      text-align: left; font-size: 13px; font-weight: 750;
     }
-    .adopt-button:hover { background: #2d3338; }
+    .adopt-button:hover:not(:disabled) { background: var(--btn-bg-hover); }
+    .adopt-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+    .adopt-icon { flex: 0 0 auto; color: #d7dce0; font-size: 18px; line-height: 1; }
+    .adopt-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .adopt-button.danger { border-color: #6b3a3a; color: #f3b0b0; }
-    .adopt-button.danger:hover { background: #331f1f; }
-    .adopt-button small { display: block; color: #7f8991; font-size: 11px; font-weight: 500; }
+    .adopt-button.danger .adopt-icon { color: #f3b0b0; }
+    .adopt-button.danger:hover:not(:disabled) { background: #331f1f; }
+    .adopt-button small { display: block; color: #8f99a1; font-size: 11px; font-weight: 500; }
     .learner-note { margin: 9px 0 0; padding: 6px 9px; border-radius: 5px; font-size: 12px; line-height: 1.45; }
     .learner-note.ignored { background: #24292d; color: var(--muted); }
     .learner-note.prior { background: #15233a; color: #9cc8f0; }
@@ -1124,12 +1135,6 @@ HTML = """<!doctype html>
     .live-table td.warn { color: var(--warn); }
     .live-table td.bad { color: var(--bad); }
     .live-foot { margin-top: 9px; color: #7f8991; font-size: 12px; line-height: 1.5; }
-    .buckets, .bucket-labels { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; }
-    .buckets { height: 56px; margin-top: 12px; align-items: end; }
-    .bucket { display: flex; align-items: flex-end; height: 100%; border-radius: 4px; background: #15181a; }
-    .bucket span { width: 100%; border-radius: 4px; background: var(--warn); }
-    .bucket.full span { background: var(--good); }
-    .bucket-labels { margin-top: 4px; color: #7f8991; font-size: 10px; text-align: center; font-variant-numeric: tabular-nums; }
     .trend-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; }
     .trend-now { color: #fff; font-weight: 750; font-variant-numeric: tabular-nums; text-align: right; }
     .trend svg { display: block; width: 100%; height: 90px; border-radius: 5px; background: #15181a; }
@@ -1594,14 +1599,22 @@ HTML = """<!doctype html>
         const button = shell.adopt.get(item.key);
         const {current, target} = adoptTarget(item, s);
         const same = Number(current) === Number(target);
-        button.replaceChildren(document.createTextNode(`${item.label} ${item.show(s)} → 수동값`),
-          el("small", "", !ready ? "학습이 유효해지면 쓸 수 있습니다" : same ? `수동값과 같음 (${current})` : `${item.key} ${current} → ${target}`));
+        const on = snapshot.params.steering[spec.switchKey] === true;
+        const effect = !on ? "바로 제어에 반영"
+          : item.ignoredWhenOn ? "스위치 켜짐: 끌 때 쓰임"
+          : item.resets ? "스위치 켜짐: 사전값 · torqued 재학습"
+          : "스위치 켜짐: 출발점·범위로만 쓰임";
+        const detail = !ready ? "학습이 유효해지면 쓸 수 있습니다"
+          : same ? `수동값과 같음 (${current})` : `${item.key} ${current} → ${target}`;
+        const text = el("span", "adopt-text");
+        text.append(document.createTextNode(`수동값에 저장 · ${item.label} ${item.show(s)}`),
+                    el("small", "", detail), ...(ready && !same ? [el("small", "", effect)] : []));
+        button.replaceChildren(el("span", "adopt-icon", "⤓"), text);
         button.disabled = !ready || same;
       }
     }
 
     // ------------------------------------------------------------ 실시간 학습
-    const BUCKET_MIN = [100, 300, 500, 500, 500, 500, 300, 100];
     const TREND_CHARTS = [
       {title: "조향비", series: [[1, "main"]], ref: f => [f.steer_ratio], span: 0.2, digits: 2},
       {title: "조향각 영점 (°) · 평균 / 합계", series: [[2, "main"], [3, "thin"]], ref: f => [f.angle_offset_deg], span: 0.2, digits: 2},
@@ -1671,7 +1684,7 @@ HTML = """<!doctype html>
         adopt.set(item.key, button);
         row.appendChild(button);
       }
-      card.append(head, body, el("div", "live-foot", "수동값에 반영 · 확인 후 저장"), row);
+      card.append(head, body, row);
       const shell = {card, badges, body, adopt, state: null};
       return shell;
     }
@@ -1730,18 +1743,6 @@ HTML = """<!doctype html>
         ["마찰", num(s.friction, 3), [calculable ? num(s.friction_raw, 3) : "–", frictionOut ? "warn" : ""],
          `${num(pf, 3)} · ${num(pf * 0.5, 3)}~${num(pf * 1.5, 3)}`],
       ]));
-      const bars = el("div", "buckets");
-      const labels = el("div", "bucket-labels");
-      buckets.forEach((count, i) => {
-        const full = count >= BUCKET_MIN[i];
-        const bar = el("div", `bucket${full ? " full" : ""}`);
-        const fill = el("span");
-        fill.style.height = `${Math.max(2, Math.min(1, count / BUCKET_MIN[i]) * 100)}%`;
-        bar.appendChild(fill);
-        bars.appendChild(bar);
-        labels.appendChild(el("span", "", full ? String(count) : `${count}/${BUCKET_MIN[i]}`));
-      });
-      children.push(el("div", "live-foot", "버킷: 보낸 토크 −0.5 → +0.5 (우측 양수) · 채움 / 최소"), bars, labels);
       children.push(el("div", "live-foot",
         `점 ${s.total_bucket_points.toLocaleString("ko-KR")} · decay ${num(s.decay, 1)} · 초기화 ${Math.max(0, Math.round(s.max_resets) - 1)}회 · 12초마다 저장 · ${flags.torque_restored ? "이번 시동에 복원" : "새로 시작"}`));
       fillShell(shell, badges, children);
@@ -1846,8 +1847,10 @@ HTML = """<!doctype html>
         ]);
       }
       const blocked = c && c.engaged;
-      shell.button.replaceChildren(document.createTextNode(c && c.reset_pending ? "초기화 요청됨 · modeld 대기 중" : "캘리브레이션 초기화"),
+      const text = el("span", "adopt-text");
+      text.append(document.createTextNode(c && c.reset_pending ? "초기화 요청됨 · modeld 대기 중" : "캘리브레이션 초기화"),
         el("small", "", blocked ? "결합 중에는 초기화할 수 없습니다" : "저장된 보정을 지우고 처음부터 다시 수렴합니다"));
+      shell.button.replaceChildren(el("span", "adopt-icon", "↺"), text);
       shell.button.disabled = Boolean(blocked);
     }
 
