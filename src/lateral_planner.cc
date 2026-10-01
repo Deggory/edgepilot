@@ -244,6 +244,7 @@ struct LateralPlanner::Impl {
     steering_pressed_threshold = steering.steering_pressed_threshold;
     lane_change_min_speed_mps = driving.lane_change_min_speed_kph / 3.6;
     laneless_mode = driving.laneless_mode;
+    turn_desire_enabled = driving.turn_desire;
     const double center_to_front = steering.center_to_front_m();
     constexpr double civic_mass = 1326.0 + 136.0;
     constexpr double civic_wheelbase = 2.70;
@@ -285,7 +286,11 @@ struct LateralPlanner::Impl {
     // 여기부터는 Lane 모드다(laneless 모드는 위에서 upstream_target으로 끝난다).
     bool use_model_path = false;
     const bool lane_change_off = lane_change_state == 0;
-    if (lane_probability < 0.3 && lane_change_off) {
+    if (turn_desire_active) {
+      // 회전 desire를 준 동안은 차선선 경로가 회전을 막지 않게 모델 경로를 따른다.
+      use_model_path = true;
+      laneless_buffer = true;
+    } else if (lane_probability < 0.3 && lane_change_off) {
       use_model_path = true;
       laneless_buffer = true;
     // 복귀 문턱을 openpilot의 0.5에서 0.4로 내렸다. 교차로 후 차선
@@ -510,6 +515,19 @@ struct LateralPlanner::Impl {
     previous_one_blinker = road_edge_blocked ? false : one_blinker;
     desire = lane_change_state >= 2 && direction == -1 ? 3
         : lane_change_state >= 2 && direction == 1 ? 4 : 0;
+
+    /* 회전 desire(실험, DrivingParams::turn_desire): 차선 변경 속도 미만 + 깜빡이 하나 + 결합 중.
+     * 모델 desire 입력은 rising edge 펄스이고 5초(100틱) 뒤 빠지므로 2.5초마다 한 번 내렸다
+     * 다시 올린다. 0.9.4·master DESIRES: 1 = turnLeft, 2 = turnRight. */
+    turn_desire_active = turn_desire_enabled && active && one_blinker && below_speed &&
+                         lane_change_state == 0;
+    if (turn_desire_active) {
+      const bool on = turn_desire_ticks % kTurnRepulseTicks < kTurnRepulseTicks / 2;
+      desire = on ? (vehicle.left_blinker ? 1 : 2) : 0;
+      ++turn_desire_ticks;
+    } else {
+      turn_desire_ticks = 0;
+    }
   }
 
   LanePlanner lane_planner;
@@ -521,6 +539,10 @@ struct LateralPlanner::Impl {
   int steering_pressed_threshold = 150;
   double lane_change_min_speed_mps = 30.0 / 3.6;
   bool laneless_mode = false;
+  bool turn_desire_enabled = false;
+  bool turn_desire_active = false;
+  int turn_desire_ticks = 0;
+  static constexpr int kTurnRepulseTicks = 50;  // 2.5 s at the 20 Hz model rate
   bool laneless_buffer = false;
   /* 0 = 차선 융합 경로, 1 = 모델 플랜. 전환 판정을 그대로 따라가되 램프로 움직인다. */
   double plan_mix = 1.0;

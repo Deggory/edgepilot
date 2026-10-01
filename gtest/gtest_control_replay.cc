@@ -1593,6 +1593,54 @@ TEST(ControlReplay, LaneChangeFollowsUpstreamDesireHelper) {
   EXPECT_EQ(r.desire, 0) << "차선선을 되살리면 끝난다";
 }
 
+/* 회전 desire(실험): 저속 + 깜빡이 + 결합 중이면 turnLeft/turnRight를 2.5초마다 다시 올리고,
+ * 그동안 차선 모드라도 모델 경로를 따른다. 스위치·깜빡이·속도·비활성 어느 것이든 풀리면 끝. */
+TEST(ControlReplay, TurnDesireRepulsesAtLowSpeedWithBlinker) {
+  SteeringParams steering;
+  DrivingParams driving;
+  driving.turn_desire = true;
+  LateralPlanner planner(steering, driving);
+  ModelState ms{};
+  ms.valid = 1;
+  const float v = 5.0f;  // 18 km/h < 30
+  for (int i = 0; i < kTrajectorySize; ++i) {
+    const float t = model_t_idx(i);
+    ms.model_t[i] = t;
+    ms.lane_t[i] = t;
+    ms.plan[i] = {v * t, 0.0f, 0.0f};
+  }
+  for (int l = 0; l < 4; ++l) ms.lane_probabilities[l] = 0.9f;  // 차선이 뚜렷해도
+  ms.desire_state[0] = 1.0f;
+  VehicleCanState vehicle{};
+  vehicle.left_blinker = true;
+  std::vector<int> seq;
+  bool model_path = true;
+  for (int i = 0; i < 120; ++i) {  // 6초
+    const LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true);
+    seq.push_back(r.desire);
+    model_path = model_path && r.laneless_mode;
+  }
+  EXPECT_EQ(seq[0], 1) << "깜빡이를 켜자마자 turnLeft";
+  EXPECT_EQ(seq[24], 1);
+  EXPECT_EQ(seq[25], 0) << "1.25초 뒤 내려 다음 rising edge를 만든다";
+  EXPECT_EQ(seq[50], 1) << "2.5초마다 다시 올린다";
+  EXPECT_EQ(seq[100], 1);
+  EXPECT_TRUE(model_path) << "회전 desire 동안은 모델 경로";
+
+  vehicle.left_blinker = false;
+  vehicle.right_blinker = true;
+  EXPECT_EQ(planner.update(ms, vehicle, v, 0.0f, true).desire, 2) << "오른쪽은 turnRight";
+  EXPECT_EQ(planner.update(ms, vehicle, 12.0f, 0.0f, true).desire, 0) << "차선 변경 속도 이상이면 아님";
+  EXPECT_EQ(planner.update(ms, vehicle, v, 0.0f, false).desire, 0) << "비활성이면 아님";
+  vehicle.right_blinker = false;
+  EXPECT_EQ(planner.update(ms, vehicle, v, 0.0f, true).desire, 0) << "깜빡이를 끄면 끝";
+
+  DrivingParams off;
+  LateralPlanner plain(steering, off);
+  vehicle.left_blinker = true;
+  EXPECT_EQ(plain.update(ms, vehicle, v, 0.0f, true).desire, 0) << "스위치가 꺼져 있으면 openpilot과 같다";
+}
+
 /* path_offset_m은 차선 중심에만 적용된다. 차선이 없어 모델 경로로 넘어가면(교차로) 적용하지
  * 않는다: 차 기준인 모델 경로에 더하면 위치 고정점 없이 차가 오프셋 쪽으로 계속 밀린다. */
 TEST(ControlReplay, PathOffsetOnlyShiftsLanePath) {

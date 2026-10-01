@@ -279,6 +279,15 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "increase": "켜면 차선이 보여도 모델 경로만 따라가고 HUD에 LANELESS로 표시됩니다.",
             "decrease": "끄면 차선 확률이 높을 때 차선 중심 경로를 섞는 Lane 모드로 돌아갑니다.",
         },
+        "turn_desire": {
+            "label": "교차로 회전 desire (실험)",
+            "section": "경로 모드",
+            "description": "결합 중 차선 변경 최소 속도보다 느릴 때 깜빡이를 켜면 모델에 좌·우회전 의도를 "
+            "알려 회전 경로를 잡게 합니다(openpilot에 없는 기능). 2.5초마다 다시 알리고, 그동안은 "
+            "Lane 모드라도 모델 경로를 따릅니다. 깜빡이를 끄거나 속도가 오르면 바로 풀립니다.",
+            "increase": "켜면 저속 깜빡이에서 모델이 회전 경로를 따릅니다. 처음엔 한적한 교차로에서 시험하세요.",
+            "decrease": "끄면 교차로 회전은 운전자가 합니다(openpilot과 같음).",
+        },
         "model_timeout_ms": param_meta(
             "모델 경로 유효 시간", "데이터 상태", "ms", 50, 50, 2000,
             "마지막 모델 경로를 유효하다고 인정하는 최대 시간입니다.",

@@ -45,6 +45,7 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
 
 constexpr JsonBoolField<DrivingParams> kDrivingBools[] = {
     {"laneless_mode", &DrivingParams::laneless_mode},
+    {"turn_desire", &DrivingParams::turn_desire},
 };
 constexpr JsonIntField<DrivingParams> kDrivingInts[] = {
     {"model_timeout_ms", 50, 2000, &DrivingParams::model_timeout_ms},

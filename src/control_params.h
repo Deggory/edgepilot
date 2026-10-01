@@ -80,6 +80,11 @@ struct DrivingParams {
   float mdps_speed_spoof_kph = 60.0f;
   float lane_change_min_speed_kph = 30.0f;
   bool laneless_mode = false;
+  /* 실험(상류 없음): 결합 중 차선 변경 최소 속도 미만에서 깜빡이를 켜면 모델에 좌·우회전
+   * desire를 준다. desire는 켜지는 순간의 펄스라 5초면 모델 입력에서 빠지므로 2.5초마다 다시 준다.
+   * 그동안은 차선 모드라도 모델 경로를 따른다. 2026-10-02 교차로 좌회전 재생(master 모델)에서
+   * 회전 초입의 오른쪽 뒤집힘이 사라졌다(개방 루프). */
+  bool turn_desire = false;
 };
 
 // params/steering.json을 읽어 SteeringParams에 반영한다.
