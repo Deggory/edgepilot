@@ -211,6 +211,15 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "increase": "켜면 확정된 추정 지연을 씁니다(길수록 커브를 일찍 꺾습니다).",
             "decrease": "끄면 steer_actuator_delay를 씁니다.",
         },
+        "use_locationd_learner_inputs": {
+            "label": "학습 입력을 locationd로",
+            "section": "실시간 학습",
+            "description": "paramsd·torqued가 요레이트·도로 롤을 locationd(IMU·카메라 융합)에서 받습니다"
+            "(openpilot과 같음). 끄면 ESP12 요레이트(자체 바이어스 추정)와 ESP12 횡가속으로 구한 롤을 씁니다. "
+            "locationd가 없거나 끊기면 ESP12로 돌아갑니다.",
+            "increase": "켜면 조향각 영점·롤·토크 절편이 locationd 기준으로 다시 수렴합니다(수 분).",
+            "decrease": "끄면 ESP12 기준으로 학습합니다.",
+        },
         "torque_lat_accel_offset": param_meta(
             "횡가속 편향 보정", "차량 중심 보정", "m/s²", 0.01, -1.0, 1.0,
             "장착 롤 오차 등이 만드는 상수 횡가속 편향을 feed-forward에서 "
@@ -640,6 +649,7 @@ LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
     "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
     "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored", "use_delay",
+    "localizer_inputs",
 )
 LEARNER_HISTORY_S = 600
 GRAVITY = 9.81
@@ -1701,6 +1711,7 @@ HTML = """<!doctype html>
         ...(flags.vehicle_inputs_ok ? [] : [["입력 끊김", "warn"]]),
         ...(flags.sensor_valid ? [] : [["센서 불일치", "warn"]]),
         flags.use_vehicle ? ["제어에 사용 중", "accent"] : ["섀도", "muted"],
+        flags.localizer_inputs ? ["입력 locationd", "accent"] : ["입력 ESP12", "muted"],
       ]);
       const children = [];
       const roll = deg(s.roll_rad);

@@ -60,6 +60,9 @@ struct SteeringParams {
   /* lagd(locationd) 조향 지연 사용. 켜고 lagd가 확정(5블록)되면 경로 지연(목표 곡률을 읽는
    * 시점)에 추정값을 쓴다. 토크 컨트롤러·torqued는 steer_actuator_delay를 그대로 쓴다(1단계). */
   bool use_live_delay = false;
+  /* paramsd·torqued 입력을 상류처럼 locationd 요레이트·롤로 받는다. 끄면 ESP12 요레이트(자체 바이어스
+   * 추정)와 ESP12 횡가속 롤. locationd가 없거나 낡으면 ESP12로 돌아간다. */
+  bool use_locationd_learner_inputs = false;
   float mass_kg = 1816.0f;
   float wheelbase_m = 2.855f;
   float center_to_front_ratio = 0.4f;

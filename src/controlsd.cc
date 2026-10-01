@@ -467,7 +467,8 @@ LearnerState make_learner_state(const LateralLearners &learners,
                 (learners.vehicle_restored() ? kLearnerVehicleRestored : 0U) |
                 (learners.torque_restore_status() == TorqueRestore::Restored
                      ? kLearnerTorqueRestored : 0U) |
-                (live_delay_in_use ? kLearnerUseDelay : 0U);
+                (live_delay_in_use ? kLearnerUseDelay : 0U) |
+                (learners.localizer_inputs() ? kLearnerLocalizerInputs : 0U);
   state.steer_ratio = static_cast<float>(v.steer_ratio);
   state.stiffness_factor = static_cast<float>(v.stiffness_factor);
   state.roll_rad = static_cast<float>(v.roll_rad);
@@ -890,11 +891,25 @@ int main() {
       }
       if (localization_open) {
         LocalizationState localization;
-        const bool fresh = localization_sub.read(&localization, sizeof(localization)) &&
-                           monotonic_now_ns() - localization.timestamp_ns < 2'000'000'000ULL;
+        const bool read = localization_sub.read(&localization, sizeof(localization));
+        const uint64_t age_ns = monotonic_now_ns() - localization.timestamp_ns;
+        const bool fresh = read && age_ns < 2'000'000'000ULL;
         controller.set_live_delay(localization.lateral_delay_s,
                                   fresh && localization.lag_status ==
                                       static_cast<uint32_t>(LateralLagStatus::Estimated));
+        /* 상류 paramsd·torqued 입력. 자세가 무효면 관측도 무효(상류)이고, locationd가 없거나
+         * 0.5초 넘게 낡았으면 ESP12 입력으로 돌아간다. */
+        const uint32_t pose_ok = kLocalizationFilterValid | kLocalizationInputsOk |
+                                 kLocalizationSensorsOk | kLocalizationPosenetOk;
+        const bool use = config.steering_params.use_locationd_learner_inputs && read &&
+                         age_ns < 500'000'000ULL;
+        const bool valid = (localization.flags & pose_ok) == pose_ok;
+        learners.set_localizer_yaw_rate(use, localization.angular_velocity_calib[2], valid);
+        learners.set_localizer_roll(use, localization.orientation_calib[0], localization.orientation_std[0],
+                                    valid);
+      } else {
+        learners.set_localizer_yaw_rate(false, 0.0, false);
+        learners.set_localizer_roll(false, 0.0, 0.0, false);
       }
 
       /* IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness

@@ -362,6 +362,7 @@ public:
   }
   /* locationd 요레이트(보정 좌표계, 우측 양수). use면 ESP12 요레이트·자체 바이어스 추정 대신
    * 쓴다(상류 paramsd·torqued는 livePose 각속도를 쓴다). */
+  bool localizer_inputs() const { return use_localizer_yaw_; }
   void set_localizer_yaw_rate(bool use, double yaw_rate_right_rad_s, bool valid) {
     use_localizer_yaw_ = use;
     localizer_yaw_right_ = yaw_rate_right_rad_s;

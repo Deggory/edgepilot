@@ -728,6 +728,34 @@ VehicleCanState driving_vehicle(double t) {
   return v;
 }
 
+// 상류 입력: locationd 요레이트(우측 양수)·롤로 ESP12 입력을 대신한다. 자세가 무효면 관측도 무효.
+TEST(LateralLearners, LocalizerInputsReplaceEsp) {
+  const SteeringParams sp;
+  VehicleCanState vehicle = driving_vehicle(1.0);
+  vehicle.yaw_rate_valid = true;
+  vehicle.yaw_rate_rad_s = 0.02f;  // ESP12 좌측 양수
+  vehicle.lat_accel_valid = true;
+  LateralLearners l(sp, "", "", 1);
+  l.update(vehicle, 1.0, 0.5, true, 0, false);
+  EXPECT_FALSE(l.localizer_inputs());
+  EXPECT_GT(l.last_vehicle_input().yaw_rate_rad_s, 0.0) << "기본은 ESP12";
+
+  l.set_localizer_yaw_rate(true, 0.05, true);  // 우측 0.05 rad/s
+  l.set_localizer_roll(true, 0.02, 0.003, true);
+  l.update(vehicle, 1.01, 0.5, true, 0, false);
+  EXPECT_TRUE(l.localizer_inputs());
+  EXPECT_NEAR(l.last_vehicle_input().yaw_rate_rad_s, -0.05, 1e-12) << "좌측 양수로 바꿔 넣는다";
+  EXPECT_TRUE(l.last_vehicle_input().localizer_roll_given);
+  EXPECT_NEAR(l.last_torque_input().roll_rad, 0.02, 1e-12) << "torqued는 자세 롤을 그대로";
+  EXPECT_NEAR(l.last_torque_input().yaw_rate_rad_s, 0.05, 1e-12);
+
+  l.set_localizer_yaw_rate(true, 0.05, false);
+  l.set_localizer_roll(true, 0.02, 0.003, false);
+  l.update(vehicle, 1.02, 0.5, true, 0, false);
+  EXPECT_FALSE(l.last_vehicle_input().yaw_rate_valid) << "자세가 무효면 요레이트 관측도 무효";
+  EXPECT_FALSE(l.last_torque_input().pose_valid);
+}
+
 TEST(LateralLearners, LearnersGlue) {
   const SteeringParams sp;
   VehicleCanState vehicle = driving_vehicle(1.0);
