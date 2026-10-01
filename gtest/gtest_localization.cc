@@ -111,6 +111,7 @@ TEST(Localization, PoseKalmanConvergesAtRest)
     loc.set_imu_extrinsic(calib);  // 칩 축만 본다
     for (int i = 0; i < 104 * 60; ++i) {
         const double t = 10.0 + i / 104.0;
+        loc.handle_car_speed(t, 0.0, true);  // 정차(CAN 차속 0)
         loc.handle_imu(t, accel_chip, gyro_chip);
         if (i % 5 == 0) loc.handle_camera_odometry(t + 0.02, zero, zero, small, small);
     }
@@ -259,20 +260,21 @@ TEST(Localization, PipelineOutputsPoseAndLagIndependentOfImuBatching)
 
 /* 정차 중 모델이 가짜 움직임(2026-09-29 책상: 전진 15 m/s, 요 −0.25 rad/s)을 내도, CAN 차속이
  * 0이면 카메라를 쓰지 않아 자세가 IMU 중력 기울기에 머물고 입력도 정상으로 남는다.
- * 차속을 모르면(상류와 같이) 가드가 없고 자세가 틀어진다. */
+ * 차속을 모를 때(부팅 직후)도 카메라를 쓰지 않는다. */
 TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
 {
     const float accel[3] = {0.16f, 9.76f, 0.08f}, gyro[3] = {0.0396f, 0.0157f, -0.0222f};  // 보드 책상 실측
     const float rot_std[3] = {0.0009f, 0.0009f, 0.0009f}, trans_std[3] = {0.05f, 0.05f, 0.05f};
     const double calib[3] = {0, 0, 0};
-    auto run = [&](bool speed_known, double *roll, double *pitch, bool *inputs_ok, uint64_t *guarded) {
+    // speed_known_from: 이 시각부터 CAN 차속이 들어온다(부팅 직후에는 없다)
+    auto run = [&](double speed_known_from, double *roll, double *pitch, bool *inputs_ok, uint64_t *guarded) {
         LocationEstimator loc;
         loc.handle_calibration(calib);
         loc.set_imu_extrinsic(calib);
         for (int i = 0; i < 104 * 240; ++i) {
             const double t = 10.0 + i / 104.0;
             const bool fake = t >= 70.0 && t < 190.0;
-            loc.handle_car_speed(t, 0.0, speed_known);
+            loc.handle_car_speed(t, 0.0, t >= speed_known_from);
             loc.handle_imu(t, accel, gyro);
             if (i % 5 == 0) {
                 const float trans[3] = {fake ? 15.0f : 0.0f, 0, 0};
@@ -291,14 +293,19 @@ TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
     double roll, pitch;
     bool inputs_ok;
     uint64_t guarded;
-    run(true, &roll, &pitch, &inputs_ok, &guarded);
+    run(0.0, &roll, &pitch, &inputs_ok, &guarded);
     EXPECT_NEAR(roll, true_roll, 0.5);
     EXPECT_NEAR(pitch, true_pitch, 0.5);
     EXPECT_TRUE(inputs_ok);
     EXPECT_NEAR(static_cast<double>(guarded), 120.0 * 104.0 / 5.0, 5.0);  // 가짜 구간의 카메라 관측 전부
-    run(false, &roll, &pitch, &inputs_ok, &guarded);
-    EXPECT_EQ(guarded, 0U);
-    EXPECT_GT(std::hypot(roll - true_roll, pitch - true_pitch), 3.0) << "가드가 없으면 틀어진다(책상 현상)";
+    /* 부팅: 가짜 움직임이 나오는 동안 차속을 모르다가(10~130 s) 이후 CAN 차속 0이 들어온다.
+     * 모르는 동안 카메라를 쓰지 않아 자이로가 버려지지 않고, 차속이 오면 정상 기울기로 돌아온다
+     * (예전에는 모르면 가드가 없어 책상처럼 틀어지고 inputs_ok가 7분 가까이 떨어졌다). */
+    run(130.0, &roll, &pitch, &inputs_ok, &guarded);
+    EXPECT_NEAR(roll, true_roll, 0.5);
+    EXPECT_NEAR(pitch, true_pitch, 0.5);
+    EXPECT_TRUE(inputs_ok);
+    EXPECT_GE(static_cast<double>(guarded), 120.0 * 104.0 / 5.0) << "모르는 동안의 관측은 쓰지 않는다";
 }
 
 /* 외부 회전: 칩이 카메라 대비 앞 2.2°·오른쪽 1.0° 기운 보드를 수평에 두면, 원시 가속도는 그만큼
@@ -321,6 +328,7 @@ TEST(Localization, ImuExtrinsicLevelsTiltedChip)
         if (!apply) loc.set_imu_extrinsic(calib);
         for (int i = 0; i < 104 * 60; ++i) {
             const double t = 10.0 + i / 104.0;
+            loc.handle_car_speed(t, 0.0, true);
             loc.handle_imu(t, accel_chip, zero);
             if (i % 5 == 0) loc.handle_camera_odometry(t + 0.02, zero, zero, small, small);
         }

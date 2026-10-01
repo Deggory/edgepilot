@@ -460,16 +460,21 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
         return;
     }
     /* 차속 가드: 모델이 차속과 다른 움직임을 말하면(정차 중 가짜 움직임 등) 관측을 버린다.
-     * 입력 이상으로 세지 않고(inputs_ok 유지), 교차검사 기준도 풀어 자이로가 버려지지 않게 한다. */
-    if (car_speed_ok(t)) {
+     * 차속을 모르면(부팅 직후 controlsd·CAN 전, CAN 끊김) 대조할 수 없으니 쓰지 않는다
+     * (2026-10-02 부팅 30초 동안 가짜 20 m/s로 롤 −70°·피치 −54°까지 틀어지고 자이로 거부가
+     * 쌓여 7분 가까이 inputs_ok가 떨어졌다). 입력 이상으로 세지 않고(inputs_ok 유지), 교차검사
+     * 기준도 풀어 자이로가 버려지지 않게 한다. */
+    bool guard = !car_speed_ok(t);
+    if (!guard) {
         const double speed_err = std::fabs(static_cast<double>(trans[0]) - car_speed_);
         const bool fake_rotation = car_speed_ <= kStoppedSpeed && norm(rot_device) > kStoppedMaxRotation;
-        if (speed_err > std::max(kCamSpeedErrAbs, kCamSpeedErrRel * car_speed_) || fake_rotation) {
-            ++counters_.camera_speed_guard;
-            camera_guarded_ = true;
-            camodo_yawrate_ = {0.0, 10.0};
-            return;
-        }
+        guard = speed_err > std::max(kCamSpeedErrAbs, kCamSpeedErrRel * car_speed_) || fake_rotation;
+    }
+    if (guard) {
+        ++counters_.camera_speed_guard;
+        camera_guarded_ = true;
+        camodo_yawrate_ = {0.0, 10.0};
+        return;
     }
     camera_guarded_ = false;
     seen_camera_ = true;
