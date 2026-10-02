@@ -148,12 +148,17 @@ struct ModelState {
     // 녹화 v6부터. plan의 yaw·yaw rate(laneless 모드가 openpilot 메인처럼 곡률을 만든다).
     float plan_yaw[kTrajectorySize] = {};
     float plan_yaw_rate[kTrajectorySize] = {};
+    /* 녹화 v7부터. 이 프레임 워프에 쓴 카메라 장착(웹 기기 설정, modeld가 천천히 옮긴 값).
+     * 모델 점은 이만큼 오른쪽 가상 카메라 기준이라 HUD가 같은 값으로 되돌려 그린다. */
+    float camera_offset_m = 0.0f;
+    float camera_height_m = 0.0f;
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
  * kRecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(ModelState) == 3520 && offsetof(ModelState, plan_yaw) == 3256,
+static_assert(sizeof(ModelState) == 3528 && offsetof(ModelState, plan_yaw) == 3256 &&
+                  offsetof(ModelState, camera_offset_m) == 3520,
               "ModelState layout is shared with the recording reader");
 // param_server.py(MODEL_CALIBRATION_OFFSET)가 이 위치에서 보정 상태를 읽는다.
 static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationState) == 32,
@@ -485,9 +490,9 @@ static_assert(sizeof(ControlState) == 240,
 static_assert(sizeof(PandaState) == 96,
               "PandaState is recorded as-is: bump kRecordingVersion");
 /* 기록 버전과 저장 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다. */
-static_assert(kRecordingVersion == 6 && sizeof(ModelState) == 3520 &&
+static_assert(kRecordingVersion == 7 && sizeof(ModelState) == 3528 &&
                   sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
-              "recording v6 pins these payloads; bump kRecordingVersion together");
+              "recording v7 pins these payloads; bump kRecordingVersion together");
 
 /* modeld가 발행 직전에, overlayd와 hud_snapshot이 소비 직후에 쓴다. */
 void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,

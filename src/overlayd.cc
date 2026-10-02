@@ -18,7 +18,6 @@
 #include <opencv2/core.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -224,11 +223,10 @@ private:
     }
 
     /* 웹 기기 설정: 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다(시작 때 읽은 값은 소리 없이).
-     * 카메라 장착 오프셋은 HUD 투영에 쓴다(모델 출력이 그만큼 옮겨진 가상 카메라 기준이다). */
+     * 카메라 장착 오프셋은 modeld가 그 프레임에 쓴 값을 ModelState로 받는다(projection_from_model_state). */
     void apply_device_settings(uint64_t now_ns)
     {
         if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
-        latest_projection_.lateral_offset_m = device_settings_.camera_offset_m;
         const float percent = device_settings_.alert_volume_percent;
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
@@ -246,7 +244,6 @@ private:
             fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
         latest_output_ = parsed_from_model_state(latest_model_state_);
         latest_projection_ = projection_from_model_state(latest_model_state_);
-        latest_projection_.lateral_offset_m = device_settings_.camera_offset_m;
         return true;
     }
 

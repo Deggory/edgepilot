@@ -163,5 +163,8 @@ ParsedModelOutput parsed_from_model_state(const ModelState &state)
 
 ProjectionState projection_from_model_state(const ModelState &state)
 {
-    return make_projection_state(state.calibration.roll, state.calibration.pitch, state.calibration.yaw);
+    ProjectionState projection =
+        make_projection_state(state.calibration.roll, state.calibration.pitch, state.calibration.yaw);
+    projection.lateral_offset_m = state.camera_offset_m;
+    return projection;
 }

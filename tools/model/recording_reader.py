@@ -142,6 +142,8 @@ def model_state_layout(version: int) -> dict[str, int]:
       v4 dropped stop_line (4048)
       v5 dropped plan_position_stds and plan_orientations (3256)
       v6 appended plan_yaw and plan_yaw_rate (3520)
+      v7 appended camera_offset_m and camera_height_m (3528), the camera
+         mount the warp used for that frame
     Callers should check ``layout["__size__"]`` against the payload size they
     actually saw so a future layout change fails loudly instead of decoding
     garbage.
@@ -161,6 +163,8 @@ def model_state_layout(version: int) -> dict[str, int]:
     fields += [("pose", 52), ("calibration", 32)]
     if version >= 6:
         fields += [("plan_yaw", 4 * n), ("plan_yaw_rate", 4 * n)]
+    if version >= 7:
+        fields += [("camera_offset_m", 4), ("camera_height_m", 4)]
 
     layout, offset = {}, 0
     for name, size in fields:

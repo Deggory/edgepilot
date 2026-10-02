@@ -1,6 +1,7 @@
 /* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(K230LOG1), 세그먼트
  * 프레임 인덱스(K230IDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
  * 최종 경로 이동. 보드·인코더 없이 합성 레코드로 검사한다. */
+#include "recorded_model_state.h"
 #include "recording_format.h"
 #include "recording_writer.h"
 
@@ -203,6 +204,31 @@ TEST(RecordingWriter, RouteOnDisk) {
   ASSERT_EQ(snapshot[0], "steering.json");
 
   std::system(("rm -rf '" + root + "'").c_str());
+}
+
+/* 진단 도구가 옛 녹화의 ModelState를 현재 구조체로 읽는다: v7은 카메라 장착까지, v6은 그 앞까지
+ * (장착은 0), v5는 plan_yaw 앞까지. */
+TEST(RecordedModelState, DecodesV5ToV7) {
+  ModelState src;
+  src.frame_id = 42;
+  src.calibration.yaw = 0.01f;
+  src.plan_yaw[3] = 0.2f;
+  src.camera_offset_m = 0.15f;
+  src.camera_height_m = 1.3f;
+  const char *bytes = reinterpret_cast<const char *>(&src);
+  ModelState out;
+  ASSERT_TRUE(decode_recorded_model_state(bytes, sizeof(ModelState), 7, &out));
+  EXPECT_EQ(out.frame_id, 42u);
+  EXPECT_FLOAT_EQ(out.camera_offset_m, 0.15f);
+  EXPECT_FLOAT_EQ(out.camera_height_m, 1.3f);
+  ASSERT_TRUE(decode_recorded_model_state(bytes, offsetof(ModelState, camera_offset_m), 6, &out));
+  EXPECT_FLOAT_EQ(out.plan_yaw[3], 0.2f);
+  EXPECT_FLOAT_EQ(out.camera_offset_m, 0.0f);
+  ASSERT_TRUE(decode_recorded_model_state(bytes, offsetof(ModelState, plan_yaw), 5, &out));
+  EXPECT_FLOAT_EQ(out.calibration.yaw, 0.01f);
+  EXPECT_FLOAT_EQ(out.plan_yaw[3], 0.0f);
+  EXPECT_FALSE(decode_recorded_model_state(bytes, offsetof(ModelState, camera_offset_m), 7, &out))
+      << "v7이라면서 짧으면 거부";
 }
 
 }  // namespace

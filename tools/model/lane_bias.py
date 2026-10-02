@@ -62,13 +62,14 @@ class RouteLateral:
         self.plan_y = []         # [N, TRAJECTORY_SIZE] model path
         self.left_prob = []
         self.right_prob = []
+        self.camera_offset = []  # [N] warp camera offset (recording v7+), else empty
         self.model_ts = []
         self.control = {k: [] for k in
                         ("ts", "active", "speed_kph", "steer_deg",
                          "desired_curv", "actual_curv", "driver_torque")}
 
     def finish(self):
-        for key in ("lane_offset", "plan_y", "left_prob", "right_prob"):
+        for key in ("lane_offset", "plan_y", "left_prob", "right_prob", "camera_offset"):
             setattr(self, key, np.array(getattr(self, key)))
         self.model_ts = np.array(self.model_ts, np.uint64)
         self.control = {k: np.array(v) for k, v in self.control.items()}
@@ -95,6 +96,8 @@ def read_route_lateral(route: Path) -> RouteLateral:
                 out.plan_y.append(plan[1::3])
                 out.left_prob.append(probs[1])
                 out.right_prob.append(probs[2])
+                if "camera_offset_m" in layout:
+                    out.camera_offset.append(_floats(rec.payload, layout["camera_offset_m"], 1)[0])
                 out.model_ts.append(
                     struct.unpack_from("<Q", rec.payload,
                                        layout["capture_timestamp_ns"])[0])
@@ -111,14 +114,16 @@ def read_route_lateral(route: Path) -> RouteLateral:
 
 
 def route_offsets(route: Path) -> dict[str, float]:
-    """The lateral tuning that was active on this drive, from its snapshot."""
-    path = route / "params" / "steering.json"
-    if not path.exists():
-        return {}
-    params = json.loads(path.read_text())
-    return {k: params[k] for k in
-            ("camera_offset_m", "path_offset_m", "angle_offset_deg")
-            if k in params}
+    """The lateral tuning that was active when this drive started, from its
+    param snapshot. camera_offset_m lives in display.json (web device settings)."""
+    out = {}
+    for name, keys in (("steering.json", ("path_offset_m", "angle_offset_deg")),
+                       ("display.json", ("camera_offset_m",))):
+        path = route / "params" / name
+        if path.exists():
+            params = json.loads(path.read_text())
+            out.update({k: params[k] for k in keys if k in params})
+    return out
 
 
 def analyse(route: Path) -> None:
@@ -170,6 +175,20 @@ def analyse(route: Path) -> None:
         raw = intercept + tuning["path_offset_m"]
         print(f"  path_offset_m={tuning['path_offset_m']} is already applied, so the "
               f"uncompensated translation is about {raw * 100:+.1f} cm")
+    # The warp moves the model's viewpoint camera_offset_m to the right of the
+    # camera, so a lane centre at y (camera) reads y - offset in the model.
+    if len(data.camera_offset):
+        used = data.camera_offset[keep]
+        offset = float(used.mean())
+        if used.max() - used.min() > 0.005:
+            print(f"  camera_offset_m changed during the drive "
+                  f"({used.min():+.3f} .. {used.max():+.3f} m); using the mean")
+    else:
+        offset = float(tuning.get("camera_offset_m", 0.0))
+    if offset:
+        print(f"  camera_offset_m={offset:+.3f} m is in the warp: the translation above is from "
+              f"the virtual camera; from the physical camera it is about "
+              f"{(intercept + offset) * 100:+.1f} cm")
 
 
 def main() -> None:

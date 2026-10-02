@@ -2,6 +2,7 @@
  * 도로 점이 화면의 같은 비율 위치에 놓여야 한다. 폭을 하드코딩하면 오버레이가 영상과
  * 어긋난다. */
 #include "app_config.h"
+#include "ipc_messages.h"
 #include "projection.h"
 
 #include <cstdlib>
@@ -72,6 +73,13 @@ TEST(Projection, CameraOffsetDrawsModelPointsAtRealPosition) {
   auto shown_x = [&](float y) { return 640 - 1 - project(plain, 15.0f, y, 1.2f, 640, 480).x; };
   EXPECT_GT(shown_x(1.8f), 320);
   EXPECT_LT(shown_x(-1.8f), 320);
+}
+
+// HUD는 modeld가 그 프레임 워프에 쓴 오프셋(ModelState)으로 그린다
+TEST(Projection, ModelStateCarriesCameraOffset) {
+  ModelState ms;
+  ms.camera_offset_m = 0.25f;
+  EXPECT_FLOAT_EQ(projection_from_model_state(ms).lateral_offset_m, 0.25f);
 }
 
 }  // namespace

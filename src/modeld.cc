@@ -16,9 +16,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -139,8 +142,65 @@ private:
     bool right_blinker_ = false;
 };
 
+/* 카메라 장착(웹 기기 설정 camera_offset_m·camera_height_m). 라이브는 display.json을 1초마다 보고
+ * 바뀐 오프셋은 초당 kRateMps로 옮긴다: 모델은 t−4·t 두 프레임과 4.8초 특징 이력을 보므로 한 번에
+ * 바꾸면 차가 옆으로 순간 이동한 것처럼 보여 pose·보정·locationd·경로가 튄다(보정 워프도 같은
+ * 이유로 kSmoothCycles에 걸쳐 옮긴다). 시작할 때는 첫 프레임부터 그대로 쓴다. 재생은 보드 설정을
+ * 읽지 않고 EDGEPILOT_CAMERA_OFFSET_M·EDGEPILOT_CAMERA_HEIGHT_M(기본 0, 모델 높이)만 쓴다. */
+class CameraMount
+{
+public:
+    static constexpr float kRateMps = 0.1f;
+    static constexpr float kFrameS = 0.05f;
+
+    explicit CameraMount(bool live) : live_(live)
+    {
+        if (live_) {
+            file_.poll(monotonic_now_ns(), &target_);
+        } else {
+            target_.camera_offset_m = env_setting("EDGEPILOT_CAMERA_OFFSET_M", &DeviceSettings::camera_offset_m);
+            target_.camera_height_m = env_setting("EDGEPILOT_CAMERA_HEIGHT_M", &DeviceSettings::camera_height_m);
+        }
+        offset_m_ = target_.camera_offset_m;
+        log();
+    }
+
+    // 매 프레임 실행 직전. 이번 프레임 워프에 쓴 값이 offset_m()·height_m()이다.
+    void apply(SupercomboModel &model)
+    {
+        if (live_ && file_.poll(monotonic_now_ns(), &target_)) log();
+        const float step = kRateMps * kFrameS;
+        offset_m_ += std::clamp(target_.camera_offset_m - offset_m_, -step, step);
+        model.set_camera_mount(offset_m_, target_.camera_height_m);
+    }
+    float offset_m() const { return offset_m_; }
+    float height_m() const { return target_.camera_height_m; }
+
+private:
+    static float env_setting(const char *name, float DeviceSettings::*member)
+    {
+        const DeviceSettings defaults;
+        const char *text = std::getenv(name);
+        if (!text || !*text) return defaults.*member;
+        char *end = nullptr;
+        const float value = std::strtof(text, &end);
+        if (*end != '\0' || !std::isfinite(value)) throw std::runtime_error(std::string(name) + " is not a number");
+        return clamp_device_setting(member, value);
+    }
+    void log() const
+    {
+        std::fprintf(stderr, "\nmodeld: camera mount offset=%+.3f m height=%.2f m (%s)\n", target_.camera_offset_m,
+                     target_.camera_height_m, live_ ? "display.json" : "replay env");
+    }
+
+    bool live_ = false;
+    DeviceSettingsFile file_;
+    DeviceSettings target_;
+    float offset_m_ = 0.0f;
+};
+
 bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
-                    CalibrationService &calibration,
+                    CalibrationService &calibration, const CameraMount &mount,
                     uint64_t frame_id, uint64_t capture_timestamp_ns, float model_ms,
                     float v_ego)
 {
@@ -148,19 +208,14 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
     float input_rpy[3];
     calibration.input_rpy(input_rpy);
     model.set_input_calibration(input_rpy);
-    // 웹 기기 설정의 카메라 장착(1초마다 확인)
-    static DeviceSettingsFile settings_file;
-    static DeviceSettings settings;
-    if (settings_file.poll(monotonic_now_ns(), &settings))
-        std::fprintf(stderr, "\nmodeld: camera mount offset=%+.3f m height=%.2f m\n", settings.camera_offset_m,
-                     settings.camera_height_m);
-    model.set_camera_mount(settings.camera_offset_m, settings.camera_height_m);
 
     const ProjectionState projection = calibration.projection();
 
     ModelState state;
     fill_model_state(state, parsed, projection, calibration.snapshot(),
                           frame_id, capture_timestamp_ns, model_ms);
+    state.camera_offset_m = mount.offset_m();
+    state.camera_height_m = mount.height_m();
     return model_pub.publish(&state, sizeof(state));
 }
 
@@ -184,6 +239,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
     model.set_input_calibration(initial_rpy);
+    CameraMount mount(false);
 
     Nv12Frame frame;
     std::vector<float> raw;
@@ -193,6 +249,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
     RateWindow window;
 
     while (!g_stop && source.read(frame)) {
+        mount.apply(model);
         const uint64_t t0 = monotonic_now_ns();
         const bool ok = model.run_frame_nv12(frame.data.data(), frame.width, frame.height, raw);
         const uint64_t t1 = monotonic_now_ns();
@@ -200,7 +257,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
             raw_dump.append(raw);
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
-            if (!publish_output(model_pub, model, parsed, calibration,
+            if (!publish_output(model_pub, model, parsed, calibration, mount,
                                 processed, monotonic_now_ns(), model_ms, 0.0f)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
@@ -267,6 +324,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
     model.set_input_calibration(initial_rpy);
+    CameraMount mount(true);
     EgoStateReader ego;
     std::vector<float> raw;
     uint64_t last_frame_seq = 0;
@@ -320,6 +378,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
         }
         ego.poll();
         model.set_desire(ego.desire(), ego.left_blinker(), ego.right_blinker());
+        mount.apply(model);
 
         // 녹화기(아직 포팅 전)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
         if (!record_frame_pub.publish(&meta, sizeof(meta))) {
@@ -337,7 +396,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
         if (ok) {
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
-            if (!publish_output(model_pub, model, parsed, calibration,
+            if (!publish_output(model_pub, model, parsed, calibration, mount,
                                 meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego())) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;

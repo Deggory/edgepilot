@@ -29,6 +29,14 @@ inline constexpr JsonFloatField<DeviceSettings> kDeviceSettingsFloats[] = {
     {"camera_height_m", 0.8f, 2.0f, &DeviceSettings::camera_height_m},
 };
 
+/* 표의 허용 범위로 자른다(환경 변수로 받은 값 등). */
+inline float clamp_device_setting(float DeviceSettings::*member, float value)
+{
+    for (const auto &field : kDeviceSettingsFloats)
+        if (field.member == member) return value < field.lo ? field.lo : value > field.hi ? field.hi : value;
+    return value;
+}
+
 /* 다른 파라미터 파일과 같은 로더: 값이 잘못되면(숫자가 아님, NaN) 예외 대신 false와 error. */
 inline bool load_device_settings(const std::string &path, DeviceSettings *out, std::string *error)
 {
