@@ -38,7 +38,7 @@ struct SteeringParams {
   // paramsd 학습값(2026-09-27): 조향비 14.72, 타이어 강성 0.83.
   float steer_ratio = 14.72f;
   float tire_stiffness_factor = 0.83f;
-  float steer_actuator_delay = 0.34f;
+  float steer_actuator_delay = 0.42f;
   bool avoid_lkas_fault_enabled = true;
   float avoid_lkas_fault_max_angle_deg = 85.0f;
   int avoid_lkas_fault_max_frames = 89;

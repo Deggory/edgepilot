@@ -32,7 +32,7 @@ struct LateralLagConfig {
     double max_lat_accel_diff = 0.6;
     double min_lat_accel_range = 0.5;
     double min_confidence = 0.7;
-    double initial_lag = 0.34;      // steering.json steer_actuator_delay
+    double initial_lag = 0.42;      // steering.json steer_actuator_delay
 };
 
 struct LateralLagInput {

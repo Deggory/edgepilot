@@ -9,7 +9,7 @@
   "torque_output_sign": -1,
   "steer_ratio": 14.72,
   "tire_stiffness_factor": 0.83,
-  "steer_actuator_delay": 0.34,
+  "steer_actuator_delay": 0.42,
   "avoid_lkas_fault_enabled": true,
   "avoid_lkas_fault_max_angle_deg": 85.0,
   "avoid_lkas_fault_max_frames": 89,
