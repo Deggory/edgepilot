@@ -6,25 +6,20 @@
 #include "ipc_channels.h"
 #include "ipc_messages.h"
 #include "overlay_renderer.h"
+#include "device_settings.h"
 #include "projection.h"
 #include "system_monitor.h"
 #include "maix_display.h"
-#include "utils_json.h"
 
 #include <linux/videodev2.h>
 #include <signal.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include <opencv2/core.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
-#include <fstream>
-#include <iterator>
-#include <thread>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -92,65 +87,6 @@ struct StageStats {
     }
 };
 
-/* 웹 기기 설정(params/display.json)을 1초마다 본다. 알림음 크기(alert_volume_percent)는 바뀌면
- * 적용한 뒤 확인음을 한 번 내고, 카메라 장착 오프셋(camera_offset_m)은 차선 투영에 쓴다(모델 출력이
- * 그만큼 옮겨진 가상 카메라 기준이라 화면에서 되돌린다). SD가 녹화로 바쁠 때 stat/open이 몇 초씩 막힐 수
- * 있어 화면 루프가 아닌 자기 스레드에서 읽는다. 값이 없으면 시작 크기(EDGEPILOT_ALERT_VOLUME)를
- * 그대로 둔다. */
-class SoundSettingsWatcher {
-public:
-    explicit SoundSettingsWatcher(AlertSound *sound)
-        : sound_(sound), path_(param_path("display.json"))
-    {
-        thread_ = std::thread(&SoundSettingsWatcher::loop, this);
-    }
-    ~SoundSettingsWatcher()
-    {
-        stop_ = true;
-        if (thread_.joinable()) thread_.join();
-    }
-    float camera_offset_m() const { return camera_offset_m_.load(); }
-    SoundSettingsWatcher(const SoundSettingsWatcher &) = delete;
-    SoundSettingsWatcher &operator=(const SoundSettingsWatcher &) = delete;
-
-private:
-    void loop()
-    {
-        bool first = true;
-        struct timespec last_mtime = {};
-        while (!stop_) {
-            struct stat st {};
-            if (stat(path_.c_str(), &st) == 0 &&
-                (first || st.st_mtim.tv_sec != last_mtime.tv_sec ||
-                 st.st_mtim.tv_nsec != last_mtime.tv_nsec)) {
-                last_mtime = st.st_mtim;
-                std::ifstream file(path_);
-                const std::string text((std::istreambuf_iterator<char>(file)),
-                                       std::istreambuf_iterator<char>());
-                float offset = 0.0f;
-                if (!parse_json_float_value(text, "camera_offset_m", &offset) || !std::isfinite(offset)) offset = 0.0f;
-                camera_offset_m_ = std::clamp(offset, -0.35f, 0.35f);  // modeld CameraMountSettings와 같은 한계
-                float percent = 0.0f;
-                if (sound_->enabled() && parse_json_float_value(text, "alert_volume_percent", &percent) &&
-                    std::fabs(percent - sound_->volume_percent()) > 0.5f) {
-                    sound_->set_volume_percent(percent);
-                    std::fprintf(stderr, "\noverlayd: alert volume %.0f%%\n", sound_->volume_percent());
-                    if (!first) sound_->play(AlertSoundId::engage);  // 바꾼 크기를 들려준다
-                }
-                first = false;
-            }
-            for (int i = 0; i < 10 && !stop_; ++i)
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
-
-    AlertSound *sound_;
-    std::string path_;
-    std::atomic<float> camera_offset_m_{0.0f};
-    std::atomic<bool> stop_{false};
-    std::thread thread_;
-};
-
 class OverlayDisplay {
 public:
     explicit OverlayDisplay(const AppConfig &config)
@@ -187,6 +123,7 @@ public:
             pending_redraw_ = update_aux_state() || pending_redraw_;
             pending_redraw_ = update_turn_signal(loop_start) || pending_redraw_;
             play_test_sound();
+            apply_device_settings(loop_start);
             update_preview();
             if (pending_redraw_ && loop_start - last_overlay_draw_ns_ >= kOverlayIntervalNs) {
                 pending_redraw_ = false;
@@ -286,6 +223,21 @@ private:
         return true;
     }
 
+    /* 웹 기기 설정: 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다(시작 때 읽은 값은 소리 없이).
+     * 카메라 장착 오프셋은 HUD 투영에 쓴다(모델 출력이 그만큼 옮겨진 가상 카메라 기준이다). */
+    void apply_device_settings(uint64_t now_ns)
+    {
+        if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
+        latest_projection_.lateral_offset_m = device_settings_.camera_offset_m;
+        const float percent = device_settings_.alert_volume_percent;
+        if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
+            sound_.set_volume_percent(percent);
+            std::fprintf(stderr, "\noverlayd: alert volume %.0f%%\n", sound_.volume_percent());
+            if (device_settings_read_) sound_.play(AlertSoundId::engage);  // 바꾼 크기를 들려준다
+        }
+        device_settings_read_ = true;
+    }
+
     bool update_model()
     {
         if (!poll(model_state_sub_, &latest_model_state_, &latest_model_seq_)) return false;
@@ -294,7 +246,7 @@ private:
             fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
         latest_output_ = parsed_from_model_state(latest_model_state_);
         latest_projection_ = projection_from_model_state(latest_model_state_);
-        latest_projection_.lateral_offset_m = sound_settings_.camera_offset_m();
+        latest_projection_.lateral_offset_m = device_settings_.camera_offset_m;
         return true;
     }
 
@@ -452,7 +404,9 @@ private:
 
     OverlayRenderer overlay_;
     AlertSound sound_;
-    SoundSettingsWatcher sound_settings_{&sound_};  // sound_ 뒤에 선언해야 먼저 멈춘다
+    DeviceSettingsFile device_settings_file_;
+    DeviceSettings device_settings_;
+    bool device_settings_read_ = false;
     bool previous_soft_disabling_ = false;
     bool previous_steer_saturated_ = false;
     int test_sounds_played_ = 0;
