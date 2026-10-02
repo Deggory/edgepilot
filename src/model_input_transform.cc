@@ -64,6 +64,15 @@ void ModelInputTransform::set_calibration(float roll, float pitch, float yaw)
     map_valid_ = false;
 }
 
+void ModelInputTransform::set_camera_mount(float offset_m, float height_m)
+{
+    if (!std::isfinite(offset_m) || !std::isfinite(height_m) || height_m < 0.5f) return;
+    if (std::fabs(camera_offset_m_ - offset_m) < 1e-5f && std::fabs(camera_height_m_ - height_m) < 1e-5f) return;
+    camera_offset_m_ = offset_m;
+    camera_height_m_ = height_m;
+    map_valid_ = false;
+}
+
 uint8_t ModelInputTransform::sample(const uint8_t *base, const SampleMap &map,
                                     size_t index, int channel)
 {
@@ -107,10 +116,18 @@ void ModelInputTransform::projection_matrix(float *projection) const
     float rot[9];
     rotation_from_rpy(roll_, pitch_, yaw_, rot);
 
-    float kv[9], kvr[9], kvrvt[9];
+    /* 가상 카메라 이동(set_camera_mount): 보정 좌표계(x 앞, y 오른쪽, z 아래)에서 가상 카메라가
+     * c = (0, offset, 0)에 있으면, 높이 h 아래 도로면 점 P_v(z = h)는 실제 카메라에서
+     * P = P_v + c·(z/h) = (I + c·nᵀ/h)·P_v, n = (0,0,1)이다. 도로면 위 물체는 기울어진다
+     * (sunnypilot은 ±0.35 m로 제한). offset 0이면 단위행렬. */
+    const float shift[9] = {1.0f, 0.0f, 0.0f,
+                            0.0f, 1.0f, camera_offset_m_ / camera_height_m_,
+                            0.0f, 0.0f, 1.0f};
+    float kv[9], kvr[9], kvrs[9], kvrvt[9];
     matmul3(k, view, kv);
     matmul3(kv, rot, kvr);
-    matmul3(kvr, view_t, kvrvt);
+    matmul3(kvr, shift, kvrs);
+    matmul3(kvrs, view_t, kvrvt);
     matmul3(kvrvt, model_k_inv, projection);
 }
 

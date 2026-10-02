@@ -2,6 +2,7 @@
 #define MODEL_INPUT_TRANSFORM_H
 
 #include "app_config.h"
+#include "model_output.h"
 
 #include <array>
 #include <cstdint>
@@ -22,6 +23,10 @@ public:
                                  ModelFrame model_frame = ModelFrame::MedModel);
 
     void set_calibration(float roll, float pitch, float yaw);
+    /* 카메라 좌우 장착 보정(sunnypilot camera offset과 같다). 모델이 offset_m만큼 오른쪽(+)에 있는
+     * 가상 카메라에서 본 영상을 받도록, 높이 height_m 아래 도로면 기준 호모그래피를 워프에 더한다.
+     * 모델은 카메라 위치를 차 중심으로 보므로 +면 차가 왼쪽으로 간다. */
+    void set_camera_mount(float offset_m, float height_m);
     /* 크로마 평면의 바이트 순서. NV12는 U,V(기본), NV21은 V,U. 워프 출력의
      * 4번 평면은 항상 U, 5번은 V다. */
     void set_chroma_vu(bool vu) { chroma_vu_ = vu; }
@@ -72,6 +77,8 @@ private:
     float roll_ = 0.0f;
     float pitch_ = 0.0f;
     float yaw_ = 0.0f;
+    float camera_offset_m_ = 0.0f;
+    float camera_height_m_ = kModelHeight;
     ModelFrame model_frame_ = ModelFrame::MedModel;
     bool chroma_vu_ = false;
     std::array<SampleMap, 4> y_maps_;

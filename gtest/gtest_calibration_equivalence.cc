@@ -1106,3 +1106,52 @@ TEST(CalibrationEquivalence, Nv21ChromaOrder)
 }
 
 } // namespace
+
+/* 카메라 장착 보정(sunnypilot camera offset): 가상 카메라가 offset만큼 오른쪽에 있을 때 가상 기준
+ * 도로면 점의 모델 픽셀은, 실제 카메라에서 그 도로 점(가상 위치 + offset)이 찍히는 픽셀로 간다.
+ * offset 0이면 기존 행렬과 같다. */
+TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane)
+{
+    AppConfig config;
+    config.set_warp_source(1280, 720);
+    const float roll = 0.004f, pitch = -0.012f, yaw = 0.009f;
+    const float offset = 0.2f, height = 1.3f;
+    for (const bool big : {false, true}) {
+        ModelInputTransform plain(config, big ? ModelFrame::SmallBigModel : ModelFrame::MedModel);
+        ModelInputTransform shifted(config, big ? ModelFrame::SmallBigModel : ModelFrame::MedModel);
+        plain.set_calibration(roll, pitch, yaw);
+        shifted.set_calibration(roll, pitch, yaw);
+        shifted.set_camera_mount(offset, height);
+        float p0[9], p1[9];
+        plain.projection_matrix(p0);
+        shifted.projection_matrix(p1);
+        ModelInputTransform zero(config, big ? ModelFrame::SmallBigModel : ModelFrame::MedModel);
+        zero.set_calibration(roll, pitch, yaw);
+        zero.set_camera_mount(0.0f, height);
+        float pz[9];
+        zero.projection_matrix(pz);
+        for (int i = 0; i < 9; ++i) EXPECT_FLOAT_EQ(pz[i], p0[i]) << "offset 0은 기존과 같다";
+
+        const float mf = big ? 455.0f : 910.0f, mcx = 256.0f, mcy = big ? 0.5f * (256.0f + 47.6f) : 47.6f;
+        float rot[9];
+        rotation_from_rpy(roll, pitch, yaw, rot);
+        for (const float y_right : {-1.5f, 0.0f, 1.8f}) {
+            for (const float x_fwd : {8.0f, 20.0f, 45.0f}) {
+                // 가상 카메라 기준 도로면 점(보정 좌표계: x 앞, y 오른쪽, z 아래 = 높이)
+                const float pv[3] = {x_fwd, y_right, height};
+                // 모델 픽셀: K_m · view · P (view: (y, z, x))
+                const float u = mf * pv[1] / pv[0] + mcx, v = mf * pv[2] / pv[0] + mcy;
+                const float w = p1[6] * u + p1[7] * v + p1[8];
+                const float sx = (p1[0] * u + p1[1] * v + p1[2]) / w, sy = (p1[3] * u + p1[4] * v + p1[5]) / w;
+                // 실제 카메라: 같은 도로 점은 P_v + (0, offset, 0)
+                const float pr[3] = {pv[0], pv[1] + offset, pv[2]};
+                float d[3];
+                for (int r = 0; r < 3; ++r) d[r] = rot[r * 3] * pr[0] + rot[r * 3 + 1] * pr[1] + rot[r * 3 + 2] * pr[2];
+                const float ex = config.input_warp_fx * d[1] / d[0] + config.input_warp_cx;
+                const float ey = config.input_warp_fy * d[2] / d[0] + config.input_warp_cy;
+                EXPECT_NEAR(sx, ex, 0.02f) << "big " << big << " x " << x_fwd << " y " << y_right;
+                EXPECT_NEAR(sy, ey, 0.02f);
+            }
+        }
+    }
+}

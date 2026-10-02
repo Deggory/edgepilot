@@ -41,6 +41,7 @@ public:
     bool run_frame_phys(unsigned long long src_phys, int src_w, int src_h, std::vector<float> &raw_output,
                         const std::function<bool()> &source_still_valid);
     void set_input_calibration(const float rpy[3]);
+    void set_camera_mount(float offset_m, float height_m);
     void set_desire(int desire);
     // 소스 프레임의 크로마 순서(NV21이면 true). 워프 두 탑에 같이 적용한다.
     void set_chroma_vu(bool vu);

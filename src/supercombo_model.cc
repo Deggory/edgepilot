@@ -157,6 +157,12 @@ void SupercomboModel::set_chroma_vu(bool vu)
     big_input_transform_.set_chroma_vu(vu);
 }
 
+void SupercomboModel::set_camera_mount(float offset_m, float height_m)
+{
+    input_transform_.set_camera_mount(offset_m, height_m);
+    big_input_transform_.set_camera_mount(offset_m, height_m);
+}
+
 void SupercomboModel::set_input_calibration(const float rpy[3])
 {
     input_transform_.set_calibration(rpy[0], rpy[1], rpy[2]);

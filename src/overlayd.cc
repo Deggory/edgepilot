@@ -92,8 +92,9 @@ struct StageStats {
     }
 };
 
-/* 웹 기기 설정의 알림음 크기(params/display.json의 alert_volume_percent)를 1초마다 보고
- * 바뀌면 적용한 뒤 확인음을 한 번 낸다. SD가 녹화로 바쁠 때 stat/open이 몇 초씩 막힐 수
+/* 웹 기기 설정(params/display.json)을 1초마다 본다. 알림음 크기(alert_volume_percent)는 바뀌면
+ * 적용한 뒤 확인음을 한 번 내고, 카메라 장착 오프셋(camera_offset_m)은 차선 투영에 쓴다(모델 출력이
+ * 그만큼 옮겨진 가상 카메라 기준이라 화면에서 되돌린다). SD가 녹화로 바쁠 때 stat/open이 몇 초씩 막힐 수
  * 있어 화면 루프가 아닌 자기 스레드에서 읽는다. 값이 없으면 시작 크기(EDGEPILOT_ALERT_VOLUME)를
  * 그대로 둔다. */
 class SoundSettingsWatcher {
@@ -101,13 +102,14 @@ public:
     explicit SoundSettingsWatcher(AlertSound *sound)
         : sound_(sound), path_(param_path("display.json"))
     {
-        if (sound_->enabled()) thread_ = std::thread(&SoundSettingsWatcher::loop, this);
+        thread_ = std::thread(&SoundSettingsWatcher::loop, this);
     }
     ~SoundSettingsWatcher()
     {
         stop_ = true;
         if (thread_.joinable()) thread_.join();
     }
+    float camera_offset_m() const { return camera_offset_m_.load(); }
     SoundSettingsWatcher(const SoundSettingsWatcher &) = delete;
     SoundSettingsWatcher &operator=(const SoundSettingsWatcher &) = delete;
 
@@ -125,8 +127,11 @@ private:
                 std::ifstream file(path_);
                 const std::string text((std::istreambuf_iterator<char>(file)),
                                        std::istreambuf_iterator<char>());
+                float offset = 0.0f;
+                if (!parse_json_float_value(text, "camera_offset_m", &offset) || !std::isfinite(offset)) offset = 0.0f;
+                camera_offset_m_ = std::clamp(offset, -0.35f, 0.35f);  // modeld CameraMountSettings와 같은 한계
                 float percent = 0.0f;
-                if (parse_json_float_value(text, "alert_volume_percent", &percent) &&
+                if (sound_->enabled() && parse_json_float_value(text, "alert_volume_percent", &percent) &&
                     std::fabs(percent - sound_->volume_percent()) > 0.5f) {
                     sound_->set_volume_percent(percent);
                     std::fprintf(stderr, "\noverlayd: alert volume %.0f%%\n", sound_->volume_percent());
@@ -141,6 +146,7 @@ private:
 
     AlertSound *sound_;
     std::string path_;
+    std::atomic<float> camera_offset_m_{0.0f};
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };
@@ -288,6 +294,7 @@ private:
             fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
         latest_output_ = parsed_from_model_state(latest_model_state_);
         latest_projection_ = projection_from_model_state(latest_model_state_);
+        latest_projection_.lateral_offset_m = sound_settings_.camera_offset_m();
         return true;
     }
 

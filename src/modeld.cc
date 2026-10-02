@@ -7,6 +7,7 @@
 #include "ipc_messages.h"
 #include "model_output.h"
 #include "supercombo_model.h"
+#include "utils_json.h"
 #include "maix_cmm.h"
 
 #include <linux/videodev2.h>
@@ -15,6 +16,14 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <sys/stat.h>
+#include <thread>
 #include <cstdio>
 #include <cstdint>
 #include <stdexcept>
@@ -107,6 +116,68 @@ struct RateWindow
 
 /* controlsd 스냅샷에서 모델 입력용 자차 속도와 desire를 읽는다. controlsd가
  * 아직 없으면 열릴 때까지 마지막 값을 유지한다. */
+/* 웹 기기 설정의 카메라 장착(params/display.json camera_offset_m·camera_height_m)을 1초마다 읽는다.
+ * SD가 녹화로 바쁠 때 stat/open이 막힐 수 있어 추론 루프가 아닌 자기 스레드에서 읽고, 루프는
+ * 원자 값만 가져간다. 값이 없으면 장착 보정 없음(0 m, 1.22 m). */
+class CameraMountSettings
+{
+public:
+    static constexpr float kMaxOffsetM = 0.35f;  // sunnypilot과 같은 한계(넘으면 물체가 기운다)
+
+    CameraMountSettings() : path_(param_path("display.json")), thread_(&CameraMountSettings::loop, this) {}
+    ~CameraMountSettings()
+    {
+        stop_ = true;
+        if (thread_.joinable()) thread_.join();
+    }
+    CameraMountSettings(const CameraMountSettings &) = delete;
+    CameraMountSettings &operator=(const CameraMountSettings &) = delete;
+
+    float offset_m() const { return offset_m_.load(); }
+    float height_m() const { return height_m_.load(); }
+
+private:
+    void loop()
+    {
+        struct timespec last_mtime = {};
+        bool first = true;
+        while (!stop_) {
+            struct stat st {};
+            if (stat(path_.c_str(), &st) == 0 &&
+                (first || st.st_mtim.tv_sec != last_mtime.tv_sec || st.st_mtim.tv_nsec != last_mtime.tv_nsec)) {
+                last_mtime = st.st_mtim;
+                first = false;
+                std::ifstream file(path_);
+                const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                float offset = 0.0f, height = kModelHeight;
+                parse_json_float_value(text, "camera_offset_m", &offset);
+                parse_json_float_value(text, "camera_height_m", &height);
+                if (!std::isfinite(offset)) offset = 0.0f;
+                if (!std::isfinite(height)) height = kModelHeight;
+                offset = std::clamp(offset, -kMaxOffsetM, kMaxOffsetM);
+                height = std::clamp(height, 0.8f, 2.0f);
+                if (offset != offset_m_.load() || height != height_m_.load())
+                    std::fprintf(stderr, "\nmodeld: camera mount offset=%+.3f m height=%.2f m\n", offset, height);
+                offset_m_ = offset;
+                height_m_ = height;
+            }
+            for (int i = 0; i < 10 && !stop_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    std::string path_;
+    std::atomic<float> offset_m_{0.0f};
+    std::atomic<float> height_m_{kModelHeight};
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
+};
+
+CameraMountSettings &camera_mount_settings()
+{
+    static CameraMountSettings settings;
+    return settings;
+}
+
 class EgoStateReader
 {
 public:
@@ -141,6 +212,7 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
     float input_rpy[3];
     calibration.input_rpy(input_rpy);
     model.set_input_calibration(input_rpy);
+    model.set_camera_mount(camera_mount_settings().offset_m(), camera_mount_settings().height_m());
 
     const ProjectionState projection = calibration.projection();
 
@@ -253,6 +325,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
     model.set_input_calibration(initial_rpy);
+    model.set_camera_mount(camera_mount_settings().offset_m(), camera_mount_settings().height_m());
     EgoStateReader ego;
     std::vector<float> raw;
     uint64_t last_frame_seq = 0;

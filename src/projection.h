@@ -5,6 +5,9 @@ struct ProjectionState {
     float roll = 0.0f;
     float pitch = 0.0f;
     float yaw = 0.0f;
+    /* 모델 출력 좌표계의 원점(가상 카메라, set_camera_mount)이 실제 카메라에서 오른쪽(+)으로
+     * 떨어진 거리. 화면에 그릴 때 모델 점을 실제 카메라 기준으로 되돌린다. */
+    float lateral_offset_m = 0.0f;
     float view_from_calib[9] = {
         0.0f, -1.0f, 0.0f,
         0.0f, 0.0f, -1.0f,
