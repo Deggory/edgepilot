@@ -119,7 +119,7 @@ only in the board build, against `deps/ax630` from
 ### Control safety holds
 
 `src/control_holds.*` implements both holds as `PandaHealthGate` and
-`PathHoldGate`; `gtest_control_replay` exercises their boundaries.
+`PathHoldGate`; `gtest_control_holds` exercises their boundaries.
 `controlsd` tolerates a single malformed plan frame by holding the last
 usable path for at most 150 ms; the normal 250 ms model freshness timeout remains
 a hard safety gate, so a stale or invalid model still removes control. A

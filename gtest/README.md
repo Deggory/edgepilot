@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 83개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 129개와
 Python 1개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -27,15 +27,22 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | 실행 파일 | 개수 | 검사 내용 |
 | --- | ---: | --- |
 | `gtest_adaptive_cruise` | 14 | 비전 크루즈 버튼 간격과 한계. 차량 모형과 폐루프로 돌려 설정 속도 동기화, 재설정, 반응 없는 차, 오르내림 반복을 본다 |
-| `gtest_calibration_equivalence` | 4 | 온라인 보정 상태 기계(calibrationd.py 참조), 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조) |
+| `gtest_calibration_equivalence` | 10 | 온라인 보정 상태 기계(calibrationd.py 참조), 장착 변경·초기화 재보정, 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조), NV21 색차 순서, 카메라 장착 위치 |
 | `gtest_can_queue` | 1 | 공유 메모리 CAN 큐 |
-| `gtest_control_replay` | 36 | K7 CAN 신호 해석, engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피, CAN 프레임 구성, 학습값 소비(끄면 비트 동일, opendbc `calc_curvature`, latAccelFactor, `paramsd_invalid`, 롤 반영 곡률 한계), CAN 픽스처 재생 |
+| `gtest_control_holds` | 3 | 조향 경로 게이트(plan 도달 거리와 점 수), Panda 헬스 공백 홀드(100 ms), 잘못된 plan 홀드(150 ms) |
+| `gtest_control_replay` | 22 | 횡제어기: engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피, 곡률 제한, Panda 게이트와 넘겨받기, LKAS HUD, 학습값 소비(끄면 비트 동일, `paramsd_invalid`, 롤 반영 곡률 한계, lagd 지연), CAN 픽스처 재생 |
 | `gtest_departure_alert` | 5 | 정차 중 앞차 출발과 신호 대기 알림 |
-| `gtest_lateral_learners` | 13 | paramsd EKF(야코비안, Joseph 양정치, 수렴, 게이트, 출력 한계, 저장, 자이로 바이어스), torqued(TLS와 닫힌 해 대조, 버킷, 게이트, 필터·decay, 4 Hz/12 s 스케줄, 캐시), controlsd 연결 |
+| `gtest_device_settings` | 3 | 웹 기기 설정(`display.json`) 읽기: 범위 클램프, 잘못된 값은 이전 값 유지, 파일이 바뀔 때만 다시 읽기 |
+| `gtest_k7_can` | 9 | K7 CAN 신호 해석(LCA11, WHL_SPD11, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 MDPS용 CLU11 속도 바꿔치기 |
+| `gtest_lateral_learners` | 18 | paramsd EKF(야코비안, Joseph 양정치, 수렴, 게이트, 출력 한계, 저장, 자이로 바이어스), torqued(TLS와 닫힌 해 대조, 버킷, 게이트, 필터·decay, 4 Hz/12 s 스케줄, 캐시), controlsd 연결 |
 | `gtest_lateral_mpc` | 1 | 횡 MPC 최적성. 동역학과 코스트를 따로 구현해 시나리오 8개의 수렴점에서 기울기를 본다([검증 기록](../docs/verification.md#lateral-mpc-solver)) |
-| `gtest_model_output_parser` | 2 | supercombo raw 출력 레이아웃과 시간축 입력 규약 |
+| `gtest_lateral_planner` | 4 | 횡 플래너: laneless(openpilot `get_curvature_from_plan`), 차선 변경(상류 desire_helper), 실험용 회전 desire, `path_offset_m` 적용 범위 |
+| `gtest_lateral_torque` | 8 | 토크 횡제어기: 조향 지연만큼의 요청 버퍼, 속도별 이득(KP_INTERP), 라이브 뱅크와 latAccelOffset feedforward, 학습값 소비(opendbc `calc_curvature`, 상류 latAccelFactor 구조) |
+| `gtest_localization` | 11 | locationd(PoseKalman, LocationEstimator: 정지 수렴, 요레이트 추적, 자이로 교차검증, 되감기, IMU 묶음 무관, 정차 속도 가드, 부팅, IMU 장착 기울기)와 lagd(상류 상관식 대조, 주행 지연 추정, 개입·저속 무시) |
+| `gtest_model_output_parser` | 6 | supercombo raw 출력 레이아웃과 시간축 입력 규약(desire 펄스·풀링과 깜빡이로 끝나는 회전 desire, 특징 이력, 이미지 이력) |
 | `gtest_overlay_state` | 5 | 제어 상태 → HUD 매핑, 모든 `BlockReason`의 라벨, 알림 선택(기준값, 카운터 리셋, 우선순위) |
 | `gtest_panda_can_codec` | 1 | panda USB CAN 패킹·언패킹 |
+| `gtest_projection` | 5 | 화면 크기·방향과 무관한 도로 점 투영, 설정된 카메라 내부 파라미터, 카메라 장착 오프셋 |
 | `gtest_recording_writer` | 3 | 디스크의 route 구조: K230LOG1 청크, K230IDX1 인덱스, 매니페스트, params 스냅샷, 스테이징 비우기. 이벤트 로그 리더(끊긴 꼬리에서 멈춤, 큰 파일 머리), 옛 버전 ModelState 해석 |
 
 `diagnostics/check_param_server.py`(Python unittest)도 `ctest`에 등록돼 함께 돈다.
