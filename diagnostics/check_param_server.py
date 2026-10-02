@@ -191,6 +191,8 @@ class ParamStoreTest(unittest.TestCase):
             "steering": ("src/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
             "driving": ("src/control_params.cc", ("kDrivingInts", "kDrivingFloats")),
             "adaptive_cruise": ("src/adaptive_cruise.cc", ("kAdaptiveInts", "kAdaptiveFloats")),
+            # display는 백라이트(display_control.py) 항목도 있어 런타임이 읽는 키만 대조한다
+            "display": ("src/device_settings.h", ("kDeviceSettingsFloats",)),
         }
         for group, (source, names) in tables.items():
             text = (root / source).read_text(encoding="utf-8")
@@ -202,6 +204,8 @@ class ParamStoreTest(unittest.TestCase):
                                 for key, low, high in row.findall(body.group(1))})
             self.assertTrue(runtime, f"{source}: no rows parsed")
             ui = {key: meta for key, meta in PARAM_METADATA[group].items() if "min" in meta}
+            if group == "display":
+                ui = {key: meta for key, meta in ui.items() if key in runtime}
             self.assertEqual(set(runtime), set(ui), group)
             for key, (low, high) in runtime.items():
                 self.assertEqual((float(ui[key]["min"]), float(ui[key]["max"])), (low, high),
