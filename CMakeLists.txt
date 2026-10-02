@@ -75,6 +75,8 @@ add_edgepilot_library(control_core
   src/hyundai_can.cc
   src/lateral_controller.cc
   src/lateral_learners.cc
+  src/torque_estimator.cc
+  src/vehicle_params_learner.cc
   src/lateral_path.cc
   src/lateral_torque.cc
   src/vehicle_can.cc

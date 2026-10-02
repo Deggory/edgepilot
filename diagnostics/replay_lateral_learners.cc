@@ -18,6 +18,7 @@
 #include "control_params.h"
 #include "ipc_messages.h"
 #include "lateral_learners.h"
+#include "localizer_inputs.h"
 #include "lateral_torque.h"
 #include "recording_format.h"
 #include "vehicle_can.h"

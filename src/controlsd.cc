@@ -5,6 +5,7 @@
 #include "lateral_controller.h"
 #include "lateral_lag.h"
 #include "lateral_learners.h"
+#include "localizer_inputs.h"
 #include "lateral_path.h"
 #include "lateral_planner.h"
 #include "utils_file.h"

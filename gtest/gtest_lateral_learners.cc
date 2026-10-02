@@ -1,6 +1,7 @@
 /* paramsd·torqued 이식 검사: 필터 수학, 합성 주행 수렴, 게이트, 출력 제한, 저장/복원. */
 #include "ipc_messages.h"
 #include "lateral_learners.h"
+#include "localizer_inputs.h"
 #include "vehicle_can.h"
 
 #include <gtest/gtest.h>
