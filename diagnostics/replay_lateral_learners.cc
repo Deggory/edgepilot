@@ -10,6 +10,7 @@
  * --steering: 녹화 당시 파라미터(사전값·지연·토크 튜닝). 없으면 코드 기본값이라 보드와 다를 수 있다.
  * --vehicle-json: paramsd 저장값(route/params/live_parameters.json)으로 시작한다(보드와 같게).
  * --locationd-roll: 도로 롤을 ESP 횡가속 대신 기록된 locationd 롤로 관측한다(상류 paramsd·torqued).
+ * --metric-from N: 곡률 대조를 N번째 이벤트 파일부터 센다(앞 파일로 학습을 수렴시킬 때).
  * 끝에 결합 직진 구간의 조향각 기반 곡률(학습값 차량 모델) − 요레이트 곡률 평균을 출력한다. */
 #include "control_params.h"
 #include "ipc_messages.h"
@@ -46,6 +47,7 @@ int main(int argc, char **argv) {
   std::string inputs_path, outputs_path, torque_inputs_path, torque_outputs_path, torque_cache_path;
   std::string steering_path, vehicle_json_path;
   bool fit_all = false, locationd_roll = false, locationd_yaw = false;
+  size_t metric_from_file = 0;  // 곡률 대조를 이 번호 파일부터만 센다(앞 파일은 학습 수렴용)
   VehicleParamsOptions options;
   std::vector<std::string> events;
   for (int i = 1; i < argc; ++i) {
@@ -61,6 +63,7 @@ int main(int argc, char **argv) {
     else if (arg == "--vehicle-json" && i + 1 < argc) vehicle_json_path = argv[++i];
     else if (arg == "--locationd-roll") locationd_roll = true;
     else if (arg == "--locationd-yaw") locationd_yaw = true;
+    else if (arg == "--metric-from" && i + 1 < argc) metric_from_file = std::stoul(argv[++i]);
     else if (arg.rfind("--", 0) == 0) {
       events.clear();
       break;
@@ -133,7 +136,9 @@ int main(int argc, char **argv) {
   double latest_can_s = 0.0;
   long publishes = 0, active_ticks = 0, ticks = 0;
   double first_t = -1.0, last_t = 0.0;
+  size_t file_index = 0;
   for (const std::string &path : events) {
+    const bool count_metric = file_index++ >= metric_from_file;
     std::ifstream file(path, std::ios::binary);
     EventFileHeader hdr{};
     file.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
@@ -192,7 +197,7 @@ int main(int argc, char **argv) {
 
       const VehicleParamsInput &in = learners.last_vehicle_input();
       const LiveLateralParams live = learners.live();
-      if (cs.active && in.inputs_fresh && in.yaw_rate_valid && in.speed_mps > 12.0 &&
+      if (count_metric && cs.active && in.inputs_fresh && in.yaw_rate_valid && in.speed_mps > 12.0 &&
           std::fabs(cs.desired_curvature) < 3e-4f && live.use_vehicle) {
         const double angle_curv = curvature_model.estimate_actual_curvature(
             static_cast<float>(in.speed_mps), static_cast<float>(in.steering_angle_deg), angle_params, 0.0f, false,
