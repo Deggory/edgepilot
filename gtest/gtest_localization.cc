@@ -2,6 +2,7 @@
  * lagd의 상관·신뢰도는 upstream 식을 그대로 옮긴 파이썬(FFT 방식)과 같은 입력에서 대조한다. */
 #include "lateral_lag.h"
 #include "localization_pipeline.h"
+#include "ipc_messages.h"
 #include "location_estimator.h"
 
 #include <gtest/gtest.h>
@@ -148,6 +149,49 @@ TEST(Localization, PoseKalmanTracksYawRate)
     EXPECT_NEAR(p.velocity_device[0], v, 0.3);
     const double calib_rpy[3] = {0, 0, 0};
     EXPECT_NEAR(calibrate_pose(p, calib_rpy).angular_velocity[2], w, 0.005) << "보정 좌표계 요레이트";
+}
+
+/* 카메라는 IMU 묶음(~100 ms) 앞에 몰려 들어가 마지막 프레임 하나가 자이로 ~10표본을 가린다.
+ * 상류(도착 순서, 프레임당 ~5표본)처럼 나쁜 프레임 하나로는 inputs_ok가 내려가지 않고, 연달아
+ * 나쁘면 내려간다. */
+TEST(Localization, GyroCrossCheckToleratesOneBadCameraFrame)
+{
+    const double w = 0.1, v = 15.0, g = 9.81;
+    const float gyro_chip[3] = {0.0f, static_cast<float>(-w), 0.0f};
+    const float accel_chip[3] = {static_cast<float>(w * v), static_cast<float>(g), 0.0f};
+    const float trans[3] = {static_cast<float>(v), 0, 0};
+    const float rot[3] = {0, 0, static_cast<float>(w)};
+    const float stds[3] = {0.1f, 0.1f, 0.1f};
+    const float bad_rot[3] = {0, 0, static_cast<float>(w - 0.5)};  // 급회전 중 모델이 틀린 요레이트
+    const float tight[3] = {0.001f, 0.001f, 0.001f};  // ×10 → 교차검사 한계 0.3 rad/s
+    const double calib[3] = {0, 0, 0};
+    for (const int bad_frames : {1, 2}) {
+        SCOPED_TRACE(bad_frames);
+        LocationEstimator loc;
+        loc.handle_calibration(calib);
+        loc.set_imu_extrinsic(calib);
+        int i = 0;
+        auto imu = [&](int n) {
+            for (int k = 0; k < n; ++k, ++i) {
+                const double t = 20.0 + i / 104.0;
+                loc.handle_car_speed(t, v, true);
+                loc.handle_imu(t, accel_chip, gyro_chip);
+            }
+        };
+        for (; i < 104 * 20;) {
+            const double t = 20.0 + i / 104.0;
+            if (i % 5 == 0) loc.handle_camera_odometry(t + 0.1, trans, rot, stds, stds);
+            imu(1);
+        }
+        ASSERT_TRUE(loc.estimate(20.0 + i / 104.0).inputs_ok);
+        for (int f = 0; f < bad_frames; ++f) {
+            loc.handle_camera_odometry(20.0 + i / 104.0 + 0.1, trans, bad_rot, stds, tight);
+            imu(11);  // 묶음 하나가 이 프레임 뒤에 통째로 들어온다
+        }
+        EXPECT_GE(loc.counters().gyro_cross_check, 11u * bad_frames) << "가린 자이로는 버린다";
+        const bool gyro_invalid = (loc.invalid_service_mask() & kLocalizationInvalidGyro) != 0;
+        EXPECT_EQ(gyro_invalid, bad_frames == 2);
+    }
 }
 
 // 늦게 온 관측을 되감아 넣으면, 처음부터 시간순으로 넣은 것과 결과가 같다.

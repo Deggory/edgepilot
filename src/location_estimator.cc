@@ -24,6 +24,11 @@ constexpr double kCamOdoRotStdMult = 10.0;
 constexpr double kCamOdoTransStdMult = 4.0;
 constexpr double kImuFrequency = 104.0;         // imud ODR
 constexpr double kCameraFrequency = 20.0;
+/* 상류는 메시지를 도착 순서대로 넣어 카메라 한 프레임이 자이로 약 5표본만 가린다. 여기서는
+ * 카메라가 IMU 묶음(~100 ms) 앞에 몰려 들어가 마지막 프레임 하나가 묶음 전체(~10표본)를
+ * 가리므로, 교차검사 실패는 프레임당 이만큼만 센다. 그래야 상류처럼 나쁜 프레임 하나(한계
+ * 9.5)는 넘어간다(2026-10-02 급회전에서 프레임 하나로 11회 → inputs_ok 29초 off). */
+constexpr int kGyroCrossFailsPerCamera = static_cast<int>(kImuFrequency / kCameraFrequency);
 constexpr double kSensorAliveS = 0.1;
 // 차속 가드(상류에 없음): 카메라 전진 속도와 CAN 차속 차이가 이보다 크면 관측을 쓰지 않는다.
 // 2026-09-27 재생에서 모델/바퀴 속도 비 중앙값 0.967.
@@ -406,7 +411,7 @@ void LocationEstimator::handle_imu(double t, const float accel_chip[3], const fl
                             kYawrateCrossErrCheckFactor * camodo_yawrate_[1];
     if (norm(gyro) >= kRotationSanityCheck || !gyro_valid) {
         ++(gyro_valid ? counters_.gyro_sanity : counters_.gyro_cross_check);
-        note_result(kGyro, false);
+        if (gyro_valid || gyro_cross_fails_++ < kGyroCrossFailsPerCamera) note_result(kGyro, false);
     } else {
         const bool ok = kf_.predict_and_observe(t, PoseKalman::Kind::Gyro, gyro,
                                                 PoseKalman::default_noise(PoseKalman::Kind::Gyro));
@@ -474,6 +479,7 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
         ++counters_.camera_speed_guard;
         camera_guarded_ = true;
         camodo_yawrate_ = {0.0, 10.0};
+        gyro_cross_fails_ = 0;
         return;
     }
     camera_guarded_ = false;
@@ -495,6 +501,7 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
     const bool ok_trans =
         kf_.predict_and_observe(t, PoseKalman::Kind::CameraTranslation, trans_device, trans_noise);
     camodo_yawrate_ = {rot_device[2], rot_device_std[2]};
+    gyro_cross_fails_ = 0;
     ++(ok_rot && ok_trans ? counters_.camera_ok : counters_.camera_filter);
     note_result(kCamera, ok_rot && ok_trans);
     finite_check(t);

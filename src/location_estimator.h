@@ -151,6 +151,7 @@ private:
     std::array<double, 9> device_from_calib_{1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::array<double, 9> device_from_imu_{1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::array<double, 2> camodo_yawrate_{0.0, 10.0};  // 평균, 표준편차
+    int gyro_cross_fails_ = 0;                          // 지금 camodo로 센 교차검사 실패
     std::array<double, 40> posenet_stds_{};
     std::array<double, kServiceCount> invalid_{};
     std::array<double, kServiceCount> invalid_threshold_{};
