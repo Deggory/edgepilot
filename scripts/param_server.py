@@ -1258,7 +1258,8 @@ HTML = """<!doctype html>
       learners: "paramsd·torqued는 항상 계산하고 기록합니다. 제어에는 스위치를 켠 쪽만 씁니다. 1초마다 갱신하고 추이는 최근 10분입니다.",
     };
     // 학습 스위치는 학습값을 보면서 켜도록 실시간 학습 탭에만 둔다
-    const hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params", "use_live_delay"]};
+    const hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params", "use_live_delay",
+                                   "use_locationd_learner_inputs"]};
 
     function setConnection(pids, saved = false, recording = false) {
       const online = pids.length > 0;
@@ -1912,6 +1913,35 @@ HTML = """<!doctype html>
       }
     }
 
+    /* paramsd·torqued 공통 입력 출처(요레이트·롤) 스위치와 지금 쓰는 출처. */
+    function inputShell() {
+      const card = el("article", "live-card");
+      card.dataset.group = "steering";
+      const head = el("div", "live-head");
+      const badges = el("span", "live-badges");
+      head.append(el("h3", "live-title", "학습 입력 · 요레이트·롤"), badges);
+      const steering = snapshot.params.steering;
+      const key = "use_locationd_learner_inputs";
+      let meta = null;
+      if (key in steering) {
+        meta = snapshot.metadata.steering[key] || genericMeta(key, steering[key]);
+        const toggle = createToggleControl(key, steering[key], meta, card);
+        toggle.classList.add("mini");
+        toggle.title = meta.label;
+        head.append(toggle, el("div", "card-status"));
+      }
+      const body = el("div");
+      card.append(head, body);
+      return {card, badges, body, meta};
+    }
+
+    function inputCard(shell, learner) {
+      const using = learner ? learner.flags.localizer_inputs : null;
+      const badges = using === null ? [["상태 없음", "muted"]]
+        : using ? [["locationd 사용 중", "accent"]] : [["ESP12 사용 중", "muted"]];
+      fillShell(shell, badges, shell.meta ? [el("div", "live-foot", shell.meta.description)] : []);
+    }
+
     function lagShell() {
       const card = el("article", "live-card");
       card.dataset.group = "steering";
@@ -1977,6 +2007,7 @@ HTML = """<!doctype html>
       const panel = learnerPanel;
       calibCard(panel.calib, data.calibration);
       lagCard(panel.lag, data.localization, data.available ? data.state : null);
+      inputCard(panel.input, data.available ? data.state : null);
       if (!data.available) {
         panel.notice.replaceChildren(el("div", "empty", "학습 상태가 없습니다. controlsd가 실행 중인지 확인하세요."));
         return;
@@ -2024,8 +2055,10 @@ HTML = """<!doctype html>
       const trendSection = learnerSection("최근 10분 추이", []);
       const calib = calibShell();
       const lag = lagShell();
-      learnerPanel = {notice: el("div"), calib, lag, vehicle, torque, trends: trendSection.querySelector(".param-list")};
+      const input = inputShell();
+      learnerPanel = {notice: el("div"), calib, lag, input, vehicle, torque, trends: trendSection.querySelector(".param-list")};
       sections.append(learnerPanel.notice, learnerSection("학습값 · 오른쪽 스위치로 제어에 사용", [vehicle.card, torque.card]),
+                      learnerSection("학습 입력", [input.card]),
                       learnerSection("카메라 장착 · 조향 지연", [calib.card, lag.card]), trendSection);
       if (learnerTimer) return;
       learnerTimer = window.setInterval(pollLearners, 1000);
