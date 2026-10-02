@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <initializer_list>
 #include <string>
@@ -713,6 +714,28 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
   ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, bad_magic).restore_status(),
             TorqueRestore::Corrupt);
   ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, "").restore_status(), TorqueRestore::None);
+
+  /* 다른 요레이트·롤 출처의 캐시: 점과 절편은 버리고(롤 출처 차이만큼 어긋난다) 배율·마찰만
+   * 이어 쓴다. 출처 바이트가 없는 옛 캐시(버전 1)는 ESP12 출처다. */
+  TorqueEstimator switched(tuning, kTorqueLag, 5, valid_cache, true);
+  ASSERT_EQ(switched.restore_status(), TorqueRestore::SourceChanged);
+  ASSERT_EQ(switched.total_points(), 0);
+  switched.update(stale);
+  ASSERT_FALSE(switched.params().valid);
+  ASSERT_NEAR(switched.params().lat_accel_factor, cached.lat_accel_factor, 1e-6);
+  ASSERT_NEAR(switched.params().friction, cached.friction, 1e-6);
+  ASSERT_EQ(switched.params().lat_accel_offset, 0.0);
+  ASSERT_EQ(switched.params().decay, 50.0);
+  ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, switched.cache(), true).restore_status(),
+            TorqueRestore::Restored)
+      << "새 출처로 저장한 캐시는 그 출처로 복원한다";
+  std::string legacy = valid_cache;  // 버전 1: 버전 4바이트 뒤 키 8바이트, 출처 바이트 없음
+  const int32_t v1 = 1;
+  std::memcpy(&legacy[8], &v1, sizeof(v1));
+  legacy.erase(8 + 4 + 8, 1);
+  ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, legacy).restore_status(), TorqueRestore::Restored);
+  ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, legacy, true).restore_status(),
+            TorqueRestore::SourceChanged);
 }
 
 // ---------------------------------------------------------------- controlsd 연결
@@ -834,6 +857,7 @@ TEST(LateralLearners, LocalizerSamplesObservedAtTheirTime) {
   EXPECT_FALSE(d.l.localizer_inputs());
   EXPECT_DOUBLE_EQ(d.l.last_vehicle_input().t_s, 3.01);
   EXPECT_NEAR(d.l.last_vehicle_input().yaw_rate_rad_s, d.esp_yaw_left, 1e-6);
+  EXPECT_FALSE(d.l.last_torque_input().pose_valid) << "torqued는 시작할 때의 출처(locationd) 점만 쓴다";
 }
 
 // 그 시각의 표본이 없거나 자세가 무효인 틱은 ESP12 요레이트이고 torqued 점은 만들지 않는다

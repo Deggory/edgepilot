@@ -216,9 +216,11 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "section": "실시간 학습",
             "description": "paramsd·torqued가 요레이트·도로 롤을 locationd(IMU·카메라 융합)에서 받습니다"
             "(openpilot과 같음). 끄면 ESP12 요레이트(자체 바이어스 추정)와 ESP12 횡가속으로 구한 롤을 씁니다. "
-            "locationd가 없거나 끊기면 ESP12로 돌아갑니다.",
-            "increase": "켜면 조향각 영점·롤·토크 절편이 locationd 기준으로 다시 수렴합니다(수 분).",
-            "decrease": "끄면 ESP12 기준으로 학습합니다.",
+            "locationd가 없거나 끊기거나 그 틱의 자세가 무효면 ESP12로 대신합니다. torqued는 시작할 때의 "
+            "출처로만 점을 모으고, 출처가 바뀐 캐시는 배율·마찰만 이어 쓰고 점·절편은 처음부터 다시 모읍니다"
+            "(유효해지기까지 몇 시간).",
+            "increase": "켜면 조향각 영점·롤은 locationd 기준으로 몇 분 안에, torqued는 다음 시작부터 다시 수렴합니다.",
+            "decrease": "끄면 ESP12 기준으로 학습합니다(torqued는 다음 시작부터).",
         },
         "torque_lat_accel_offset": param_meta(
             "횡가속 편향 보정", "차량 중심 보정", "m/s²", 0.01, -1.0, 1.0,

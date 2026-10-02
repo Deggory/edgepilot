@@ -422,7 +422,7 @@ constexpr double kMinFilterDecay = 50.0;
 constexpr double kMaxFilterDecay = 250.0;
 constexpr double kLatAccThreshold = 1.0;
 constexpr double kMinEngageBuffer = 2.0;
-constexpr int kTorqueVersion = 1;
+constexpr int kTorqueVersion = 2;  // 2: 요레이트·롤 출처 바이트(1은 출처 없이 ESP12)
 constexpr double kSteerBucketBounds[TorqueEstimator::kBuckets][2] = {
     {-0.5, -0.3}, {-0.3, -0.2}, {-0.2, -0.1}, {-0.1, 0.0},
     {0.0, 0.1},   {0.1, 0.2},   {0.2, 0.3},   {0.3, 0.5}};
@@ -488,8 +488,8 @@ template <class T> bool take(const std::string &in, size_t *pos, T *v) {
 }  // namespace
 
 TorqueEstimator::TorqueEstimator(const TorqueTuning &offline, double lag_s, uint64_t seed,
-                                 const std::string &cache)
-    : offline_(offline), lag_s_(lag_s), rng_(seed) {
+                                 const std::string &cache, bool localizer_source)
+    : offline_(offline), localizer_source_(localizer_source), lag_s_(lag_s), rng_(seed) {
   fit_points_.reserve(kBuckets * kPointsPerBucket);
   reset();
   decay_ = kMinFilterDecay;
@@ -714,6 +714,7 @@ std::string TorqueEstimator::serialize(const TorqueParams &p) const {
   put(&out, static_cast<int32_t>(kTorqueVersion));
   put(&out, static_cast<float>(offline_.friction));
   put(&out, static_cast<float>(offline_.lat_accel_factor));
+  put(&out, static_cast<uint8_t>(localizer_source_ ? 1 : 0));
   put(&out, static_cast<uint8_t>(p.valid ? 1 : 0));
   put(&out, static_cast<float>(p.lat_accel_factor));
   put(&out, static_cast<float>(p.lat_accel_offset));
@@ -734,18 +735,25 @@ TorqueRestore TorqueEstimator::restore(const std::string &cache, double *factor,
   size_t pos = sizeof(kTorqueCacheMagic);
   int32_t version = 0;
   float key_friction = 0, key_factor = 0, f_factor = 0, f_offset = 0, f_friction = 0, decay = 0;
-  uint8_t valid = 0;
+  uint8_t source = 0, valid = 0;
   uint32_t n = 0;
   if (cache.size() < pos || std::memcmp(cache.data(), kTorqueCacheMagic, pos) != 0 ||
       !take(cache, &pos, &version) || !take(cache, &pos, &key_friction) ||
-      !take(cache, &pos, &key_factor) || !take(cache, &pos, &valid) ||
-      !take(cache, &pos, &f_factor) || !take(cache, &pos, &f_offset) ||
+      !take(cache, &pos, &key_factor) || (version >= 2 && !take(cache, &pos, &source)) ||
+      !take(cache, &pos, &valid) || !take(cache, &pos, &f_factor) || !take(cache, &pos, &f_offset) ||
       !take(cache, &pos, &f_friction) || !take(cache, &pos, &decay) || !take(cache, &pos, &n) ||
       cache.size() != pos + static_cast<size_t>(n) * 2 * sizeof(float))
     return TorqueRestore::Corrupt;
-  if (version != kTorqueVersion || key_friction != static_cast<float>(offline_.friction) ||
+  if ((version != kTorqueVersion && version != 1) || key_friction != static_cast<float>(offline_.friction) ||
       key_factor != static_cast<float>(offline_.lat_accel_factor))
     return TorqueRestore::KeyMismatch;
+  if ((source != 0) != localizer_source_) {
+    if (valid) {
+      *factor = f_factor;
+      *friction = f_friction;
+    }
+    return TorqueRestore::SourceChanged;
+  }
   if (valid) {
     *factor = f_factor;
     *offset = f_offset;
@@ -801,7 +809,8 @@ LateralLearners::LateralLearners(const SteeringParams &params, const std::string
       bias_(init_.yaw_bias_rad_s),
       vehicle_(constants_, init_.steer_ratio, init_.stiffness_factor, rad(init_.angle_offset_deg),
                options),
-      torque_(torque_tuning(params), params.steer_actuator_delay, seed, torque_cache),
+      torque_(torque_tuning(params), params.steer_actuator_delay, seed, torque_cache,
+              params.use_locationd_learner_inputs),
       steer_max_(std::max(1, params.steer_max)),
       output_sign_(params.torque_output_sign >= 0 ? 1 : -1) {}
 
@@ -927,13 +936,14 @@ void LateralLearners::feed(Tick tick) {
     live_.roll_rad = static_cast<float>(vp.roll_rad);
   }
 
+  /* torqued 점은 시작할 때 정한 출처(캐시에 남는다)의 틱만 쓴다. 출처가 섞이면 점의 횡가속도가
+   * 롤 출처 차이만큼 어긋난다. 상류 torqued는 자세 롤을 그대로 쓴다. */
   if (localizer) {
-    // 상류 torqued는 자세 롤을 그대로 쓴다. 섞인 점이 남지 않게 locationd 값이 온전한 틱만 쓴다
-    tin.pose_valid = loc.roll_ok;
+    tin.pose_valid = loc.roll_ok && torque_.localizer_source();
     tin.yaw_rate_rad_s = loc.yaw_rate_rad_s;
     tin.roll_rad = loc.roll_rad;
   } else {
-    tin.pose_valid = in.yaw_rate_valid && !use_localizer_;
+    tin.pose_valid = in.yaw_rate_valid && !torque_.localizer_source();
     tin.yaw_rate_rad_s = -in.yaw_rate_rad_s;
     tin.roll_rad = vp.roll_rad;
   }

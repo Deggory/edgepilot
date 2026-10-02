@@ -808,10 +808,11 @@ int main() {
                  "controlsd: learners paramsd=%s torqued=%s use_vehicle=%u use_torque=%u\n",
                  learners.vehicle_restored() ? "restored"
                  : vehicle_learn_json.empty() ? "fresh" : "rejected",
-                 learners.torque_restore_status() == TorqueRestore::Restored      ? "restored"
-                 : learners.torque_restore_status() == TorqueRestore::KeyMismatch ? "key_mismatch"
-                 : learners.torque_restore_status() == TorqueRestore::Corrupt     ? "corrupt"
-                                                                                  : "fresh",
+                 learners.torque_restore_status() == TorqueRestore::Restored        ? "restored"
+                 : learners.torque_restore_status() == TorqueRestore::KeyMismatch   ? "key_mismatch"
+                 : learners.torque_restore_status() == TorqueRestore::Corrupt       ? "corrupt"
+                 : learners.torque_restore_status() == TorqueRestore::SourceChanged ? "source_changed"
+                                                                                    : "fresh",
                  config.steering_params.use_live_vehicle_params ? 1U : 0U,
                  config.steering_params.use_live_torque_params ? 1U : 0U);
     AdaptiveCruiseController adaptive_cruise_controller(

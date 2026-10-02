@@ -229,7 +229,10 @@ struct TorqueParams {
   double max_resets = 0.0;
 };
 
-enum class TorqueRestore { None, Restored, KeyMismatch, Corrupt };
+/* SourceChanged: 다른 요레이트·롤 출처(ESP12 ↔ locationd)로 쌓은 캐시. 점의 횡가속도가 롤 출처
+ * 차이(g·Δroll, 0.1~0.25 m/s²)만큼 어긋나 섞으면 절편이 몇 시간 끌려가므로 점과 절편은 버리고
+ * 출처와 무관한 배율·마찰만 이어 쓴다. */
+enum class TorqueRestore { None, Restored, KeyMismatch, Corrupt, SourceChanged };
 
 class TorqueEstimator {
 public:
@@ -238,9 +241,10 @@ public:
   static constexpr int kHistLen = 100;  // 5초 × 20 Hz
 
   /* lag_s는 상류 lateralDelay 자리. cache가 비어 있지 않으면 상류처럼 먼저 복원한다.
-   * Corrupt면 호출자가 캐시를 지운다(상류 params.remove). 키 불일치는 두기만 한다. */
+   * Corrupt면 호출자가 캐시를 지운다(상류 params.remove). 키 불일치는 두기만 한다.
+   * localizer_source: 점의 요레이트·롤 출처(캐시에 남기고 복원 때 대조한다). */
   TorqueEstimator(const TorqueTuning &offline, double lag_s, uint64_t seed,
-                  const std::string &cache = std::string());
+                  const std::string &cache = std::string(), bool localizer_source = false);
 
   /* 제어 틱마다 부른다. 4 Hz 출력 틱이면 true이고 params()가 갱신된다. */
   bool update(const TorqueEstimatorInput &in);
@@ -251,6 +255,7 @@ public:
   const std::string &cache() const { return cache_; }
   TorqueRestore restore_status() const { return restore_; }
   const TorqueTuning &tuning() const { return offline_; }
+  bool localizer_source() const { return localizer_source_; }
 
   /* 적합에 점을 전부 쓴다(상류는 2000점 무작위 추출). 참조 구현 대조용. */
   void set_fit_all_points(bool all) { fit_all_points_ = all; }
@@ -296,6 +301,7 @@ private:
                         double *friction);
 
   TorqueTuning offline_;
+  bool localizer_source_ = false;
   double lag_s_ = 0.0;
   uint64_t rng_ = 0;
   bool fit_all_points_ = false;
