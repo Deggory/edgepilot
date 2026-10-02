@@ -9,7 +9,12 @@
  *   --wn/--zeta/--delay N      플랜트 고유진동수·감쇠·지연 틱
  *   --gain G, --gain-pts a,b,c,d  플랜트 이득(속도 노드 전부 G, 또는 노드별)
  *   --sad S, --kp, --ki, --laf  컨트롤러 steer_actuator_delay·토크 이득
- *   --driver-high/--driver-low T, --driver-release N  운전자 개입 히스테리시스 */
+ *   --driver-high/--driver-low T, --driver-release N  운전자 개입 히스테리시스
+ *   --steering route/params/steering.json  녹화 당시 튜닝(없으면 코드 기본값). 녹화의 LearnerState
+ *                              학습값(paramsd·torqued)은 controlsd처럼 매번 컨트롤러에 넣는다.
+ *   --driving route/params/driving.json  녹화 당시 주행 파라미터(laneless 모드 등)
+ *   --camera-shift D           카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다
+ *                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08). */
 #include "control_params.h"
 #include "hyundai_can.h"
 #include "ipc_messages.h"
@@ -45,6 +50,9 @@ struct Options {
   bool open_loop = false;
   std::optional<float> sad, kp, ki, laf, gain;
   const char *gain_pts = nullptr;
+  const char *steering_path = nullptr;
+  const char *driving_path = nullptr;
+  float camera_shift = 0.0f;
   float wn = 10.0f, zeta = 4.0f;
   int delay = 0, driver_high = 150, driver_low = 60, driver_release = 50;
   std::vector<const char *> positional;
@@ -54,7 +62,8 @@ struct Options {
   std::fprintf(stderr,
                "usage: %s [--open-loop] [--wn W] [--zeta Z] [--delay N] [--gain G | --gain-pts a,b,c,d]\n"
                "       [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T] [--driver-low T]\n"
-               "       [--driver-release N] <out.csv|-> <events.bin...>\n",
+               "       [--driver-release N] [--steering steering.json] [--driving driving.json] [--camera-shift D]\n"
+               "       <out.csv|-> <events.bin...>\n",
                argv0);
   std::exit(2);
 }
@@ -80,6 +89,9 @@ Options parse_options(int argc, char **argv) {
     else if (arg == "--driver-high") o.driver_high = std::atoi(value());
     else if (arg == "--driver-low") o.driver_low = std::atoi(value());
     else if (arg == "--driver-release") o.driver_release = std::atoi(value());
+    else if (arg == "--steering") o.steering_path = value();
+    else if (arg == "--driving") o.driving_path = value();
+    else if (arg == "--camera-shift") o.camera_shift = static_cast<float>(std::atof(value()));
     else if (arg.rfind("--", 0) == 0) usage(argv[0]);
     else o.positional.push_back(argv[i]);
   }
@@ -181,6 +193,20 @@ int main(int argc, char **argv) {
 
   SteeringParams steering;
   DrivingParams driving;
+  if (opt.steering_path != nullptr) {
+    std::string error;
+    if (!load_steering_params_json(opt.steering_path, &steering, &error)) {
+      std::fprintf(stderr, "%s: %s\n", opt.steering_path, error.c_str());
+      return 1;
+    }
+  }
+  if (opt.driving_path != nullptr) {
+    std::string error;
+    if (!load_driving_params_json(opt.driving_path, &driving, &error)) {
+      std::fprintf(stderr, "%s: %s\n", opt.driving_path, error.c_str());
+      return 1;
+    }
+  }
   steering.steer_actuator_delay = opt.sad.value_or(steering.steer_actuator_delay);
   steering.torque_kp = opt.kp.value_or(steering.torque_kp);
   steering.torque_ki = opt.ki.value_or(steering.torque_ki);
@@ -231,6 +257,8 @@ int main(int argc, char **argv) {
   double route_t0 = -1.0;
   float dy = 0.0f;
   float dpsi = 0.0f;
+  bool calibrated = true;
+  LiveLateralParams live_now;
   float angle_sim = 0.0f;
   float k_sim = 0.0f;
   bool active_prev = false;
@@ -303,11 +331,16 @@ int main(int argc, char **argv) {
     const float a_act = plant.step(a_cmd, v_mps);
     k_sim = a_act / (v_clamped * v_clamped);
 
-    // 곡률 -> 조향각. 컨트롤러와 같은 차량 모델을 역으로 쓴다.
-    const float per_deg = inverse_model.estimate_actual_curvature(
-        v_mps, angle_params.angle_offset_deg + 1.0f, angle_params);
+    /* 곡률 -> 조향각. 컨트롤러와 같은 차량 모델(학습값을 쓰면 그 SR·강성·영점·롤)을 역으로
+     * 써서, 컨트롤러가 재는 곡률이 시뮬 곡률과 같다. */
+    const LiveLateralParams live_vm =
+        steering.use_live_vehicle_params ? live_now : LiveLateralParams{};
+    const float offset_deg = live_vm.use_vehicle ? live_vm.angle_offset_deg : angle_params.angle_offset_deg;
+    const float k0 = inverse_model.estimate_actual_curvature(v_mps, offset_deg, angle_params, 0.0f, false, live_vm);
+    const float per_deg =
+        inverse_model.estimate_actual_curvature(v_mps, offset_deg + 1.0f, angle_params, 0.0f, false, live_vm) - k0;
     if (std::fabs(per_deg) > 1e-9f)
-      angle_sim = k_sim / per_deg + angle_params.angle_offset_deg;
+      angle_sim = (k_sim - k0) / per_deg + offset_deg;
 
     /* 운전자 토크나 비활성은 시뮬이 못 재현하는 외란이다. 그 구간은 실측으로
      * 되돌리고, 다음 자유 주행 구간이 실제 자세에서 출발하게 한다. */
@@ -393,6 +426,24 @@ int main(int argc, char **argv) {
         }
       }
 
+      // controlsd처럼 학습값을 컨트롤러에 넣는다(스위치는 steering 파라미터가 정한다)
+      if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) &&
+          rh.payload_size >= sizeof(LearnerState)) {
+        LearnerState ls{};
+        std::memcpy(&ls, buf.data(), sizeof(ls));
+        LiveLateralParams live;
+        live.use_vehicle = (ls.flags & kLearnerUseVehicle) != 0;
+        live.steer_ratio = ls.steer_ratio;
+        live.stiffness_factor = ls.stiffness_factor;
+        live.angle_offset_deg = ls.angle_offset_deg;
+        live.roll_rad = ls.roll_rad;
+        live.use_torque = (ls.flags & kLearnerUseTorque) != 0;
+        live.lat_accel_factor = ls.lat_accel_factor;
+        live.lat_accel_offset = ls.lat_accel_offset;
+        live.friction = ls.friction;
+        controller.set_live_params(live, (ls.flags & kLearnerVehicleValid) != 0, calibrated);
+        live_now = live;
+      }
       if (rh.type == static_cast<uint16_t>(RecordType::ControlState) &&
           rh.payload_size >= sizeof(ControlState)) {
         ControlState cs{};
@@ -410,8 +461,10 @@ int main(int argc, char **argv) {
           sim_t = rec_t;
           route_t0 = rec_t;
         }
+        calibrated = ms.calibration.status == 1U;
         ms_sim = ms;
-        transform_model(ms_sim, dy, dpsi);
+        // 카메라 오프셋 변경: 모델은 실제 점을 y - 오프셋으로 본다(set_camera_mount)
+        transform_model(ms_sim, dy + opt.camera_shift, dpsi);
         have_model = true;
         VehicleCanState planner_vehicle{};
         target = planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim,

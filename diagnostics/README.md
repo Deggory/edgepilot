@@ -49,6 +49,10 @@ cmake --build build-host --target replay_closed_loop -j2
 - 컨트롤러: `--sad`(steer_actuator_delay), `--kp`, `--ki`, `--laf`
 - 운전자 개입 히스테리시스: `--driver-high`, `--driver-low`, `--driver-release`
 - `--open-loop`: 자세 보정을 멈춰 플랜트가 녹화 주행을 얼마나 재현하는지만 본다
+- `--steering`·`--driving route/params/*.json`: 녹화 당시 튜닝과 주행 모드. 녹화의 LearnerState
+  학습값(paramsd·torqued)은 controlsd처럼 컨트롤러에 넣고, 조향각 역모델도 같은 학습값을 쓴다.
+- `--camera-shift D`: 카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다.
+- laneless는 차선이 위치를 잡아 주지 않아 폐루프가 발산한다(2 m 클램프). Lane 모드에만 쓴다.
 
 재현 점수(전체와 속도 구간별)를 표준 출력으로 낸다. CSV가 필요 없으면 출력 경로에 `-`를
 준다. 플랜트 식별과 점수의 해석은 [폐루프 재생](../docs/closed-loop-replay.md)에 있다.
