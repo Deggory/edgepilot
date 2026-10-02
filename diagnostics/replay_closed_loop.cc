@@ -13,6 +13,7 @@
  *   --steering route/params/steering.json  녹화 당시 튜닝(없으면 코드 기본값). 녹화의 LearnerState
  *                              학습값(paramsd·torqued)은 controlsd처럼 매번 컨트롤러에 넣는다.
  *   --driving route/params/driving.json  녹화 당시 주행 파라미터(laneless 모드 등)
+ *   --torque F,O,R             torqued 학습값(배율·절편·마찰)을 이 값으로 바꿔 쓴다(유효해진 뒤를 본다)
  *   --camera-shift D           카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다
  *                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08). */
 #include "control_params.h"
@@ -52,6 +53,7 @@ struct Options {
   const char *gain_pts = nullptr;
   const char *steering_path = nullptr;
   const char *driving_path = nullptr;
+  const char *torque = nullptr;
   float camera_shift = 0.0f;
   float wn = 10.0f, zeta = 4.0f;
   int delay = 0, driver_high = 150, driver_low = 60, driver_release = 50;
@@ -63,6 +65,7 @@ struct Options {
                "usage: %s [--open-loop] [--wn W] [--zeta Z] [--delay N] [--gain G | --gain-pts a,b,c,d]\n"
                "       [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T] [--driver-low T]\n"
                "       [--driver-release N] [--steering steering.json] [--driving driving.json] [--camera-shift D]\n"
+               "       [--torque factor,offset,friction]\n"
                "       <out.csv|-> <events.bin...>\n",
                argv0);
   std::exit(2);
@@ -91,6 +94,7 @@ Options parse_options(int argc, char **argv) {
     else if (arg == "--driver-release") o.driver_release = std::atoi(value());
     else if (arg == "--steering") o.steering_path = value();
     else if (arg == "--driving") o.driving_path = value();
+    else if (arg == "--torque") o.torque = value();
     else if (arg == "--camera-shift") o.camera_shift = static_cast<float>(std::atof(value()));
     else if (arg.rfind("--", 0) == 0) usage(argv[0]);
     else o.positional.push_back(argv[i]);
@@ -441,6 +445,15 @@ int main(int argc, char **argv) {
         live.lat_accel_factor = ls.lat_accel_factor;
         live.lat_accel_offset = ls.lat_accel_offset;
         live.friction = ls.friction;
+        if (opt.torque != nullptr) {
+          float f = 0, o = 0, r = 0;
+          if (std::sscanf(opt.torque, "%f,%f,%f", &f, &o, &r) == 3) {
+            live.use_torque = true;
+            live.lat_accel_factor = f;
+            live.lat_accel_offset = o;
+            live.friction = r;
+          }
+        }
         controller.set_live_params(live, (ls.flags & kLearnerVehicleValid) != 0, calibrated);
         live_now = live;
       }

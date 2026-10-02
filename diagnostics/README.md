@@ -52,6 +52,7 @@ cmake --build build-host --target replay_closed_loop -j2
 - `--steering`·`--driving route/params/*.json`: 녹화 당시 튜닝과 주행 모드. 녹화의 LearnerState
   학습값(paramsd·torqued)은 controlsd처럼 컨트롤러에 넣고, 조향각 역모델도 같은 학습값을 쓴다.
 - `--camera-shift D`: 카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다.
+- `--torque F,O,R`: torqued 값(배율·절편·마찰)을 바꿔 넣어 유효해진 뒤의 거동을 본다.
 - laneless는 차선이 위치를 잡아 주지 않아 폐루프가 발산한다(2 m 클램프). Lane 모드에만 쓴다.
 
 재현 점수(전체와 속도 구간별)를 표준 출력으로 낸다. CSV가 필요 없으면 출력 경로에 `-`를
