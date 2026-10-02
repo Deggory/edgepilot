@@ -53,4 +53,25 @@ TEST(Projection, FollowsConfiguredIntrinsics) {
   EXPECT_EQ(back.y, maix.y);
 }
 
+/* 카메라 장착 오프셋(set_camera_mount): 가상 카메라가 실제보다 오프셋만큼 오른쪽이라 모델은 실제 점
+ * y를 y − 오프셋으로 본다(gtest_calibration_equivalence CameraMountShiftsGroundPlane). HUD는 모델 점을
+ * 실제 위치에 그려야 한다. */
+TEST(Projection, CameraOffsetDrawsModelPointsAtRealPosition) {
+  const ProjectionState plain = make_projection_state(0.0f, 0.02f, -0.01f);
+  ProjectionState shifted = plain;
+  shifted.lateral_offset_m = 0.3f;
+  for (const float fwd : {8.0f, 15.0f, 30.0f}) {
+    const float y_model = 1.0f, z = 1.2f;  // 모델 좌표: 오른쪽·아래 양수
+    const Point drawn = project(shifted, fwd, y_model, z, 640, 480);
+    const Point real = project(plain, fwd, y_model + 0.3f, z, 640, 480);
+    EXPECT_EQ(drawn.x, real.x) << fwd;
+    EXPECT_EQ(drawn.y, real.y) << fwd;
+  }
+  // 오른쪽 점은 화면 오른쪽에 찍힌다(모델 y는 오른쪽 양수). project_point 좌표는 180° 돌아간
+  // 버퍼라 표시할 때 뒤집는다(overlay_renderer project_display_point).
+  auto shown_x = [&](float y) { return 640 - 1 - project(plain, 15.0f, y, 1.2f, 640, 480).x; };
+  EXPECT_GT(shown_x(1.8f), 320);
+  EXPECT_LT(shown_x(-1.8f), 320);
+}
+
 }  // namespace

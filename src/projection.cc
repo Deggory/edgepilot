@@ -70,17 +70,17 @@ void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy)
     g_camera = {fx, fy, cx, cy};
 }
 
-bool project_point(const ProjectionState &projection, float x_forward, float y_left, float z_up,
+bool project_point(const ProjectionState &projection, float x_forward, float y_right, float z_down,
                    int width, int height, int *px, int *py)
 {
     if (x_forward < 0.5f || x_forward > 120.0f) return false;
-    // 가상 카메라 기준 점 → 실제 카메라 기준(y는 왼쪽 양수, 오프셋은 오른쪽 양수)
-    y_left -= projection.lateral_offset_m;
+    // 가상 카메라가 오프셋만큼 오른쪽이라 모델은 실제 점을 y − 오프셋으로 본다. 실제 위치로 되돌린다.
+    y_right += projection.lateral_offset_m;
 
     const float *m = projection.view_from_calib;
-    const float vx = m[0] * x_forward + m[1] * y_left + m[2] * z_up;
-    const float vy = m[3] * x_forward + m[4] * y_left + m[5] * z_up;
-    const float vz = m[6] * x_forward + m[7] * y_left + m[8] * z_up;
+    const float vx = m[0] * x_forward + m[1] * y_right + m[2] * z_down;
+    const float vy = m[3] * x_forward + m[4] * y_right + m[5] * z_down;
+    const float vz = m[6] * x_forward + m[7] * y_right + m[8] * z_down;
     if (vz <= 0.1f) return false;
 
     // 가로 화면(K230 800x480, MaixCAM2 640x480)은 카메라 영상 가운데의 kPreviewAspect
