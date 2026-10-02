@@ -30,6 +30,13 @@ constexpr double kCameraFrequency = 20.0;
  * 9.5)는 넘어간다(2026-10-02 급회전에서 프레임 하나로 11회 → inputs_ok 29초 off). */
 constexpr int kGyroCrossFailsPerCamera = static_cast<int>(kImuFrequency / kCameraFrequency);
 constexpr double kSensorAliveS = 0.1;
+/* 카메라를 한 번도 못 받은 채(부팅 직후 차속을 모름) IMU만으로 돌면 속도가 묶이지 않아 자세가
+ * 틀어진다(30초 4~5°, 120초 40~55°, 그래도 std는 실제 오차보다 작다). 그 시간이 이보다 길면 첫 카메라
+ * 관측에서 필터를 처음부터 시작하고, 첫 관측 뒤 kAnchorSettleS 동안은 무효로 낸다(상류는 입력이
+ * 다 갖춰질 때까지 아무것도 넣지 않는다). 한 번 수렴한 뒤의 가드 구간은 30초여도 자세가 그대로라
+ * 해당하지 않는다. */
+constexpr double kImuOnlyResetS = 5.0;
+constexpr double kAnchorSettleS = 3.0;
 // 차속 가드(상류에 없음): 카메라 전진 속도와 CAN 차속 차이가 이보다 크면 관측을 쓰지 않는다.
 // 2026-09-27 재생에서 모델/바퀴 속도 비 중앙값 0.967.
 constexpr double kCamSpeedErrAbs = 2.0;     // m/s
@@ -397,6 +404,7 @@ void LocationEstimator::handle_imu(double t, const float accel_chip[3], const fl
     const Vec3 gyro = mul(device_from_imu_, Vec3{-gyro_chip[2], gyro_chip[0], -gyro_chip[1]});
     const Vec3 accel = mul(device_from_imu_, Vec3{-accel_chip[2], accel_chip[0], -accel_chip[1]});
     seen_imu_ = true;
+    if (first_imu_t_ < 0.0) first_imu_t_ = t;
     last_imu_t_ = t;
 
     if (!timestamp_ok(t)) {
@@ -483,6 +491,11 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
         return;
     }
     camera_guarded_ = false;
+    if (!seen_camera_) {
+        if (first_imu_t_ >= 0.0 && t - first_imu_t_ > kImuOnlyResetS)
+            kf_.init(PoseKalman::initial_x(), PoseKalman::initial_p(), t);
+        first_camera_t_ = t;
+    }
     seen_camera_ = true;
     std::rotate(posenet_stds_.begin(), posenet_stds_.begin() + 1, posenet_stds_.end());
     posenet_stds_.back() = trans_calib_std[0];
@@ -538,7 +551,8 @@ LivePoseEstimate LocationEstimator::estimate(double now) const
         out.acceleration_device_std[i] =
             std::sqrt(p[PoseKalman::kAcceleration + i][PoseKalman::kAcceleration + i]);
     }
-    out.filter_valid = seen_imu_ && seen_camera_ && std::isfinite(kf_.t());
+    out.filter_valid = seen_imu_ && seen_camera_ && std::isfinite(kf_.t()) &&
+                       kf_.t() - first_camera_t_ >= kAnchorSettleS;
     bool inputs_ok = true;
     for (int s = 0; s < kServiceCount; ++s) inputs_ok = inputs_ok && invalid_[s] < invalid_threshold_[s];
     out.inputs_ok = inputs_ok;

@@ -157,6 +157,8 @@ private:
     std::array<double, kServiceCount> invalid_threshold_{};
     std::array<double, kServiceCount> invalid_decay_{};
     double last_imu_t_ = -1.0;
+    double first_imu_t_ = -1.0;
+    double first_camera_t_ = 0.0;  // 처음 받은 카메라 관측(필터가 처음 묶인 시각)
     bool seen_camera_ = false;
     bool seen_imu_ = false;
 };

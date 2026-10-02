@@ -352,6 +352,43 @@ TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
     EXPECT_GE(static_cast<double>(guarded), 120.0 * 104.0 / 5.0) << "모르는 동안의 관측은 쓰지 않는다";
 }
 
+/* 부팅 직후 차속을 모르는 동안은 카메라를 못 써서 IMU만으로 돈다(자세가 틀어진다). 첫 카메라
+ * 관측에서 필터를 새로 시작하고, 그 뒤 3초는 무효로 낸다: 유효해졌을 때 자세가 맞아야 한다
+ * (예전에는 120초 뒤 첫 관측 순간부터 유효였고 자세가 40° 넘게 틀려 있었다). */
+TEST(Localization, BootWithoutSpeedSettlesBeforeValid)
+{
+    const float accel[3] = {0.16f, 9.76f, 0.08f}, gyro[3] = {0.0396f, 0.0157f, -0.0222f};  // 보드 책상 실측
+    const float rot_std[3] = {0.0009f, 0.0009f, 0.0009f}, trans_std[3] = {0.05f, 0.05f, 0.05f};
+    const float zero[3] = {0, 0, 0};
+    const double calib[3] = {0, 0, 0};
+    const double true_roll = std::atan2(-0.16, 9.76), true_pitch = std::asin(-0.08 / 9.81);
+    for (const double speed_known_from : {12.0, 130.0}) {
+        SCOPED_TRACE(speed_known_from);
+        LocationEstimator loc;
+        loc.handle_calibration(calib);
+        loc.set_imu_extrinsic(calib);
+        double first_valid = -1.0, worst_after_valid = 0.0;
+        for (int i = 0; i < 104 * 140; ++i) {
+            const double t = 10.0 + i / 104.0;
+            loc.handle_car_speed(t, 0.0, t >= speed_known_from);
+            loc.handle_imu(t, accel, gyro);
+            if (i % 5 == 0) loc.handle_camera_odometry(t + 0.1, zero, zero, trans_std, rot_std);
+            const LivePoseEstimate p = loc.estimate(t);
+            if (!p.filter_valid) {
+                ASSERT_LT(first_valid, 0.0) << "한 번 유효해지면 계속 유효";
+                continue;
+            }
+            if (first_valid < 0.0) first_valid = t;
+            worst_after_valid = std::fmax(worst_after_valid,
+                                          std::fmax(std::fabs(p.orientation_ned[0] - true_roll),
+                                                    std::fabs(p.orientation_ned[1] - true_pitch)));
+        }
+        ASSERT_GT(first_valid, 0.0);
+        EXPECT_GE(first_valid, speed_known_from + 3.0 - 0.2) << "첫 카메라 관측 뒤 3초는 무효";
+        EXPECT_LT(worst_after_valid * 180.0 / kPi, 1.0) << "유효한 동안 자세 오차 1° 미만";
+    }
+}
+
 /* 외부 회전: 칩이 카메라 대비 앞 2.2°·오른쪽 1.0° 기운 보드를 수평에 두면, 원시 가속도는 그만큼
  * 기운 중력을 보이지만 기본 외부 회전을 적용한 추정은 수평이다. */
 TEST(Localization, ImuExtrinsicLevelsTiltedChip)
