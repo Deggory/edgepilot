@@ -1,4 +1,5 @@
 /* paramsd·torqued 이식 검사: 필터 수학, 합성 주행 수렴, 게이트, 출력 제한, 저장/복원. */
+#include "ipc_messages.h"
 #include "lateral_learners.h"
 #include "vehicle_can.h"
 
@@ -728,32 +729,160 @@ VehicleCanState driving_vehicle(double t) {
   return v;
 }
 
-// 상류 입력: locationd 요레이트(우측 양수)·롤로 ESP12 입력을 대신한다. 자세가 무효면 관측도 무효.
-TEST(LateralLearners, LocalizerInputsReplaceEsp) {
+// controlsd·재생 도구 공용 판단: 스위치·0.5초·필터 유효면 쓴다. inputsOK는 보지 않는다(상류 paramsd).
+TEST(LateralLearners, LocalizerSampleFrom) {
+  LocalizationState loc;
+  loc.flags = kLocalizationFilterValid | kLocalizationSensorsOk | kLocalizationPosenetOk;  // inputs_ok 없음
+  loc.angular_velocity_calib[2] = 0.1f;
+  loc.angular_velocity_calib_std[2] = 0.013f;
+  loc.orientation_calib[0] = 0.02f;
+  loc.orientation_std[0] = 0.004f;
+  LocalizerSample s;
+  ASSERT_TRUE(localizer_sample_from(loc, true, 0.07, 12.0, &s));
+  // 자이로 교차검증으로 inputs_ok가 내려가도 학습 입력은 그대로다
+  EXPECT_TRUE(s.pose_ok);
+  EXPECT_TRUE(s.roll_ok);
+  EXPECT_DOUBLE_EQ(s.t_s, 12.0);
+  EXPECT_FLOAT_EQ(static_cast<float>(s.yaw_rate_std_rad_s), 0.013f);
+  // 스위치가 꺼졌거나 0.5초 넘게 낡았거나 필터가 무효면 ESP12
+  EXPECT_FALSE(localizer_sample_from(loc, false, 0.07, 12.0, &s));
+  EXPECT_FALSE(localizer_sample_from(loc, true, 0.6, 12.0, &s));
+  loc.flags &= ~kLocalizationFilterValid;
+  EXPECT_FALSE(localizer_sample_from(loc, true, 0.07, 12.0, &s));
+  // 자세(posenet)가 무효면 요레이트·롤 관측 조건이, 센서가 무효면 롤 관측 조건이 빠진다
+  loc.flags = kLocalizationFilterValid | kLocalizationSensorsOk;
+  ASSERT_TRUE(localizer_sample_from(loc, true, 0.07, 12.0, &s));
+  EXPECT_FALSE(s.pose_ok);
+  loc.flags = kLocalizationFilterValid | kLocalizationPosenetOk;
+  ASSERT_TRUE(localizer_sample_from(loc, true, 0.07, 12.0, &s));
+  EXPECT_TRUE(s.pose_ok);
+  EXPECT_FALSE(s.roll_ok);
+}
+
+/* 100 Hz 제어 틱과 10 Hz locationd 표본(추정 시각 + 70 ms에 도착). 요레이트는 시각에 비례하는
+ * 램프라 보간이 정확하다. */
+struct LocalizerDrive {
+  LateralLearners l;
+  VehicleCanState vehicle;
+  double esp_yaw_left = 0.02;
+  double delay_s = 0.07;
+  double roll = 0.02, roll_std = 0.003;
+  bool pose_ok = true, roll_ok = true;
+  explicit LocalizerDrive(const SteeringParams &sp) : l(sp, "", "", 1), vehicle(driving_vehicle(0.0)) {}
+  double yaw_slope = 0.1;
+  double yaw_right(double t) const { return yaw_slope * t; }
+  void tick(double now, bool use = true, bool send = true,
+            const std::function<void(VehicleCanState *)> &edit = {}) {
+    vehicle = driving_vehicle(now);
+    vehicle.yaw_rate_valid = true;
+    vehicle.yaw_rate_rad_s = static_cast<float>(esp_yaw_left);
+    vehicle.lat_accel_valid = true;
+    if (edit) edit(&vehicle);
+    if (send) {
+      // 지금까지 도착한 마지막 표본
+      const double ts = std::floor((now - delay_s) * 10.0 + 1e-9) / 10.0;
+      LocalizerSample s;
+      s.t_s = ts;
+      s.yaw_rate_rad_s = yaw_right(ts);
+      s.yaw_rate_std_rad_s = 0.013;
+      s.roll_rad = roll;
+      s.roll_std_rad = roll_std;
+      s.pose_ok = pose_ok;
+      s.roll_ok = roll_ok;
+      l.set_localizer(use, s);
+    } else {
+      l.set_localizer(use, LocalizerSample{});
+    }
+    l.update(vehicle, now, 0.5, true, 0, false);
+  }
+};
+
+// 표본은 그 추정 시각에 관측한다: 학습기는 kLocalizerDelayS 늦게 돌고 그 시각 값을 보간한다
+TEST(LateralLearners, LocalizerSamplesObservedAtTheirTime) {
   const SteeringParams sp;
-  VehicleCanState vehicle = driving_vehicle(1.0);
-  vehicle.yaw_rate_valid = true;
-  vehicle.yaw_rate_rad_s = 0.02f;  // ESP12 좌측 양수
-  vehicle.lat_accel_valid = true;
-  LateralLearners l(sp, "", "", 1);
-  l.update(vehicle, 1.0, 0.5, true, 0, false);
-  EXPECT_FALSE(l.localizer_inputs());
-  EXPECT_GT(l.last_vehicle_input().yaw_rate_rad_s, 0.0) << "기본은 ESP12";
+  LocalizerDrive d(sp);
+  d.tick(1.0, false);
+  EXPECT_FALSE(d.l.localizer_inputs());
+  EXPECT_DOUBLE_EQ(d.l.last_vehicle_input().t_s, 1.0) << "ESP12면 바로 넣는다";
+  int checked = 0;
+  double last_t = 1.0;
+  for (int i = 1; i <= 200; ++i) {
+    const double now = 1.0 + 0.01 * i;
+    d.tick(now);
+    ASSERT_TRUE(d.l.localizer_inputs());
+    const VehicleParamsInput &in = d.l.last_vehicle_input();
+    if (now < 1.0 + LateralLearners::kLocalizerDelayS + 0.02) continue;
+    ASSERT_LE(in.t_s, now - LateralLearners::kLocalizerDelayS + 1e-9);
+    ASSERT_GT(in.t_s, last_t) << "틱 순서대로 넣는다";
+    last_t = in.t_s;
+    ASSERT_TRUE(in.localizer_roll_given);
+    ASSERT_TRUE(in.yaw_rate_valid);
+    // 받은 즉시 지금 시각으로 넣으면 0.1·(지연)만큼 늦은 값이 된다
+    ASSERT_NEAR(in.yaw_rate_rad_s, -d.yaw_right(in.t_s), 1e-9) << "좌측 양수, 그 시각 값";
+    ASSERT_NEAR(in.yaw_rate_std_rad_s, 0.013, 1e-12) << "locationd std(상류)";
+    const TorqueEstimatorInput &tin = d.l.last_torque_input();
+    ASSERT_DOUBLE_EQ(tin.t_s, in.t_s);
+    ASSERT_NEAR(tin.yaw_rate_rad_s, d.yaw_right(in.t_s), 1e-9);
+    ASSERT_NEAR(tin.roll_rad, 0.02, 1e-12) << "torqued는 자세 롤을 그대로";
+    ASSERT_TRUE(tin.pose_valid);
+    ++checked;
+  }
+  EXPECT_GT(checked, 150);
 
-  l.set_localizer_yaw_rate(true, 0.05, true);  // 우측 0.05 rad/s
-  l.set_localizer_roll(true, 0.02, 0.003, true);
-  l.update(vehicle, 1.01, 0.5, true, 0, false);
-  EXPECT_TRUE(l.localizer_inputs());
-  EXPECT_NEAR(l.last_vehicle_input().yaw_rate_rad_s, -0.05, 1e-12) << "좌측 양수로 바꿔 넣는다";
-  EXPECT_TRUE(l.last_vehicle_input().localizer_roll_given);
-  EXPECT_NEAR(l.last_torque_input().roll_rad, 0.02, 1e-12) << "torqued는 자세 롤을 그대로";
-  EXPECT_NEAR(l.last_torque_input().yaw_rate_rad_s, 0.05, 1e-12);
+  // ESP12로 돌아가면 쌓인 틱을 순서대로 다 넣고 이번 틱부터 바로 넣는다
+  d.tick(3.01, false);
+  EXPECT_FALSE(d.l.localizer_inputs());
+  EXPECT_DOUBLE_EQ(d.l.last_vehicle_input().t_s, 3.01);
+  EXPECT_NEAR(d.l.last_vehicle_input().yaw_rate_rad_s, d.esp_yaw_left, 1e-6);
+}
 
-  l.set_localizer_yaw_rate(true, 0.05, false);
-  l.set_localizer_roll(true, 0.02, 0.003, false);
-  l.update(vehicle, 1.02, 0.5, true, 0, false);
-  EXPECT_FALSE(l.last_vehicle_input().yaw_rate_valid) << "자세가 무효면 요레이트 관측도 무효";
-  EXPECT_FALSE(l.last_torque_input().pose_valid);
+// 그 시각의 표본이 없거나 자세가 무효인 틱은 ESP12 요레이트이고 torqued 점은 만들지 않는다
+TEST(LateralLearners, LocalizerFallsBackToEspPerTick) {
+  const SteeringParams sp;
+  LocalizerDrive d(sp);
+  d.pose_ok = false;
+  for (int i = 0; i <= 100; ++i) d.tick(1.0 + 0.01 * i);
+  EXPECT_TRUE(d.l.localizer_inputs());
+  EXPECT_FALSE(d.l.last_vehicle_input().localizer_roll_given);
+  EXPECT_NEAR(d.l.last_vehicle_input().yaw_rate_rad_s, d.esp_yaw_left, 1e-6);
+  EXPECT_FALSE(d.l.last_torque_input().pose_valid) << "출처가 섞인 점은 쓰지 않는다";
+
+  // 표본이 끊기면(locationd가 멈춤) 0.1초까지만 마지막 값을 잇는다
+  d.pose_ok = true;
+  for (int i = 101; i <= 200; ++i) d.tick(1.0 + 0.01 * i);
+  EXPECT_TRUE(d.l.last_vehicle_input().localizer_roll_given);
+  const double last_sample = std::floor((3.0 - d.delay_s) * 10.0 + 1e-9) / 10.0;
+  for (int i = 201; i <= 260; ++i) d.tick(1.0 + 0.01 * i, true, false);
+  const VehicleParamsInput &in = d.l.last_vehicle_input();
+  ASSERT_GT(in.t_s, last_sample + 0.1);
+  EXPECT_FALSE(in.localizer_roll_given);
+  EXPECT_NEAR(in.yaw_rate_rad_s, d.esp_yaw_left, 1e-6);
+}
+
+/* paramsd까지 돈다: locationd 롤이 유효하면 그 값으로, 센서가 무효면(상류는 0±10°) ESP 횡가속
+ * 롤로 수렴하고, 그 동안 VehicleParams가 계속 유효하다(롤 std가 1.5°에 붙지 않는다). */
+TEST(LateralLearners, LocalizerRollThroughParamsd) {
+  const SteeringParams sp;
+  LocalizerDrive d(sp);
+  d.esp_yaw_left = 0.0;
+  d.yaw_slope = 0.0;  // 직진
+  d.roll = rad(2.0);
+  d.roll_std = rad(0.2);
+  for (double now = 1.0; now < 21.0 - 1e-9; now += 0.01) d.tick(now);
+  EXPECT_NEAR(deg(d.l.vehicle_params().roll_rad), 2.0, 0.3) << "locationd 롤";
+
+  // 센서 무효 60초. ESP 횡가속이 말하는 롤은 0.5°(좌측 비력 g·sin 0.5°, 반전 저장)
+  const double esp_roll = rad(0.5);
+  d.roll_ok = false;
+  bool always_valid = true;
+  for (double now = 21.0; now < 81.0 - 1e-9; now += 0.01) {
+    d.tick(now, true, true, [&](VehicleCanState *v) {
+      v->lat_accel_mps2 = static_cast<float>(-9.81 * std::sin(esp_roll));
+    });
+    if (d.l.vehicle_published()) always_valid = always_valid && d.l.vehicle_params().valid;
+  }
+  EXPECT_TRUE(always_valid);
+  EXPECT_NEAR(d.l.vehicle_params().roll_rad, esp_roll, rad(0.2)) << "ESP12 횡가속 롤";
 }
 
 TEST(LateralLearners, LearnersGlue) {

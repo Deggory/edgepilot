@@ -897,19 +897,19 @@ int main() {
         controller.set_live_delay(localization.lateral_delay_s,
                                   fresh && localization.lag_status ==
                                       static_cast<uint32_t>(LateralLagStatus::Estimated));
-        /* 상류 paramsd·torqued 입력. 자세가 무효면 관측도 무효(상류)이고, locationd가 없거나
-         * 0.5초 넘게 낡았으면 ESP12 입력으로 돌아간다. */
-        const uint32_t pose_ok = kLocalizationFilterValid | kLocalizationInputsOk |
-                                 kLocalizationSensorsOk | kLocalizationPosenetOk;
-        const bool use = config.steering_params.use_locationd_learner_inputs && read &&
-                         age_ns < 500'000'000ULL;
-        const bool valid = (localization.flags & pose_ok) == pose_ok;
-        learners.set_localizer_yaw_rate(use, localization.angular_velocity_calib[2], valid);
-        learners.set_localizer_roll(use, localization.orientation_calib[0], localization.orientation_std[0],
-                                    valid);
+        /* 상류 paramsd·torqued 입력(localizer_sample_from). 표본 시각은 학습기 시계(now_s)로
+         * 옮긴다. 읽기가 쓰기와 겹쳐 실패한 틱은 직전 판단을 그대로 둔다. */
+        if (read) {
+          const double age_s =
+              static_cast<double>(static_cast<int64_t>(can_now_ns - localization.timestamp_ns)) * 1e-9;
+          LocalizerSample sample;
+          const bool use = localizer_sample_from(
+              localization, config.steering_params.use_locationd_learner_inputs, age_s, now_s - age_s,
+              &sample);
+          learners.set_localizer(use, sample);
+        }
       } else {
-        learners.set_localizer_yaw_rate(false, 0.0, false);
-        learners.set_localizer_roll(false, 0.0, 0.0, false);
+        learners.set_localizer(false, LocalizerSample{});
       }
 
       /* IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness

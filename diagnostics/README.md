@@ -58,8 +58,14 @@ cmake --build build-host --target replay_closed_loop -j2
 controlsd와 같은 `LateralLearners`를 부른다. 활성과 보낸 토크는 `ControlState`에서,
 운전자 개입은 기록된 운전자 토크를 컨트롤러와 같게 디바운스해서 얻는다.
 
-- `--steering route/params/steering.json`: 녹화 당시 튜닝(사전값, 지연)을 쓴다. 없으면 코드
-  기본값이라 보드와 다를 수 있다.
+- `--steering route/params/steering.json`: 녹화 당시 튜닝(사전값, 지연, 입력 출처)을 쓴다.
+  없으면 코드 기본값이라 보드와 다를 수 있다.
+- `--vehicle-json route/params/live_parameters.json`: paramsd 저장값으로 시작한다.
+- `--source steering|locationd|esp`: paramsd·torqued의 요레이트·롤 출처. 기본(`steering`)은
+  `use_locationd_learner_inputs`를 따르고, controlsd처럼 locationd가 0.5초 넘게 낡거나 필터가
+  무효면 ESP12로 돌아간다.
+- `--metric-from N`: 끝에 내는 곡률 대조를 0부터 센 N번 파일부터 센다. 앞 파일은 학습을
+  수렴시키는 데만 쓴다.
 - `--upstream-schedule`: 조향각·속도를 상류처럼 20 Hz로만 관측한다(기본은 매 틱).
 - `--fit-all`: torqued 적합에 점을 전부 쓴다(기본은 상류처럼 무작위 2000점).
 - `--torque-cache c.bin`: 있으면 복원하고 저장 틱마다 덮어써, 여러 주행을 런타임 캐시처럼

@@ -1,12 +1,13 @@
 #pragma once
 
 /* openpilot paramsd(VehicleParamsLearner·CarKalman)와 torqued(TorqueEstimator) 이식.
- * 상류와 다른 것: 요레이트·롤은 ESP12(locationd 자세 대신), 지연은 고정값(lagd 대신),
+ * 상류와 다른 것: 요레이트·롤은 locationd 자세(기본) 또는 ESP12, 지연은 고정값(lagd 대신),
  * 예측은 1 ms로 분할(상류의 0.05 s 오일러 한 걸음은 7.5 m/s 아래에서 발산),
  * 조향각·속도는 매 틱 관측(상류는 20 Hz, 아래 VehicleParamsOptions), 입력이 낡으면 비활성과 같이 처리. */
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -75,10 +76,13 @@ struct VehicleParamsInput {
   int gear = 0;
   bool yaw_rate_valid = false;
   double yaw_rate_rad_s = 0.0;  // 바이어스 제거 후
+  // 관측 표준편차. 기본은 ESP12 고주파 잡음(0.06~0.08°/s)에 여유를 둔 값, locationd면 그 std(상류)
+  double yaw_rate_std_rad_s = 0.1 * 3.14159265358979323846 / 180.0;
   bool lat_accel_valid = false;
   double lat_accel_mps2 = 0.0;  // 비력(가속도계), 좌측 양수
   /* 상류 paramsd처럼 locationd 자세 롤로 도로 롤을 관측한다(given이면 ESP 횡가속 대신).
-   * 오른쪽이 낮으면 양수. valid는 locationd 자세·센서 정상. */
+   * 오른쪽이 낮으면 양수. valid는 locationd 센서 정상(상류 sensorsOK). 무효이거나 std·범위를
+   * 벗어나면 그 틱은 ESP 횡가속 롤로 대신한다(아래 handle_device_motion). */
   bool localizer_roll_given = false;
   bool localizer_roll_valid = false;
   double localizer_roll_rad = 0.0;
@@ -315,6 +319,26 @@ private:
 
 // ---------------------------------------------------------------- controlsd 연결
 
+/* locationd 한 표본. t_s는 학습기 시계(controlsd now_s)로 옮긴 추정 시각(마지막 IMU 샘플). */
+struct LocalizerSample {
+  double t_s = 0.0;
+  double yaw_rate_rad_s = 0.0;  // 보정 좌표계, 우측 양수
+  double yaw_rate_std_rad_s = 0.0;
+  double roll_rad = 0.0;        // 오른쪽이 낮으면 양수
+  double roll_std_rad = 0.0;
+  bool pose_ok = false;         // 상류 posenetOK: 요레이트·롤을 관측하는 조건
+  bool roll_ok = false;         // 상류 sensorsOK: 롤을 관측하는 조건
+};
+
+struct LocalizationState;  // ipc_messages.h
+
+/* controlsd와 대조 도구가 같이 쓴다. locationd 상태를 학습기 표본으로 옮기고 쓸지를 돌려준다:
+ * 스위치가 켜져 있고, 0.5초 안의 값이고, 필터가 유효해야 한다(상류는 livePose가 무효면
+ * paramsd가 아예 돌지 않는다. 여기서는 ESP12로 계속 배운다). inputsOK는 상류 paramsd처럼
+ * 보지 않는다(자이로 교차검증 실패로 내려가도 자세·각속도 추정은 멀쩡하다). */
+bool localizer_sample_from(const LocalizationState &loc, bool enabled, double age_s,
+                           double sample_t_s, LocalizerSample *out);
+
 /* controlsd 안의 paramsd·torqued. 제어 틱 끝에 이번 틱 값(보낸 토크 포함)으로 갱신하고
  * 컨트롤러는 다음 틱에 live()를 쓴다. 상류 controlsd가 직전 메시지를 쓰는 것과 같다.
  * 사전값·지연은 생성 시 파라미터로 고정한다(상류 CarParams처럼 주행 중 바뀌지 않는다). */
@@ -341,39 +365,39 @@ public:
   bool torque_published() const { return torque_published_; }
 
   // 저장: 이번 틱에 새 내용이 생겼으면 참. 쓰기는 호출자가 제어 루프 밖에서 한다.
-  bool vehicle_persist_due() const { return vehicle_.persist_due(); }
+  bool vehicle_persist_due() const { return vehicle_persist_due_; }
   std::string vehicle_persist_json() const;
-  bool torque_persist_due() const { return torque_.persist_due(); }
+  bool torque_persist_due() const { return torque_persist_due_; }
   const std::string &torque_cache() const { return torque_.cache(); }
   // 상류는 복원이 거부된 paramsd 저장과 깨진 torqued 캐시를 지운다
   bool vehicle_restore_rejected() const { return vehicle_restore_rejected_; }
   TorqueRestore torque_restore_status() const { return torque_.restore_status(); }
   bool vehicle_restored() const { return vehicle_restored_; }
 
-  // 대조 도구용: 이번 틱에 넣은 입력과 추정기
+  /* locationd를 paramsd·torqued 입력으로 쓸지와 그 최신 표본(제어 틱마다 부른다). use면
+   * 학습기는 kLocalizerDelayS만큼 늦은 타임라인에서 돌고, 각 틱의 조향각·속도·토크와 같은
+   * 시각의 요레이트·롤을 받은 표본 사이에서 보간해 관측한다. 표본은 IMU 묶음마다(10 Hz)
+   * 평균 70 ms 늦게 오므로, 받은 즉시 지금 시각으로 관측하면 요레이트가 조향보다 늦어 강성을
+   * 낮게 배운다(2026-10-01 재생 0.92 → 0.71). 상류는 메시지 시각 순서로 넣는다.
+   * 그 시각의 표본이 없거나 자세가 무효(상류 posenetOK)인 틱은 ESP12 입력을 쓴다. */
+  static constexpr double kLocalizerDelayS = 0.25;
+  void set_localizer(bool use, const LocalizerSample &sample);
+  bool localizer_inputs() const { return use_localizer_; }
+
+  // 대조 도구용: 마지막으로 학습기에 넣은 입력(locationd 모드면 kLocalizerDelayS 전 틱)
   const VehicleParamsInput &last_vehicle_input() const { return last_vehicle_input_; }
-  /* locationd 롤(상류 paramsd·torqued의 롤 출처). use가 켜져 있으면 다음 update부터 ESP 횡가속
-   * 대신 쓴다. */
-  void set_localizer_roll(bool use, double roll_rad, double std_rad, bool valid) {
-    use_localizer_roll_ = use;
-    localizer_roll_rad_ = roll_rad;
-    localizer_roll_std_rad_ = std_rad;
-    localizer_roll_valid_ = valid;
-  }
-  /* locationd 요레이트(보정 좌표계, 우측 양수). use면 ESP12 요레이트·자체 바이어스 추정 대신
-   * 쓴다(상류 paramsd·torqued는 livePose 각속도를 쓴다). */
-  bool localizer_inputs() const { return use_localizer_yaw_; }
-  void set_localizer_yaw_rate(bool use, double yaw_rate_right_rad_s, bool valid) {
-    use_localizer_yaw_ = use;
-    localizer_yaw_right_ = yaw_rate_right_rad_s;
-    localizer_yaw_valid_ = valid;
-  }
   const TorqueEstimatorInput &last_torque_input() const { return last_torque_input_; }
   TorqueEstimator &torque_estimator() { return torque_; }
   const TorqueEstimator &torque_estimator() const { return torque_; }
 
 private:
+  struct Tick {  // 한 제어 틱에서 만든 입력(ESP12 요레이트·롤 기준)
+    VehicleParamsInput vin;
+    TorqueEstimatorInput tin;
+  };
   static VehicleModelConstants constants(const SteeringParams &params);
+  bool localizer_at(double t_s, LocalizerSample *out) const;
+  void feed(Tick tick);
 
   VehicleModelConstants constants_;
   VehicleParamsInit init_;
@@ -387,10 +411,11 @@ private:
   LiveLateralParams live_{};
   bool vehicle_published_ = false;
   bool torque_published_ = false;
+  bool vehicle_persist_due_ = false;
+  bool torque_persist_due_ = false;
   VehicleParamsInput last_vehicle_input_{};
-  bool use_localizer_roll_ = false, localizer_roll_valid_ = false;
-  bool use_localizer_yaw_ = false, localizer_yaw_valid_ = false;
-  double localizer_yaw_right_ = 0.0;
-  double localizer_roll_rad_ = 0.0, localizer_roll_std_rad_ = 0.0;
   TorqueEstimatorInput last_torque_input_{};
+  bool use_localizer_ = false;
+  std::deque<Tick> pending_;               // locationd 모드에서 아직 넣지 않은 틱
+  std::deque<LocalizerSample> samples_;    // 받은 locationd 표본(시각 순)
 };
