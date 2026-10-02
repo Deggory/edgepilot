@@ -1,14 +1,9 @@
 #ifndef CALIBRATION_ONLINE_H
 #define CALIBRATION_ONLINE_H
 
-#include <cstdint>
+#include "model_output.h"  // PoseObservation(모델 pose 출력)
 
-struct PoseObservation {
-    float trans[3];
-    float rot[3];
-    float trans_std[3];
-    float rot_std[3];
-};
+#include <cstdint>
 
 enum class CalibrationStatus {
     Uncalibrated = 0,

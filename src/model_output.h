@@ -1,10 +1,16 @@
 #ifndef MODEL_OUTPUT_H
 #define MODEL_OUTPUT_H
 
-#include "calibration_online.h"
-
 #include <array>
 #include <vector>
+
+/* 모델 pose 출력(카메라 이동·회전과 표준편차). 온라인 보정과 locationd가 입력으로 쓴다. */
+struct PoseObservation {
+    float trans[3];
+    float rot[3];
+    float trans_std[3];
+    float rot_std[3];
+};
 
 constexpr int kTrajectorySize = 33;
 constexpr int kLeadMhpSelection = 3;

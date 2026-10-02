@@ -1,4 +1,5 @@
 #include "ipc_messages.h"
+#include "model_state_fill.h"
 #include "utils_time.h"
 
 #include <algorithm>

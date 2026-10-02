@@ -5,6 +5,7 @@
 #include "utils_time.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
+#include "model_state_fill.h"
 #include "model_output.h"
 #include "supercombo_model.h"
 #include "device_settings.h"

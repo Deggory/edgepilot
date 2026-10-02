@@ -494,12 +494,7 @@ static_assert(kRecordingVersion == 7 && sizeof(ModelState) == 3528 &&
                   sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
               "recording v7 pins these payloads; bump kRecordingVersion together");
 
-/* modeld가 발행 직전에, overlayd와 hud_snapshot이 소비 직후에 쓴다. */
-void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
-                           const ProjectionState &projection,
-                           const OnlineCalibrator::Snapshot &calibration,
-                           uint64_t frame_id, uint64_t capture_timestamp_ns,
-                           float model_execution_ms);
+/* overlayd와 hud_snapshot이 소비 직후에 쓴다(채우는 쪽은 model_state_fill.h). */
 ParsedModelOutput parsed_from_model_state(const ModelState &state);
 ProjectionState projection_from_model_state(const ModelState &state);
 
