@@ -1639,6 +1639,20 @@ TEST(ControlReplay, TurnDesireRepulsesAtLowSpeedWithBlinker) {
   LateralPlanner plain(steering, off);
   vehicle.left_blinker = true;
   EXPECT_EQ(plain.update(ms, vehicle, v, 0.0f, true).desire, 0) << "스위치가 꺼져 있으면 openpilot과 같다";
+
+  /* 빠를 때(35 km/h) 켠 깜빡이는 차선 변경 대기다. 감속해 25 km/h가 돼도 회전으로 바꾸지 않고,
+   * 깜빡이를 다시 켜면(그 속도 미만) 회전이다. */
+  LateralPlanner slowing(steering, driving);
+  vehicle = VehicleCanState{};
+  vehicle.left_blinker = true;
+  EXPECT_EQ(slowing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true).desire, 0) << "차선 변경 대기(넛지 전)";
+  bool turned = false;
+  for (int i = 0; i < 40; ++i) turned = turned || slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire != 0;
+  EXPECT_FALSE(turned) << "차선 변경 의도로 켠 깜빡이는 감속해도 회전이 아니다";
+  vehicle.left_blinker = false;
+  slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true);
+  vehicle.left_blinker = true;
+  EXPECT_EQ(slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire, 1) << "저속에서 새로 켜면 회전";
 }
 
 /* path_offset_m은 차선 중심에만 적용된다. 차선이 없어 모델 경로로 넘어가면(교차로) 적용하지

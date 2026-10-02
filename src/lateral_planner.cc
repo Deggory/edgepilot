@@ -517,10 +517,16 @@ struct LateralPlanner::Impl {
         : lane_change_state >= 2 && direction == 1 ? 4 : 0;
 
     /* 회전 desire(실험, DrivingParams::turn_desire): 차선 변경 속도 미만 + 깜빡이 하나 + 결합 중.
+     * 깜빡이를 그 속도 미만에서 켰을 때만이다(켜는 순간 판정). 빠를 때 켠 깜빡이는 차선 변경
+     * 의도라, 속도가 떨어지거나 변경을 마친 뒤 깜빡이가 남아도 회전으로 바꾸지 않는다.
      * 모델 desire 입력은 rising edge 펄스이고 5초(100틱) 뒤 빠지므로 2.5초마다 한 번 내렸다
-     * 다시 올린다. 0.9.4·master DESIRES: 1 = turnLeft, 2 = turnRight. */
+     * 다시 올린다(깜빡이를 끄면 modeld가 이력에서 지운다). 0.9.4·master DESIRES: 1 = turnLeft,
+     * 2 = turnRight. */
+    if (one_blinker && !previous_turn_blinker) turn_blinker_slow = below_speed && lane_change_state == 0;
+    if (!one_blinker) turn_blinker_slow = false;
+    previous_turn_blinker = one_blinker;
     turn_desire_active = turn_desire_enabled && active && one_blinker && below_speed &&
-                         lane_change_state == 0;
+                         lane_change_state == 0 && turn_blinker_slow;
     if (turn_desire_active) {
       const bool on = turn_desire_ticks % kTurnRepulseTicks < kTurnRepulseTicks / 2;
       desire = on ? (vehicle.left_blinker ? 1 : 2) : 0;
@@ -541,6 +547,8 @@ struct LateralPlanner::Impl {
   bool laneless_mode = false;
   bool turn_desire_enabled = false;
   bool turn_desire_active = false;
+  bool turn_blinker_slow = false;  // 지금 깜빡이를 차선 변경 속도 미만에서 켰다
+  bool previous_turn_blinker = false;
   int turn_desire_ticks = 0;
   static constexpr int kTurnRepulseTicks = 50;  // 2.5 s at the 20 Hz model rate
   bool laneless_buffer = false;

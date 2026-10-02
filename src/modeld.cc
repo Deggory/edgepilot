@@ -122,15 +122,21 @@ public:
             : control_state.cluster_speed_kph;
         v_ego_ = std::max(0.0f, ego_speed_kph / 3.6f);
         desire_ = static_cast<int>(control_state.desire);
+        left_blinker_ = control_state.left_blinker != 0;
+        right_blinker_ = control_state.right_blinker != 0;
     }
     float v_ego() const { return v_ego_; }
     int desire() const { return desire_; }
+    bool left_blinker() const { return left_blinker_; }
+    bool right_blinker() const { return right_blinker_; }
 
 private:
     LatestChannel sub_;
     bool open_ = false;
     float v_ego_ = 0.0f;
     int desire_ = 0;
+    bool left_blinker_ = false;
+    bool right_blinker_ = false;
 };
 
 bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
@@ -313,7 +319,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
             continue;
         }
         ego.poll();
-        model.set_desire(ego.desire());
+        model.set_desire(ego.desire(), ego.left_blinker(), ego.right_blinker());
 
         // 녹화기(아직 포팅 전)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
         if (!record_frame_pub.publish(&meta, sizeof(meta))) {
