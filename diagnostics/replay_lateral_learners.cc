@@ -190,6 +190,13 @@ int main(int argc, char **argv) {
         have_loc = true;
         continue;
       }
+      // 보드가 실제로 쓴 조향 지연(torqued lag도 이 값을 따른다). 예전 기록은 0이라 건너뛴다
+      if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) && rh.payload_size >= sizeof(LearnerState)) {
+        LearnerState ls{};
+        std::memcpy(&ls, buf.data(), sizeof(ls));
+        if (ls.plan_delay_s > 0.0f) learners.set_lateral_delay(ls.plan_delay_s);
+        continue;
+      }
       // 제어 틱(ControlState, 100 Hz)마다 한 번 넣는다. controlsd가 부를 자리와 같다.
       if (rh.type != static_cast<uint16_t>(RecordType::ControlState)) continue;
       ControlState cs{};

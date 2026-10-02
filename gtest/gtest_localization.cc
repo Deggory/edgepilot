@@ -71,6 +71,13 @@ TEST(Localization, LagdEstimatesDelayFromDriving)
     ASSERT_TRUE(again.restore(lag.cache_json()));
     EXPECT_EQ(again.output().valid_blocks, out.valid_blocks);
     EXPECT_NEAR(again.output().lateral_delay, out.estimate, 1e-5);
+    // steer_actuator_delay(초기값)를 바꿔도 측정한 블록은 차의 지연이라 이어 쓴다(상류도 차종·버전만 본다)
+    LateralLagConfig changed = config;
+    changed.initial_lag = 0.42;
+    LateralLagEstimator retuned(changed);
+    ASSERT_TRUE(retuned.restore(lag.cache_json()));
+    EXPECT_EQ(retuned.output().valid_blocks, out.valid_blocks);
+    EXPECT_NEAR(retuned.output().estimate, out.estimate, 1e-5);
 }
 
 TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed)
@@ -90,7 +97,7 @@ TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed)
         if (i % 5 == 0) lag.update_estimate();
     }
     EXPECT_EQ(lag.output().valid_blocks, 0) << "저속이면 쓰지 않는다";
-    EXPECT_NEAR(lag.output().lateral_delay, 0.34, 1e-9) << "추정 전에는 초기값";
+    EXPECT_NEAR(lag.output().lateral_delay, LateralLagConfig{}.initial_lag, 1e-9) << "추정 전에는 초기값";
 }
 
 // 정차: 기울어진 보드의 가속도(중력)와 자이로 바이어스를 넣으면 roll·pitch와 바이어스가 수렴한다.

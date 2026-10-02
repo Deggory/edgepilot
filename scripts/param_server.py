@@ -206,8 +206,8 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "label": "lagd 조향 지연 사용",
             "section": "실시간 학습",
             "description": "주행 중 추정한 조향 지연(목표 곡률 → 실제 요레이트, openpilot lagd)을 "
-            "목표 곡률을 읽는 경로 지연에 씁니다. 추정이 확정(5블록)된 뒤에만 적용되고, 그 전에는 "
-            "steer_actuator_delay를 씁니다. 토크 컨트롤러·torqued는 계속 steer_actuator_delay를 씁니다.",
+            "목표 곡률을 읽는 경로 지연과 토크 컨트롤러·torqued의 지연에 씁니다(openpilot과 같음). "
+            "추정이 확정(5블록)된 뒤에만 적용되고, 그 전에는 steer_actuator_delay를 씁니다.",
             "increase": "켜면 확정된 추정 지연을 씁니다(길수록 커브를 일찍 꺾습니다).",
             "decrease": "끄면 steer_actuator_delay를 씁니다.",
         },

@@ -741,18 +741,18 @@ TEST(ControlReplay, DelayCompensatedError) {
 
   // 요청 0으로 버퍼를 채운다
   for (int i = 0; i < 120; ++i)
-    torque.update(true, v, 0.0f, 0.0f, false, false, params);
+    torque.update(true, v, 0.0f, 0.0f, false, false, params, params.steer_actuator_delay);
   ASSERT_LT(std::fabs(torque.error()), 1e-6f) << "0 요청이 이어지면 오차가 없다";
 
   // 곡률 스텝. 조향각은 아직 0(차가 반응 전).
-  torque.update(true, v, 0.01f, 0.0f, false, false, params);
+  torque.update(true, v, 0.01f, 0.0f, false, false, params, params.steer_actuator_delay);
   ASSERT_LT(std::fabs(torque.error()), 1e-4f)
       << "스텝 직후 오차는 거의 0이다(지연 보상)";
   ASSERT_GT(torque.feedforward(), 1.0f) << "스텝은 feedforward가 바로 싣는다";
 
   // delay(31프레임)를 넘겨도 차가 반응하지 않으면 그때 오차가 나타난다
   for (int i = 0; i < 40; ++i)
-    torque.update(true, v, 0.01f, 0.0f, false, false, params);
+    torque.update(true, v, 0.01f, 0.0f, false, false, params, params.steer_actuator_delay);
   ASSERT_GT(torque.error(), 1.0f) << "지연이 지나도 못 따라간 만큼은 오차로 나타난다";
 }
 
@@ -769,12 +769,12 @@ TEST(ControlReplay, ReengageHasNoStaleBufferSpike) {
 
   // 커브 요청으로 버퍼를 채운 뒤 disengage
   for (int i = 0; i < 120; ++i)
-    torque.update(true, v, 0.01f, 0.0f, false, false, params);
+    torque.update(true, v, 0.01f, 0.0f, false, false, params, params.steer_actuator_delay);
   // inactive 동안 요청은 0으로 돌아간다 (직선 수동 주행)
   for (int i = 0; i < 120; ++i)
-    torque.update(false, v, 0.0f, 0.0f, false, false, params);
+    torque.update(false, v, 0.0f, 0.0f, false, false, params, params.steer_actuator_delay);
   // 직선에서 re-engage: 버퍼가 신선하면 오차 ~0, 얼었다면 큰 스파이크
-  torque.update(true, v, 0.0f, 0.0f, false, false, params);
+  torque.update(true, v, 0.0f, 0.0f, false, false, params, params.steer_actuator_delay);
   ASSERT_LT(std::fabs(torque.error()), 1e-4f)
       << "다시 engage할 때 disengage 전의 낡은 요청과 비교하지 않는다";
 }
@@ -795,7 +795,7 @@ TEST(ControlReplay, KpSpeedSchedule) {
     SteeringParams p = base;
     p.torque_kp = kp;
     TorqueController torque;
-    for (int i = 0; i < 120; ++i) torque.update(true, v, 0.0f, 3.0f, false, false, p);
+    for (int i = 0; i < 120; ++i) torque.update(true, v, 0.0f, 3.0f, false, false, p, p.steer_actuator_delay);
     return torque.normalized_output();
   };
   // 이득 곡선의 노드에서 출력비가 KP_INTERP 비율 x v^2 비율과 맞아야 한다.
@@ -803,7 +803,7 @@ TEST(ControlReplay, KpSpeedSchedule) {
     const float out = run(v, 0.8f);
     TorqueController probe;
     SteeringParams p = base;
-    for (int i = 0; i < 120; ++i) probe.update(true, v, 0.0f, 3.0f, false, false, p);
+    for (int i = 0; i < 120; ++i) probe.update(true, v, 0.0f, 3.0f, false, false, p, p.steer_actuator_delay);
     return std::fabs(out / (probe.error() == 0.0f ? 1.0f : probe.error()));
   };
   // 5 m/s 노드는 11.5, 10 m/s 노드는 3.5 -> 이득비 3.2857
@@ -826,7 +826,7 @@ TEST(ControlReplay, KpSpeedSchedule) {
    * 오차가 순수 횡가속도인지 확인한다. */
   TorqueController t;
   SteeringParams p = base;
-  for (int i = 0; i < 120; ++i) t.update(true, 4.0f, 0.002f, 3.0f, false, false, p);
+  for (int i = 0; i < 120; ++i) t.update(true, 4.0f, 0.002f, 3.0f, false, false, p, p.steer_actuator_delay);
   const float curvature_error = 0.002f - t.actual_curvature();
   ASSERT_NEAR(t.error(), curvature_error * 16.0f, 1e-4f)
       << "오차는 횡가속도뿐이고 저속 곡률 항이 없다";
@@ -842,9 +842,9 @@ TEST(ControlReplay, LiveBankCompensation) {
   SteeringParams off = params;
   off.live_bank_compensation = false;
   for (int i = 0; i < 120; ++i) {
-    with_bank.update(true, 20.0f, 0.002f, 1.0f, false, false, params,
+    with_bank.update(true, 20.0f, 0.002f, 1.0f, false, false, params, params.steer_actuator_delay,
                      0.0f, false, -0.117f);
-    without_bank.update(true, 20.0f, 0.002f, 1.0f, false, false, off,
+    without_bank.update(true, 20.0f, 0.002f, 1.0f, false, false, off, off.steer_actuator_delay,
                         0.0f, false, -0.117f);
   }
   // bank -0.117(우측 기움) -> 중력이 우로 끄니 FF는 좌로 0.117 이동해야 한다
@@ -892,8 +892,8 @@ TEST(ControlReplay, LatAccelOffsetShiftsFeedforward) {
   SteeringParams offset_params = params;
   offset_params.torque_lat_accel_offset = 0.25f;
   for (int i = 0; i < 120; ++i) {
-    a.update(true, 20.0f, 0.002f, 1.0f, false, false, params);
-    b.update(true, 20.0f, 0.002f, 1.0f, false, false, offset_params);
+    a.update(true, 20.0f, 0.002f, 1.0f, false, false, params, params.steer_actuator_delay);
+    b.update(true, 20.0f, 0.002f, 1.0f, false, false, offset_params, offset_params.steer_actuator_delay);
   }
   const float diff = a.feedforward() - b.feedforward();
   ASSERT_NEAR(diff, 0.25f, 1e-3f) << "lat_accel_offset은 feedforward에서 정확히 빠진다";
@@ -1369,8 +1369,8 @@ TEST(ControlReplay, LiveVehicleParamsFollowVehicleModel) {
   flat.roll_rad = 0.0f;
   params.live_bank_compensation = true;
   for (int i = 0; i < 150; ++i) {
-    with_roll.update(true, 20.0f, 0.004f, 1.0f, false, false, params, 0.0f, false, -0.5f, live);
-    without_roll.update(true, 20.0f, 0.004f, 1.0f, false, false, params, 0.0f, false, -0.5f, flat);
+    with_roll.update(true, 20.0f, 0.004f, 1.0f, false, false, params, params.steer_actuator_delay, 0.0f, false, -0.5f, live);
+    without_roll.update(true, 20.0f, 0.004f, 1.0f, false, false, params, params.steer_actuator_delay, 0.0f, false, -0.5f, flat);
   }
   ASSERT_NEAR(with_roll.feedforward() - without_roll.feedforward(), -live.roll_rad * 9.81f, 1e-4f)
       << "실시간 롤은 feedforward에서 roll*g를 빼고 뱅크 추정을 대신한다";
@@ -1397,7 +1397,7 @@ TEST(ControlReplay, LiveTorqueParamsMatchUpstreamStructure) {
     for (int i = 0; i < 300; ++i) {
       const float desired = 0.0015f * std::sin(0.03f * i);
       const float angle = 1.5f * std::sin(0.03f * i - 0.4f);
-      torque.update(true, 20.0f, desired, angle, false, false, params, 0.0f, false, 0.0f, live);
+      torque.update(true, 20.0f, desired, angle, false, false, params, params.steer_actuator_delay, 0.0f, false, 0.0f, live);
       out->push_back(torque.normalized_output());
     }
   };
@@ -1653,6 +1653,26 @@ TEST(ControlReplay, TurnDesireRepulsesAtLowSpeedWithBlinker) {
   slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true);
   vehicle.left_blinker = true;
   EXPECT_EQ(slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire, 1) << "저속에서 새로 켜면 회전";
+}
+
+/* 토크 컨트롤러는 넘겨받은 조향 지연(상류 lat_delay)만큼 전의 요청을 지금 측정과 비교한다:
+ * 계단 요청이 오차로 나타나는 틱이 지연을 따른다(예전에는 늘 steer_actuator_delay). */
+TEST(ControlReplay, TorqueSetpointFollowsLateralDelay) {
+  SteeringParams params;
+  params.enabled = true;
+  params.torque_use_angle = true;
+  params.steer_actuator_delay = 0.34f;
+  params.angle_offset_deg = 0.0f;  // 조향각 0이면 측정 곡률 0
+  for (const float delay : {0.34f, 0.5f}) {
+    TorqueController torque;
+    int first = -1;
+    for (int i = 0; i < 150; ++i) {
+      const float desired = i >= 20 ? 0.002f : 0.0f;
+      torque.update(true, 20.0f, desired, 0.0f, false, false, params, delay);
+      if (first < 0 && std::fabs(torque.error()) > 1e-6f) first = i - 20;
+    }
+    EXPECT_EQ(first, static_cast<int>(delay / 0.01f)) << delay;
+  }
 }
 
 /* path_offset_m은 차선 중심에만 적용된다. 차선이 없어 모델 경로로 넘어가면(교차로) 적용하지

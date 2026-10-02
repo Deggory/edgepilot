@@ -948,7 +948,9 @@ int main() {
       }
 
       /* 학습기는 이번 틱에 실제로 보낸 토크로 갱신하고, 컨트롤러는 다음 틱에 쓴다.
-       * 송신 뒤에 둬서 적합·직렬화 틱이 CAN 송신을 늦추지 않게 한다. */
+       * 송신 뒤에 둬서 적합·직렬화 틱이 CAN 송신을 늦추지 않게 한다. torqued 지연은
+       * 컨트롤러와 같은 조향 지연(상류는 lateralDelay). */
+      learners.set_lateral_delay(controller.plan_delay_s());
       learners.update(vehicle, now_s,
                       static_cast<double>(config.driving_params.vehicle_state_timeout_ms) / 1000.0,
                       last_result.active, last_result.apply_torque, last_result.steering_pressed);

@@ -659,8 +659,14 @@ bool TorqueEstimator::update(const TorqueEstimatorInput &in) {
   ++frame_;
   if (in.inputs_fresh) {
     // 상류는 conflate된 carControl·carOutput·carState 최신값을 deviceMotion보다 먼저 넣는다
+    // lag가 줄면 시각이 뒤로 갈 수 있다. 보간(np.interp)은 증가하는 시각을 가정한다
+    double sample_t = in.t_s + lag_s_;
+    if (raw_count_ > 0) {
+      const double last_t = raw_[(raw_head_ + raw_count_ - 1) % kHistLen].t;
+      sample_t = std::max(sample_t, last_t + 1e-3);
+    }
     RawSample &s = raw_[(raw_head_ + raw_count_) % kHistLen];
-    s = {in.t_s + lag_s_, in.lat_active ? 1.0 : 0.0, in.steer_torque, in.speed_mps,
+    s = {sample_t, in.lat_active ? 1.0 : 0.0, in.steer_torque, in.speed_mps,
          in.steer_override ? 1.0 : 0.0};
     if (raw_count_ < kHistLen) ++raw_count_;
     else raw_head_ = (raw_head_ + 1) % kHistLen;

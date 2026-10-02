@@ -909,6 +909,28 @@ TEST(LateralLearners, LocalizerRollThroughParamsd) {
   EXPECT_NEAR(d.l.vehicle_params().roll_rad, esp_roll, rad(0.2)) << "ESP12 횡가속 롤";
 }
 
+/* torqued lag는 조향 지연을 따른다(상류 lateralDelay). 줄어도 이력 시각이 거꾸로 가지 않는다. */
+TEST(LateralLearners, TorqueLagFollowsLateralDelay) {
+  const SteeringParams sp;
+  LateralLearners l(sp, "", "", 1);
+  EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), sp.steer_actuator_delay);
+  l.set_lateral_delay(0.5);
+  EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), 0.5);
+  l.set_lateral_delay(std::nan(""));
+  EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), 0.5) << "잘못된 값은 무시";
+  VehicleCanState vehicle = driving_vehicle(1.0);
+  vehicle.yaw_rate_valid = true;
+  vehicle.lat_accel_valid = true;
+  for (int i = 0; i < 300; ++i) {
+    if (i == 150) l.set_lateral_delay(0.2);  // 0.3초 줄인다
+    vehicle = driving_vehicle(1.0 + 0.01 * i);
+    vehicle.yaw_rate_valid = true;
+    vehicle.lat_accel_valid = true;
+    l.update(vehicle, 1.0 + 0.01 * i, 0.5, true, 100, false);
+    ASSERT_TRUE(std::isfinite(l.torque_params().lat_accel_factor));
+  }
+}
+
 TEST(LateralLearners, LearnersGlue) {
   const SteeringParams sp;
   VehicleCanState vehicle = driving_vehicle(1.0);

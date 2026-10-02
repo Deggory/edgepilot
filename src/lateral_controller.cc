@@ -269,7 +269,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
         : 1.0f;
     const int raw_torque = torque_controller_.update(
         true, speed_mps, result.desired_curvature, vehicle_state.steering_angle_deg,
-        steering_pressed, steer_rate_limited_ || above_fault_angle, control_params,
+        steering_pressed, steer_rate_limited_ || above_fault_angle, control_params, plan_delay_s(),
         vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_lat_accel_, live);
     result.desired_torque = static_cast<int>(std::lround(
         static_cast<float>(raw_torque) * angle_scale));
@@ -312,7 +312,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
     fault_angle_frames_ = 0;
     torque_controller_.update(false, speed_mps, result.desired_curvature,
                               vehicle_state.steering_angle_deg,
-                              false, steer_rate_limited_, control_params,
+                              false, steer_rate_limited_, control_params, plan_delay_s(),
                               vehicle_state.yaw_rate_rad_s, yaw_rate_valid,
                               road_bank_lat_accel_, live);
     result.actual_curvature = torque_controller_.actual_curvature();

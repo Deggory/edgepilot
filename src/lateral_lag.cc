@@ -283,16 +283,16 @@ std::string LateralLagEstimator::cache_json() const
 
 bool LateralLagEstimator::restore(const std::string &json)
 {
-    // upstream retrieve_initial_lag: 같은 버전·차량(여기선 같은 초기값)이고 무효가 아니면
-    // 추정값과 유효 블록 수로 다시 시작한다.
+    // upstream retrieve_initial_lag: 같은 버전·차량(단일 차종이라 버전만)이고 무효가 아니면
+    // 추정값과 유효 블록 수로 다시 시작한다. 초기값(steer_actuator_delay)이 바뀌어도 측정한 블록은
+    // 차의 지연이라 그대로 쓴다(상류도 steerActuatorDelay로 거르지 않는다).
     float version = 0, initial = 0, estimate = 0, blocks = 0, status = 0;
     if (!parse_json_float_value(json, "version", &version) || static_cast<int>(version) != kCacheVersion ||
         !parse_json_float_value(json, "initial_lag", &initial) ||
         !parse_json_float_value(json, "estimate", &estimate) ||
         !parse_json_float_value(json, "valid_blocks", &blocks) || !parse_json_float_value(json, "status", &status))
         return false;
-    if (std::fabs(initial - config_.initial_lag) > 1e-3 ||
-        static_cast<int>(status) == static_cast<int>(LateralLagStatus::Invalid) || blocks < 0 ||
+    if (static_cast<int>(status) == static_cast<int>(LateralLagStatus::Invalid) || blocks < 0 ||
         blocks > config_.block_count || !std::isfinite(estimate))
         return false;
     const double keep_initial = config_.initial_lag;

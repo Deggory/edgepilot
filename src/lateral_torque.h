@@ -25,6 +25,9 @@ public:
   void reset();
 
   // openpilot LatControlTorque와 같은 형태로 조향 토크를 계산한다.
+  /* lat_delay_s: 조향 지연(상류 LatControlTorque.update의 lat_delay). 요청 버퍼에서 이만큼 전의
+   * 요청을 지금 측정과 비교한다. 컨트롤러는 경로를 읽는 지연과 같은 값(lagd 사용 중이면 추정값,
+   * 아니면 steer_actuator_delay)을 넘긴다. */
   int update(bool active,
              float speed_mps,
              float desired_curvature,
@@ -32,6 +35,7 @@ public:
              bool steering_pressed,
              bool steering_rate_limited,
              const SteeringParams &params,
+             float lat_delay_s,
              float yaw_rate_rad_s = 0.0f,
              bool yaw_rate_valid = false,
              float road_bank_lat_accel = 0.0f,

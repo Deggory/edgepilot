@@ -83,6 +83,7 @@ int TorqueController::update(bool active,
                                       bool steering_pressed,
                                       bool steering_rate_limited,
                                       const SteeringParams &params,
+                                      float lat_delay_s,
                                       float yaw_rate_rad_s,
                                       bool yaw_rate_valid,
                                       float road_bank_lat_accel,
@@ -99,8 +100,9 @@ int TorqueController::update(bool active,
   request_head_ = (request_head_ + 1) % kRequestBufferLen;
   lat_accel_request_[request_head_] =
       std::isfinite(desired_lat_accel) ? desired_lat_accel : 0.0f;
+  // 상류: delay_frames = int(clip(lat_delay / dt + 1, 1, buffer_len))
   const int delay_frames = clamp_int(
-      static_cast<int>(params.steer_actuator_delay / kDtCtrl) + 1,
+      static_cast<int>((std::isfinite(lat_delay_s) ? lat_delay_s : params.steer_actuator_delay) / kDtCtrl) + 1,
       1, kRequestBufferLen);
   const auto at = [this](int back) {
     return (request_head_ - back + 2 * kRequestBufferLen) % kRequestBufferLen;

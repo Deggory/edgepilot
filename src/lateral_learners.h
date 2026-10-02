@@ -6,6 +6,7 @@
  * 조향각·속도는 매 틱 관측(상류는 20 Hz, 아래 VehicleParamsOptions), 입력이 낡으면 비활성과 같이 처리. */
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -256,6 +257,11 @@ public:
   TorqueRestore restore_status() const { return restore_; }
   const TorqueTuning &tuning() const { return offline_; }
   bool localizer_source() const { return localizer_source_; }
+  /* 상류 torqued는 lateralDelay 메시지(lagd)로 lag를 바꾼다. 이후 들어오는 점부터 적용한다. */
+  void set_lag(double lag_s) {
+    if (std::isfinite(lag_s) && lag_s > 0.0) lag_s_ = lag_s;
+  }
+  double lag() const { return lag_s_; }
 
   /* 적합에 점을 전부 쓴다(상류는 2000점 무작위 추출). 참조 구현 대조용. */
   void set_fit_all_points(bool all) { fit_all_points_ = all; }
@@ -388,6 +394,9 @@ public:
    * 그 시각의 표본이 없거나 자세가 무효(상류 posenetOK)인 틱은 ESP12 입력을 쓴다. */
   static constexpr double kLocalizerDelayS = 0.25;
   void set_localizer(bool use, const LocalizerSample &sample);
+  /* 조향 지연(컨트롤러가 경로를 읽는 지연과 같은 값). 상류 torqued처럼 점의 토크·활성 이력을 이만큼
+   * 밀어 요레이트와 맞춘다. */
+  void set_lateral_delay(double delay_s) { torque_.set_lag(delay_s); }
   bool localizer_inputs() const { return use_localizer_; }
 
   // 대조 도구용: 마지막으로 학습기에 넣은 입력(locationd 모드면 kLocalizerDelayS 전 틱)
