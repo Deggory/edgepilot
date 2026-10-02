@@ -89,9 +89,16 @@ only in the board build, against `deps/ax630` from
   `src/control_params.*`, `src/hyundai_can.*`
   - apply the planner's lag-adjusted curvature through the validated K7
     torque/CAN path.
-- `src/lateral_learners.*`
+- `src/vehicle_params_learner.*`, `src/torque_estimator.*`,
+  `src/lateral_learners.*`, `src/localizer_inputs.h`
   - the paramsd/torqued ports that estimate steer ratio and torque response
-    while driving (opt-in).
+    while driving (opt-in). `vehicle_params_learner` is paramsd with its
+    car_kf EKF and saved-value restore; `torque_estimator` is torqued with its
+    cache; `lateral_learners` is the controlsd glue that turns vehicle CAN and
+    locationd samples into learner inputs and collects the outputs as
+    `LiveLateralParams`. `localizer_inputs.h` converts the IPC
+    `LocalizationState` into a learner sample, so the learner library does not
+    depend on the IPC layout.
 - `src/lateral_path.*`
   - reduces `modelState` to the steering-usability gate (reach and point
     count). It computes no path geometry; curvature comes from the MPC.
@@ -125,10 +132,14 @@ released after that short hold if they persist.
 - `src/ipc_messages.*`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the `K230*State` snapshots with their `static_assert`s, and the
-    `ParsedModelOutput` ↔ `ModelState` marshalling. Recording v5 stores
-    `ModelState`, `ControlState`, and `PandaState` as-is, so their
+    `ModelState` → `ParsedModelOutput`/`ProjectionState` unpacking. Recording
+    v5 stores `ModelState`, `ControlState`, and `PandaState` as-is, so their
     offsets are pinned here and tied to `kRecordingVersion`. Code that only
     reads or fills a message includes this and nothing else.
+- `src/model_state_fill.h`
+  - `fill_model_state`, which modeld calls to pack a frame's outputs into
+    `ModelState`. It needs the online calibrator's snapshot, so it is kept out
+    of `ipc_messages.h` and message consumers do not pull in the calibrator.
 - `src/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
     and the camera frame ring, all on one `ShmRegion` (open, size, map, close).
