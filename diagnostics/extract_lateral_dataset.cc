@@ -7,12 +7,12 @@
 #include "recorded_model_state.h"
 #include "recording_format.h"
 #include "control_params.h"
+#include "event_log_reader.h"
 #include "vehicle_can.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <vector>
 
 namespace {
@@ -78,29 +78,14 @@ int main(int argc, char **argv) {
 
   std::vector<char> buf;
   for (int arg = 2; arg < argc; ++arg) {
-    std::ifstream file(argv[arg], std::ios::binary);
-    EventFileHeader hdr{};
-    file.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-    if (!file || std::memcmp(hdr.magic, "K230LOG1", 8) != 0) {
+    EventLogReader reader(argv[arg]);
+    if (!reader.ok()) {
       std::fprintf(stderr, "skip %s: not an event file\n", argv[arg]);
       continue;
     }
-    file.seekg(hdr.header_size);
 
     EventRecordHeader rh{};
-    while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-      /* 8-19 route처럼 tmpfs가 차서 끊긴 파일은 0으로 채워진 구간이 남는다.
-       * 재동기화를 시도하지 않고 그 파일을 거기서 끝낸다. */
-      if (rh.type < 1 || rh.type > kLastRecordType ||
-          rh.payload_size > (1U << 20)) {
-        std::fprintf(stderr, "%s: truncated at %lld bytes (type=%u len=%u)\n",
-                     argv[arg],
-                     static_cast<long long>(file.tellg()) - static_cast<long long>(sizeof(rh)),
-                     rh.type, rh.payload_size);
-        break;
-      }
-      buf.resize(rh.payload_size);
-      if (!file.read(buf.data(), rh.payload_size)) break;
+    while (reader.next(&rh, &buf)) {
 
       const double now_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
       if (route_start_s < 0.0) route_start_s = now_s;
@@ -126,7 +111,7 @@ int main(int argc, char **argv) {
       }
 
       if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
-          decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &model)) {
+          decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &model)) {
         have_model = model.valid != 0;
         model_time_s = now_s;
         continue;
@@ -216,6 +201,11 @@ int main(int argc, char **argv) {
                    model_age);
       ++rows;
     }
+    /* 8-19 route처럼 tmpfs가 차서 끊긴 파일은 0으로 채워진 구간이 남는다.
+     * 리더는 재동기화를 시도하지 않고 그 파일을 거기서 끝낸다. */
+    if (reader.truncated())
+      std::fprintf(stderr, "%s: truncated at %lld bytes (type=%u len=%u)\n", argv[arg],
+                   reader.truncated_at(), rh.type, rh.payload_size);
   }
 
   std::fclose(out);

@@ -1,6 +1,7 @@
 /* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(K230LOG1), 세그먼트
  * 프레임 인덱스(K230IDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
  * 최종 경로 이동. 보드·인코더 없이 합성 레코드로 검사한다. */
+#include "event_log_reader.h"
 #include "recorded_model_state.h"
 #include "recording_format.h"
 #include "recording_writer.h"
@@ -166,6 +167,22 @@ TEST(RecordingWriter, RouteOnDisk) {
     offset += record.payload;
   }
   ASSERT_EQ(offset, events.size()) << "마지막 레코드 뒤에 남는 바이트가 없다";
+  {
+    // 진단 도구와 replayd가 쓰는 리더도 같은 레코드를 읽는다
+    EventLogReader reader(route + "/events/000.bin");
+    ASSERT_TRUE(reader.ok());
+    ASSERT_EQ(reader.version(), kRecordingVersion);
+    EventRecordHeader header{};
+    std::vector<char> payload;
+    for (const Expected &record : expected) {
+      ASSERT_TRUE(reader.next(&header, &payload));
+      ASSERT_EQ(header.type, record.type);
+      ASSERT_EQ(header.timestamp_ns, record.ts);
+      ASSERT_EQ(payload.size(), record.payload);
+    }
+    ASSERT_FALSE(reader.next(&header, &payload));
+    ASSERT_FALSE(reader.truncated()) << "온전한 파일 끝은 끊김이 아니다";
+  }
 
   // segments/000: 코덱 설정 + 패킷 3개, 인덱스 오프셋은 누적
   const std::vector<uint8_t> video = read_file(route + "/segments/000/road.h264");
@@ -202,6 +219,82 @@ TEST(RecordingWriter, RouteOnDisk) {
   // params 스냅샷은 json 파일만 복사한다
   ASSERT_EQ(snapshot.size(), 1);
   ASSERT_EQ(snapshot[0], "steering.json");
+
+  std::system(("rm -rf '" + root + "'").c_str());
+}
+
+/* 끊긴 이벤트 로그: tmpfs가 차서 0으로 채워진 꼬리, 모자란 페이로드·레코드 머리, 1 MiB를 넘는
+ * 길이. 리더는 재동기화 없이 거기서 끝내고 truncated()로 알린다. header_size가 구조체보다 큰
+ * (뒤에 필드가 붙은) 머리는 header_size만큼 건너뛴다. */
+TEST(EventLogReader, StopsAtTruncatedTail) {
+  char root_template[] = "/tmp/gtest_event_log_XXXXXX";
+  const std::string root = mkdtemp(root_template);
+  const auto write_log = [&](const std::string &name, uint32_t extra_header, uint32_t claimed_payload,
+                             const std::string &tail) {
+    EventFileHeader file_header;
+    file_header.header_size = sizeof(EventFileHeader) + extra_header;
+    EventRecordHeader record;
+    record.timestamp_ns = 123;
+    record.type = static_cast<uint16_t>(RecordType::ControlState);
+    record.payload_size = claimed_payload;
+    std::ofstream out(root + "/" + name, std::ios::binary);
+    out.write(reinterpret_cast<const char *>(&file_header), sizeof(file_header));
+    out << std::string(extra_header, '\x7f');
+    out.write(reinterpret_cast<const char *>(&record), sizeof(record));
+    out << tail;
+    return root + "/" + name;
+  };
+  const long long first_record = sizeof(EventFileHeader);
+  EventRecordHeader header;
+  std::vector<char> payload;
+
+  {
+    // 레코드 하나 + 0으로 채워진 꼬리. 큰 머리를 건너뛴다
+    EventLogReader reader(write_log("zero_tail.bin", 8, 4, std::string(4, '\x11') + std::string(32, '\0')));
+    ASSERT_TRUE(reader.ok());
+    ASSERT_TRUE(reader.next(&header, &payload));
+    ASSERT_EQ(header.timestamp_ns, 123);
+    ASSERT_EQ(payload, std::vector<char>(4, '\x11'));
+    ASSERT_FALSE(reader.next(&header, &payload));
+    ASSERT_TRUE(reader.truncated());
+    ASSERT_EQ(reader.truncated_at(), first_record + 8 + static_cast<long long>(sizeof(EventRecordHeader)) + 4);
+    ASSERT_FALSE(reader.next(&header, &payload)) << "끝난 뒤에는 계속 false";
+  }
+  {
+    // 레코드 하나로 깨끗하게 끝난다
+    EventLogReader reader(write_log("clean.bin", 0, 4, std::string(4, '\x11')));
+    ASSERT_TRUE(reader.next(&header, &payload));
+    ASSERT_FALSE(reader.next(&header, &payload));
+    ASSERT_FALSE(reader.truncated());
+  }
+  // 페이로드가 모자람, 길이가 1 MiB 초과, 다음 레코드 머리가 반만 있음
+  const struct {
+    const char *name;
+    uint32_t claimed;
+    std::string tail;
+    int records;
+  } cases[] = {
+      {"short_payload.bin", 100, std::string(10, '\x11'), 0},
+      {"huge_payload.bin", 2U << 20, std::string(4, '\x11'), 0},
+      {"partial_header.bin", 4, std::string(4, '\x11') + std::string(5, '\x22'), 1},
+  };
+  for (const auto &c : cases) {
+    EventLogReader reader(write_log(c.name, 0, c.claimed, c.tail));
+    int records = 0;
+    while (reader.next(&header, &payload)) ++records;
+    EXPECT_EQ(records, c.records) << c.name;
+    EXPECT_TRUE(reader.truncated()) << c.name;
+    EXPECT_EQ(reader.truncated_at(),
+              first_record + c.records * static_cast<long long>(sizeof(EventRecordHeader) + 4))
+        << c.name;
+  }
+  {
+    std::ofstream(root + "/not_a_log.bin", std::ios::binary) << std::string(64, 'x');
+    EventLogReader reader(root + "/not_a_log.bin");
+    ASSERT_FALSE(reader.ok());
+    ASSERT_FALSE(reader.next(&header, &payload));
+    ASSERT_FALSE(EventLogReader(root + "/missing.bin").ok());
+  }
 
   std::system(("rm -rf '" + root + "'").c_str());
 }

@@ -16,6 +16,7 @@
  * --metric-from N: 곡률 대조를 0부터 센 N번 이벤트 파일부터 센다(앞 파일로 학습을 수렴시킬 때).
  * 끝에 결합 직진 구간의 조향각 기반 곡률(학습값 차량 모델) − 요레이트 곡률 평균을 출처별로 출력한다. */
 #include "control_params.h"
+#include "event_log_reader.h"
 #include "ipc_messages.h"
 #include "lateral_learners.h"
 #include "localizer_inputs.h"
@@ -152,18 +153,10 @@ int main(int argc, char **argv) {
   size_t file_index = 0;
   for (const std::string &path : events) {
     const bool count_metric = file_index++ >= metric_from_file;
-    std::ifstream file(path, std::ios::binary);
-    EventFileHeader hdr{};
-    file.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-    if (!file || std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
-    file.seekg(hdr.header_size);
+    EventLogReader reader(path);
+    if (!reader.ok()) continue;
     EventRecordHeader rh{};
-    while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-      if (rh.type < 1 || rh.type > kLastRecordType ||
-          rh.payload_size > (1U << 20))
-        break;
-      buf.resize(rh.payload_size);
-      if (!file.read(buf.data(), rh.payload_size)) break;
+    while (reader.next(&rh, &buf)) {
       const double record_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
       const double now_s = std::max(record_s, latest_can_s);
       if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {

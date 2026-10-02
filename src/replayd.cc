@@ -10,6 +10,7 @@
  * 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
  * 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지) */
 #include "app_config.h"
+#include "event_log_reader.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
 #include "maix_cmm.h"
@@ -121,20 +122,14 @@ public:
             }
             segments.push_back(segment);
         }
+        std::vector<char> payload;
         for (const std::string &path : numbered_entries(dir + "/events", ".bin")) {
-            const std::vector<uint8_t> data = read_file(path);
-            size_t pos = sizeof(EventFileHeader);
-            if (data.size() < pos || std::memcmp(data.data(), "K230LOG1", 8) != 0) continue;
-            while (pos + sizeof(EventRecordHeader) <= data.size()) {
-                EventRecordHeader h;
-                std::memcpy(&h, data.data() + pos, sizeof(h));
-                pos += sizeof(h);
-                if (pos + h.payload_size > data.size()) break;
+            EventLogReader reader(path);
+            EventRecordHeader h{};
+            while (reader.next(&h, &payload)) {
                 const auto type = static_cast<RecordType>(h.type);
                 if (type == RecordType::CanRx || type == RecordType::PandaState)
-                    events.push_back({h.timestamp_ns, type,
-                                      std::vector<uint8_t>(data.begin() + pos, data.begin() + pos + h.payload_size)});
-                pos += h.payload_size;
+                    events.push_back({h.timestamp_ns, type, std::vector<uint8_t>(payload.begin(), payload.end())});
             }
         }
         std::stable_sort(events.begin(), events.end(),

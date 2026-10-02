@@ -17,6 +17,7 @@
  *   --camera-shift D           카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다
  *                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08). */
 #include "control_params.h"
+#include "event_log_reader.h"
 #include "hyundai_can.h"
 #include "ipc_messages.h"
 #include "recorded_model_state.h"
@@ -33,7 +34,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -411,16 +411,11 @@ int main(int argc, char **argv) {
   };
 
   for (size_t a = 1; a < opt.positional.size(); ++a) {
-    std::ifstream f(opt.positional[a], std::ios::binary);
-    EventFileHeader hdr{};
-    f.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-    if (std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
-    f.seekg(hdr.header_size);
+    EventLogReader reader(opt.positional[a]);
+    if (!reader.ok()) continue;
     EventRecordHeader rh{};
     std::vector<char> buf;
-    while (f.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-      buf.resize(rh.payload_size);
-      if (!f.read(buf.data(), rh.payload_size)) break;
+    while (reader.next(&rh, &buf)) {
       const double rec_t = static_cast<double>(rh.timestamp_ns) * 1e-9;
 
       if (sim_t > 0.0) {
@@ -469,7 +464,7 @@ int main(int argc, char **argv) {
         ex.active_rec = cs.active;
       } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
         ModelState ms{};
-        if (!decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
+        if (!decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) continue;
         if (sim_t < 0.0) {
           sim_t = rec_t;
           route_t0 = rec_t;

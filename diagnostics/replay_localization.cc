@@ -5,6 +5,7 @@
  * CSV(IMU 묶음마다): t, 속도, CAN 요레이트, locationd 보정 요레이트·표준편차, 롤·피치, 플래그,
  *   lagd 값. 끝에 요레이트 비교와 lagd 결과를 출력한다. (CAN 횡가속 LatAccel은 부호가 반대이고
  *   배율이 맞지 않아 롤 비교 기준으로 쓰지 않는다: 2026-09-27 경로에서 요레이트·속도 대비 −0.35배) */
+#include "event_log_reader.h"
 #include "ipc_messages.h"
 #include "localization_pipeline.h"
 #include "recorded_model_state.h"
@@ -16,7 +17,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -57,16 +57,10 @@ int main(int argc, char **argv)
     std::vector<char> buf;
 
     for (int f = 2; f < argc; ++f) {
-        std::ifstream file(argv[f], std::ios::binary);
-        EventFileHeader hdr{};
-        file.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-        if (!file || std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
-        file.seekg(hdr.header_size);
+        EventLogReader reader(argv[f]);
+        if (!reader.ok()) continue;
         EventRecordHeader rh{};
-        while (file.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-            if (rh.type < 1 || rh.type > kLastRecordType || rh.payload_size > (1U << 20)) break;
-            buf.resize(rh.payload_size);
-            if (!file.read(buf.data(), rh.payload_size)) break;
+        while (reader.next(&rh, &buf)) {
             const double record_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
             const auto type = static_cast<RecordType>(rh.type);
             if (type == RecordType::CanRx) {
@@ -86,7 +80,7 @@ int main(int argc, char **argv)
                 }
             } else if (type == RecordType::ModelState) {
                 ModelState ms{};
-                if (decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) pipeline.on_model(ms);
+                if (decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) pipeline.on_model(ms);
             } else if (type == RecordType::ControlState) {
                 ControlState cs{};
                 std::memcpy(&cs, buf.data(), std::min(sizeof(cs), buf.size()));

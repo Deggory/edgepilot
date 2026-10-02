@@ -162,6 +162,11 @@ released after that short hold if they persist.
     (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
     is mirrored by `tools/model/recording_reader.py`. No process uses it on the
     MaixCAM2 yet.
+- `src/event_log_reader.h`
+  - the one C++ reader of `events/NNN.bin`, shared by `replayd` and the replay
+    and dataset tools. It checks the magic, skips `header_size`, and stops
+    without resyncing at a truncated tail (record type out of range, a payload
+    over 1 MiB, or a short header or payload), which `truncated()` reports.
 - `src/panda_client.*`, `src/panda_can_codec.*`, `src/pandad.cc`
   - optional panda USB bridge. It handles USB, health, heartbeat, receive CAN,
     and the final TX gate, but does not generate vehicle control messages.

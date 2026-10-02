@@ -1,6 +1,7 @@
 /* 녹화된 ModelState/ControlState로 LateralPlanner를 재실행한다.
  * 녹화된 인지 결과에 대해 플래너가 무엇을 요구했는지 오프라인으로 재현한다.
  * 사용: replay_planner [--laneless] <out.csv> <events.bin...> */
+#include "event_log_reader.h"
 #include "ipc_messages.h"
 #include "recorded_model_state.h"
 #include "lateral_controller.h"
@@ -13,7 +14,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <vector>
 
 int main(int argc, char **argv) {
@@ -48,16 +48,11 @@ int main(int argc, char **argv) {
   float v_kph = 0.0f, measured = 0.0f, des_rec = 0.0f, prev_des = 0.0f;
   bool have_cs = false;
   for (size_t a = 1; a < positional.size(); ++a) {
-    std::ifstream f(positional[a], std::ios::binary);
-    EventFileHeader hdr{};
-    f.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-    if (std::memcmp(hdr.magic, "K230LOG1", 8) != 0) continue;
-    f.seekg(hdr.header_size);
+    EventLogReader reader(positional[a]);
+    if (!reader.ok()) continue;
     EventRecordHeader rh{};
     std::vector<char> buf;
-    while (f.read(reinterpret_cast<char *>(&rh), sizeof(rh))) {
-      buf.resize(rh.payload_size);
-      if (!f.read(buf.data(), rh.payload_size)) break;
+    while (reader.next(&rh, &buf)) {
       if (rh.type == static_cast<uint16_t>(RecordType::ControlState) &&
           rh.payload_size >= sizeof(ControlState)) {
         ControlState cs{};
@@ -69,7 +64,7 @@ int main(int argc, char **argv) {
       } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
         if (!have_cs) continue;
         ModelState ms{};
-        if (!decode_recorded_model_state(buf.data(), rh.payload_size, hdr.version, &ms)) continue;
+        if (!decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) continue;
         const float v = v_kph / 3.6f;
         LateralTarget t = planner.update(ms, vehicle, v, measured, true);
         /* 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이
