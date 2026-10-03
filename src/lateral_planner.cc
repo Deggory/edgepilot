@@ -391,6 +391,7 @@ struct LateralPlanner::Impl {
     target.heading_rad = static_cast<float>(mpc.nodes()[0].psi);
     target.curvature = static_cast<float>(mpc.nodes()[0].curvature);
     target.desire = desire;
+    target.turn_desire = turn_desire_direction;
     for (int i = 0; i < kLateralControlN; ++i) {
       target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
       target.curvatures[i] = static_cast<float>(mpc.nodes()[i].curvature);
@@ -436,6 +437,7 @@ struct LateralPlanner::Impl {
     target.heading_rad = target.psis[0];
     target.curvature = target.curvatures[0];
     target.desire = desire;
+    target.turn_desire = turn_desire_direction;
     // 차선 모드로 돌아가면 낡은 MPC 해가 아니라 지금 곡률에서 출발한다.
     laneless_buffer = false;
     plan_mix = 1.0;
@@ -516,20 +518,21 @@ struct LateralPlanner::Impl {
     desire = lane_change_state >= 2 && direction == -1 ? 3
         : lane_change_state >= 2 && direction == 1 ? 4 : 0;
 
-    /* 회전 desire(실험, DrivingParams::turn_desire): 차선 변경 속도 미만 + 깜빡이 하나 + 결합 중.
-     * 깜빡이를 그 속도 미만에서 켰을 때만이다(켜는 순간 판정). 빠를 때 켠 깜빡이는 차선 변경
-     * 의도라, 속도가 떨어지거나 변경을 마친 뒤 깜빡이가 남아도 회전으로 바꾸지 않는다.
+    /* 회전 desire(실험, DrivingParams::turn_desire): 차선 변경 속도 미만 + 깜빡이 하나 + 결합 중 +
+     * 차선 변경이 진행 중이 아님(상태 0). 빠를 때 켠 깜빡이도 그 속도 아래까지 켜져 있으면 회전으로
+     * 본다. 회전 차로로 차선을 바꾸거나 미리 깜빡이를 켜고 감속해 도는 순서가 흔하다(2026-10-03 실차:
+     * 회전 6번 중 3번이 30 km/h 위에서 켰다). 변경 대기(1)는 감속하면 0이 되고, 변경을 마친 뒤
+     * 깜빡이가 남으면 대기(1)로 돌아갔다가 감속하면 0이 된다. 진행 중인 변경(2, 3)이 먼저다.
+     * 차선 변경 뒤 깜빡이를 켠 채 정체로 감속해도 회전 의도가 들어간다는 뜻이라 운전자가 바로잡는다.
      * 모델 desire 입력은 rising edge 펄스이고 5초(100틱) 뒤 빠지므로 2.5초마다 한 번 내렸다
      * 다시 올린다(깜빡이를 끄면 modeld가 이력에서 지운다). 0.9.4·master DESIRES: 1 = turnLeft,
      * 2 = turnRight. */
-    if (one_blinker && !previous_turn_blinker) turn_blinker_slow = below_speed && lane_change_state == 0;
-    if (!one_blinker) turn_blinker_slow = false;
-    previous_turn_blinker = one_blinker;
     turn_desire_active = turn_desire_enabled && active && one_blinker && below_speed &&
-                         lane_change_state == 0 && turn_blinker_slow;
+                         lane_change_state == 0;
+    turn_desire_direction = turn_desire_active ? (vehicle.left_blinker ? 1 : 2) : 0;
     if (turn_desire_active) {
       const bool on = turn_desire_ticks % kTurnRepulseTicks < kTurnRepulseTicks / 2;
-      desire = on ? (vehicle.left_blinker ? 1 : 2) : 0;
+      desire = on ? turn_desire_direction : 0;
       ++turn_desire_ticks;
     } else {
       turn_desire_ticks = 0;
@@ -547,8 +550,7 @@ struct LateralPlanner::Impl {
   bool laneless_mode = false;
   bool turn_desire_enabled = false;
   bool turn_desire_active = false;
-  bool turn_blinker_slow = false;  // 지금 깜빡이를 차선 변경 속도 미만에서 켰다
-  bool previous_turn_blinker = false;
+  int turn_desire_direction = 0;  // 회전 desire 중 1 = turnLeft, 2 = turnRight(펄스와 무관)
   int turn_desire_ticks = 0;
   static constexpr int kTurnRepulseTicks = 50;  // 2.5 s at the 20 Hz model rate
   bool laneless_buffer = false;

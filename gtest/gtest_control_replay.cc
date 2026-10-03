@@ -923,6 +923,45 @@ TEST(ControlReplay, HoldAngleCapsOwnSteeringOnly) {
   EXPECT_NEAR(run(config, 0.01f, 0), 0.01f, 1e-3f) << "상한 안의 요청은 그대로다";
 }
 
+/* 회전 desire 중(계획의 turn_desire) 운전자가 깜빡이 방향으로 돌리고 있으면 반대 방향 토크는 내지
+ * 않는다. 회전 desire가 없거나, 운전자가 반대로 돌리거나, 손만 얹은 정도면 평소대로다. */
+TEST(ControlReplay, TurnDesireDoesNotPushAgainstDriver) {
+  LateralControllerConfig config;
+  config.force_engaged = true;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  // 20 km/h, 왼쪽 깜빡이. 계획은 오른쪽(+곡률)을 원한다(걷는 속도에서 회전을 놓친 계획)
+  auto run = [&](int turn_desire, int driver_torque) {
+    LateralTarget plan = replay_target();
+    for (int i = 0; i < kLateralControlN; ++i) {
+      plan.curvatures[i] = 0.02f;
+      plan.psis[i] = 0.02f * (20.0f / 3.6f) * model_t_idx(i);
+    }
+    plan.turn_desire = turn_desire;
+    LateralController controller(config);
+    VehicleCanState vehicle = ready_vehicle();
+    vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 20.0f;
+    vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 20.0f;
+    vehicle.cluster_speed_raw = 21.0f;
+    vehicle.left_blinker = true;
+    vehicle.steering_angle_deg = 10.0f;
+    vehicle.driver_torque = driver_torque;
+    LateralControlResult r;
+    for (int f = 0; f < 200; ++f) {
+      stamp_can_times(&vehicle, 1.0 + f * 0.01);
+      r = controller.update(replay_path(), plan, vehicle, 1.0 + f * 0.01, f);
+    }
+    EXPECT_TRUE(r.active);
+    return r;
+  };
+  ASSERT_LT(run(0, 120).desired_torque, 0) << "회전 desire가 없으면 계획대로 오른쪽(운전자 반대) 토크다";
+  const LateralControlResult turning = run(1, 120);
+  // 왼쪽 회전 desire 중 왼쪽으로 돌리는 운전자를 밀지 않는다
+  EXPECT_GE(turning.desired_torque, 0);
+  EXPECT_GE(turning.apply_torque, 0);
+  EXPECT_LT(run(1, -120).desired_torque, 0) << "운전자가 깜빡이 반대로 돌리면 평소대로다";
+  EXPECT_LT(run(1, 30).desired_torque, 0) << "손만 얹은 정도(허용치 50 이하)는 평소대로다";
+}
+
 // ---------------------------------------------------------------- paramsd·torqued·lagd 소비
 
 LiveLateralParams odd_live_params() {

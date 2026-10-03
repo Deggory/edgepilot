@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 132개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 133개와
 Python 1개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -30,7 +30,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_calibration_equivalence` | 10 | 온라인 보정 상태 기계(calibrationd.py 참조), 장착 변경·초기화 재보정, 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조), NV21 색차 순서, 카메라 장착 위치 |
 | `gtest_can_queue` | 1 | 공유 메모리 CAN 큐 |
 | `gtest_control_holds` | 3 | 조향 경로 게이트(plan 도달 거리와 점 수), Panda 헬스 공백 홀드(100 ms), 잘못된 plan 홀드(150 ms) |
-| `gtest_control_replay` | 25 | 횡제어기: engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피(85도 위 토크 상한과 steer 요청 끄기, 정차 대기·85도 위 결합, 손을 뗐을 때 80도 상한, 운전자가 넘겨받은 회전은 15도까지 해제), 곡률 제한, Panda 게이트와 넘겨받기, LKAS HUD, 학습값 소비(끄면 비트 동일, `paramsd_invalid`, 롤 반영 곡률 한계, lagd 지연), CAN 픽스처 재생 |
+| `gtest_control_replay` | 26 | 횡제어기: engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피(85도 위 토크 상한과 steer 요청 끄기, 정차 대기·85도 위 결합, 손을 뗐을 때 80도 상한, 운전자가 넘겨받은 회전은 15도까지 해제), 회전 desire 중 깜빡이 방향으로 돌리는 운전자를 밀지 않음, 곡률 제한, Panda 게이트와 넘겨받기, LKAS HUD, 학습값 소비(끄면 비트 동일, `paramsd_invalid`, 롤 반영 곡률 한계, lagd 지연), CAN 픽스처 재생 |
 | `gtest_departure_alert` | 5 | 정차 중 앞차 출발과 신호 대기 알림 |
 | `gtest_device_settings` | 3 | 웹 기기 설정(`display.json`) 읽기: 범위 클램프, 잘못된 값은 이전 값 유지, 파일이 바뀔 때만 다시 읽기 |
 | `gtest_k7_can` | 9 | K7 CAN 신호 해석(LCA11, WHL_SPD11, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 MDPS용 CLU11 속도 바꿔치기 |

@@ -290,6 +290,16 @@ LateralControlResult LateralController::update(const LateralPath &path,
         steering_pressed, steer_rate_limited_ || above_fault_angle, control_params, plan_delay_s(),
         vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_lat_accel_, live);
     result.desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
+    /* 회전 desire 중 운전자가 깜빡이 방향으로 돌리고 있으면(운전자 토크 > steer_driver_allowance)
+     * 그 반대 방향 토크는 내지 않는다. 걷는 속도에서 모델 계획이 회전을 놓치면 회전에 들어가는
+     * 운전자를 밀었다(2026-10-03 8:16·8:48). panda 운전자 클램프도 반대 토크를 줄이지만 운전자
+     * 토크가 242를 넘어야 0이 된다. 토크와 운전자 토크는 같은 부호계다(+ = 왼쪽). */
+    if (target.turn_desire != 0) {
+      const int toward = target.turn_desire == 1 ? 1 : -1;
+      if (vehicle_state.driver_torque * toward > control_params.steer_driver_allowance)
+        result.desired_torque = toward > 0 ? std::max(result.desired_torque, 0)
+                                           : std::min(result.desired_torque, 0);
+    }
     result.actual_curvature = torque_controller_.actual_curvature();
     result.actual_curvature_vm = torque_controller_.actual_curvature_vm();
     result.actual_curvature_yaw = torque_controller_.actual_curvature_yaw();

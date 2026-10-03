@@ -20,6 +20,9 @@ struct LateralTarget {
     float heading_rad = 0.0f;
     float curvature = 0.0f;
     int desire = 0;
+    /* 회전 desire가 켜진 동안의 방향(1 = turnLeft, 2 = turnRight, 아니면 0). desire는 모델 입력용
+     * 펄스라 2.5초마다 0으로 내려가므로, 컨트롤러는 이 값을 본다. */
+    int turn_desire = 0;
     float psis[kLateralControlN] = {};
     float curvatures[kLateralControlN] = {};
     // 차선 관측값(로그 전용). 모델 좌표계(+y=오른쪽), 오프셋 미적용.

@@ -111,11 +111,12 @@ TEST(LateralPlanner, TurnDesireRepulsesAtLowSpeedWithBlinker) {
   VehicleCanState vehicle{};
   vehicle.left_blinker = true;
   std::vector<int> seq;
-  bool model_path = true;
+  bool model_path = true, held = true;
   for (int i = 0; i < 120; ++i) {  // 6초
     const LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true);
     seq.push_back(r.desire);
     model_path = model_path && r.laneless_mode;
+    held = held && r.turn_desire == 1;
   }
   EXPECT_EQ(seq[0], 1) << "깜빡이를 켜자마자 turnLeft";
   EXPECT_EQ(seq[24], 1);
@@ -123,6 +124,7 @@ TEST(LateralPlanner, TurnDesireRepulsesAtLowSpeedWithBlinker) {
   EXPECT_EQ(seq[50], 1) << "2.5초마다 다시 올린다";
   EXPECT_EQ(seq[100], 1);
   EXPECT_TRUE(model_path) << "회전 desire 동안은 모델 경로";
+  EXPECT_TRUE(held) << "펄스가 내려가는 동안에도 컨트롤러용 turn_desire는 유지한다";
 
   vehicle.left_blinker = false;
   vehicle.right_blinker = true;
@@ -130,26 +132,32 @@ TEST(LateralPlanner, TurnDesireRepulsesAtLowSpeedWithBlinker) {
   EXPECT_EQ(planner.update(ms, vehicle, 12.0f, 0.0f, true).desire, 0) << "차선 변경 속도 이상이면 아님";
   EXPECT_EQ(planner.update(ms, vehicle, v, 0.0f, false).desire, 0) << "비활성이면 아님";
   vehicle.right_blinker = false;
-  EXPECT_EQ(planner.update(ms, vehicle, v, 0.0f, true).desire, 0) << "깜빡이를 끄면 끝";
+  const LateralTarget blinker_off = planner.update(ms, vehicle, v, 0.0f, true);
+  EXPECT_EQ(blinker_off.desire, 0) << "깜빡이를 끄면 끝";
+  EXPECT_EQ(blinker_off.turn_desire, 0);
 
   DrivingParams off;
   LateralPlanner plain(steering, off);
   vehicle.left_blinker = true;
   EXPECT_EQ(plain.update(ms, vehicle, v, 0.0f, true).desire, 0) << "스위치가 꺼져 있으면 openpilot과 같다";
 
-  /* 빠를 때(35 km/h) 켠 깜빡이는 차선 변경 대기다. 감속해 25 km/h가 돼도 회전으로 바꾸지 않고,
-   * 깜빡이를 다시 켜면(그 속도 미만) 회전이다. */
+  /* 빠를 때(35 km/h) 켠 깜빡이도 켜진 채 차선 변경 속도 아래로 내려오면 회전이다(회전 차로로 들어가
+   * 감속해 도는 순서). 진행 중인 차선 변경은 감속해도 그 변경이 먼저다. */
   LateralPlanner slowing(steering, driving);
   vehicle = VehicleCanState{};
   vehicle.left_blinker = true;
   EXPECT_EQ(slowing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true).desire, 0) << "차선 변경 대기(넛지 전)";
-  bool turned = false;
-  for (int i = 0; i < 40; ++i) turned = turned || slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire != 0;
-  EXPECT_FALSE(turned) << "차선 변경 의도로 켠 깜빡이는 감속해도 회전이 아니다";
-  vehicle.left_blinker = false;
-  slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true);
+  EXPECT_EQ(slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire, 1) << "켜 둔 채 감속하면 회전";
+
+  LateralPlanner changing(steering, driving);
+  vehicle = VehicleCanState{};
   vehicle.left_blinker = true;
-  EXPECT_EQ(slowing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire, 1) << "저속에서 새로 켜면 회전";
+  changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true);
+  vehicle.driver_torque = 300;  // 왼쪽 넛지
+  EXPECT_EQ(changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true).desire, 3) << "차선 변경 시작";
+  vehicle.driver_torque = 0;
+  EXPECT_EQ(changing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true).desire, 3)
+      << "변경 중에는 감속해도 회전이 아니다";
 }
 
 /* path_offset_m은 차선 중심에만 적용된다. 차선이 없어 모델 경로로 넘어가면(교차로) 적용하지
