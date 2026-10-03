@@ -26,7 +26,7 @@
  * 압축하고, CAN과 모델·제어·판다·학습기 상태를 함께 RecordingWriter 형식(세그먼트별
  * .h264 + 인덱스 + 이벤트 로그)으로 남긴다. 링 슬롯은 IVPS로 인코더 전용 버퍼에 복사한 뒤
  * 슬롯이 그동안 덮어써지지 않았을 때만 인코더에 넣는다(maix_venc.h). 녹화 on/off는
- * params/recording.json을 따른다. */
+ * params/recording.json을 따르고, 녹화 중인지는 recordState로 HUD에 알린다. */
 
 namespace {
 
@@ -36,6 +36,7 @@ constexpr unsigned kRecordingFps = 20;
 constexpr unsigned kRecordingBitrate = 8000000;
 constexpr uint64_t kConfigPollIntervalNs = 250000000ULL;
 constexpr uint64_t kMaximumFrameAgeNs = 100000000ULL;
+constexpr uint64_t kStatePublishIntervalNs = 500000000ULL;
 
 bool read_recording_enabled(const std::string &path, bool fallback) {
   std::ifstream file(path);
@@ -100,6 +101,10 @@ int main() {
     LatestChannel record_frame_sub;
     if (!record_frame_sub.open(kRecordFrameTopic, sizeof(RoadAiFrame), true))
       throw std::runtime_error("open recordFrame IPC failed");
+    // HUD 표시용이라 못 열어도 녹화는 계속한다.
+    LatestChannel record_state_pub;
+    if (!record_state_pub.open(kRecordStateTopic, sizeof(RecordState), true))
+      std::fprintf(stderr, "recordd: open recordState IPC failed; HUD shows no REC\n");
 
     CanQueue can_log_sub;
     CanQueue sendcan_log_sub;
@@ -151,6 +156,7 @@ int main() {
     uint64_t frame_seq = 0;
     uint64_t config_revision = UINT64_MAX;
     uint64_t next_config_poll_ns = 0;
+    uint64_t next_state_publish_ns = 0;
     uint64_t next_log_ns = monotonic_now_ns() + 1000000000ULL;
     uint64_t selected_frames = 0;
     uint64_t dropped_frames = 0;
@@ -173,6 +179,15 @@ int main() {
             std::fprintf(stderr, "recordd: config error: %s\n", error.what());
           }
         }
+      }
+
+      if (record_state_pub.valid() && now_ns >= next_state_publish_ns) {
+        next_state_publish_ns = now_ns + kStatePublishIntervalNs;
+        RecordState state;
+        state.timestamp_ns = now_ns;
+        state.active = writer.active() ? 1U : 0U;
+        state.storage_blocked = writer.blocked_for_space() ? 1U : 0U;
+        record_state_pub.publish(&state, sizeof(state));
       }
 
       const bool need_video_frame = !warmed || writer.requested_enabled();

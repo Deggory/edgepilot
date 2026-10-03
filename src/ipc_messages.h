@@ -42,6 +42,7 @@ constexpr char kControlStateTopic[] = "/edgepilot_control_state";
 constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
 constexpr char kImuTopic[] = "/edgepilot_imu";
 constexpr char kLocalizationStateTopic[] = "/edgepilot_localization";
+constexpr char kRecordStateTopic[] = "/edgepilot_record_state";
 
 constexpr uint32_t kHudFlagLaneless = 1U << 0;
 constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
@@ -432,6 +433,13 @@ struct LocalizationState {
     uint32_t input_flags = 0;              // kLocalizationInvalid*, kLocalizationCameraGuarded
 };
 static_assert(sizeof(LocalizationState) == 128, "LocalizationState layout is shared with the recording reader");
+
+/* recordd가 0.5초마다 발행하고 overlayd가 녹화 표시(REC)에 쓴다. */
+struct RecordState {
+    uint64_t timestamp_ns = 0;
+    uint32_t active = 0;           // route를 쓰는 중
+    uint32_t storage_blocked = 0;  // 저장 공간 여유가 모자라 녹화를 거부했거나 멈춤
+};
 
 /* controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이
  * 구조체를 그대로 저장하고 tools/model/recording_reader.py가 위치로 디코드하므로 필드
