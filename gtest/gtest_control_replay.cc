@@ -130,16 +130,17 @@ TEST(ControlReplay, BrakingDoesNotDisengage) {
   ASSERT_TRUE(brake_pressed_result.active) << "DriverBraking도 횡제어를 disengage하지 않는다";
 }
 
-/* K7 MDPS는 steer 요청이 켜진 채 85도 위에 1초 머물면 fault를 낸다(2026-09-18 실측).
- * 85도 위: 토크를 램프로 0까지 내리고 steer 요청은 유지, 89프레임마다 2프레임 컷.
- * 램프는 fault 실측 하한(98프레임)보다 먼저 끝나야 하고, 컷과 복귀가 토크 0에서
- * 일어나야 어시스트가 빠졌다 돌아오는 충격이 없다. 즉시 0으로 떨어뜨리지 않는 것은
- * 짧게 스치는 커브에서 어시스트를 유지하기 위해서다. */
+/* K7 MDPS는 steer 요청이 켜진 채 85도 위에 0.98초 넘게 머물면 토크와 무관하게 fault를 낸다
+ * (2026-09-18 실측). 85도 위에서도 컨트롤러 토크는 그대로 내되, 크기를 steer_delta_down × 남은
+ * 프레임으로 묶어 89번째 프레임에 0에 닿게 하고, 그때부터 85도 아래로 돌아올 때까지 steer 요청을
+ * ToiFlt 없이 끈다. 2프레임 컷처럼 85도 위에서 요청을 다시 켜지 않는다(2026-10-03: 다시 켜는
+ * 순간 고장). 85도 아래로 오면 요청을 켜고 토크를 0부터 올린다. */
 TEST(ControlReplay, LargeAngleFaultAvoidance) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
   LateralController controller(config);
+  const SteeringParams &sp = config.steering_params;
   VehicleCanState vehicle = ready_vehicle();
   vehicle.cluster_speed_raw = 72.0f;
   int frame = 0;
@@ -147,6 +148,10 @@ TEST(ControlReplay, LargeAngleFaultAvoidance) {
     const int f = frame++;
     stamp_can_times(&vehicle, 1.0 + f * 0.01);  // 4초 넘게 돌리므로 CAN 신선도를 유지한다
     return controller.update(replay_path(), replay_target(), vehicle, 1.0 + f * 0.01, f);
+  };
+  auto lkas = [](const LateralControlResult &r) {
+    EXPECT_FALSE(r.frames.empty()) << "LKAS11을 보낸다";
+    return r.frames.empty() ? HyundaiLkas11Values{} : decode_lkas11(r.frames.front().data);
   };
 
   vehicle.steering_angle_deg = 20.0f;
@@ -157,52 +162,108 @@ TEST(ControlReplay, LargeAngleFaultAvoidance) {
   ASSERT_NE(result.apply_torque, 0);
 
   vehicle.steering_angle_deg = 100.0f;
-  const int crossed = frame;
-  const int ramp = config.steering_params.avoid_lkas_fault_max_frames - 20;
-  while (frame < crossed + 89) {
+  int full_until = 0;
+  for (int since = 1; since < sp.avoid_lkas_fault_max_frames; ++since) {
     result = step();
-    const int since = frame - crossed;
-    // RK 고장 한계 전까지는 큰 조향각에서도 요청을 유지한다
+    const int cap = sp.steer_delta_down * (sp.avoid_lkas_fault_max_frames - since);
+    // 요청을 끄는 프레임 전까지는 steer 요청을 유지하고, 토크는 그때 0에 닿을 만큼만 남긴다
     ASSERT_TRUE(result.active);
-    ASSERT_FALSE(result.cut_steer_temp);
-    if (since == 1)
-      ASSERT_NE(result.desired_torque, 0) << "고장 각도를 넘은 첫 프레임은 보조를 유지한다";
-    if (since >= ramp)
-      ASSERT_EQ(result.desired_torque, 0)
-          << "각도 램프는 실측 고장 시각보다 충분히 먼저 0이 된다";
-    if (frame > crossed + 80)
-      ASSERT_EQ(result.apply_torque, 0) << "첫 차단 전에 토크가 0까지 내려와 있다";
+    ASSERT_FALSE(result.large_angle_hold) << since;
+    ASSERT_TRUE(lkas(result).steer_req) << since;
+    ASSERT_LE(std::abs(result.desired_torque), cap) << since;
+    ASSERT_LE(std::abs(result.apply_torque), cap) << since;
+    if (std::abs(result.desired_torque) == sp.steer_max) full_until = since;
   }
-  for (int i = 0; i < config.steering_params.avoid_lkas_fault_cut_frames; ++i) {
-    result = step();
-    // 큰 조향각 고장 회피는 disengage 없이 요청만 끊는다
-    ASSERT_TRUE(result.active);
-    ASSERT_TRUE(result.cut_steer_temp);
-    ASSERT_FALSE(result.frames.empty());
-    const HyundaiLkas11Values lkas = decode_lkas11(result.frames.front().data);
-    // 고장 회피 중 LKAS11 요청 비트와 일시 고장 비트
-    ASSERT_FALSE(lkas.steer_req);
-    ASSERT_TRUE(lkas.toi_fault);
-    // 차단은 토크 0에서 일어난다
-    ASSERT_EQ(lkas.steer_torque, 0);
-    ASSERT_EQ(result.apply_torque, 0);
-  }
+  ASSERT_GE(full_until, sp.avoid_lkas_fault_max_frames - sp.steer_max / sp.steer_delta_down - 1)
+      << "최대 요청은 하강에 필요한 프레임 전까지 그대로 둔다(예전 램프는 첫 프레임부터 줄였다)";
+
   result = step();
-  // 설정한 차단 길이 뒤 조향 요청을 다시 낸다
+  // 89번째 프레임: 토크 0에서 요청을 끈다. disengage가 아니고 ToiFlt도 세우지 않는다
   ASSERT_TRUE(result.active);
-  ASSERT_FALSE(result.cut_steer_temp);
-  ASSERT_FALSE(result.frames.empty());
-  const HyundaiLkas11Values lkas = decode_lkas11(result.frames.front().data);
-  // 재개한 LKAS11 요청은 고장 각도 위에서 토크 0을 유지한다
-  ASSERT_TRUE(lkas.steer_req);
-  ASSERT_FALSE(lkas.toi_fault);
+  ASSERT_TRUE(result.large_angle_hold);
   ASSERT_EQ(result.apply_torque, 0);
+  HyundaiLkas11Values off = lkas(result);
+  ASSERT_FALSE(off.steer_req);
+  ASSERT_FALSE(off.toi_fault);
+  ASSERT_EQ(off.steer_torque, 0);
+  for (int i = 0; i < 300; ++i) {
+    result = step();
+    off = lkas(result);
+    // 85도 위에 있는 동안은 요청을 다시 켜지 않는다
+    ASSERT_TRUE(result.large_angle_hold) << i;
+    ASSERT_FALSE(off.steer_req) << i;
+    ASSERT_EQ(result.apply_torque, 0) << i;
+  }
 
   vehicle.steering_angle_deg = 20.0f;
+  result = step();
+  // 85도 아래로 오면 요청을 켜고 토크를 0부터 올린다
+  ASSERT_FALSE(result.large_angle_hold);
+  ASSERT_TRUE(lkas(result).steer_req);
+  ASSERT_LE(std::abs(result.apply_torque), sp.steer_delta_up);
   for (int i = 0; i < 30; ++i) result = step();
-  // 고장 각도 아래로 오면 평소 램프로 토크를 되살린다
   ASSERT_TRUE(result.active);
   ASSERT_NE(result.apply_torque, 0);
+}
+
+/* 정차 대기(Stopped)도 steer 요청을 잡고 있으므로 같은 회피를 건다. 예전에는 active일 때만 세어,
+ * 정차에서 핸들을 85도 넘게 감고 출발하면 1초 뒤 고장이 났다(2026-10-03 2:54). 85도 위에서
+ * 결합하면 요청을 켜지 않고 85도 아래로 올 때까지 기다린다. */
+TEST(ControlReplay, LargeAngleHoldCoversStopAndEngage) {
+  LateralControllerConfig config;
+  config.force_engaged = true;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  const SteeringParams &sp = config.steering_params;
+  LateralController controller(config);
+  VehicleCanState vehicle = ready_vehicle();
+  vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 0.0f;
+  vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 0.0f;
+  vehicle.cluster_speed_raw = 0.0f;
+  LateralPath stopped_path = replay_path();
+  stopped_path.usable_for_steering = false;
+  int frame = 0;
+  auto step = [&]() {
+    const int f = frame++;
+    stamp_can_times(&vehicle, 1.0 + f * 0.01);
+    return controller.update(stopped_path, replay_target(), vehicle, 1.0 + f * 0.01, f);
+  };
+  auto steer_req = [](const LateralControlResult &r) {
+    EXPECT_FALSE(r.frames.empty()) << "LKAS11을 보낸다";
+    return !r.frames.empty() && decode_lkas11(r.frames.front().data).steer_req;
+  };
+
+  vehicle.steering_angle_deg = 10.0f;
+  LateralControlResult result;
+  for (int i = 0; i < 50; ++i) result = step();
+  // 정차 대기는 토크 0으로 steer 요청을 유지한다
+  ASSERT_EQ(result.active_block, BlockReason::Stopped);
+  ASSERT_FALSE(result.active);
+  ASSERT_TRUE(steer_req(result));
+
+  vehicle.steering_angle_deg = 300.0f;
+  for (int since = 1; since <= sp.avoid_lkas_fault_max_frames; ++since) {
+    result = step();
+    ASSERT_EQ(steer_req(result), since < sp.avoid_lkas_fault_max_frames)
+        << "정차 대기에서도 85도 위 " << since << "프레임";
+  }
+  for (int i = 0; i < 100; ++i) ASSERT_FALSE(steer_req(step())) << i;
+  vehicle.steering_angle_deg = 30.0f;
+  ASSERT_TRUE(steer_req(step())) << "85도 아래로 오면 다시 켠다";
+
+  LateralController late(config);
+  VehicleCanState turning = ready_vehicle();
+  turning.steering_angle_deg = 120.0f;
+  for (int f = 0; f < 150; ++f) {
+    stamp_can_times(&turning, 1.0 + f * 0.01);
+    result = late.update(replay_path(), replay_target(), turning, 1.0 + f * 0.01, f);
+    // 85도 위에서 결합해도 요청과 토크를 내지 않는다
+    if (!result.frames.empty()) ASSERT_FALSE(decode_lkas11(result.frames.front().data).steer_req) << f;
+    ASSERT_EQ(result.apply_torque, 0) << f;
+  }
+  turning.steering_angle_deg = 40.0f;
+  stamp_can_times(&turning, 2.5);
+  result = late.update(replay_path(), replay_target(), turning, 2.5, 150);
+  ASSERT_TRUE(steer_req(result)) << "85도 아래로 오면 요청을 켠다";
 }
 
 // 정지 부근 path 깜빡임: active 재진입은 0.5s 연속 유효 후에만.
@@ -418,6 +479,8 @@ TEST(ControlReplay, FixedMaxCurvature) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
+  // openpilot 곡률 한계만 본다. 손을 뗀 상태의 조향각 상한(80도)은 HoldAngleCapsOwnSteeringOnly가 본다.
+  config.steering_params.avoid_lkas_fault_hold_angle_deg = 0.0f;
   LateralController controller(config);
   VehicleCanState vehicle = ready_vehicle();
   vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 3.6f;
@@ -767,6 +830,97 @@ TEST(ControlReplay, InactiveDesiredTracksActual) {
   // 다시 활성이 되면 plan이 아니라 실제 곡률에서 출발한다
   ASSERT_NEAR(r.desired_curvature, previous, step * 1.001f);
   ASSERT_GT(std::fabs(r.desired_curvature - replay_target().curvatures[0]), 10.0f * step);
+}
+
+/* 운전자가 85도 넘게 돌려 넘겨받은 회전(steering pressed)에서는 요청을 끈 뒤 핸들이 15도 아래로
+ * 오고 손을 뗄 때까지 끈 채로 둔다(carrotpilot 해제 조건). 빠져나오며 펴는 핸들을 밀지 않는다.
+ * 운전자가 손대지 않은 체류는 85도 아래로 오면 바로 다시 켠다(LargeAngleFaultAvoidance). */
+TEST(ControlReplay, DriverTakeoverHoldsUntilCentered) {
+  LateralControllerConfig config;
+  config.force_engaged = true;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  const SteeringParams &sp = config.steering_params;
+  LateralController controller(config);
+  VehicleCanState vehicle = ready_vehicle();
+  int frame = 0;
+  auto step = [&](float angle, int driver_torque) {
+    vehicle.steering_angle_deg = angle;
+    vehicle.driver_torque = driver_torque;
+    const int f = frame++;
+    stamp_can_times(&vehicle, 1.0 + f * 0.01);
+    return controller.update(replay_path(), replay_target(), vehicle, 1.0 + f * 0.01, f);
+  };
+  auto steer_req = [](const LateralControlResult &r) {
+    EXPECT_FALSE(r.frames.empty()) << "LKAS11을 보낸다";
+    return !r.frames.empty() && decode_lkas11(r.frames.front().data).steer_req;
+  };
+
+  LateralControlResult result;
+  for (int i = 0; i < 100; ++i) result = step(20.0f, 0);
+  ASSERT_TRUE(steer_req(result));
+  for (int i = 0; i < sp.avoid_lkas_fault_max_frames + 20; ++i) result = step(150.0f, 300);
+  // 운전자가 150도까지 감아 85도 위에 머물면 89번째 프레임에 요청을 끈다
+  ASSERT_TRUE(result.large_angle_hold);
+  ASSERT_FALSE(steer_req(result));
+  for (int i = 0; i < 50; ++i) ASSERT_FALSE(steer_req(step(60.0f, 300))) << "잡고 펴는 중 " << i;
+  for (int i = 0; i < 50; ++i) ASSERT_FALSE(steer_req(step(30.0f, 0))) << "손을 뗐지만 15도 위 " << i;
+  for (int i = 0; i < 20; ++i) ASSERT_FALSE(steer_req(step(30.0f, 300))) << "다시 잡음 " << i;
+  for (int i = 0; i < 50; ++i) ASSERT_FALSE(steer_req(step(10.0f, 300))) << "15도 아래지만 잡고 있음 " << i;
+  int released = -1;
+  for (int i = 0; i < 20 && released < 0; ++i) {
+    result = step(10.0f, 0);
+    if (steer_req(result)) released = i;
+  }
+  // 15도 아래에서 손을 떼면(조향 감지 디바운스 뒤) 다시 켜고 토크는 0부터 올린다
+  ASSERT_GE(released, 0);
+  ASSERT_TRUE(result.active);
+  ASSERT_FALSE(result.large_angle_hold);
+  ASSERT_LE(std::abs(result.apply_torque), sp.steer_delta_up);
+}
+
+/* 운전자가 핸들을 잡지 않으면 컨트롤러 목표를 avoid_lkas_fault_hold_angle_deg(80도) 조향각이 내는
+ * 곡률 안으로 묶는다. 85도를 넘겨 토크가 끊겼다 다시 잡는 반복 대신 그 각도에서 버틴다. 운전자가
+ * 조향 중이거나 0으로 끄면 묶지 않는다. */
+TEST(ControlReplay, HoldAngleCapsOwnSteeringOnly) {
+  LateralControllerConfig config;
+  config.force_engaged = true;
+  config.driving_params.vehicle_state_timeout_ms = 2000;
+  const float v = 20.0f / 3.6f;
+  auto run = [&](const LateralControllerConfig &cfg, float plan_curvature, int driver_torque) {
+    LateralTarget tight = replay_target();  // 20 km/h 교차로 회전: plan은 반경 10 m를 원한다
+    for (int i = 0; i < kLateralControlN; ++i) {
+      tight.curvatures[i] = plan_curvature;
+      tight.psis[i] = plan_curvature * v * model_t_idx(i);
+    }
+    LateralController controller(cfg);
+    VehicleCanState vehicle = ready_vehicle();
+    vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 20.0f;
+    vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 20.0f;
+    vehicle.cluster_speed_raw = 21.0f;
+    vehicle.steering_angle_deg = 30.0f;
+    vehicle.driver_torque = driver_torque;
+    LateralControlResult r;
+    for (int f = 0; f < 300; ++f) {
+      stamp_can_times(&vehicle, 1.0 + f * 0.01);
+      r = controller.update(replay_path(), tight, vehicle, 1.0 + f * 0.01, f);
+    }
+    EXPECT_TRUE(r.active);
+    return r.desired_curvature;
+  };
+  TorqueController model;
+  const float right_cap = model.curvature_at_angle(v, -80.0f, config.steering_params);
+  const float left_cap = model.curvature_at_angle(v, 80.0f, config.steering_params);
+  // 80도가 내는 곡률은 반경 30 m 남짓이다(오른쪽 +, 왼쪽 −)
+  ASSERT_GT(right_cap, 0.02f);
+  ASSERT_LT(right_cap, 0.05f);
+  ASSERT_LT(left_cap, -0.02f);
+  EXPECT_NEAR(run(config, 0.1f, 0), right_cap, 1e-3f) << "혼자서는 80도까지만 요청한다(오른쪽)";
+  EXPECT_NEAR(run(config, -0.1f, 0), left_cap, 1e-3f) << "왼쪽도 같다";
+  EXPECT_GT(run(config, 0.1f, 300), 2.0f * right_cap) << "운전자가 조향 중이면 plan을 따른다";
+  LateralControllerConfig off = config;
+  off.steering_params.avoid_lkas_fault_hold_angle_deg = 0.0f;
+  EXPECT_GT(run(off, 0.1f, 0), 2.0f * right_cap) << "0이면 끈다";
+  EXPECT_NEAR(run(config, 0.01f, 0), 0.01f, 1e-3f) << "상한 안의 요청은 그대로다";
 }
 
 // ---------------------------------------------------------------- paramsd·torqued·lagd 소비

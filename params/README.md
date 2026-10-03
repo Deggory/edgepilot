@@ -162,10 +162,11 @@ panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화�
 
 | 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
 |---|---:|---|---|
-| `avoid_lkas_fault_enabled` | true | bool | 큰 조향각이 지속될 때 steer request를 잠시 끊는 RK openpilot 방식의 fault 회피 로직을 사용한다. K7 YG HEV 실측(2026-09-18): steer 요청이 켜진 채 85도 위에 약 1.0초 머물면 MDPS가 ToiFlt/FailState를 세우고 각도가 85도 아래로 돌아올 때까지 어시스트를 끊는다. 끄면 안 된다. |
-| `avoid_lkas_fault_max_angle_deg` | 85.0 | degree / 1~180 | fault 회피 카운터를 증가시키는 절대 조향각 기준이다. 이 각도 이상에서는 토크 요청을 램프로 0까지 내리고 steer request만 유지한다. 컷과 fault 회복이 토크 0에서 일어나야 어시스트가 빠졌다 돌아오는 충격이 없다. |
-| `avoid_lkas_fault_max_frames` | 89 | frame / 0~300 | 85도 이상 조향각이 지속될 때 허용하는 프레임 수다. 이후 2프레임 동안 request를 끊고 다시 허용한다. 토크 램프 길이도 여기서 20을 뺀 값(69프레임 = 0.69초)이라, fault가 실측(0.98~1.12초)보다 일찍 나는 상황이 발견되면 이 값을 낮춰 램프를 함께 당긴다. |
-| `avoid_lkas_fault_cut_frames` | 2 | frame / 1~100 | steer request를 끊어두는 프레임 수다. 2프레임은 openpilot에서 물려받은 값인데 K7 MDPS의 fault 타이머를 되돌리지 못한다(2026-09-21: 폴트 중 2프레임 컷 34회 전부 이후 1.5초 폴트 유지). 되돌아가는 길이를 실차에서 찾기 위한 파라미터다. 컷 동안 토크는 0이고 85도 램프가 이미 끝난 뒤라 어시스트 손실은 없다. |
+| `avoid_lkas_fault_enabled` | true | bool | 큰 조향각 fault 회피를 사용한다. K7 YG HEV 실측(2026-09-18): steer 요청이 켜진 채 85도 위에 0.98~1.12초 머물면 MDPS가 토크와 무관하게 ToiFlt/FailState를 세우고 각도가 85도 아래로 돌아올 때까지 어시스트를 끊는다. 85도 위에서도 토크는 그대로 내되 허용 프레임에 0에 닿을 만큼만 남기고(`steer_delta_down` × 남은 프레임), 그 프레임부터 85도 아래로 올 때까지 steer request를 ToiFlt 없이 끈다. 정차 대기 중에도 같고, 85도 위에서는 request를 새로 켜지 않는다. 그 체류 중 운전자가 핸들을 돌렸으면(조향 감지) 85도 아래가 아니라 15도 아래로 오고 손을 뗄 때까지 끈 채로 둔다(carrotpilot 해제 조건): 회전을 빠져나오며 핸들을 펴는 운전자를 밀지 않는다. 끄면 안 된다. |
+| `avoid_lkas_fault_max_angle_deg` | 85.0 | degree / 1~180 | fault 회피 카운터를 세는 절대 조향각 기준이다. 이 각도 위에서 request를 유지한 프레임을 센다. |
+| `avoid_lkas_fault_max_frames` | 89 | frame / 0~300 | 85도 위에서 steer request를 유지하는 프레임 수다. 이 프레임에 request를 끄고, 토크는 그때 0에 닿도록 `steer_delta_down`씩 미리 내려온다(최대 토크면 약 0.35초 유지 뒤 0.55초 하강). 실측 fault 하한 98프레임보다 9프레임 이르다. fault가 더 일찍 나는 상황이 발견되면 이 값을 낮춘다. |
+| `avoid_lkas_fault_hold_angle_deg` | 80.0 | degree / 0~180 | 운전자가 핸들을 잡지 않았을 때(steering pressed 아님) 컨트롤러가 스스로 가는 최대 핸들 각도다. 목표 곡률을 이 각도가 내는 곡률(학습 SR·강성·오프셋·롤을 쓰는 차량 모델) 안으로 묶어, 85도를 넘겨 0.89초 뒤 토크가 빠지고 핸들이 풀렸다 다시 잡는 반복 대신 이 각도에서 토크를 끊김 없이 유지한다. 운전자가 조향 중이면 묶지 않는다(더 감는 운전자를 밀지 않는다). 횡가속 한계(3.3 m/s²)가 더 좁은 약 36 km/h 위에서는 걸리지 않는다. 0이면 끈다. |
+| `avoid_lkas_fault_cut_frames` | 2 | frame / 1~100 | `avoid_lkas_fault_enabled`를 끈 경우에만 쓴다. MDPS 오류가 이어질 때 steer request를 끊는 프레임 수다(openpilot 방식). 켠 경우 85도 위에서는 짧게 끊지 않고 85도 아래로 올 때까지 끈다: K7에서 2프레임 컷 뒤 request를 다시 켜면 3~14 ms 안에 fault가 났다(2026-10-03, 4번 중 4번). |
 
 ## calibration.json
 

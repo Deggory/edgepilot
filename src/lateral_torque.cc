@@ -159,16 +159,11 @@ int TorqueController::update(bool active,
   return static_cast<int>(std::lround(normalized_output_ * static_cast<float>(params.steer_max)));
 }
 
-// 현재 조향각/속도에서 차량 모델 기반 실제 curvature를 추정한다.
-float TorqueController::estimate_actual_curvature(float speed_mps,
-                                                           float steering_angle_deg,
-                                                           const SteeringParams &params,
-                                                           float yaw_rate_rad_s,
-                                                           bool yaw_rate_valid,
-                                                           const LiveLateralParams &live) {
-  actual_curvature_vm_ = 0.0f;
-  actual_curvature_yaw_ = 0.0f;
-  if (!std::isfinite(speed_mps) || speed_mps < params.min_steer_speed_mps) return 0.0f;
+// 조향각이 만드는 곡률(차량 모델, 제어 부호).
+float TorqueController::curvature_at_angle(float speed_mps,
+                                           float steering_angle_deg,
+                                           const SteeringParams &params,
+                                           const LiveLateralParams &live) {
   // 상류 VM.update_params(max(x, 0.1), max(sr, 0.1)). 강성 배율은 타이어 계수에 곱해진다.
   const SteeringParams *vm = &params;
   float angle_offset_deg = params.angle_offset_deg;
@@ -184,7 +179,20 @@ float TorqueController::estimate_actual_curvature(float speed_mps,
   float curvature = vehicle_model_curvature(
       deg_to_rad(steering_angle_deg - angle_offset_deg), speed_mps, *vm);
   if (live.use_vehicle) curvature += roll_compensation(live.roll_rad, speed_mps);
-  const float actual_curvature_vm = -curvature;
+  return -curvature;
+}
+
+// 현재 조향각/속도에서 차량 모델 기반 실제 curvature를 추정한다.
+float TorqueController::estimate_actual_curvature(float speed_mps,
+                                                           float steering_angle_deg,
+                                                           const SteeringParams &params,
+                                                           float yaw_rate_rad_s,
+                                                           bool yaw_rate_valid,
+                                                           const LiveLateralParams &live) {
+  actual_curvature_vm_ = 0.0f;
+  actual_curvature_yaw_ = 0.0f;
+  if (!std::isfinite(speed_mps) || speed_mps < params.min_steer_speed_mps) return 0.0f;
+  const float actual_curvature_vm = curvature_at_angle(speed_mps, steering_angle_deg, params, live);
   actual_curvature_vm_ = actual_curvature_vm;
   float actual_curvature_yaw = actual_curvature_vm;
   if (yaw_rate_valid && std::isfinite(yaw_rate_rad_s)) {

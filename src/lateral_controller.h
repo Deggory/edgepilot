@@ -80,7 +80,12 @@ struct LateralControlResult {
   int desired_torque = 0;
   int apply_torque = 0;
   bool steering_pressed = false;
+  // avoid_lkas_fault를 끈 경우의 MDPS 오류 컷(openpilot식 짧은 steer 요청 끊기, ToiFlt 표시)
   bool cut_steer_temp = false;
+  /* 큰 조향각 고장 회피: 85도 위에서 요청을 끈 상태. 토크가 0일 때 들어가고 ToiFlt 없이 요청
+   * 비트만 내린다. 85도 아래로 오면 풀리고, 운전자가 넘겨받은 회전이면 15도 아래에서 손을 떼야 풀린다.
+   * 그동안 조향은 비활성처럼 쉰다(토크 0, 목표 곡률은 실제를 따라감). */
+  bool large_angle_hold = false;
   // 해제 예고: 캘리브레이션 같은 SoftDisable 사유로 3초 뒤 해제된다. 조향은 계속한다.
   bool soft_disabling = false;
   // openpilot steerSaturated: 커브가 조향 한계를 넘어 목표 곡률을 못 따라간다.
@@ -139,8 +144,12 @@ private:
                                   float speed_kph,
                                   float plan_age_s) const;
 
-  // LKAS fault 회피를 위한 임시 cut-steer 상태를 갱신한다.
-  bool update_cut_steer_state(bool active, const VehicleCanState &vehicle_state);
+  // avoid_lkas_fault를 끈 경우: MDPS 오류가 이어지면 steer 요청을 잠깐 끊는다.
+  bool update_cut_steer_state(const VehicleCanState &vehicle_state);
+
+  // 큰 조향각 고장 회피: 85도 위 체류를 세고 요청을 끌지 정한다.
+  bool update_large_angle_hold(bool steer_requested, float steering_angle_deg,
+                               bool steering_pressed);
 
   // 노이즈가 있는 운전자 조향 토크를 openpilot 방식으로 필터링한다.
   bool update_steering_pressed(int driver_torque);
@@ -190,9 +199,14 @@ private:
   int last_torque_ = 0;
   bool steer_rate_limited_ = false;
   double last_disengage_s_ = -1000.0;
-  int angle_limit_counter_ = 0;
-  // 85도 위 연속 체류 프레임. 토크 램프용이라 cut_steer 리셋과 분리한다.
+  // steer 요청을 낸 채 85도 위에 머문 연속 프레임(요청을 끄면 멈춘다)
   int fault_angle_frames_ = 0;
+  // 85도 위에서 요청을 끈 상태. 85도 아래로 와야 풀린다(운전자가 넘겨받았으면 15도 아래, 손을 떼야).
+  bool large_angle_hold_ = false;
+  // 이번 85도 위 체류 중 운전자가 핸들을 돌렸다(steering pressed)
+  bool driver_took_wheel_ = false;
+  // 지난 프레임에 steer 요청 비트를 실제로 보냈다(85도 위에서 새로 켜지 않기 위해)
+  bool steer_req_sent_ = false;
   int cut_steer_frames_ = 0;
   bool cut_steer_ = false;
   int steering_pressed_counter_ = 0;

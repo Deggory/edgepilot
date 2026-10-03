@@ -41,6 +41,13 @@ public:
              float road_bank_lat_accel = 0.0f,
              const LiveLateralParams &live = LiveLateralParams{});
 
+  /* 조향각이 만드는 곡률(차량 모델: 학습 SR·강성·오프셋·롤 포함, 제어 부호). estimate_actual_curvature의
+   * 각도 경로와 같은 식이고 로그용 값을 건드리지 않는다. 컨트롤러의 조향각 상한이 쓴다. */
+  float curvature_at_angle(float speed_mps,
+                           float steering_angle_deg,
+                           const SteeringParams &params,
+                           const LiveLateralParams &live = LiveLateralParams{});
+
   // 현재 조향각/속도에서 차량 모델 기반 실제 curvature를 추정한다.
   float estimate_actual_curvature(float speed_mps,
                                   float steering_angle_deg,

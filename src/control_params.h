@@ -42,9 +42,12 @@ struct SteeringParams {
   bool avoid_lkas_fault_enabled = true;
   float avoid_lkas_fault_max_angle_deg = 85.0f;
   int avoid_lkas_fault_max_frames = 89;
-  /* steer request를 끊는 프레임 수. K7에서 2프레임 컷은 MDPS fault 타이머를
-   * 되돌리지 못한다(2026-09-21 실측: 폴트 중 2프레임 컷 34회 모두 1.5초 유지).
-   * 길이를 바꿔 되돌아가는 지점을 찾기 위한 실측 파라미터다. */
+  /* 운전자가 핸들을 잡지 않았을 때 컨트롤러가 스스로 가는 최대 핸들 각도. 고장 각도(85도) 아래에서
+   * 멈춰 토크를 끊김 없이 유지한다. 0이면 끈다. */
+  float avoid_lkas_fault_hold_angle_deg = 80.0f;
+  /* avoid_lkas_fault_enabled를 끈 경우에만: MDPS 오류가 이어질 때 steer request를 끊는 프레임 수
+   * (openpilot 방식). 켠 경우 85도 위에서는 짧게 끊지 않고 85도 아래로 올 때까지 끈다. K7에서
+   * 2프레임 컷 뒤 다시 켜면 3~14 ms 안에 fault가 났다(2026-10-03, 4번 중 4번). */
   int avoid_lkas_fault_cut_frames = 2;
   float angle_offset_deg = -1.57f;  // paramsd 학습 평균(2026-09-27; K230 때 −1.5~−1.6°)
   /* openpilot latAccelOffset(m/s^2). 상수 횡가속 편향을 FF에서 뺀다.

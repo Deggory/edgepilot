@@ -14,6 +14,8 @@ constexpr int kButtonCancel = 4;
 constexpr int kGearDrive = 5;
 constexpr int kSteeringPressedMinCount = 5;
 constexpr double kPandaEngageGraceS = 1.0;
+// 운전자가 넘겨받은 큰 회전에서 조향을 다시 켜는 각도(carrotpilot lat_suspend_control의 resume_angle)
+constexpr float kDriverReleaseAngleDeg = 15.0f;
 
 float cluster_speed_kph(const VehicleCanState &vehicle_state) {
   if (!std::isfinite(vehicle_state.cluster_speed_raw) || vehicle_state.cluster_speed_raw < 0.0f) {
@@ -205,10 +207,13 @@ LateralControlResult LateralController::update(const LateralPath &path,
   steer_availability_hold_ = logical_engaged && !result.active &&
       (kind == BlockKind::Availability ||
        result.active_block == BlockReason::LateralPlanInvalid);
-  result.cut_steer_temp = update_cut_steer_state(result.active, vehicle_state);
-
   const bool steering_pressed = update_steering_pressed(vehicle_state.driver_torque);
   result.steering_pressed = steering_pressed;
+  result.cut_steer_temp = update_cut_steer_state(vehicle_state);
+  result.large_angle_hold = update_large_angle_hold(result.active || steer_availability_hold_,
+                                                    vehicle_state.steering_angle_deg, steering_pressed);
+  // 요청을 끈 동안은 활성이라도 조향을 쉰다(상류 latActive=false처럼)
+  const bool steering = result.active && !result.large_angle_hold;
   const SteeringParams &control_params = config_.steering_params;
   const bool yaw_rate_valid = signal_time_fresh(
                                   vehicle_state.esp12_time_s, now_s,
@@ -236,43 +241,55 @@ LateralControlResult LateralController::update(const LateralPath &path,
 
   /* 상류 controlsd: 활성이면 plan, 비활성이면 실제 곡률을 클립에 넣는다. 재활성 때 목표가
    * 실제 곡률에서 한계 안으로 출발하고, 비활성 중의 잘못된 plan 값이 넘어오지 않는다. */
-  const float requested_curvature = result.active
+  float requested_curvature = steering
       ? lag_adjusted_curvature(target, speed_mps, plan_age_s, plan_delay_s())
       : torque_controller_.estimate_actual_curvature(speed_mps, vehicle_state.steering_angle_deg,
                                                      control_params, vehicle_state.yaw_rate_rad_s,
                                                      yaw_rate_valid, live);
+  /* 운전자가 핸들을 잡지 않았을 때는 목표를 avoid_lkas_fault_hold_angle_deg(80도) 조향각이 내는
+   * 곡률 안으로 묶는다(같은 차량 모델, 학습 SR·강성·오프셋·롤). 컨트롤러가 스스로 85도를 넘겨
+   * 0.89초 뒤 토크가 빠지고 핸들이 풀렸다 다시 잡는 반복 대신, 그 각도에서 토크를 끊김 없이
+   * 유지한다. 운전자가 조향 중이면 묶지 않는다: 교차로에서 더 감는 운전자를 80도 쪽으로 밀지
+   * 않고, 85도 위에서는 시간 규칙이 그대로 적용된다. 횡가속 한계가 더 좁은 약 36 km/h 위에서는
+   * 걸리지 않는다. */
+  const float hold_angle_deg = control_params.avoid_lkas_fault_hold_angle_deg;
+  if (steering && !steering_pressed && control_params.avoid_lkas_fault_enabled &&
+      hold_angle_deg > 0.0f && std::isfinite(speed_mps) && std::isfinite(requested_curvature)) {
+    const float left = torque_controller_.curvature_at_angle(speed_mps, hold_angle_deg,
+                                                             control_params, live);
+    const float right = torque_controller_.curvature_at_angle(speed_mps, -hold_angle_deg,
+                                                              control_params, live);
+    requested_curvature = std::clamp(requested_curvature, std::min(left, right),
+                                     std::max(left, right));
+  }
   bool curvature_limited = false;
   result.desired_curvature =
       clip_curvature(speed_mps, prev_desired_curvature_, requested_curvature,
                      live.use_vehicle ? live.roll_rad : 0.0f, &curvature_limited);
   prev_desired_curvature_ = result.desired_curvature;
 
-  if (result.active) {
-    /* MDPS는 steer 요청이 켜진 채 |조향각|이 85도 위에 1초 머물면 fault를 낸다
-     * (2026-09-18 K7 실측 0.98~1.12 s, 토크 크기 무관). fault가 날 때 이미 토크가
-     * 0이면 어시스트가 빠졌다 돌아오는 "탁"이 없다. 즉시 0으로 떨어뜨릴 필요는
-     * 없고 fault 전에 닿기만 하면 되므로, 램프로 내려 짧게 스치는 커브에서는
-     * 어시스트를 유지한다(2026-09-21: 85도 진입 46회 중 46%가 0.5 s 미만).
-     * 적분기는 램프 내내 얼린다. */
+  if (steering) {
+    /* 85도 위에서도 컨트롤러 토크를 그대로 내되, 요청을 끄는 프레임(avoid_lkas_fault_max_frames,
+     * update_large_angle_hold)에 0에 닿도록 크기를 steer_delta_down × 남은 프레임으로 묶는다.
+     * 하강 레이트 한계로 내려와도 늦지 않는 만큼만 남기는 것이라, 최대 토크로 85도를 넘으면
+     * 약 0.35초는 그대로 두고 0.55초에 걸쳐 내린다(2026-10-03까지는 0.69초 선형 램프로 0).
+     * 요청은 토크가 0일 때 꺼지므로 어시스트가 빠지는 "탁"이 없다. 적분기는 85도 위에서 얼린다. */
     const bool above_fault_angle =
         control_params.avoid_lkas_fault_enabled &&
         std::fabs(vehicle_state.steering_angle_deg) >=
             control_params.avoid_lkas_fault_max_angle_deg;
-    /* cut_steer의 angle_limit_counter_는 컷이 나가며 0으로 돌아가 램프를
-     * 되살리므로 따로 센다. */
-    if (above_fault_angle) ++fault_angle_frames_; else fault_angle_frames_ = 0;
-    // fault 실측 하한 98프레임보다 먼저 0에 닿도록 컷 프레임 수에서 여유를 뺀다.
-    const int ramp_frames = std::max(1, control_params.avoid_lkas_fault_max_frames - 20);
-    const float angle_scale = above_fault_angle
-        ? clamp_float(1.0f - static_cast<float>(fault_angle_frames_) /
-                                 static_cast<float>(ramp_frames), 0.0f, 1.0f)
-        : 1.0f;
+    int torque_cap = control_params.steer_max;
+    if (result.large_angle_hold) {
+      torque_cap = 0;
+    } else if (fault_angle_frames_ > 0) {
+      torque_cap = std::min(torque_cap, control_params.steer_delta_down *
+          std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
+    }
     const int raw_torque = torque_controller_.update(
         true, speed_mps, result.desired_curvature, vehicle_state.steering_angle_deg,
         steering_pressed, steer_rate_limited_ || above_fault_angle, control_params, plan_delay_s(),
         vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_lat_accel_, live);
-    result.desired_torque = static_cast<int>(std::lround(
-        static_cast<float>(raw_torque) * angle_scale));
+    result.desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
     result.actual_curvature = torque_controller_.actual_curvature();
     result.actual_curvature_vm = torque_controller_.actual_curvature_vm();
     result.actual_curvature_yaw = torque_controller_.actual_curvature_yaw();
@@ -309,7 +326,6 @@ LateralControlResult LateralController::update(const LateralPath &path,
   } else {
     sat_time_ = 0.0f;
     // 0을 넘기면 커브 중 engage 시 지연 버퍼가 0-setpoint로 P를 튀게 한다
-    fault_angle_frames_ = 0;
     torque_controller_.update(false, speed_mps, result.desired_curvature,
                               vehicle_state.steering_angle_deg,
                               false, steer_rate_limited_, control_params, plan_delay_s(),
@@ -337,6 +353,8 @@ LateralControlResult LateralController::update(const LateralPath &path,
     lkas11_counter_valid_ = false;
   }
 
+  steer_req_sent_ = result.should_send && (result.active || steer_availability_hold_) &&
+                    !result.large_angle_hold && !result.cut_steer_temp;
   last_torque_ = result.apply_torque;
   steer_rate_limited_ = result.desired_torque != result.apply_torque;
   if (!result.active) {
@@ -360,38 +378,58 @@ void LateralController::update_button_state(int button, double now_s) {
   last_button_ = button;
 }
 
-// LKAS fault 회피를 위한 임시 cut-steer 상태를 갱신한다.
-bool LateralController::update_cut_steer_state(
-    bool active, const VehicleCanState &vehicle_state) {
+// avoid_lkas_fault를 끈 경우: MDPS 오류가 이어지면 steer 요청을 잠깐 끊는다(openpilot 방식).
+bool LateralController::update_cut_steer_state(const VehicleCanState &vehicle_state) {
   const SteeringParams &params = config_.steering_params;
-  if (params.avoid_lkas_fault_enabled) {
-    if (active && std::fabs(vehicle_state.steering_angle_deg) >=
-                      params.avoid_lkas_fault_max_angle_deg) {
-      ++angle_limit_counter_;
-    } else {
-      angle_limit_counter_ = 0;
-    }
-
-    if (angle_limit_counter_ > params.avoid_lkas_fault_max_frames) {
-      cut_steer_ = true;
-    } else if (cut_steer_frames_ >= std::max(1, params.avoid_lkas_fault_cut_frames)) {
-      cut_steer_frames_ = 0;
-      cut_steer_ = false;
-    }
-  } else {
-    angle_limit_counter_ = 0;
-    if (vehicle_state.mdps_error_count > params.avoid_lkas_fault_max_frames) {
-      cut_steer_ = true;
-    } else if (cut_steer_frames_ >= std::max(1, params.avoid_lkas_fault_cut_frames)) {
-      cut_steer_frames_ = 0;
-      cut_steer_ = false;
-    }
+  if (params.avoid_lkas_fault_enabled) return false;
+  if (vehicle_state.mdps_error_count > params.avoid_lkas_fault_max_frames) {
+    cut_steer_ = true;
+  } else if (cut_steer_frames_ >= std::max(1, params.avoid_lkas_fault_cut_frames)) {
+    cut_steer_frames_ = 0;
+    cut_steer_ = false;
   }
-
   if (!cut_steer_) return false;
-  angle_limit_counter_ = 0;
   ++cut_steer_frames_;
   return true;
+}
+
+/* 큰 조향각 고장 회피. K7 MDPS는 steer 요청이 켜진 채 |조향각|이 85도 위에 0.98~1.12초 머물면
+ * 토크와 무관하게 ToiFlt+FailStat을 내고, 85도 아래로 와야 푼다(2026-09-18 실측). 요청을 내는
+ * 동안(active, 또는 정차 같은 가용성 대기) 85도 위 체류를 세어 avoid_lkas_fault_max_frames에 닿으면
+ * 요청을 끈다. 그 프레임까지 토크는 update가 0으로 내려 둔다. openpilot식 2프레임 컷은 85도 위에서
+ * 요청을 다시 켜는 순간 3~14 ms 뒤 고장을 냈고(2026-10-03, 4번 중 4번), 정차 대기 중에는 세지도
+ * 않아 1초 뒤 고장이 났다. 그래서 85도 위에서는 요청을 새로 켜지 않는다(결합이나 차단 해제가
+ * 85도 위에서 일어나도 같다).
+ * 끈 요청은 85도 아래로 오면 다시 켠다. 다만 그 체류 중 운전자가 핸들을 돌렸으면(넘겨받은 회전)
+ * 핸들이 kDriverReleaseAngleDeg(15도) 아래로 오고 손을 뗄 때까지 끈 채로 둔다(carrotpilot
+ * lat_suspend_control과 같은 해제 조건). 회전을 빠져나오며 핸들을 펴는 운전자를 시스템이 미리
+ * 밀지 않는다(2026-10-03 2:54 탈출에서 최대 213). */
+bool LateralController::update_large_angle_hold(bool steer_requested, float steering_angle_deg,
+                                                bool steering_pressed) {
+  const SteeringParams &params = config_.steering_params;
+  const float angle = std::fabs(steering_angle_deg);
+  const bool above = params.avoid_lkas_fault_enabled && angle >= params.avoid_lkas_fault_max_angle_deg;
+  if (above && steer_requested && steering_pressed) driver_took_wheel_ = true;
+  if (!above) {
+    fault_angle_frames_ = 0;
+    if (large_angle_hold_ && driver_took_wheel_ &&
+        (angle >= kDriverReleaseAngleDeg || steering_pressed))
+      return true;
+    large_angle_hold_ = false;
+    driver_took_wheel_ = false;
+    return false;
+  }
+  if (!steer_requested) {
+    fault_angle_frames_ = 0;
+    return large_angle_hold_;
+  }
+  if (!steer_req_sent_) {
+    large_angle_hold_ = true;
+  } else if (!large_angle_hold_ &&
+             ++fault_angle_frames_ >= params.avoid_lkas_fault_max_frames) {
+    large_angle_hold_ = true;
+  }
+  return large_angle_hold_;
 }
 
 // 노이즈가 있는 운전자 조향 토크를 openpilot 방식으로 필터링한다.
@@ -408,8 +446,9 @@ bool LateralController::update_steering_pressed(int driver_torque) {
 void LateralController::reset_control_state() {
   last_torque_ = 0;
   steer_rate_limited_ = false;
-  angle_limit_counter_ = 0;
   fault_angle_frames_ = 0;
+  large_angle_hold_ = false;
+  driver_took_wheel_ = false;
   cut_steer_frames_ = 0;
   cut_steer_ = false;
   torque_controller_.reset();
@@ -543,7 +582,7 @@ std::vector<CanFrame> LateralController::build_frames(
     int frame) {
   HyundaiLkasCommand command;
   command.apply_steer = result.apply_torque;
-  command.steer_req = result.active || steer_availability_hold_;
+  command.steer_req = (result.active || steer_availability_hold_) && !result.large_angle_hold;
   command.cut_steer_temp = result.cut_steer_temp;
   /* 클러스터는 sys_state 천이마다 부저를 울린다. active(정차 대기 등
    * 가용성)가 아니라 engaged를 따르게 해 enable/disable에서만 울린다.

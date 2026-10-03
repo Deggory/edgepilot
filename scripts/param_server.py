@@ -156,26 +156,37 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         "avoid_lkas_fault_enabled": {
             "label": "LKAS fault 회피",
             "section": "LKAS fault 보호",
-            "description": "큰 조향각이 지속될 때 steer request를 잠시 끊어 fault를 회피합니다.",
-            "increase": "켜면 K7용 request pulse 회피 로직을 사용합니다.",
-            "decrease": "끄면 큰 조향각에서도 request를 계속 유지합니다.",
+            "description": "큰 조향각에서 MDPS fault 전에 토크를 0으로 내리고, 85도 아래로 돌아올 때까지 "
+            "steer request를 끕니다. 운전자가 넘겨받아 돌린 회전이면 핸들이 15도 아래로 오고 손을 뗄 때까지 "
+            "끈 채로 둡니다.",
+            "increase": "켜면 85도 위에서도 fault 전까지 토크를 유지하다 request를 끕니다.",
+            "decrease": "끄면 큰 조향각에서도 request를 계속 유지해 약 1초 뒤 MDPS fault가 납니다.",
         },
         "avoid_lkas_fault_max_angle_deg": param_meta(
             "Fault 감시 조향각", "LKAS fault 보호", "°", 1, 1, 180,
-            "LKAS fault 회피 카운터를 시작하는 절대 조향각입니다.",
+            "LKAS fault 회피 카운터를 세는 절대 조향각입니다.",
             "더 큰 핸들 각도에서 회피 동작을 시작합니다.",
             "더 작은 핸들 각도부터 회피 동작을 준비합니다.",
         ),
         "avoid_lkas_fault_max_frames": param_meta(
             "Fault 허용 프레임", "LKAS fault 보호", "frame", 1, 0, 300,
-            "큰 조향각에서 request를 유지할 수 있는 최대 100 Hz 프레임 수입니다.",
-            "request를 더 오래 유지한 뒤 잠시 끊습니다.",
-            "request를 더 일찍 끊어 fault를 회피합니다.",
+            "큰 조향각에서 steer request를 유지하는 최대 100 Hz 프레임 수입니다. 이 프레임에 토크가 "
+            "0에 닿도록 미리 내려오고, 그 뒤 85도 아래로 올 때까지 request를 끕니다.",
+            "토크와 request를 더 오래 유지합니다(실측 fault 하한 98프레임).",
+            "더 일찍 내려와 request를 끕니다.",
+        ),
+        "avoid_lkas_fault_hold_angle_deg": param_meta(
+            "스스로 가는 최대 조향각", "LKAS fault 보호", "°", 1, 0, 180,
+            "운전자가 핸들을 잡지 않았을 때 시스템이 스스로 돌리는 최대 핸들 각도입니다. 85도 fault "
+            "각도 아래에서 멈춰 토크를 끊김 없이 유지합니다. 운전자가 조향 중이면 적용하지 않습니다. "
+            "0이면 끕니다.",
+            "시스템이 혼자 더 급하게 돌지만, 85도에 가까우면 넘어가 토크가 끊길 수 있습니다.",
+            "시스템이 혼자 도는 반경이 넓어지고, 더 일찍 운전자 조향이 필요합니다.",
         ),
         "avoid_lkas_fault_cut_frames": param_meta(
             "Fault 컷 길이", "LKAS fault 보호", "frame", 1, 1, 100,
-            "steer request를 끊어두는 100 Hz 프레임 수입니다. 2프레임은 이 차의 "
-            "MDPS fault 타이머를 되돌리지 못하는 것으로 측정되었습니다.",
+            "fault 회피를 끈 경우에만 쓰는 값으로, MDPS 오류가 이어질 때 steer request를 끊는 "
+            "100 Hz 프레임 수입니다.",
             "request를 더 오래 끊습니다.",
             "request를 더 짧게 끊습니다.",
         ),
