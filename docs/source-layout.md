@@ -176,6 +176,12 @@ released after that short hold if they persist.
     toast/log alert a frame may raise (baseline on first sight, rebaseline on a
     controlsd restart, reject > engage > disengage > departure).
     `gtest_overlay_state` pins all of it on the host.
+- `src/alert_tones.*`, `src/alert_sound.*`
+  - the alert sounds: `alert_tones` synthesises them (overlapping bell-like
+    notes with soft attacks and decaying overtones; portable, so
+    `alert_sound_preview` writes them as WAV and `gtest_alert_tones` checks
+    them on the host), and `alert_sound` streams them to one long-lived
+    `aplay` on the board speaker.
 - `src/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling (the Wi-Fi SSID through the
     `SIOCGIWESSID` ioctl) into `OverlayHudState`, called at 1 Hz by `overlayd`.

@@ -112,7 +112,8 @@ keeps the AX system open.
   `overlayd: tap x=... y=...`
 - turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`, level from
   `/boot/configs`)
-- plays the K230 piezo alert melodies on the board speaker, shows departure
+- plays the alert sounds (short bell-like tones, `src/alert_tones.cc`) on the
+  board speaker, shows departure
   alerts and engage refusals on screen, and writes every alert as a
   `overlayd: alert=...` log line
 

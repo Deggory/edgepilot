@@ -30,6 +30,12 @@ its `segments/`. `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]`
 turns the frames into PNGs and composites them over the centre 4:3 of the
 camera frame, as the screen shows it.
 
+`alert_sound_preview --out /tmp/alert` writes each alert sound `overlayd`
+plays (`/tmp/alert_engage.wav`, ...) as a 48 kHz mono WAV at 100% volume, from
+the same synthesis code, so a sound change can be heard on the host. On the
+board, `pkill -USR1 -f "[.]/overlayd"` plays them one by one through the
+speaker.
+
 ## NV12 replay
 
 `modeld` can run headless from a recorded route: replay mode reads an

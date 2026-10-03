@@ -330,15 +330,12 @@ private:
             AlertSoundId::engage, AlertSoundId::disengage, AlertSoundId::unable,
             AlertSoundId::signal_changed, AlertSoundId::unavailable,
         };
-        static constexpr const char *kNames[] = {
-            "engage", "disengage", "unable", "signal_changed", "unavailable",
-        };
         const int requests = g_test_sound_requests;
         if (requests == test_sounds_played_) return;
         test_sounds_played_ = requests;
-        const size_t i = static_cast<size_t>(requests - 1) % std::size(kOrder);
-        sound_.play(kOrder[i]);
-        std::fprintf(stderr, "\noverlayd: test sound %s\n", kNames[i]);
+        const AlertSoundId id = kOrder[static_cast<size_t>(requests - 1) % std::size(kOrder)];
+        sound_.play(id);
+        std::fprintf(stderr, "\noverlayd: test sound %s\n", alert_sound_name(id));
     }
 
     /* 고른 알림을 소리 내고 기록한다. engage 거부는 토스트도 띄운다. 알렸으면 true. */

@@ -31,6 +31,7 @@ cmake --build build-host --target replay_closed_loop -j2
 | `replay_lateral_learners` | `[옵션] <events.bin...>` | paramsd·torqued 학습기를 녹화에 돌려 학습값을 출력한다 |
 | `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
 | `hud_snapshot` | `[--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `overlayd`와 같은 640x480으로 `K230ARGB` 프레임에 그리고 그리기 시간을 출력한다. 시간은 보드에서 잰다 |
+| `alert_sound_preview` | `[--out PREFIX]` | `overlayd` 알림음을 같은 합성 코드로 `PREFIX_<이름>.wav`(48 kHz 모노, 100% 크기)에 쓴다 |
 
 재생 도구의 입력은 녹화(`events/*.bin`)다. MaixCAM2에는 아직 녹화기가 없어서 지금은 K230에서
 녹화한 주행을 쓴다.

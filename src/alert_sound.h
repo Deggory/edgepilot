@@ -1,8 +1,7 @@
 #ifndef ALERT_SOUND_H
 #define ALERT_SOUND_H
 
-/* HUD 알림음. K230 피에조 부저의 멜로디(음높이·길이)를 그대로 옮겨 MaixCAM2 보드
- * 스피커로 낸다.
+/* HUD 알림음(alert_tones.h)을 MaixCAM2 보드 스피커로 낸다.
  *
  * aplay 하나를 시작할 때 띄워 표준입력(raw 48 kHz 스테레오 S16)을 계속 열어 두고, 소리
  * 스레드가 평소엔 무음을, 알림이 오면 그 멜로디를 20 ms 단위로 흘려 넣는다. 알림 순간에
@@ -15,14 +14,14 @@
  * 환경: EDGEPILOT_ALERT_SOUND=0이면 끈다, EDGEPILOT_ALERT_VOLUME(0~100, 기본 70: 설정
  * 파일에 값이 없을 때의 크기), EDGEPILOT_ALERT_PCM(ALSA 장치, 기본 plughw:0,1). */
 
+#include "alert_tones.h"
+
 #include <atomic>
 #include <cstdint>
 #include <string>
 #include <sys/types.h>
 #include <thread>
 #include <vector>
-
-enum class AlertSoundId { unable, engage, disengage, signal_changed, unavailable, count };
 
 class AlertSound {
 public:

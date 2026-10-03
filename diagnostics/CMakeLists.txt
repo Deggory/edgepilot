@@ -15,5 +15,9 @@ target_link_libraries(replay_planner PRIVATE planning)
 add_host_tool(hud_snapshot hud_snapshot.cc)
 target_link_libraries(hud_snapshot PRIVATE overlay)
 
+# 알림음 미리 듣기(WAV). overlayd와 같은 합성 코드.
+add_host_tool(alert_sound_preview alert_sound_preview.cc)
+target_link_libraries(alert_sound_preview PRIVATE alert_tones)
+
 add_host_tool(replay_localization replay_localization.cc)
 target_link_libraries(replay_localization PRIVATE localization control_core)

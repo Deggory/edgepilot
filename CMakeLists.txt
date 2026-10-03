@@ -114,6 +114,9 @@ target_link_libraries(overlay_state PUBLIC common)
 add_edgepilot_library(overlay src/overlay_canvas.cc src/overlay_font.cc src/overlay_renderer.cc)
 target_link_libraries(overlay PUBLIC overlay_state)
 
+# 알림음 합성(재생은 보드의 alert_sound.cc). 호스트에서 alert_sound_preview가 같은 소리를 낸다.
+add_edgepilot_library(alert_tones src/alert_tones.cc)
+
 # 호스트 검사·도구: 로컬 헤더와 경고만 붙인 일반 실행 파일.
 function(add_host_tool target)
   add_executable(${target} ${ARGN})
@@ -200,7 +203,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
     src/alert_sound.cc
     src/system_monitor.cc
   )
-  configure_board_target(overlayd common overlay maixcam2_media utils_json)
+  configure_board_target(overlayd common overlay alert_tones maixcam2_media utils_json)
 
   add_executable(camerad src/camerad.cc)
   configure_board_target(camerad common maixcam2_media)
@@ -216,7 +219,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
   # 카메라 내부 파라미터 측정용 스틸 캡처(docs/camcal.md).
   add_executable(camcal src/camcal.cc src/alert_sound.cc)
   target_include_directories(camcal SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-  configure_board_target(camcal common maixcam2_media ${OpenCV_LIBS})
+  configure_board_target(camcal common alert_tones maixcam2_media ${OpenCV_LIBS})
   target_link_options(camcal PRIVATE "-Wl,-rpath-link,${AX_OPENCV_DIR}/opencv_lib")
 
   # 모델 입력 워프용 GDC. MSP SDK 헤더만 쓰고 미들웨어는 쓰지 않는다(NPU 세션과 같은

@@ -22,6 +22,7 @@ function(add_host_test target)
 endfunction()
 
 add_host_test(gtest_adaptive_cruise control_core)
+add_host_test(gtest_alert_tones alert_tones)
 add_host_test(gtest_calibration_equivalence perception)
 add_host_test(gtest_can_queue common)
 add_host_test(gtest_control_holds control_core)

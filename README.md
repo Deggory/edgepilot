@@ -17,7 +17,7 @@ names. The project started as the K230 runtime (the legacy
 this branch ports it to the MaixCAM2. The control stack, Panda/CAN protocol,
 parameter server, and recording format are carried over unchanged; the camera, display, model, and build are
 new. The K230 nncase/kmodel pipeline, VGLite warp, and MVX recorder are not part
-of this branch; the piezo alert melodies now play on the board speaker.
+of this branch; the piezo alerts are now bell-like tones on the board speaker.
 
 > [!WARNING]
 > This is experimental vehicle-control software. Keep Panda safety enabled, run
