@@ -10,24 +10,25 @@ their options, and how to build them are listed in
 ## HUD snapshots
 
 `hud_snapshot` renders the overlay renderer off-line for the idle / standby /
-drive / busy / depart / fault scenarios, writes each frame as a `K230ARGB` file
-and prints draw timings. `--maixcam2` draws the native 640x480 layout that
-`overlayd` puts on VO layer 1; without it the tool draws the K230 `480x800`
-portrait frame (`--landscape` for `800x480`). It links OpenCV like
-`overlayd`, so build it where OpenCV is found: a host with OpenCV, or the
-container build with `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`.
+drive / busy / depart / fault / torque / saturated / debug / network /
+warnings scenarios at the
+640x480 size `overlayd` puts on VO layer 1, writes each frame as a `K230ARGB`
+file and prints draw timings. The renderer needs no OpenCV, so the tool builds
+on the host as well as in the container build with
+`-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`; time it on the board, where the numbers
+matter (the host is 20–40x faster).
 
 ```sh
-./hud_snapshot --maixcam2 --assets assets/ui --out /tmp/hud
+./hud_snapshot --out /tmp/hud
 ```
 
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
 `ModelState` / `ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
-pair, plus the matching camera frame, from a K230 `recordd` route.
-`python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]` turns K230-size
-frames (`480x800` or `800x480`) into PNGs and composites a camera frame the way
-the K230 panel showed it; it does not accept 640x480 frames yet.
+pair (current v7 layout), plus the matching camera frame when the route copy has
+its `segments/`. `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]`
+turns the frames into PNGs and composites them over the centre 4:3 of the
+camera frame, as the screen shows it.
 
 ## NV12 replay
 

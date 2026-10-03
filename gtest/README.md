@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 133개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 143개와
 Python 1개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -40,7 +40,8 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_lateral_torque` | 8 | 토크 횡제어기: 조향 지연만큼의 요청 버퍼, 속도별 이득(KP_INTERP), 라이브 뱅크와 latAccelOffset feedforward, 학습값 소비(opendbc `calc_curvature`, 상류 latAccelFactor 구조) |
 | `gtest_localization` | 11 | locationd(PoseKalman, LocationEstimator: 정지 수렴, 요레이트 추적, 자이로 교차검증, 되감기, IMU 묶음 무관, 정차 속도 가드, 부팅, IMU 장착 기울기)와 lagd(상류 상관식 대조, 주행 지연 추정, 개입·저속 무시) |
 | `gtest_model_output_parser` | 6 | supercombo raw 출력 레이아웃과 시간축 입력 규약(desire 펄스·풀링과 깜빡이로 끝나는 회전 desire, 특징 이력, 이미지 이력) |
-| `gtest_overlay_state` | 5 | 제어 상태 → HUD 매핑, 모든 `BlockReason`의 라벨, 알림 선택(기준값, 카운터 리셋, 우선순위) |
+| `gtest_overlay_canvas` | 9 | HUD 캔버스: 스트레이트 알파 합성(부동소수 기준식 대조), 다각형 커버리지 합 = 기하 넓이, 먼 쪽 흐림, 둥근 사각형 곧은 행(이음매 없음), 그린 칸만 지우기, 글자 폭. 렌더러의 상태 테두리와 알림 카드, 다시 받은 버퍼 = 새 버퍼, 아래 모서리 카드, 상태 알약 터치 영역 |
+| `gtest_overlay_state` | 6 | 제어·녹화 상태 → HUD 매핑, 모든 `BlockReason`의 라벨, 알림 선택(기준값, 카운터 리셋, 우선순위) |
 | `gtest_panda_can_codec` | 1 | panda USB CAN 패킹·언패킹 |
 | `gtest_projection` | 5 | 화면 크기·방향과 무관한 도로 점 투영, 설정된 카메라 내부 파라미터, 카메라 장착 오프셋 |
 | `gtest_recording_writer` | 3 | 디스크의 route 구조: K230LOG1 청크, K230IDX1 인덱스, 매니페스트, params 스냅샷, 스테이징 비우기. 이벤트 로그 리더(끊긴 꼬리에서 멈춤, 큰 파일 머리), 옛 버전 ModelState 해석 |
@@ -66,7 +67,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 2. [`CMakeLists.txt`](CMakeLists.txt)에 한 줄을 더한다:
    `add_host_test(gtest_<이름> <라이브러리...>)`. 라이브러리는 루트 CMake의 `common`,
    `control_core`, `planning`, `perception`, `panda_codec`, `recording_writer`,
-   `overlay_state` 중에서 고른다.
+   `overlay_state`, `overlay` 중에서 고른다.
 3. 작성 규칙:
    - 파일 첫머리에 `/* */` 한글 주석으로 무엇을, 무엇과 대조해 검사하는지 적는다.
    - TEST와 도우미는 익명 namespace 안에 둔다.

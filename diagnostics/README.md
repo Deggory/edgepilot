@@ -18,8 +18,7 @@ cmake --build build-host --target replay_closed_loop -j2
 
 보드용으로는 `tools/docker_ax630/`의 컨테이너에서 `build-ax630/`을 구성할 때
 `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`을 더하면 같은 도구가 `build-ax630/bin`에 생긴다
-(`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는 없다. `hud_snapshot`은
-`overlayd`처럼 OpenCV가 있는 곳에서만 빌드된다.
+(`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는 없다.
 
 ## 도구
 
@@ -31,7 +30,7 @@ cmake --build build-host --target replay_closed_loop -j2
 | `replay_planner` | `[--laneless] <out.csv> <events.bin...>` | 녹화한 `ModelState`/`ControlState`로 `LateralPlanner`를 다시 돌려 요구 곡률을 CSV로 쓴다 |
 | `replay_lateral_learners` | `[옵션] <events.bin...>` | paramsd·torqued 학습기를 녹화에 돌려 학습값을 출력한다 |
 | `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
-| `hud_snapshot` | `[--assets DIR] [--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--landscape \| --maixcam2]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `K230ARGB` 프레임으로 그리고 그리기 시간을 출력한다. `--maixcam2`는 `overlayd`와 같은 640x480 네이티브 배치, 기본은 K230의 480x800 |
+| `hud_snapshot` | `[--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX]` | HUD 시나리오(또는 녹화한 모델·제어 상태)를 `overlayd`와 같은 640x480으로 `K230ARGB` 프레임에 그리고 그리기 시간을 출력한다. 시간은 보드에서 잰다 |
 
 재생 도구의 입력은 녹화(`events/*.bin`)다. MaixCAM2에는 아직 녹화기가 없어서 지금은 K230에서
 녹화한 주행을 쓴다.

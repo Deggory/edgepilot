@@ -1,10 +1,8 @@
-/* HUD 스냅샷·타이밍 도구. 렌더러만 떼어 480x800 ARGB 버퍼에 그리고 시나리오별 프레임을
- * K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의 ModelState /
- * ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성 장면을 쓴다.
- * 호스트와 보드에서 같은 소스로 빌드한다.
- * 사용: hud_snapshot [--assets DIR] [--model model.bin] [--control control.bin]
- *       [--iterations N] [--out PREFIX] [--landscape | --maixcam2]
- * --maixcam2: 640x480 네이티브 배치(overlayd의 VO 버퍼와 같다). */
+/* HUD 스냅샷·타이밍 도구. 렌더러만 떼어 MaixCAM2 화면과 같은 640x480 BGRA 버퍼에 그리고
+ * 시나리오별 프레임을 K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
+ * ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성
+ * 장면을 쓴다. 호스트와 보드에서 같은 소스로 빌드한다.
+ * 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX] */
 #include "overlay_state.h"
 #include "ipc_messages.h"
 #include "overlay_renderer.h"
@@ -104,28 +102,21 @@ void print_stats(const char *label, std::vector<double> values)
 
 int main(int argc, char **argv)
 {
-    std::string assets_dir = "assets/ui";
     std::string model_path;
     std::string control_path;
     std::string out_prefix = "hud_snapshot";
     int iterations = 50;
-    bool landscape = false;
-    bool maixcam2 = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> const char * { return i + 1 < argc ? argv[++i] : ""; };
-        if (arg == "--assets") assets_dir = next();
-        else if (arg == "--model") model_path = next();
+        if (arg == "--model") model_path = next();
         else if (arg == "--control") control_path = next();
         else if (arg == "--iterations") iterations = std::max(1, std::atoi(next()));
         else if (arg == "--out") out_prefix = next();
-        else if (arg == "--landscape") landscape = true;
-        else if (arg == "--maixcam2") landscape = maixcam2 = true;
         else {
             std::fprintf(stderr,
-                         "usage: %s [--assets DIR] [--model model.bin] [--control control.bin]\n"
-                         "          [--iterations N] [--out PREFIX] [--landscape | --maixcam2]\n",
-                         argv[0]);
+                         "usage: %s [--model model.bin] [--control control.bin] [--iterations N] "
+                         "[--out PREFIX]\n", argv[0]);
             return 2;
         }
     }
@@ -155,6 +146,7 @@ int main(int argc, char **argv)
     std::snprintf(idle.active_block, sizeof(idle.active_block), "control_stale");
     std::snprintf(idle.network_interface, sizeof(idle.network_interface), "wlan0");
     std::snprintf(idle.network_ipv4, sizeof(idle.network_ipv4), "192.168.219.111");
+    std::snprintf(idle.network_ssid, sizeof(idle.network_ssid), "edgepilot-car");
 
     OverlayHudState drive = idle;
     drive.panda_connected = true;
@@ -164,7 +156,10 @@ int main(int argc, char **argv)
     drive.calibration_available = true;
     drive.calibration_status = 1;
     drive.calibration_valid_blocks = 12;
+    drive.calibration_roll_deg = 0.12f;
     drive.calibration_pitch_deg = -2.3f;
+    drive.calibration_yaw_deg = 0.85f;
+    drive.recording = true;
     if (have_control) {
         hud_apply_control_state(control_state, true, &drive);
     } else {
@@ -190,8 +185,8 @@ int main(int argc, char **argv)
     busy.turn_signal_step = 10;
     busy.brake_hold = true;
     busy.green_light_alert_armed = true;
-    std::snprintf(busy.engage_alert_message, sizeof(busy.engage_alert_message),
-                  "UNABLE TO ENGAGE: LOW SPEED");
+    std::snprintf(busy.engage_reject_label, sizeof(busy.engage_reject_label), "%s",
+                  engage_block_label("seatbelt_unlatched"));
 
     OverlayHudState depart = drive;
     depart.departure_alert_type = DepartureAlertType::green_light;
@@ -210,6 +205,26 @@ int main(int argc, char **argv)
     saturated.steer_torque_fraction = 0.95f;
     saturated.steer_saturated = true;
 
+    OverlayHudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면
+    debug.debug_overlay = true;
+
+    OverlayHudState network = drive;  // 상태 알약을 눌러 연 네트워크 카드
+    network.network_card = true;
+    network.cpu_temp_c = 74.0f;
+
+    OverlayHudState warnings = drive;  // 재보정, 낮은·높은 타이어, 저장 공간 부족, 오프라인
+    warnings.calibration_status = 3;
+    warnings.calibration_valid_blocks = 2;
+    warnings.tpms_valid = true;
+    warnings.tpms_unit = 0;
+    warnings.tpms_pressure_fl = 28.0f;
+    warnings.tpms_pressure_fr = 36.0f;
+    warnings.tpms_pressure_rl = 35.0f;
+    warnings.tpms_pressure_rr = 47.0f;
+    warnings.recording = false;
+    warnings.storage_full = true;
+    warnings.network_connected = false;
+
     OverlayHudState standby = drive;
     standby.controller_engaged = standby.controller_active = false;
     standby.cruise_active = false;
@@ -225,16 +240,17 @@ int main(int argc, char **argv)
         {"fault", true, fault},
         {"torque", true, torque},
         {"saturated", true, saturated},
+        {"debug", true, debug},
+        {"network", true, network},
+        {"warnings", true, warnings},
     };
 
-    const uint32_t width = maixcam2 ? 640 : landscape ? 800 : 480;
-    const uint32_t height = landscape ? 480 : 800;
+    constexpr uint32_t width = 640;
+    constexpr uint32_t height = 480;
     std::vector<uint32_t> storage(static_cast<size_t>(width) * height, 0);
     const OverlayTarget target{storage.data(), width, height, width * 4};
 
     OverlayRenderer renderer;
-    std::printf("assets: %s (%s)\n", assets_dir.c_str(),
-                renderer.load_assets(assets_dir) ? "loaded" : "missing");
     std::printf("inputs: model=%s control=%s target=%ux%u\n",
                 have_model ? model_path.c_str() : "synthetic",
                 have_control ? control_path.c_str() : "synthetic", width, height);
@@ -244,7 +260,7 @@ int main(int argc, char **argv)
         std::vector<double> draw_ms;
         for (int i = 0; i < iterations; ++i) {
             const uint64_t t0 = now_ns();
-            renderer.draw(target, scene, projection, scenario.hud, !landscape);
+            renderer.draw(target, scene, projection, scenario.hud);
             draw_ms.push_back((now_ns() - t0) / 1e6);
         }
         std::printf("scenario %s (%d iters)\n", scenario.name, iterations);

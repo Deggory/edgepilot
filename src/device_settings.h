@@ -19,6 +19,7 @@ struct DeviceSettings {
     float alert_volume_percent = NAN;  // 없으면 NAN(시작 크기 유지)
     float camera_offset_m = 0.0f;      // 가상 카메라를 오른쪽(+)으로: 차가 왼쪽으로 간다
     float camera_height_m = kModelHeight;
+    bool hud_debug = false;            // HUD 진단 카드(예전 패널의 수치)
 };
 
 /* 허용 범위(벗어나면 클램프). 웹 편집기의 min/max와 같아야 한다(check_param_server.py가 대조).
@@ -27,6 +28,10 @@ inline constexpr JsonFloatField<DeviceSettings> kDeviceSettingsFloats[] = {
     {"alert_volume_percent", 0.0f, 100.0f, &DeviceSettings::alert_volume_percent},
     {"camera_offset_m", -0.35f, 0.35f, &DeviceSettings::camera_offset_m},
     {"camera_height_m", 0.8f, 2.0f, &DeviceSettings::camera_height_m},
+};
+
+inline constexpr JsonBoolField<DeviceSettings> kDeviceSettingsBools[] = {
+    {"hud_debug", &DeviceSettings::hud_debug},
 };
 
 /* 표의 허용 범위로 자른다(환경 변수로 받은 값 등). */
@@ -43,6 +48,7 @@ inline bool load_device_settings(const std::string &path, DeviceSettings *out, s
     DeviceSettings settings;
     if (!load_json_param_file(path, [&settings](const std::string &text) {
             parse_json_fields(text, kDeviceSettingsFloats, &settings);
+            parse_json_fields(text, kDeviceSettingsBools, &settings);
         }, error))
         return false;
     *out = settings;

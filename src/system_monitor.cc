@@ -3,12 +3,41 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <linux/wireless.h>  // net/if.h 다음이어야 struct ifreq가 겹치지 않는다
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/statvfs.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+
+namespace {
+
+/* 접속한 와이파이 이름. 무선 확장 ioctl(SIOCGIWESSID)이라 wpa_cli를 띄우지 않는다. HUD 글꼴에
+ * 없는 바이트(UTF-8 등)는 '?'로 바꾼다. */
+void read_ssid(const char *interface_name, char *ssid, size_t size)
+{
+    ssid[0] = '\0';
+    const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    char essid[IW_ESSID_MAX_SIZE + 1] = {};
+    iwreq request {};
+    std::snprintf(request.ifr_ifrn.ifrn_name, sizeof(request.ifr_ifrn.ifrn_name), "%s", interface_name);
+    request.u.essid.pointer = essid;
+    request.u.essid.length = IW_ESSID_MAX_SIZE;
+    if (ioctl(fd, SIOCGIWESSID, &request) == 0) {
+        const size_t length = std::min<size_t>(request.u.essid.length, size - 1);
+        for (size_t i = 0; i < length; ++i)
+            ssid[i] = essid[i] >= 0x20 && essid[i] < 0x7f ? essid[i] : '?';
+        ssid[length] = '\0';
+    }
+    close(fd);
+}
+
+}  // namespace
 
 void SystemMonitor::sample(OverlayHudState *hud)
 {
@@ -118,6 +147,7 @@ void SystemMonitor::sample_network(OverlayHudState *hud)
     hud->wifi_signal_dbm = 0;
     hud->network_interface[0] = '\0';
     hud->network_ipv4[0] = '\0';
+    hud->network_ssid[0] = '\0';
 
     ifaddrs *addresses = nullptr;
     if (getifaddrs(&addresses) != 0) return;
@@ -156,6 +186,7 @@ void SystemMonitor::sample_network(OverlayHudState *hud)
         std::strncmp(hud->network_interface, "wlan", 4) != 0) {
         return;
     }
+    read_ssid(hud->network_interface, hud->network_ssid, sizeof(hud->network_ssid));
 
     FILE *file = std::fopen("/proc/net/wireless", "r");
     if (!file) return;

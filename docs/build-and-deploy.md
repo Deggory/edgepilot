@@ -31,7 +31,7 @@ This fills `deps/ax630/` (not tracked):
   OS04D10-aware MSP sample sources
 - from the board over SSH, copied as-is so the ABI matches: `/opt/lib` (the AX
   runtime), `/usr/lib/libmaixcam_lib.so.1.2.5`, `libsamplerate`, and the OpenCV
-  4.11 headers and `core`/`imgproc`/`imgcodecs` libraries
+  4.11 headers and `core`/`imgproc`/`imgcodecs` libraries (only `camcal` uses them)
 
 The SDK download needs the network and the board copy needs SSH; after that the
 build is offline. Run the script again after a board image update.

@@ -1,997 +1,101 @@
 #include "overlay_renderer.h"
 
-#include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
+#include "calibration_online.h"
+#include "overlay_canvas.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <iterator>
 #include <optional>
 #include <string>
-#include <vector>
+
+/* MaixCAM2 HUD(640x480). 주행 화면에는 필요한 것만 둔다: 상태 테두리, 현재·설정 속도, 조향
+ * 모드, 경로·차선, 앞차, 토크 바, 알림. 아래 두 모서리에는 TPMS와 카메라 보정을 늘 두고,
+ * 오른쪽 위 상태 알약은 녹화와 와이파이를 보이며 누르면 네트워크 카드를 연다. 온도·panda·
+ * 저장 공간은 문제가 있을 때만 칩으로 띄우고, 그 밖의 수치 진단은 웹 기기 설정의 HUD 진단을
+ * 켜면 왼쪽 카드에 모은다. 색·간격·글꼴 크기는 아래 토큰 한 곳에서 정한다. */
 
 namespace {
 
-constexpr uint32_t argb(uint8_t a, uint8_t r, uint8_t g, uint8_t b)
-{
-    return (static_cast<uint32_t>(a) << 24) |
-           (static_cast<uint32_t>(r) << 16) |
-           (static_cast<uint32_t>(g) << 8) |
-           static_cast<uint32_t>(b);
-}
+// ---- 디자인 토큰 ----
 
-cv::Scalar bgra(int b, int g, int r, int a = 255)
-{
-    return cv::Scalar(b, g, r, a);
-}
+constexpr uint32_t kText = hud_argb(255, 255, 255, 255);
+constexpr uint32_t kTextSecondary = hud_argb(235, 190, 196, 205);
+constexpr uint32_t kCard = hud_argb(150, 12, 14, 18);
+constexpr uint32_t kCardStrong = hud_argb(205, 12, 14, 18);
+constexpr uint32_t kTrack = hud_argb(90, 255, 255, 255);
+constexpr uint32_t kShadow = hud_argb(110, 0, 0, 0);
+constexpr uint32_t kCarBody = hud_argb(70, 255, 255, 255);
+constexpr uint32_t kGreen = hud_argb(255, 48, 209, 88);
+constexpr uint32_t kBlue = hud_argb(255, 64, 156, 255);
+constexpr uint32_t kGray = hud_argb(255, 150, 156, 165);
+constexpr uint32_t kAmber = hud_argb(255, 255, 176, 32);
+constexpr uint32_t kRed = hud_argb(255, 255, 69, 58);
 
-/* 팔레트. */
-constexpr uint32_t kWhite = argb(230, 255, 255, 255);
-constexpr uint32_t kDim = argb(170, 210, 220, 230);
-constexpr uint32_t kGreen = argb(230, 80, 230, 95);
-constexpr uint32_t kBlue = argb(230, 90, 170, 255);
-constexpr uint32_t kYellow = argb(230, 255, 220, 60);
-constexpr uint32_t kOrange = argb(235, 255, 150, 50);
-constexpr uint32_t kRed = argb(235, 255, 70, 70);
-constexpr uint32_t kShadow = argb(185, 0, 0, 0);
-constexpr uint32_t kPanelFill = argb(82, 3, 7, 11);
-constexpr uint32_t kPanelEdgeTop = argb(68, 255, 255, 255);
-constexpr uint32_t kPanelEdgeBottom = argb(44, 255, 255, 255);
-constexpr uint32_t kPanelEdgeLeft = argb(52, 255, 255, 255);
-constexpr uint32_t kPanelEdgeRight = argb(34, 255, 255, 255);
-constexpr uint32_t kPanelRule = argb(42, 255, 255, 255);
-constexpr uint32_t kSeparator = argb(38, 255, 255, 255);
+constexpr int kMargin = 14;
+constexpr int kGap = 8;
+constexpr float kRadius = 10.0f;
+constexpr int kBorder = 4;
+constexpr int kCardPad = 10;
+constexpr int kChipH = 26;
+constexpr int kChipPadX = 10;
+constexpr int kDot = 8;
+constexpr int kSetCardW = 84;
+constexpr int kSetCardH = 70;
+constexpr int kNetworkCardMinW = 180;
+constexpr int kTorqueBarW = 220;
+constexpr int kTorqueBarH = 6;
+constexpr int kAlertH = 68;
+constexpr int kAlertMinW = 340;
+// 아래 모서리 카드(TPMS, 카메라 보정). 위는 알림 카드, 아래는 토크 바와 맞춘다.
+constexpr int kCornerCardW = 116;
+constexpr int kCornerCardH = kAlertH + kGap + kTorqueBarH;
+constexpr int kStatusTouchW = 170;  // 상태 알약을 누른 것으로 보는 오른쪽 위 영역(손가락만큼 넉넉하게)
+constexpr int kStatusTouchH = 70;
 
-/* 글꼴: 5x7 글리프, 6칸 전진, 그림자는 오른쪽 아래 2 px. */
-constexpr int kGlyphW = 5;
-constexpr int kGlyphH = 7;
-constexpr int kGlyphAdvance = 6;
-constexpr int kShadowOffset = 2;
+// ---- 장면 상수 ----
 
-/* 패널 격자: 좌우 각 4단. 폭에 따라 달라지는 값은 HudLayout. */
-constexpr int kBoxMargin = 8;
-constexpr int kBoxPadding = 10;
-constexpr int kPanelH = 66;
-constexpr int kPanelGap = 8;
-constexpr int kPanelY0 = 10;
-constexpr int kPanelY1 = kPanelY0 + kPanelH + kPanelGap;
-constexpr int kPanelY2 = kPanelY1 + kPanelH + kPanelGap;
-constexpr int kPanelY3 = kPanelY2 + kPanelH + kPanelGap;
-constexpr int kLeftBoxX = kBoxMargin;
-constexpr int kPanelAccentW = 3;
-constexpr int kPanelRuleY = 17;
-constexpr int kPanelRuleInset = 8;
-constexpr int kMetricInnerMargin = 8;
+constexpr float kMinDrawDistance = 10.0f;
+constexpr float kMaxDrawDistance = 100.0f;
+constexpr float kPathHalfWidth = 0.9f;
+constexpr float kLaneHalfWidthMin = 0.02f;
+constexpr float kLaneHalfWidthPerProbability = 0.03f;
+constexpr float kEdgeHalfWidth = 0.04f;
+constexpr float kLaneMinProbability = 0.05f;
+constexpr float kEdgeMinConfidence = 0.05f;
+constexpr float kFarAlpha = 0.12f;  // 띠의 먼 끝 알파 비
 
-/* 패널 안 행 위치(패널 상단 기준). 제목줄 아래에 scale 2 두 줄(Row1/Row2) 또는
- * scale 1 세 줄(Row1/Line2/Line3). */
-constexpr int kPanelTitleY = 5;
-constexpr int kPanelRow1Y = 22;
-constexpr int kPanelRow2Y = 47;
-constexpr int kPanelLine2Y = 36;
-constexpr int kPanelLine3Y = 51;
-constexpr int kMetricValueY = 39;
-constexpr int kMetricSeparatorH = 36;
-constexpr int kBadgeCenterInset = 37;
-constexpr int kBadgeMaxW = 68;
-constexpr int kBoxTextInset = 18;
+constexpr float kRadarToCameraDistanceM = 1.52f;
+constexpr float kLeadProbabilityThreshold = 0.5f;
+constexpr int kLeadTimeIndex = 0;
+constexpr float kLeadRiskDistanceM = 40.0f;
+constexpr float kLeadRiskClosingMps = 10.0f;
+constexpr float kLeadClosingLabelKph = -3.0f;
 
-/* 상태 띠와 중앙 속도. */
-constexpr int kStatusBarH = 6;
-constexpr int kSpeedY = 12;
-constexpr int kSpeedScale = 8;
-constexpr int kSpeedMaxW = 220;
-constexpr int kSpeedUnitY = 80;
+constexpr int kTurnLitSteps = 15;
+constexpr int kTurnChevronStartStep[] = {0, 4, 8};
+constexpr float kTurnChevronAlpha[] = {0.35f, 0.65f, 1.0f};
 
-/* AUTO HOLD 상자와 하단 알림 상자. */
-constexpr int kAutoHoldW = 190;
-constexpr int kAutoHoldH = 40;
-constexpr int kAutoHoldY = 350;
-constexpr int kAutoHoldTextY = 10;
-constexpr int kAlertW = 520;
-constexpr int kAlertH = 50;
-// 알림 상자 위쪽 끝의 화면 아래로부터 거리. 맨 아래 토크 바 위에 온다.
-constexpr int kAlertBottomMargin = 80;
-constexpr int kAlertTitleY = 8;
-constexpr int kAlertDetailY = 36;
-// 토크 바: 화면 맨 아래 가운데. 알림 상자는 그 위라 서로 가리지 않는다.
-constexpr int kTorqueBarW = 460;
-constexpr int kTorqueBarCompactW = 400;
-constexpr int kTorqueBarH = 14;
-constexpr int kTorqueBarBottomMargin = 6;  // 화면 아래 끝에서 바 아래 끝까지
-constexpr int kTorqueBarOutline = 2;
-constexpr int kTorqueBarTickH = 26;     // 가운데 눈금
-constexpr int kTorqueBarEndTickH = 20;  // 양 끝(최대 토크) 눈금
-
-/* TPMS 패널: 두 열, 단위는 제목줄 배지. */
+constexpr int kWeakWifiDbm = -75;
+constexpr float kWarmTempC = 70.0f;
+constexpr float kHotTempC = 80.0f;
 constexpr float kTpmsLowBar = 2.2f;
 constexpr float kTpmsHighBar = 2.8f;
 constexpr float kTpmsLowPsi = 32.0f;
 constexpr float kTpmsHighPsi = 45.0f;
 
-/* 리드: 패널 경고 색 기준과 장면 마커. */
-constexpr float kRadarToCameraDistanceM = 1.52f;
-constexpr float kLeadProbabilityThreshold = 0.5f;
-constexpr int kLeadTimeIndex = 0;
-constexpr float kLeadCloseDistanceM = 15.0f;
-constexpr float kLeadClosingKph = -20.0f;
-constexpr float kLeadMarkerSizeBase = 13.0f;
-constexpr float kLeadMarkerSizePerMeter = 0.05f;
-constexpr int kLeadMarkerSizeMin = 7;
-constexpr int kLeadMarkerSizeMax = 11;
-constexpr int kLeadMarkerOffsetY = 3;
-constexpr float kLeadRiskDistanceM = 40.0f;
-constexpr float kLeadRiskClosingMps = 10.0f;
-
-/* 신호등 스프라이트: 하우징 중심을 오른쪽 여백 안에 둔다. */
-constexpr int kTrafficSpriteWidth = 270;
-constexpr int kTrafficSpriteHeight = 155;
-constexpr int kSignalRightOffset = 126;
-constexpr int kSignalCenterY = 320;
-constexpr int kSignalHousingCenterX = 174;
-constexpr int kSignalHousingCenterY = 39;
-
-/* 깜빡이 셰브런: 단계 0~14 켜짐(4부터 2개, 8부터 3개), 15~24 꺼짐. */
-constexpr int kTurnLitSteps = 15;
-constexpr int kTurnChevronStartStep[] = {0, 4, 8};
-constexpr int kTurnChevronAlpha[] = {70, 140, 210};
-
-/* 장면 그리기 거리와 폭. */
-constexpr float kMinDrawDistance = 10.0f;
-constexpr float kMaxDrawDistance = 100.0f;
-constexpr float kPathHalfWidth = 0.9f;
-constexpr float kLaneHalfWidthMin = 0.015f;
-constexpr float kLaneHalfWidthPerProbability = 0.025f;
-constexpr float kEdgeHalfWidth = 0.025f;
-constexpr float kLaneMinProbability = 0.05f;
-constexpr float kEdgeMinConfidence = 0.05f;
-
-constexpr int kWeakWifiDbm = -75;
-
-struct HealthLevel {
-    float cpu_percent;
-    float temp_c;
-    float storage_percent;
-    uint32_t color;
-};
-
-/* 위에서부터 첫 일치가 색을 정한다. */
-constexpr HealthLevel kHealthLevels[] = {
-    {90.0f, 85.0f, 95.0f, kRed},
-    {75.0f, 75.0f, 85.0f, kOrange},
-    {60.0f, 65.0f, 75.0f, kYellow},
-};
-
-/* 화면 폭에 따라 달라지는 배치. 800 폭(K230)은 원래 설계 그대로이고, 640 폭(MaixCAM2)은
- * 네이티브 픽셀에 정수 배율 글꼴을 그리도록 다시 잡았다: 패널 폭 208은 4열 수치("100%")와
- * 3열 수치("-2.30")가 배율 2로 들어가는 최소 폭이고, 가운데 208 px는 속도 세 자리(136 px)만
- * 들어가므로 깜빡이 화살표는 속도 아래로, AUTO HOLD 상자는 신호등을 가리지 않게 왼쪽으로
- * 옮겼다. */
-struct HudLayout {
-    int box_w;
-    int metric_text_margin;
-    int tpms_column_offset;
-    int tpms_column_w;
-    int turn_center_y;
-    int turn_inner_offset;
-    int turn_chevron_step;
-    int turn_chevron_w;
-    int turn_chevron_half_h;
-    int auto_hold_center_x;  // 0이면 화면 가운데
-
-    int col_w() const { return box_w - 2 * kBoxPadding; }
-    int metric_inner_w() const { return box_w - 2 * kMetricInnerMargin; }
-};
-
-constexpr HudLayout kWideLayout{236, 4, 112, 108, 42, 74, 28, 24, 34, 0};
-constexpr HudLayout kCompactLayout{208, 2, 98, 94, 124, 20, 28, 24, 24, 170};
-
-const HudLayout &layout_for_width(int width)
-{
-    return width <= 640 ? kCompactLayout : kWideLayout;
-}
-
-/* 한 프레임의 그리기 대상: 네이티브 버퍼와 가로 화면 좌표계(width x height).
- * rotated면 버퍼는 세로 패널(K230 480x800)이다. */
-struct Frame {
-    cv::Mat &mat;
-    int width;
-    int height;
-    bool rotated;
-    HudLayout layout;
-
-    // 반올림 없이: 안티앨리어싱 폴리곤이 1/16 px까지 쓴다.
-    cv::Point2f nativef(float x, float y) const
-    {
-        return rotated ? cv::Point2f(height - 1 - y, x) : cv::Point2f(x, y);
-    }
-};
-
-/* 직선(premultiplied 아님) 알파 BGRA 픽셀 위에 color를 커버리지 cov(0..255)로 over
- * 합성한다. OSD 레이어가 직선 알파를 받으므로 색을 알파로 다시 나눠 둔다. */
-inline void blend_pixel(uint32_t &dst, uint32_t color, unsigned cov)
-{
-    const unsigned sa = ((color >> 24) * cov + 127) / 255;
-    if (sa == 0) return;
-    const unsigned dw = (dst >> 24) * (255 - sa) / 255;
-    const unsigned oa = sa + dw;
-    auto channel = [&](int shift) {
-        const unsigned s = (color >> shift) & 0xff;
-        const unsigned d = (dst >> shift) & 0xff;
-        return ((s * sa + d * dw + oa / 2) / oa) << shift;
-    };
-    dst = (oa << 24) | channel(16) | channel(8) | channel(0);
-}
-
-/* 커버리지 마스크를 네이티브 (x0, y0)에 놓고 합성한다(화면 밖은 잘라 낸다). */
-void blit_coverage(cv::Mat &dst, const cv::Mat &coverage, int x0, int y0, uint32_t color)
-{
-    const int c0 = std::max(0, -x0);
-    const int r0 = std::max(0, -y0);
-    const int c1 = std::min(coverage.cols, dst.cols - x0);
-    const int r1 = std::min(coverage.rows, dst.rows - y0);
-    for (int r = r0; r < r1; ++r) {
-        const uint8_t *cov = coverage.ptr<uint8_t>(r);
-        uint32_t *pixels = dst.ptr<uint32_t>(y0 + r) + x0;
-        for (int c = c0; c < c1; ++c)
-            if (cov[c]) blend_pixel(pixels[c], color, cov[c]);
-    }
-}
-
-uint32_t scalar_argb(const cv::Scalar &color)
-{
-    auto u8 = [](double v) { return static_cast<uint8_t>(std::clamp(v, 0.0, 255.0)); };
-    return argb(u8(color[3]), u8(color[2]), u8(color[1]), u8(color[0]));
-}
-
-/* 안티앨리어싱 폴리곤. BGRA에 바로 LINE_AA로 그리면 OpenCV가 알파까지 선형으로 섞어
- * 투명 배경 쪽 가장자리가 검게 번지므로, 경계 상자만 한 8비트 마스크에 커버리지를
- * 그린 뒤 blend_pixel로 합성한다. 꼭짓점은 1/16 px 정밀도(shift 4). */
-void fill_poly_aa(const Frame &frame, const cv::Point2f *points, int count,
-                  const cv::Scalar &color)
-{
-    if (count < 3) return;
-    constexpr int kShift = 4;
-    constexpr float kOne = 1 << kShift;
-    float min_x = points[0].x, max_x = min_x, min_y = points[0].y, max_y = min_y;
-    for (int i = 1; i < count; ++i) {
-        min_x = std::min(min_x, points[i].x);
-        max_x = std::max(max_x, points[i].x);
-        min_y = std::min(min_y, points[i].y);
-        max_y = std::max(max_y, points[i].y);
-    }
-    const cv::Rect box = cv::Rect(cv::Point(static_cast<int>(std::floor(min_x)) - 1,
-                                            static_cast<int>(std::floor(min_y)) - 1),
-                                  cv::Point(static_cast<int>(std::ceil(max_x)) + 2,
-                                            static_cast<int>(std::ceil(max_y)) + 2)) &
-                         cv::Rect(0, 0, frame.mat.cols, frame.mat.rows);
-    if (box.empty()) return;
-    // 상자 밖으로 나가는 꼭짓점도 상대 좌표로 그대로 넘긴다(fillPoly가 자른다).
-    std::vector<cv::Point> fixed(count);
-    for (int i = 0; i < count; ++i)
-        fixed[i] = cv::Point(static_cast<int>(std::lround((points[i].x - box.x) * kOne)),
-                             static_cast<int>(std::lround((points[i].y - box.y) * kOne)));
-    cv::Mat mask = cv::Mat::zeros(box.size(), CV_8UC1);
-    const cv::Point *polygon = fixed.data();
-    cv::fillPoly(mask, &polygon, &count, 1, cv::Scalar(255), cv::LINE_AA, kShift);
-    blit_coverage(frame.mat, mask, box.x, box.y, scalar_argb(color));
-}
-
-struct TrafficSignalSprite {
-    cv::Mat logical;
-    cv::Mat logical_mask;
-    cv::Mat rotated;
-    cv::Mat rotated_mask;
-
-    bool load(const std::string &path)
-    {
-        logical = cv::imread(path, cv::IMREAD_UNCHANGED);
-        if (logical.type() != CV_8UC4 || logical.cols != kTrafficSpriteWidth ||
-            logical.rows != kTrafficSpriteHeight) {
-            logical.release();
-            return false;
-        }
-        cv::extractChannel(logical, logical_mask, 3);
-        cv::rotate(logical, rotated, cv::ROTATE_90_CLOCKWISE);
-        cv::rotate(logical_mask, rotated_mask, cv::ROTATE_90_CLOCKWISE);
-        return true;
-    }
-};
-
-/* 스프라이트가 화면에 다 들어올 때만 그린다. 마스크(α)가 0인 픽셀은 건너뛴다. */
-void blit_traffic_signal(const Frame &frame, const TrafficSignalSprite &sprite,
-                         int logical_x, int logical_y)
-{
-    const cv::Mat &image = frame.rotated ? sprite.rotated : sprite.logical;
-    const cv::Mat &mask = frame.rotated ? sprite.rotated_mask : sprite.logical_mask;
-    const cv::Rect target = frame.rotated
-        ? cv::Rect(frame.height - logical_y - kTrafficSpriteHeight,
-                   logical_x, kTrafficSpriteHeight, kTrafficSpriteWidth)
-        : cv::Rect(logical_x, logical_y, kTrafficSpriteWidth, kTrafficSpriteHeight);
-    if ((target & cv::Rect(0, 0, frame.mat.cols, frame.mat.rows)) != target) return;
-    image.copyTo(frame.mat(target), mask);
-}
-
-} // namespace
-
-struct TrafficSignalSprites {
-    TrafficSignalSprite red;
-    TrafficSignalSprite green;
-};
-
-namespace {
-
 template <typename... Args>
 std::string format_text(const char *format, Args... args)
 {
-    char text[128];
+    char text[96];
     std::snprintf(text, sizeof(text), format, args...);
     return text;
 }
 
-/* ---- 상태 → 색·문구 ---- */
-
-uint32_t status_color(const OverlayHudState &hud)
-{
-    if (hud.steering_fault || hud.panda_faults != 0) return kRed;
-    if (!hud.services_healthy) return kOrange;
-    if (hud.controller_active) return kGreen;
-    return hud.controller_enabled ? kBlue : kDim;
-}
-
-uint32_t control_color(const OverlayHudState &hud)
-{
-    if (hud.steering_fault) return kRed;
-    if (hud.controller_active) return kGreen;
-    return hud.controller_engaged ? kYellow : kDim;
-}
-
-uint32_t system_color(const OverlayHudState &hud)
-{
-    return hud.services_healthy ? kBlue : kOrange;
-}
-
-uint32_t panda_color(const OverlayHudState &hud)
-{
-    if (!hud.panda_connected || !hud.panda_healthy) return kOrange;
-    return hud.panda_faults != 0 ? kRed : kGreen;
-}
-
-uint32_t network_color(const OverlayHudState &hud)
-{
-    if (!hud.network_connected) return kOrange;
-    return hud.wifi_signal_dbm != 0 && hud.wifi_signal_dbm <= kWeakWifiDbm ? kYellow : kGreen;
-}
-
-uint32_t health_color(const OverlayHudState &hud)
-{
-    for (const HealthLevel &level : kHealthLevels) {
-        if (hud.cpu_percent >= level.cpu_percent || hud.cpu_temp_c >= level.temp_c ||
-            hud.storage_percent >= level.storage_percent)
-            return level.color;
-    }
-    return kDim;
-}
-
-uint32_t calibration_color(const OverlayHudState &hud)
-{
-    if (!hud.calibration_available) return kDim;
-    if (hud.calibration_status == 1) return kGreen;
-    return hud.calibration_status == 2 ? kRed : kYellow;
-}
-
-uint32_t lateral_mode_color(const OverlayHudState &hud)
-{
-    if (!hud.lateral_mode_available) return kDim;
-    return hud.laneless_mode ? kBlue : kGreen;
-}
-
-const char *op_status_text(const OverlayHudState &hud)
-{
-    if (hud.controller_active) return "OP ACT";
-    if (hud.controller_engaged) return "OP EN";
-    return hud.controller_enabled ? "OP RDY" : "OP OFF";
-}
-
-const char *calibration_status_text(const OverlayHudState &hud)
-{
-    if (!hud.calibration_available) return "--";
-    if (hud.calibration_status == 1) return "OK";
-    if (hud.calibration_status == 3) return "RECAL";  // 장착 변경을 감지해 다시 모으는 중
-    return hud.calibration_status == 2 ? "BAD" : "WAIT";
-}
-
-const char *lateral_mode_text(const OverlayHudState &hud)
-{
-    if (!hud.lateral_mode_available) return "--";
-    return hud.laneless_mode ? "LANELESS" : "LANE";
-}
-
-const char *gear_text(int gear)
-{
-    switch (gear) {
-    case 0: return "P";
-    case 5: return "D";
-    case 6: return "N";
-    case 7: return "R";
-    case 8: return "S";
-    default: return "--";
-    }
-}
-
-std::string active_block_text(const OverlayHudState &hud)
-{
-    if (hud.controller_active) return "ACTIVE";
-
-    const std::string block = hud.active_block;
-    if (block.empty()) return hud.controller_engaged ? "READY" : "STANDBY";
-    if (const char *label = engage_block_label(block.c_str())) return label;
-
-    std::string fallback = block;
-    std::replace(fallback.begin(), fallback.end(), '_', ' ');
-    return fallback;
-}
-
-std::string network_text(const OverlayHudState &hud)
-{
-    if (!hud.network_connected) return "NET OFFLINE";
-    if (hud.wifi_signal_dbm != 0)
-        return format_text("%s %s %dDBM", hud.network_interface, hud.network_ipv4,
-                           hud.wifi_signal_dbm);
-    return format_text("%s %s", hud.network_interface, hud.network_ipv4);
-}
-
-std::string cruise_text(const OverlayHudState &hud)
-{
-    const bool maximum_valid =
-        std::isfinite(hud.cruise_max_speed_kph) && hud.cruise_max_speed_kph > 0.0f;
-    const bool command_valid =
-        std::isfinite(hud.cruise_command_speed_kph) && hud.cruise_command_speed_kph > 0.0f;
-    if (!maximum_valid || !command_valid) return "MAX --  SET --";
-    return format_text("MAX %.0F SET %.0F", hud.cruise_max_speed_kph,
-                       hud.cruise_command_speed_kph);
-}
-
-/* ---- 리드 ---- */
-
-float display_lead_distance_m(const OverlayHudState &hud,
-                              const ParsedLeadPoint *vision_lead)
-{
-    if (hud.radar_lead_valid && std::isfinite(hud.radar_lead_distance_m) &&
-        hud.radar_lead_distance_m > 0.0f)
-        return hud.radar_lead_distance_m;
-    return vision_lead
-        ? std::max(0.0f, vision_lead->x - kRadarToCameraDistanceM)
-        : 0.0f;
-}
-
-/* LEAD 패널과 장면 마커가 공유한다. */
-struct LeadInfo {
-    bool vision = false;
-    bool radar = false;
-    ParsedLeadPoint point {};
-    float probability = 0.0f;
-    float distance_m = 0.0f;
-    float relative_speed_kph = 0.0f;
-
-    bool any() const { return radar || vision; }
-};
-
-LeadInfo lead_info(const OverlayHudState &hud, const ParsedModelOutput &output)
-{
-    LeadInfo info;
-    info.vision = output.valid &&
-                  output.leads.primary(kLeadTimeIndex, kLeadProbabilityThreshold,
-                                       &info.point, &info.probability);
-    info.radar = hud.radar_lead_valid && std::isfinite(hud.radar_lead_distance_m) &&
-                 hud.radar_lead_distance_m > 0.0f;
-    info.distance_m = display_lead_distance_m(hud, info.vision ? &info.point : nullptr);
-    info.relative_speed_kph = info.radar
-        ? hud.radar_lead_relative_speed_mps * 3.6f
-        : (info.vision ? (info.point.velocity - hud.ego_speed_kph / 3.6f) * 3.6f : 0.0f);
-    return info;
-}
-
-uint32_t lead_color(const LeadInfo &lead)
-{
-    if (!lead.any()) return kDim;
-    return lead.distance_m < kLeadCloseDistanceM || lead.relative_speed_kph < kLeadClosingKph
-        ? kOrange : kBlue;
-}
-
-/* ---- TPMS ---- */
-
-struct TpmsRange {
-    bool bar;
-    float low;
-    float high;
-};
-
-TpmsRange tpms_range(const OverlayHudState &hud)
-{
-    if (hud.tpms_unit == 2) return {true, kTpmsLowBar, kTpmsHighBar};
-    return {false, kTpmsLowPsi, kTpmsHighPsi};
-}
-
-bool pressure_available(const OverlayHudState &hud, float pressure)
-{
-    return hud.tpms_valid && std::isfinite(pressure) && pressure > 0.0f;
-}
-
-uint32_t pressure_color(const OverlayHudState &hud, const TpmsRange &range, float pressure)
-{
-    if (!pressure_available(hud, pressure)) return kDim;
-    if (pressure > range.high) return kRed;
-    if (pressure < range.low) return kYellow;
-    return kGreen;
-}
-
-std::string pressure_text(const OverlayHudState &hud, const TpmsRange &range,
-                          const char *wheel, float pressure)
-{
-    if (!pressure_available(hud, pressure)) return format_text("%s -", wheel);
-    return range.bar ? format_text("%s %.1F", wheel, pressure)
-                     : format_text("%s %.0F", wheel, pressure);
-}
-
-uint32_t tpms_color(const OverlayHudState &hud, const TpmsRange &range)
-{
-    if (!hud.tpms_valid) return kDim;
-    bool low = false;
-    bool high = false;
-    for (float pressure : {hud.tpms_pressure_fl, hud.tpms_pressure_fr,
-                           hud.tpms_pressure_rl, hud.tpms_pressure_rr}) {
-        if (!pressure_available(hud, pressure)) continue;
-        low |= pressure < range.low;
-        high |= pressure > range.high;
-    }
-    if (hud.tpms_warning || high) return kRed;
-    return low ? kYellow : kGreen;
-}
-
-/* ---- 알림 ---- */
-
-struct Alert {
-    std::string title;
-    uint32_t color = kOrange;
-    bool departure = false;
-
-    bool empty() const { return title.empty(); }
-};
-
-/* 우선순위: engage 거부 토스트 > 해제 예고 > 조향 결함 > panda 결함 > 조향 한계 >
- * 서비스 대기 > 출발 감지. */
-Alert select_alert(const OverlayHudState &hud)
-{
-    if (hud.engage_alert_message[0] != '\0') return {hud.engage_alert_message, kOrange, false};
-    if (hud.soft_disabling) {
-        const char *label = engage_block_label(hud.active_block);
-        return {std::string("TAKE CONTROL: ") + (label ? label : "DISENGAGING"), kRed, false};
-    }
-    if (hud.steering_fault) return {"STEERING FAULT", kRed, false};
-    if (hud.panda_faults != 0) return {"PANDA FAULT", kRed, false};
-    if (hud.steer_saturated) return {"TURN EXCEEDS STEER LIMIT", kOrange, false};
-    if (!hud.services_healthy) return {"WAITING FOR SERVICES", kOrange, false};
-    if (hud.departure_alert_type == DepartureAlertType::lead_departed)
-        return {"LEAD VEHICLE MOVING", kGreen, true};
-    if (hud.departure_alert_type == DepartureAlertType::green_light)
-        return {"TRAFFIC SIGNAL CHANGED", kGreen, true};
-    return {};
-}
-
-/* ---- 5x7 글꼴 ---- */
-
-using GlyphRows = std::array<uint8_t, kGlyphH>;
-
-struct Glyph {
-    char c;
-    GlyphRows rows;
-};
-
-constexpr char kGlyphFirst = ' ';
-constexpr char kGlyphLast = '_';
-constexpr int kGlyphCount = kGlyphLast - kGlyphFirst + 1;
-
-/* 행마다 5비트, MSB가 왼쪽. ' '..'_' 밖은 공백. */
-constexpr Glyph kGlyphs[] = {
-    {'0', {0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e}},
-    {'1', {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e}},
-    {'2', {0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f}},
-    {'3', {0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e}},
-    {'4', {0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02}},
-    {'5', {0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e}},
-    {'6', {0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e}},
-    {'7', {0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
-    {'8', {0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e}},
-    {'9', {0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c}},
-    {'A', {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11}},
-    {'B', {0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e}},
-    {'C', {0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e}},
-    {'D', {0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e}},
-    {'E', {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f}},
-    {'F', {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10}},
-    {'G', {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f}},
-    {'H', {0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11}},
-    {'I', {0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e}},
-    {'J', {0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0c}},
-    {'K', {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}},
-    {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f}},
-    {'M', {0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11}},
-    {'N', {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}},
-    {'O', {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e}},
-    {'P', {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10}},
-    {'Q', {0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d}},
-    {'R', {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11}},
-    {'S', {0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e}},
-    {'T', {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
-    {'U', {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e}},
-    {'V', {0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04}},
-    {'W', {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a}},
-    {'X', {0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11}},
-    {'Y', {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04}},
-    {'Z', {0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f}},
-    {'-', {0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00}},
-    {'.', {0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c}},
-    {':', {0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00}},
-    {'/', {0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10}},
-    {'%', {0x19, 0x1a, 0x02, 0x04, 0x08, 0x0b, 0x13}},
-    {'<', {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02}},
-    {'>', {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08}},
-    {'!', {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}},
-    {'?', {0x0e, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04}},
-    {'+', {0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00}},
-    {'=', {0x00, 0x00, 0x1f, 0x00, 0x1f, 0x00, 0x00}},
-    {'_', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f}},
-};
-
-/* 글리프 행의 연속 픽셀 구간. 5비트 행은 최대 3구간, length 0이 끝. */
-struct GlyphRun {
-    uint8_t start = 0;
-    uint8_t length = 0;
-};
-using GlyphRowRuns = std::array<GlyphRun, 3>;
-using GlyphRuns = std::array<GlyphRowRuns, kGlyphH>;
-
-constexpr GlyphRuns glyph_runs_from_rows(const GlyphRows &rows)
-{
-    GlyphRuns runs {};
-    for (int row = 0; row < kGlyphH; ++row) {
-        int count = 0;
-        int col = 0;
-        while (col < kGlyphW) {
-            if (!(rows[row] & (1U << (kGlyphW - 1 - col)))) {
-                ++col;
-                continue;
-            }
-            int end = col + 1;
-            while (end < kGlyphW && (rows[row] & (1U << (kGlyphW - 1 - end)))) ++end;
-            runs[row][count++] = GlyphRun{static_cast<uint8_t>(col),
-                                          static_cast<uint8_t>(end - col)};
-            col = end;
-        }
-    }
-    return runs;
-}
-
-constexpr std::array<GlyphRuns, kGlyphCount> kGlyphRunTable = [] {
-    std::array<GlyphRuns, kGlyphCount> table {};
-    for (const Glyph &glyph : kGlyphs)
-        table[glyph.c - kGlyphFirst] = glyph_runs_from_rows(glyph.rows);
-    return table;
-}();
-
-const GlyphRuns &glyph_runs(char c)
-{
-    static constexpr GlyphRuns blank {};
-    if (c < kGlyphFirst || c > kGlyphLast) return blank;
-    return kGlyphRunTable[c - kGlyphFirst];
-}
-
-/* ---- 비트맵 HUD 그리기 ---- */
-
-class BitmapHud {
-public:
-    explicit BitmapHud(const Frame &frame) : frame_(frame) {}
-
-    int width() const { return frame_.width; }
-    const HudLayout &layout() const { return frame_.layout; }
-    int height() const { return frame_.height; }
-
-    /* 논리 사각형을 네이티브 행 단위로 채운다. */
-    void fill_rect(int x, int y, int w, int h, uint32_t color)
-    {
-        if (w <= 0 || h <= 0) return;
-        const int x0 = std::max(0, x);
-        const int y0 = std::max(0, y);
-        const int x1 = std::min(frame_.width, x + w);
-        const int y1 = std::min(frame_.height, y + h);
-        if (x0 >= x1 || y0 >= y1) return;
-
-        const int native_x0 = frame_.rotated ? frame_.height - y1 : x0;
-        const int native_y0 = frame_.rotated ? x0 : y0;
-        const int native_x1 = frame_.rotated ? frame_.height - y0 : x1;
-        const int native_y1 = frame_.rotated ? x1 : y1;
-        for (int row = native_y0; row < native_y1; ++row) {
-            uint32_t *pixels = frame_.mat.ptr<uint32_t>(row);
-            std::fill(pixels + native_x0, pixels + native_x1, color);
-        }
-    }
-
-    /* 글리프 행의 연속 픽셀 구간(컴파일 타임 표)을 사각형 하나씩 채운다. */
-    void text_left(int x, int y, const std::string &raw_text, int scale,
-                   uint32_t color, int max_width = 0)
-    {
-        if (scale <= 0) return;
-        const std::string text = clip_text(raw_text, scale, max_width);
-        int cursor_x = x;
-        for (char raw : text) {
-            char c = raw;
-            if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-            const GlyphRuns &runs = glyph_runs(c);
-            for (int row = 0; row < kGlyphH; ++row) {
-                for (const GlyphRun &run : runs[row]) {
-                    if (run.length == 0) break;
-                    fill_rect(cursor_x + run.start * scale, y + row * scale,
-                              run.length * scale, scale, color);
-                }
-            }
-            cursor_x += kGlyphAdvance * scale;
-        }
-    }
-
-    void hud_text_left(int x, int y, const std::string &text, int scale,
-                       uint32_t color, int max_width = 0)
-    {
-        text_left(x + kShadowOffset, y + kShadowOffset, text, scale, kShadow, max_width);
-        text_left(x, y, text, scale, color, max_width);
-    }
-
-    void hud_text_center(int center_x, int y, const std::string &raw_text, int scale,
-                         uint32_t color, int max_width = 0)
-    {
-        const std::string text = clip_text(raw_text, scale, max_width);
-        const int x = center_x - text_width(text, scale) / 2;
-        text_left(x + kShadowOffset, y + kShadowOffset, text, scale, kShadow);
-        text_left(x, y, text, scale, color);
-    }
-
-    /* 반투명 상자: 밝은 테두리와 왼쪽 강조 띠. */
-    void box(int x, int y, int w, int h, uint32_t accent)
-    {
-        fill_rect(x, y, w, h, kPanelFill);
-        fill_rect(x, y, w, 1, kPanelEdgeTop);
-        fill_rect(x, y + h - 1, w, 1, kPanelEdgeBottom);
-        fill_rect(x, y, 1, h, kPanelEdgeLeft);
-        fill_rect(x + w - 1, y, 1, h, kPanelEdgeRight);
-        fill_rect(x, y, kPanelAccentW, h, accent);
-    }
-
-    /* 격자 패널 한 칸: 제목줄과 그 아래 구분선. */
-    void titled_panel(int x, int y, uint32_t accent, const char *title)
-    {
-        box(x, y, frame_.layout.box_w, kPanelH, accent);
-        fill_rect(x + kPanelRuleInset, y + kPanelRuleY, frame_.layout.box_w - 2 * kPanelRuleInset, 1, kPanelRule);
-        hud_text_left(x + kBoxPadding, y + kPanelTitleY, title, 1, kDim, frame_.layout.col_w());
-    }
-
-    /* 제목줄 오른쪽 끝의 작은 배지. */
-    void title_badge(int box_x, int y, const std::string &text, uint32_t color)
-    {
-        hud_text_center(box_x + frame_.layout.box_w - kBadgeCenterInset, y + kPanelTitleY, text, 1, color,
-                        kBadgeMaxW);
-    }
-
-    void separator(int x, int y, int h)
-    {
-        fill_rect(x, y, 1, h, kSeparator);
-    }
-
-    /* 열 제목(scale 1) 위 값(scale 2)을 columns 열로. 값이 칸보다 넓으면 끝을 잘라
-     * 틀린 숫자를 보이지 않도록 scale 1로 줄여 전부 그린다. */
-    void metric_columns(int box_x, int y, const char *const *labels,
-                        const std::string *values, int columns, uint32_t color)
-    {
-        const int column_w = frame_.layout.metric_inner_w() / columns;
-        const int max_width = column_w - frame_.layout.metric_text_margin;
-        for (int column = 1; column < columns; ++column)
-            separator(box_x + kMetricInnerMargin + column * column_w, y + kPanelRow1Y,
-                      kMetricSeparatorH);
-        for (int col = 0; col < columns; ++col) {
-            const int center_x = box_x + kMetricInnerMargin +
-                                 col * column_w + column_w / 2;
-            hud_text_center(center_x, y + kPanelRow1Y, labels[col], 1, kDim, max_width);
-            if (text_width(values[col], 2) <= max_width)
-                hud_text_center(center_x, y + kMetricValueY, values[col], 2, color, max_width);
-            else
-                hud_text_center(center_x, y + kMetricValueY + kGlyphH / 2, values[col], 1, color,
-                                max_width);
-        }
-    }
-
-private:
-    static int text_width(const std::string &text, int scale)
-    {
-        return text.empty()
-            ? 0 : static_cast<int>(text.size()) * kGlyphAdvance * scale - scale;
-    }
-
-    static std::string clip_text(const std::string &text, int scale, int max_width)
-    {
-        if (max_width <= 0 || text_width(text, scale) <= max_width) return text;
-        std::string clipped = text;
-        while (!clipped.empty() && text_width(clipped, scale) > max_width)
-            clipped.pop_back();
-        return clipped;
-    }
-
-    const Frame &frame_;
-};
-
-int right_box_x(const BitmapHud &ui)
-{
-    return ui.width() - ui.layout().box_w - kBoxMargin;
-}
-
-/* ---- 패널 ---- */
-
-void draw_status_bar(BitmapHud &ui, const OverlayHudState &hud)
-{
-    ui.fill_rect(0, 0, ui.width(), kStatusBarH, status_color(hud));
-}
-
-void draw_speed(BitmapHud &ui, const OverlayHudState &hud)
-{
-    ui.hud_text_center(ui.width() / 2, kSpeedY,
-                       format_text("%.0F", std::max(0.0f, hud.cluster_speed_kph)),
-                       kSpeedScale, kWhite, kSpeedMaxW);
-    ui.hud_text_center(ui.width() / 2, kSpeedUnitY, "KPH", 2, kDim);
-}
-
-void draw_openpilot_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const int x = kLeftBoxX + kBoxPadding;
-    ui.titled_panel(kLeftBoxX, kPanelY0, status_color(hud), "OPENPILOT");
-    ui.hud_text_left(x, kPanelY0 + kPanelRow1Y, op_status_text(hud), 3, control_color(hud));
-    ui.hud_text_left(x, kPanelY0 + kPanelLine3Y,
-                     format_text("PANDA %s  CAR %s",
-                                 hud.panda_connected && hud.panda_healthy ? "OK" : "--",
-                                 hud.vehicle_fresh ? "OK" : "--"),
-                     1, panda_color(hud));
-}
-
-void draw_control_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const uint32_t color = control_color(hud);
-    ui.titled_panel(kLeftBoxX, kPanelY1, color, "CONTROL");
-    const char *labels[] = {"ANGLE", "DES", "APPLY", "DRIVER"};
-    const std::string values[] = {
-        format_text("%.0F", hud.steering_angle_deg),
-        format_text("%d", hud.desired_torque),
-        format_text("%d", hud.apply_torque),
-        format_text("%d", hud.driver_torque),
-    };
-    ui.metric_columns(kLeftBoxX, kPanelY1, labels, values, 4, color);
-}
-
-void draw_system_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const int box_x = right_box_x(ui);
-    const int x = box_x + kBoxPadding;
-    ui.titled_panel(box_x, kPanelY0, system_color(hud), "SYSTEM");
-    ui.hud_text_left(x, kPanelY0 + kPanelRow1Y,
-                     format_text("AI %.1F FPS  CAM %.1F FPS", hud.model_fps, hud.preview_fps),
-                     1, kDim, ui.layout().col_w());
-    ui.hud_text_left(x, kPanelY0 + kPanelLine2Y,
-                     format_text("HUD %.1F FPS", hud.overlay_fps), 1, kDim);
-    ui.hud_text_left(x, kPanelY0 + kPanelLine3Y, network_text(hud), 1, network_color(hud), ui.layout().col_w());
-}
-
-void draw_health_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const uint32_t color = health_color(hud);
-    const int box_x = right_box_x(ui);
-    ui.titled_panel(box_x, kPanelY1, color, "HEALTH");
-    const char *labels[] = {"CPU", "TEMP", "MEM", "DISK"};
-    const std::string values[] = {
-        format_text("%.0F%%", hud.cpu_percent),
-        format_text("%.0FC", hud.cpu_temp_c),
-        format_text("%.0F%%", hud.memory_percent),
-        format_text("%.0F%%", hud.storage_percent),
-    };
-    ui.metric_columns(box_x, kPanelY1, labels, values, 4, color);
-}
-
-void draw_calibration_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const uint32_t color = calibration_color(hud);
-    const int box_x = right_box_x(ui);
-    ui.titled_panel(box_x, kPanelY2, color, "CALIBRATION");
-    ui.title_badge(box_x, kPanelY2,
-                   format_text("%s B%d", calibration_status_text(hud),
-                               std::max(0, hud.calibration_valid_blocks)),
-                   color);
-    const char *labels[] = {"ROLL", "PITCH", "YAW"};
-    const std::string values[] = {
-        format_text("%.2F", hud.calibration_roll_deg),
-        format_text("%.2F", hud.calibration_pitch_deg),
-        format_text("%.2F", hud.calibration_yaw_deg),
-    };
-    ui.metric_columns(box_x, kPanelY2, labels, values, 3, color);
-}
-
-void draw_drive_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const uint32_t color = control_color(hud);
-    const int x = kLeftBoxX + kBoxPadding;
-    ui.titled_panel(kLeftBoxX, kPanelY2, color, "DRIVE");
-    ui.title_badge(kLeftBoxX, kPanelY2, lateral_mode_text(hud), lateral_mode_color(hud));
-    ui.hud_text_left(x, kPanelY2 + kPanelRow1Y, cruise_text(hud), 2, color, ui.layout().col_w());
-    ui.hud_text_left(x, kPanelY2 + kPanelRow2Y,
-                     format_text("GEAR %s CRZ %s %s", gear_text(hud.gear),
-                                 hud.cruise_active ? "ON" : "OFF",
-                                 active_block_text(hud).c_str()),
-                     1, color, ui.layout().col_w());
-}
-
-void draw_lead_panel(BitmapHud &ui, const LeadInfo &lead)
-{
-    const uint32_t color = lead_color(lead);
-    const int box_x = right_box_x(ui);
-    const int x = box_x + kBoxPadding;
-    ui.titled_panel(box_x, kPanelY3, color, "LEAD");
-    if (lead.any()) {
-        ui.hud_text_left(x, kPanelY3 + kPanelRow1Y,
-                         format_text("DIST %.0FM P %.0F%%", lead.distance_m,
-                                     lead.vision ? lead.probability * 100.0f : 0.0f),
-                         2, color, ui.layout().col_w());
-        ui.hud_text_left(x, kPanelY3 + kPanelRow2Y,
-                         format_text("REL %+.0F KPH", lead.relative_speed_kph), 2, color, ui.layout().col_w());
-    } else {
-        ui.hud_text_left(x, kPanelY3 + kPanelRow1Y, "NO LEAD", 2, kDim);
-        ui.hud_text_left(x, kPanelY3 + kPanelRow2Y, "REL -- KPH", 2, kDim);
-    }
-}
-
-void draw_auto_hold(BitmapHud &ui, const OverlayHudState &hud)
-{
-    if (!hud.brake_hold) return;
-    const int center_x = ui.layout().auto_hold_center_x ? ui.layout().auto_hold_center_x : ui.width() / 2;
-    ui.box(center_x - kAutoHoldW / 2, kAutoHoldY, kAutoHoldW, kAutoHoldH, kGreen);
-    ui.hud_text_center(center_x, kAutoHoldY + kAutoHoldTextY, "AUTO HOLD", 3, kGreen);
-}
-
-void draw_tpms_panel(BitmapHud &ui, const OverlayHudState &hud)
-{
-    const TpmsRange range = tpms_range(hud);
-    const uint32_t color = tpms_color(hud, range);
-    const int x = kLeftBoxX + kBoxPadding;
-    ui.titled_panel(kLeftBoxX, kPanelY3, color, "TPMS");
-    ui.title_badge(kLeftBoxX, kPanelY3, range.bar ? "BAR" : "PSI", color);
-    ui.separator(kLeftBoxX + kMetricInnerMargin + ui.layout().metric_inner_w() / 2, kPanelY3 + kPanelRow1Y,
-                 kMetricSeparatorH);
-
-    struct Wheel {
-        const char *name;
-        float pressure;
-        int column_x;
-        int row_y;
-    };
-    const Wheel wheels[] = {
-        {"FL", hud.tpms_pressure_fl, x, kPanelY3 + kPanelRow1Y},
-        {"FR", hud.tpms_pressure_fr, x + ui.layout().tpms_column_offset, kPanelY3 + kPanelRow1Y},
-        {"RL", hud.tpms_pressure_rl, x, kPanelY3 + kPanelRow2Y},
-        {"RR", hud.tpms_pressure_rr, x + ui.layout().tpms_column_offset, kPanelY3 + kPanelRow2Y},
-    };
-    for (const Wheel &wheel : wheels) {
-        ui.hud_text_left(wheel.column_x, wheel.row_y,
-                         pressure_text(hud, range, wheel.name, wheel.pressure), 2,
-                         pressure_color(hud, range, wheel.pressure), ui.layout().tpms_column_w);
-    }
-}
-
-uint32_t lerp_color(uint32_t a, uint32_t b, float t)
+uint32_t mix(uint32_t a, uint32_t b, float t)
 {
     t = std::clamp(t, 0.0f, 1.0f);
     uint32_t out = 0;
@@ -1003,376 +107,615 @@ uint32_t lerp_color(uint32_t a, uint32_t b, float t)
     return out;
 }
 
-/* openpilot mici UI의 토크 바(selfdrive/ui/mici/onroad/torque_bar.py): 가운데에서 조향
- * 방향으로 보낸 토크 / 최대 토크만큼 찬다. 75%를 넘으면 흰색에서 노랑·주황으로 바뀐다.
- * engage 중에만 그리고, 조향을 쉬는 동안(active 아님)은 흐린 바탕만 보인다. */
-void draw_torque_bar(BitmapHud &ui, const OverlayHudState &hud)
+// 줄 배치 기준 글리프: 대문자 H, 숫자만 있는 글꼴은 0.
+const HudGlyph &cap_glyph(const HudFont &font)
 {
-    if (!hud.controller_engaged) return;
-    const int w = ui.width() <= 640 ? kTorqueBarCompactW : kTorqueBarW;
-    const int cx = ui.width() / 2;
-    const int x0 = cx - w / 2;
-    const int y = ui.height() - kTorqueBarBottomMargin - kTorqueBarH;
-    const float fraction = hud.controller_active ? hud.steer_torque_fraction : 0.0f;
-    const float magnitude = std::fabs(fraction);
-    // 밝은 노면에서도 보이게 짙은 테두리를 두르고 바탕을 회색으로 채운다.
-    const uint32_t track = hud.controller_active
-        ? lerp_color(argb(150, 120, 128, 136), argb(190, 150, 158, 166), (magnitude - 0.5f) * 2.0f)
-        : argb(110, 90, 96, 102);
-    ui.fill_rect(x0 - kTorqueBarOutline, y - kTorqueBarOutline, w + 2 * kTorqueBarOutline,
-                 kTorqueBarH + 2 * kTorqueBarOutline, argb(210, 0, 0, 0));
-    ui.fill_rect(x0, y, w, kTorqueBarH, track);
-    const int length = static_cast<int>(std::lround(magnitude * static_cast<float>(w / 2)));
-    if (length > 0) {
-        const float heat = (magnitude - 0.75f) * 4.0f;  // 0.75 → 1.0에서 0 → 1
-        const uint32_t white = argb(255, 255, 255, 255);
-        const uint32_t yellow = argb(255, 255, 205, 0);
-        const uint32_t orange = argb(255, 255, 110, 0);
-        const uint32_t color = heat < 0.5f ? lerp_color(white, yellow, heat * 2.0f)
-                                           : lerp_color(yellow, orange, heat * 2.0f - 1.0f);
-        // 양수(왼쪽 조향)는 가운데에서 왼쪽으로 찬다.
-        ui.fill_rect(fraction > 0.0f ? cx - length : cx, y, length, kTorqueBarH, color);
+    const HudGlyph *cap = font.glyph('H');
+    return cap && cap->h ? *cap : *font.glyph('0');
+}
+
+// 대문자 윗선을 cap_top에 두는 줄 위 y.
+int cap_line(const HudFont &font, int cap_top) { return cap_top - cap_glyph(font).top; }
+
+// 대문자 아랫선(기준선)을 baseline에 두는 줄 위 y. 크기가 다른 글꼴을 한 줄에 맞출 때 쓴다.
+int base_line(const HudFont &font, int baseline)
+{
+    return cap_line(font, baseline - cap_glyph(font).h);
+}
+
+// 대문자 높이를 box_h 안 가운데에 두는 줄 위 y.
+int centered_line_top(const HudFont &font, int box_y, int box_h)
+{
+    return cap_line(font, box_y + (box_h - cap_glyph(font).h) / 2);
+}
+
+// ---- 상태 → 색·문구 ----
+
+// 화면 테두리와 모드 점의 색. 결합 전이면 0(테두리 없음).
+uint32_t state_color(const OverlayHudState &hud)
+{
+    if (hud.steering_fault || hud.panda_faults != 0 || hud.soft_disabling) return kRed;
+    if (!hud.services_healthy) return kAmber;
+    if (hud.controller_active) return hud.laneless_mode ? kBlue : kGreen;
+    return hud.controller_engaged ? kGray : 0;
+}
+
+std::string mode_text(const OverlayHudState &hud)
+{
+    if (hud.controller_active)
+        return hud.lateral_mode_available && hud.laneless_mode ? "LANELESS" : "LANE";
+    if (!hud.controller_engaged) return hud.controller_enabled ? "READY" : "OFF";
+    if (hud.active_block[0] == '\0') return "READY";
+    if (const char *label = engage_block_label(hud.active_block)) return label;
+    std::string fallback = hud.active_block;
+    std::replace(fallback.begin(), fallback.end(), '_', ' ');
+    return fallback;
+}
+
+const char *gear_text(int gear)
+{
+    switch (gear) {
+    case 0: return "P";
+    case 5: return "D";
+    case 6: return "N";
+    case 7: return "R";
+    case 8: return "S";
+    default: return "-";
     }
-    const int mid_y = y + kTorqueBarH / 2;
-    for (int end_x : {x0 - kTorqueBarOutline, x0 + w}) {
-        ui.fill_rect(end_x - 1, mid_y - kTorqueBarEndTickH / 2 - 1, kTorqueBarOutline + 2,
-                     kTorqueBarEndTickH + 2, argb(210, 0, 0, 0));
-        ui.fill_rect(end_x, mid_y - kTorqueBarEndTickH / 2, kTorqueBarOutline, kTorqueBarEndTickH, kWhite);
+}
+
+bool speed_valid(float kph) { return std::isfinite(kph) && kph > 0.0f; }
+
+// ---- 앞차 ----
+
+struct LeadInfo {
+    bool vision = false;
+    bool radar = false;
+    ParsedLeadPoint point{};
+    float probability = 0.0f;
+    float distance_m = 0.0f;
+    float relative_speed_kph = 0.0f;
+
+    bool any() const { return radar || vision; }
+};
+
+LeadInfo lead_info(const OverlayHudState &hud, const ParsedModelOutput &output)
+{
+    LeadInfo info;
+    info.vision = output.valid && output.leads.primary(kLeadTimeIndex, kLeadProbabilityThreshold,
+                                                       &info.point, &info.probability);
+    info.radar = hud.radar_lead_valid && std::isfinite(hud.radar_lead_distance_m) &&
+                 hud.radar_lead_distance_m > 0.0f;
+    if (info.radar) {
+        info.distance_m = hud.radar_lead_distance_m;
+        info.relative_speed_kph = hud.radar_lead_relative_speed_mps * 3.6f;
+    } else if (info.vision) {
+        info.distance_m = std::max(0.0f, info.point.x - kRadarToCameraDistanceM);
+        info.relative_speed_kph = (info.point.velocity - hud.ego_speed_kph / 3.6f) * 3.6f;
     }
-    ui.fill_rect(cx - 3, mid_y - kTorqueBarTickH / 2 - 1, 6, kTorqueBarTickH + 2, argb(210, 0, 0, 0));
-    ui.fill_rect(cx - 2, mid_y - kTorqueBarTickH / 2, 4, kTorqueBarTickH, argb(255, 255, 255, 255));
+    return info;
 }
 
-void draw_alert(BitmapHud &ui, const OverlayHudState &hud, const ParsedModelOutput &output)
+// 가깝거나 빠르게 다가올수록 1
+float lead_risk(const LeadInfo &lead)
 {
-    const Alert alert = select_alert(hud);
-    if (alert.empty()) return;
-
-    const int alert_x = (ui.width() - kAlertW) / 2;
-    const int alert_y = ui.height() - kAlertBottomMargin;
-    ui.box(alert_x, alert_y, kAlertW, kAlertH, alert.color);
-    ui.hud_text_center(ui.width() / 2, alert_y + kAlertTitleY, alert.title, 3, alert.color,
-                       kAlertW - kBoxTextInset);
-    ui.hud_text_center(ui.width() / 2, alert_y + kAlertDetailY,
-                       alert.departure
-                           ? "CHECK ROAD AND PROCEED"
-                           : format_text("M%s CTL%s PND%s",
-                                         output.valid ? "OK" : "--",
-                                         hud.vehicle_fresh ? "OK" : "--",
-                                         hud.panda_connected ? "OK" : "--"),
-                       1, kWhite, kAlertW - kBoxTextInset);
+    const float distance = 1.0f - lead.distance_m / kLeadRiskDistanceM;
+    const float closing = -lead.relative_speed_kph / 3.6f / kLeadRiskClosingMps;
+    return std::clamp(std::clamp(distance, 0.0f, 1.0f) + std::clamp(closing, 0.0f, 1.0f), 0.0f, 1.0f);
 }
 
-void draw_traffic_signal(const Frame &frame, const OverlayHudState &hud,
-                         const TrafficSignalSprites *sprites)
+std::string lead_text(const LeadInfo &lead)
 {
-    const bool green = hud.departure_alert_type == DepartureAlertType::green_light;
-    const bool red = hud.green_light_alert_armed;
-    if ((!green && !red) || sprites == nullptr) return;
-
-    const int center_x = frame.width - kSignalRightOffset;
-    blit_traffic_signal(frame, green ? sprites->green : sprites->red,
-                        center_x - kSignalHousingCenterX, kSignalCenterY - kSignalHousingCenterY);
+    if (lead.relative_speed_kph <= kLeadClosingLabelKph)
+        return format_text("%.0f m  %.0f km/h", lead.distance_m, lead.relative_speed_kph);
+    return format_text("%.0f m", lead.distance_m);
 }
 
-/* 덮어쓰기 순서: 신호등 스프라이트는 LEAD 패널 위에, 알림 상자는 그 위에. */
-void draw_hud(const Frame &frame, const OverlayHudState &hud,
-              const ParsedModelOutput &output, const LeadInfo &lead,
-              const TrafficSignalSprites *sprites)
+// ---- TPMS ----
+
+// 공기압 하나의 색: 낮으면 주황, 높으면 빨강, 값이 없으면 0.
+uint32_t tire_color(float pressure, bool bar)
 {
-    BitmapHud ui(frame);
-    draw_status_bar(ui, hud);
-    draw_speed(ui, hud);
-    draw_openpilot_panel(ui, hud);
-    draw_control_panel(ui, hud);
-    draw_system_panel(ui, hud);
-    draw_health_panel(ui, hud);
-    draw_calibration_panel(ui, hud);
-    draw_drive_panel(ui, hud);
-    draw_lead_panel(ui, lead);
-    draw_traffic_signal(frame, hud, sprites);
-    draw_auto_hold(ui, hud);
-    draw_tpms_panel(ui, hud);
-    draw_torque_bar(ui, hud);
-    draw_alert(ui, hud, output);
+    if (!std::isfinite(pressure) || pressure <= 0.0f) return 0;
+    if (pressure > (bar ? kTpmsHighBar : kTpmsHighPsi)) return kRed;
+    return pressure < (bar ? kTpmsLowBar : kTpmsLowPsi) ? kAmber : kText;
 }
 
-/* ---- 장면(모델 출력) ---- */
+// ---- 알림: 우선순위는 engage 거부 > 해제 예고 > 조향 결함 > panda 결함 > 조향 한계 >
+// 서비스 대기 > 출발 감지 ----
 
-/* 모델 좌표는 180° 뒤집힌 화면 기준이라 투영 후 뒤집는다. 논리 좌표를 돌려준다. */
-std::optional<cv::Point> project_display_point(const Frame &frame,
-                                               const ProjectionState &projection,
-                                               float x, float y, float z)
+struct Alert {
+    std::string title;
+    std::string detail;
+    uint32_t color = 0;
+
+    bool empty() const { return title.empty(); }
+};
+
+Alert select_alert(const OverlayHudState &hud, bool model_ok)
+{
+    const std::string links = format_text("MODEL %s    CONTROL %s    PANDA %s", model_ok ? "OK" : "--",
+                                          hud.vehicle_fresh ? "OK" : "--",
+                                          hud.panda_connected ? "OK" : "--");
+    if (hud.engage_reject_label[0] != '\0') return {"UNABLE TO ENGAGE", hud.engage_reject_label, kAmber};
+    if (hud.soft_disabling) {
+        const char *label = engage_block_label(hud.active_block);
+        return {"TAKE CONTROL", label ? label : "Disengaging", kRed};
+    }
+    if (hud.steering_fault) return {"STEERING FAULT", links, kRed};
+    if (hud.panda_faults != 0) return {"PANDA FAULT", links, kRed};
+    if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", kAmber};
+    if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, kAmber};
+    if (hud.departure_alert_type == DepartureAlertType::lead_departed)
+        return {"LEAD VEHICLE MOVING", "Check the road and proceed", kGreen};
+    if (hud.departure_alert_type == DepartureAlertType::green_light)
+        return {"GREEN LIGHT", "Check the road and proceed", kGreen};
+    return {};
+}
+
+// ---- 공통 부품 ----
+
+// 둥근 칩: 색 점(선택)과 글. x는 align 기준점. 그린 폭을 돌려준다.
+int chip(OverlayCanvas &canvas, int x, int y, const std::string &text, uint32_t dot,
+         HudAlign align = HudAlign::left, uint32_t fill = kCard)
+{
+    const int dot_w = dot ? kDot + 6 : 0;
+    const int w = 2 * kChipPadX + dot_w + kHudBodyFont.width(text);
+    const int left = align == HudAlign::right ? x - w : align == HudAlign::center ? x - w / 2 : x;
+    canvas.fill_round_rect(left, y, w, kChipH, kChipH / 2.0f, fill);
+    if (dot) canvas.fill_round_rect(left + kChipPadX, y + (kChipH - kDot) / 2, kDot, kDot, kDot / 2.0f, dot);
+    canvas.text(left + kChipPadX + dot_w, centered_line_top(kHudBodyFont, y, kChipH), text, kHudBodyFont, kText);
+    return w;
+}
+
+// ---- 장면(모델 출력) ----
+
+/* 모델 좌표는 180° 뒤집힌 화면 기준이라 투영한 뒤 뒤집는다. */
+std::optional<HudPoint> project(const OverlayCanvas &canvas, const ProjectionState &projection,
+                                float x, float y, float z)
 {
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return std::nullopt;
-    int px = 0;
-    int py = 0;
-    if (!project_point(projection, x, y, z, frame.width, frame.height, &px, &py))
+    float px = 0.0f, py = 0.0f;
+    if (!project_point_subpixel(projection, x, y, z, canvas.width(), canvas.height(), &px, &py))
         return std::nullopt;
-    return cv::Point(frame.width - 1 - px, frame.height - 1 - py);
+    return HudPoint{static_cast<float>(canvas.width() - 1) - px, static_cast<float>(canvas.height() - 1) - py};
 }
 
-double quad_area(const cv::Point &a, const cv::Point &b, const cv::Point &c, const cv::Point &d)
+/* 궤적 양쪽을 투영한 띠를 가까운 쪽 알파에서 먼 쪽으로 흐리게 칠한다. 접히거나(감기는 방향이
+ * 바뀜) 뒤로 가는 구간에서 멈춘다. */
+void draw_ribbon(OverlayCanvas &canvas, const std::array<ModelPoint, kTrajectorySize> &points,
+                 float half_width, float z_offset, float max_distance, uint32_t color,
+                 const ProjectionState &projection)
 {
-    const cv::Point quad[] = {a, b, c, d};
-    double area = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        const cv::Point &p = quad[i];
-        const cv::Point &q = quad[(i + 1) % 4];
-        area += static_cast<double>(p.x) * q.y - static_cast<double>(q.x) * p.y;
-    }
-    return area * 0.5;
-}
-
-/* 궤적 양쪽을 투영해 띠 다각형으로 채운다. 접히거나 뒤로 가는 구간에서 멈춘다. */
-void draw_model_ribbon(const Frame &frame,
-                       const std::array<ModelPoint, kTrajectorySize> &points,
-                       float half_width, float z_offset, float max_distance,
-                       const cv::Scalar &color, const ProjectionState &projection)
-{
-    struct ProjectedPair {
-        cv::Point left;
-        cv::Point right;
-    };
-
-    std::vector<ProjectedPair> pairs;
-    pairs.reserve(kTrajectorySize);
-    float previous_x = -1.0f;
-    double polygon_winding = 0.0;
-
+    HudPoint left[kTrajectorySize], right[kTrajectorySize];
+    int n = 0;
+    float previous_x = -1.0f, winding = 0.0f;
     for (const ModelPoint &point : points) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-            !std::isfinite(point.z)) {
-            if (!pairs.empty()) break;
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+            if (n) break;
             continue;
         }
         if (point.x > max_distance) break;
         if (point.x < 0.5f) continue;
-        if (!pairs.empty() && point.x <= previous_x) break;
-
-        const auto left = project_display_point(frame, projection, point.x,
-                                                point.y - half_width, point.z + z_offset);
-        const auto right = project_display_point(frame, projection, point.x,
-                                                 point.y + half_width, point.z + z_offset);
-        if (!left || !right) {
-            if (!pairs.empty()) break;
+        if (n && point.x <= previous_x) break;
+        const auto l = project(canvas, projection, point.x, point.y - half_width, point.z + z_offset);
+        const auto r = project(canvas, projection, point.x, point.y + half_width, point.z + z_offset);
+        if (!l || !r) {
+            if (n) break;
             continue;
         }
-
-        if (!pairs.empty()) {
-            const ProjectedPair &previous = pairs.back();
-            const double area = quad_area(previous.left, *left, *right, previous.right);
-            if (std::abs(area) < 0.5 ||
-                (polygon_winding != 0.0 && area * polygon_winding <= 0.0)) {
-                break;
-            }
-            if (polygon_winding == 0.0) polygon_winding = area;
+        if (n) {
+            // 사각형 (이전 왼쪽, 지금 왼쪽, 지금 오른쪽, 이전 오른쪽)의 부호 넓이
+            const HudPoint quad[] = {left[n - 1], *l, *r, right[n - 1]};
+            float area = 0.0f;
+            for (int i = 0; i < 4; ++i)
+                area += quad[i].x * quad[(i + 1) % 4].y - quad[(i + 1) % 4].x * quad[i].y;
+            if (std::fabs(area) < 1.0f || (winding != 0.0f && area * winding <= 0.0f)) break;
+            if (winding == 0.0f) winding = area;
         }
-
-        pairs.push_back({*left, *right});
+        left[n] = *l;
+        right[n] = *r;
         previous_x = point.x;
+        ++n;
     }
+    if (n < 2) return;
 
-    if (pairs.size() < 2) return;
-
-    std::vector<cv::Point2f> vertices;
-    vertices.reserve(pairs.size() * 2);
-    for (const ProjectedPair &pair : pairs) vertices.push_back(frame.nativef(pair.left.x, pair.left.y));
-    for (auto it = pairs.rbegin(); it != pairs.rend(); ++it)
-        vertices.push_back(frame.nativef(it->right.x, it->right.y));
-    fill_poly_aa(frame, vertices.data(), static_cast<int>(vertices.size()), color);
+    HudPoint polygon[2 * kTrajectorySize];
+    for (int i = 0; i < n; ++i) {
+        polygon[i] = left[i];
+        polygon[2 * n - 1 - i] = right[i];
+    }
+    const float near_y = std::max(left[0].y, right[0].y);
+    const float far_y = std::min(left[n - 1].y, right[n - 1].y);
+    canvas.fill_polygon_faded(polygon, 2 * n, color, near_y, far_y, kFarAlpha);
 }
 
-cv::Scalar openpilot_path_color(const OverlayHudState &hud)
+uint32_t path_color(const OverlayHudState &hud)
 {
-    if (!hud.controller_engaged)
-        return bgra(255, 255, 255, 150);
-    if (!hud.controller_active)
-        return bgra(0, 210, 255, 160);
-
-    const float output_scale = std::clamp(std::abs(hud.normalized_output) * 0.9f,
-                                          0.0f, 1.0f);
-    const int red = static_cast<int>(output_scale * 255.0f);
-    const int green = static_cast<int>((1.0f - output_scale) * 255.0f);
-    if (hud.laneless_mode)
-        return bgra(green, 150, red, 160);
-    return bgra(0, green, red, 160);
+    if (!hud.controller_engaged) return hud_argb(120, 255, 255, 255);
+    if (!hud.controller_active) return hud_fade(kGray, 0.65f);
+    // 출력이 한계에 가까워지면 주황으로 기운다.
+    const float strain = (std::fabs(hud.normalized_output) - 0.7f) / 0.3f;
+    return hud_fade(mix(hud.laneless_mode ? kBlue : kGreen, kAmber, strain), 0.75f);
 }
 
-cv::Scalar openpilot_lane_color(float probability)
+void draw_lead_marker(OverlayCanvas &canvas, const LeadInfo &lead, const ProjectionState &projection)
 {
-    float red = 255.0f;
-    float green = 255.0f;
-    if (probability > 0.4f)
-        red = (1.0f - (probability - 0.4f) * 2.5f) * 255.0f;
-    else
-        green = (1.0f - (0.4f - probability) * 2.5f) * 255.0f;
+    const auto at = project(canvas, projection, lead.point.x, lead.point.y, kModelHeight);
+    if (!at) return;
+    const float size = std::clamp(15.0f - lead.distance_m * 0.06f, 8.0f, 15.0f);
+    const float cx = std::clamp(at->x, size + 6.0f, static_cast<float>(canvas.width()) - size - 6.0f);
+    const float cy = std::clamp(at->y + size, size + 6.0f, static_cast<float>(canvas.height()) - size - 30.0f);
+    const float risk = lead_risk(lead);
+    const uint32_t fill = risk > 0.75f ? kRed : mix(kText, kAmber, risk / 0.75f);
 
-    return bgra(0,
-                static_cast<int>(std::clamp(green, 0.0f, 255.0f)),
-                static_cast<int>(std::clamp(red, 0.0f, 255.0f)),
-                static_cast<int>(std::clamp(probability, 0.0f, 1.0f) * 230.0f));
-}
-
-cv::Scalar road_edge_color(float confidence)
-{
-    return bgra(60, 60, 255, static_cast<int>(confidence * 200.0f));
-}
-
-/* 리드 위치에 세 겹 삼각형: 그림자, 테두리, 위험도에 따라 초록→빨강인 안쪽. */
-void draw_lead_marker(const Frame &frame, const LeadInfo &lead, const OverlayHudState &hud,
-                      const ProjectionState &projection)
-{
-    const auto projected = project_display_point(frame, projection, lead.point.x,
-                                                 lead.point.y, kModelHeight);
-    if (!projected) return;
-
-    const int size = std::clamp(
-        static_cast<int>(kLeadMarkerSizeBase - lead.distance_m * kLeadMarkerSizePerMeter),
-        kLeadMarkerSizeMin, kLeadMarkerSizeMax);
-    const int outer_half_width = size * 5 / 4;
-    const int cx = std::clamp(projected->x, outer_half_width + 4,
-                              frame.width - outer_half_width - 4);
-    const int cy = std::clamp(projected->y + size + kLeadMarkerOffsetY, size + 4,
-                              frame.height - size - 4);
-
-    const float relative_speed_mps = lead.point.velocity - hud.ego_speed_kph / 3.6f;
-    const float distance_risk = std::clamp(1.0f - lead.distance_m / kLeadRiskDistanceM, 0.0f, 1.0f);
-    const float closing_risk = std::clamp(-relative_speed_mps / kLeadRiskClosingMps, 0.0f, 1.0f);
-    const float risk = std::clamp(distance_risk + closing_risk, 0.0f, 1.0f);
-    const int confidence_alpha = static_cast<int>(
-        170.0f + 85.0f * std::clamp(lead.probability, 0.0f, 1.0f));
-    const int inner_green = static_cast<int>(165.0f - 125.0f * risk);
-
-    auto fill_triangle = [&](int center_y, int half_width, int half_height,
-                             const cv::Scalar &color) {
-        const cv::Point2f vertices[] = {
-            frame.nativef(cx, center_y - half_height),
-            frame.nativef(cx - half_width, center_y + half_height),
-            frame.nativef(cx + half_width, center_y + half_height),
-        };
-        fill_poly_aa(frame, vertices, 3, color);
+    auto chevron = [&](float grow, uint32_t color) {
+        const HudPoint points[] = {{cx, cy - size - grow},
+                                   {cx + size * 1.2f + grow, cy + size * 0.6f + grow},
+                                   {cx, cy + size * 0.15f + grow * 0.5f},
+                                   {cx - size * 1.2f - grow, cy + size * 0.6f + grow}};
+        canvas.fill_polygon(points, 4, color);
     };
-
-    fill_triangle(cy + 2, outer_half_width + 3, size + 3, bgra(0, 0, 0, 130));
-    fill_triangle(cy, outer_half_width, size, bgra(35, 220, 255, confidence_alpha));
-    fill_triangle(cy - 1, std::max(4, outer_half_width - 4), std::max(4, size - 4),
-                  bgra(35, inner_green, 255, confidence_alpha));
+    chevron(3.0f, kShadow);
+    chevron(0.0f, hud_fade(fill, 0.75f + 0.25f * lead.probability));
+    canvas.text(static_cast<int>(cx), static_cast<int>(cy + size * 0.6f) + 8, lead_text(lead),
+                kHudCaptionFont, kText, HudAlign::center, true);
 }
 
-void draw_scene(const Frame &frame, const ParsedModelOutput &output,
-                const ProjectionState &projection, const OverlayHudState &hud,
-                const LeadInfo &lead)
+void draw_scene(OverlayCanvas &canvas, const ParsedModelOutput &output,
+                const ProjectionState &projection, const OverlayHudState &hud, const LeadInfo &lead)
 {
     if (!output.valid) return;
-
     const float max_distance = output.plan.valid
         ? std::clamp(output.plan.points.back().x, kMinDrawDistance, kMaxDrawDistance)
         : kMaxDrawDistance;
 
-    if (output.plan.valid) {
-        draw_model_ribbon(frame, output.plan.points, kPathHalfWidth, kModelHeight,
-                          max_distance, openpilot_path_color(hud), projection);
-    }
-
     if (!hud.laneless_mode) {
+        for (const ParsedRoadEdge &edge : output.road_edges) {
+            const float confidence = std::clamp(1.0f - edge.std, 0.0f, 1.0f);
+            if (!edge.valid || confidence < kEdgeMinConfidence) continue;
+            draw_ribbon(canvas, edge.points, kEdgeHalfWidth, 0.0f, max_distance,
+                        hud_fade(kRed, 0.7f * confidence), projection);
+        }
         for (const ParsedLaneLine &lane : output.lanes) {
             if (!lane.valid || lane.probability < kLaneMinProbability) continue;
-            draw_model_ribbon(frame, lane.points,
-                              std::max(kLaneHalfWidthMin,
-                                       kLaneHalfWidthPerProbability * lane.probability),
-                              0.0f, max_distance, openpilot_lane_color(lane.probability),
-                              projection);
-        }
-
-        for (const ParsedRoadEdge &edge : output.road_edges) {
-            if (!edge.valid) continue;
-            const float confidence = std::clamp(1.0f - edge.std, 0.0f, 1.0f);
-            if (confidence < kEdgeMinConfidence) continue;
-            draw_model_ribbon(frame, edge.points, kEdgeHalfWidth, 0.0f, max_distance,
-                              road_edge_color(confidence), projection);
+            const float half_width = std::max(kLaneHalfWidthMin, kLaneHalfWidthPerProbability * lane.probability);
+            draw_ribbon(canvas, lane.points, half_width, 0.0f, max_distance,
+                        hud_fade(kText, 0.25f + 0.65f * lane.probability), projection);
         }
     }
-
-    if (lead.vision) draw_lead_marker(frame, lead, hud, projection);
+    if (output.plan.valid)
+        draw_ribbon(canvas, output.plan.points, kPathHalfWidth, kModelHeight, max_distance,
+                    path_color(hud), projection);
+    if (lead.vision) draw_lead_marker(canvas, lead, projection);
 }
 
-/* ---- 깜빡이 ---- */
+// ---- HUD ----
 
-void draw_turn_chevron(const Frame &frame, int inner_x, bool points_left, int alpha)
+void draw_border(OverlayCanvas &canvas, uint32_t color)
 {
-    const int direction = points_left ? -1 : 1;
-    const int shoulder_x = inner_x + direction * (frame.layout.turn_chevron_w / 2);
-    const int tip_x = inner_x + direction * frame.layout.turn_chevron_w;
-
-    const cv::Point2f vertices[] = {
-        frame.nativef(inner_x, frame.layout.turn_center_y - frame.layout.turn_chevron_half_h),
-        frame.nativef(shoulder_x, frame.layout.turn_center_y - frame.layout.turn_chevron_half_h),
-        frame.nativef(tip_x, frame.layout.turn_center_y),
-        frame.nativef(shoulder_x, frame.layout.turn_center_y + frame.layout.turn_chevron_half_h),
-        frame.nativef(inner_x, frame.layout.turn_center_y + frame.layout.turn_chevron_half_h),
-        frame.nativef(shoulder_x, frame.layout.turn_center_y),
-    };
-    fill_poly_aa(frame, vertices, 6, bgra(70, 230, 255, alpha));
+    if (!color) return;
+    const int w = canvas.width(), h = canvas.height();
+    canvas.fill_rect(0, 0, w, kBorder, color);
+    canvas.fill_rect(0, h - kBorder, w, kBorder, color);
+    canvas.fill_rect(0, kBorder, kBorder, h - 2 * kBorder, color);
+    canvas.fill_rect(w - kBorder, kBorder, kBorder, h - 2 * kBorder, color);
 }
 
-void draw_turn_signals(const Frame &frame, const OverlayHudState &hud)
+// 가운데 현재 속도와 그 양옆 깜빡이 화살표. 화살표 기준으로 쓸 숫자 폭을 돌려준다.
+int draw_speed(OverlayCanvas &canvas, const OverlayHudState &hud)
+{
+    const std::string speed = format_text("%.0f", std::max(0.0f, hud.cluster_speed_kph));
+    const int center = canvas.width() / 2;
+    const HudGlyph *digit = kHudSpeedFont.glyph('0');
+    const int top = kMargin - digit->top;
+    const int width = canvas.text(center, top, speed, kHudSpeedFont, kText, HudAlign::center, true);
+    canvas.text(center, kMargin + digit->h + 4, "km/h", kHudCaptionFont, kTextSecondary, HudAlign::center, true);
+    return width;
+}
+
+void draw_turn_signals(OverlayCanvas &canvas, const OverlayHudState &hud, int speed_width)
 {
     if (!hud.left_blinker && !hud.right_blinker) return;
     const int step = std::clamp(hud.turn_signal_step, 0, kTurnSignalSteps - 1);
     if (step >= kTurnLitSteps) return;
+    const float center_y = kMargin + kHudSpeedFont.glyph('0')->h / 2.0f;
+    constexpr float kHalfH = 14.0f, kWidth = 14.0f, kThickness = 7.0f, kStep = 13.0f;
 
-    const int center_x = frame.width / 2;
-    auto draw_side = [&](bool active, bool points_left) {
+    auto side = [&](bool active, float direction) {
         if (!active) return;
-        const int direction = points_left ? -1 : 1;
-        const int first_inner_x = center_x + direction * frame.layout.turn_inner_offset;
-        for (int i = 0; i < 3; ++i) {
-            if (step < kTurnChevronStartStep[i]) break;
-            draw_turn_chevron(frame, first_inner_x + direction * i * frame.layout.turn_chevron_step,
-                              points_left, kTurnChevronAlpha[i]);
+        const float inner = canvas.width() / 2.0f + direction * (speed_width / 2.0f + 18.0f);
+        for (int i = 0; i < 3 && step >= kTurnChevronStartStep[i]; ++i) {
+            const float x = inner + direction * i * kStep;
+            const HudPoint points[] = {{x, center_y - kHalfH},
+                                       {x + direction * kThickness, center_y - kHalfH},
+                                       {x + direction * (kThickness + kWidth), center_y},
+                                       {x + direction * kThickness, center_y + kHalfH},
+                                       {x, center_y + kHalfH},
+                                       {x + direction * kWidth, center_y}};
+            canvas.fill_polygon(points, 6, hud_fade(kGreen, kTurnChevronAlpha[i]));
         }
     };
-
-    draw_side(hud.left_blinker, true);
-    draw_side(hud.right_blinker, false);
+    side(hud.left_blinker, -1.0f);
+    side(hud.right_blinker, 1.0f);
 }
 
-} // namespace
-
-/* ---- 렌더러 ---- */
-
-bool OverlayRenderer::load_assets(const std::string &dir)
+/* 왼쪽 위: 설정 속도 카드와 조향 모드 칩. 비전 크루즈가 설정보다 낮게 잡고 있으면 그 속도를
+ * 카드 아래에 작게. 다음 칩이 올 y를 돌려준다. */
+int draw_cruise(OverlayCanvas &canvas, const OverlayHudState &hud)
 {
-    auto sprites = std::make_shared<TrafficSignalSprites>();
-    const bool ready =
-        sprites->red.load(dir + "/traffic_wait_red_retro-270x155-v3.png") &&
-        sprites->green.load(dir + "/traffic_go_green_retro-270x155-v3.png");
-    if (!ready) {
-        std::fprintf(stderr, "overlay: traffic signal PNG assets unavailable in %s\n",
-                     dir.c_str());
-        sprites_.reset();
-        return false;
+    const int x = kMargin, y = kMargin;
+    canvas.fill_round_rect(x, y, kSetCardW, kSetCardH, kRadius, kCard);
+    canvas.text(x + kSetCardW / 2, y + 7, "MAX", kHudCaptionFont, kTextSecondary, HudAlign::center);
+    const bool max_valid = speed_valid(hud.cruise_max_speed_kph);
+    canvas.text(x + kSetCardW / 2, centered_line_top(kHudValueFont, y + 22, kSetCardH - 28),
+                max_valid ? format_text("%.0f", hud.cruise_max_speed_kph) : "-",
+                kHudValueFont, max_valid && hud.cruise_active ? kText : kTextSecondary, HudAlign::center);
+
+    int next_y = y + kSetCardH + kGap;
+    chip(canvas, x, next_y, mode_text(hud), state_color(hud) ? state_color(hud) : kGray);
+    next_y += kChipH + kGap;
+    if (max_valid && speed_valid(hud.cruise_command_speed_kph) &&
+        hud.cruise_command_speed_kph < hud.cruise_max_speed_kph - 2.0f) {
+        chip(canvas, x, next_y, format_text("SET %.0f", hud.cruise_command_speed_kph), kAmber);
+        next_y += kChipH + kGap;
     }
-    sprites_ = std::move(sprites);
-    return true;
+    return next_y;
 }
+
+// 와이파이 막대 넷(left, bottom 기준). 약하면 주황. 무선이 아니면(dbm 0) 다 켠다.
+void draw_signal_bars(OverlayCanvas &canvas, float left, float bottom, int dbm)
+{
+    const int level = dbm == 0 || dbm >= -55 ? 4 : dbm >= -65 ? 3 : dbm > kWeakWifiDbm ? 2 : 1;
+    const uint32_t lit = level <= 1 ? kAmber : kText;
+    for (int i = 0; i < 4; ++i) {
+        const float h = 5.0f + 3.0f * i;
+        canvas.fill_round_rect(left + 6.0f * i, bottom - h, 4.0f, h, 2.0f, i < level ? lit : kTrack);
+    }
+}
+
+/* 오른쪽 위 상태 알약: 녹화 중이면 빨간 점과 REC, 그리고 와이파이 막대(끊기면 OFFLINE).
+ * 누르면 네트워크 카드가 열린다(hud_status_touch). 다음 줄 y를 돌려준다. */
+int draw_status_pill(OverlayCanvas &canvas, const OverlayHudState &hud)
+{
+    constexpr int kBarsW = 22, kItemGap = 12;
+    const int y = kMargin;
+    const int rec_w = hud.recording ? kDot + 6 + kHudBodyFont.width("REC") + kItemGap : 0;
+    const int network_w = hud.network_connected ? kBarsW : kHudBodyFont.width("OFFLINE");
+    const int w = 2 * kChipPadX + rec_w + network_w;
+    int x = canvas.width() - kMargin - w;
+    canvas.fill_round_rect(x, y, w, kChipH, kChipH / 2.0f, kCard);
+    x += kChipPadX;
+    const int line = centered_line_top(kHudBodyFont, y, kChipH);
+    if (hud.recording) {
+        canvas.fill_round_rect(x, y + (kChipH - kDot) / 2, kDot, kDot, kDot / 2.0f, kRed);
+        canvas.text(x + kDot + 6, line, "REC", kHudBodyFont, kText);
+        x += rec_w;
+    }
+    if (hud.network_connected) draw_signal_bars(canvas, x, y + 20.0f, hud.wifi_signal_dbm);
+    else canvas.text(x, line, "OFFLINE", kHudBodyFont, kAmber);
+    return y + kChipH + kGap;
+}
+
+/* 상태 알약을 눌러 연 네트워크 카드: 머리글에 신호 세기, 아래에 와이파이 이름, 주소,
+ * 인터페이스. 다음 줄 y를 돌려준다. */
+int draw_network_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
+{
+    const bool wifi = std::strncmp(hud.network_interface, "wlan", 4) == 0;
+    const char *title = wifi ? "WI-FI" : "NETWORK";
+    const std::string status = !hud.network_connected ? "OFFLINE"
+                             : wifi ? format_text("%d dBm", hud.wifi_signal_dbm) : "";
+    const bool weak = !hud.network_connected || (wifi && hud.wifi_signal_dbm <= kWeakWifiDbm);
+    struct Line {
+        const char *text;
+        const HudFont &font;
+        uint32_t color;
+        int advance;  // 앞 줄 기준선에서 이 줄 기준선까지
+    };
+    const Line lines[] = {{hud.network_ssid, kHudBodyFont, kText, 22},
+                          {hud.network_ipv4, kHudBodyFont, kText, 20},
+                          {hud.network_interface, kHudCaptionFont, kTextSecondary, 17}};
+    const int header_baseline = kCardPad + cap_glyph(kHudCaptionFont).h;
+    int w = kHudCaptionFont.width(title) + 2 * kGap + kHudCaptionFont.width(status);
+    int h = header_baseline + kCardPad;
+    for (const Line &line : lines) {
+        if (line.text[0] == '\0') continue;
+        w = std::max(w, line.font.width(line.text));
+        h += line.advance;
+    }
+    w = std::max(w + 2 * kCardPad, kNetworkCardMinW);
+    const int x = canvas.width() - kMargin - w;
+    canvas.fill_round_rect(x, y, w, h, kRadius, kCardStrong);
+    int baseline = y + header_baseline;
+    canvas.text(x + kCardPad, base_line(kHudCaptionFont, baseline), title, kHudCaptionFont, kTextSecondary);
+    canvas.text(x + w - kCardPad, base_line(kHudCaptionFont, baseline), status, kHudCaptionFont,
+                weak ? kAmber : kTextSecondary, HudAlign::right);
+    for (const Line &line : lines) {
+        if (line.text[0] == '\0') continue;
+        baseline += line.advance;
+        canvas.text(x + kCardPad, base_line(line.font, baseline), line.text, line.font, line.color);
+    }
+    return y + h + kGap;
+}
+
+/* 오른쪽 위: 상태 알약, 열려 있으면 네트워크 카드, 그 아래 문제 칩(온도, panda, 저장 공간,
+ * 레이더 앞차, 신호 대기). */
+void draw_status(OverlayCanvas &canvas, const OverlayHudState &hud, const LeadInfo &lead)
+{
+    const int right = canvas.width() - kMargin;
+    int y = draw_status_pill(canvas, hud);
+    if (hud.network_card) y = draw_network_card(canvas, y, hud);
+    auto warn = [&](const std::string &text, uint32_t color) {
+        chip(canvas, right, y, text, color, HudAlign::right);
+        y += kChipH + kGap;
+    };
+    if (hud.cpu_temp_c >= kWarmTempC) warn(format_text("%.0f\xb0" "C", hud.cpu_temp_c), hud.cpu_temp_c >= kHotTempC ? kRed : kAmber);
+    if (!hud.panda_connected || !hud.panda_healthy) warn("PANDA", kAmber);
+    if (hud.storage_full) warn("STORAGE FULL", kAmber);
+    if (lead.radar && !lead.vision) warn(format_text("LEAD %s", lead_text(lead).c_str()), kText);
+    if (hud.green_light_alert_armed) warn("WAITING FOR GREEN", kRed);
+}
+
+/* 아래 모서리 카드(TPMS, 카메라 보정)의 틀: 머리글 왼쪽에 이름, 오른쪽에 단위나 상태. */
+void corner_card(OverlayCanvas &canvas, int x, int y, const char *title, const std::string &status,
+                 uint32_t status_color)
+{
+    canvas.fill_round_rect(x, y, kCornerCardW, kCornerCardH, kRadius, kCard);
+    const int line = cap_line(kHudCaptionFont, y + kCardPad);
+    canvas.text(x + kCardPad, line, title, kHudCaptionFont, kTextSecondary);
+    canvas.text(x + kCornerCardW - kCardPad, line, status, kHudCaptionFont, status_color, HudAlign::right);
+}
+
+/* 왼쪽 아래 TPMS: 위에서 본 차의 바퀴 넷과 그 옆 공기압. 낮으면 주황, 높으면 빨강이고, 차가
+ * TPMS 경고를 내면 머리글도 빨강. 값이 없으면 "--". */
+void draw_tpms(OverlayCanvas &canvas, const OverlayHudState &hud)
+{
+    const int x = kMargin, y = canvas.height() - kMargin - kCornerCardH;
+    const bool bar = hud.tpms_unit == 2;
+    corner_card(canvas, x, y, "TPMS", bar ? "bar" : "psi", hud.tpms_warning ? kRed : kTextSecondary);
+
+    // 정수 좌표라 둥근 사각형이 곧은 행 지름길을 탄다.
+    constexpr int kBodyW = 24, kBodyH = 46, kTireW = 5, kTireH = 12, kTireInset = 7;
+    const int body_x = x + (kCornerCardW - kBodyW) / 2, body_y = y + kCornerCardH - kCardPad - kBodyH;
+    canvas.fill_round_rect(body_x, body_y, kBodyW, kBodyH, 8, kCarBody);
+    canvas.fill_round_rect(body_x + 4, body_y + 10, kBodyW - 8, 8, 2, kShadow);  // 앞유리
+
+    const float pressures[] = {hud.tpms_pressure_fl, hud.tpms_pressure_fr, hud.tpms_pressure_rl,
+                               hud.tpms_pressure_rr};
+    for (int i = 0; i < 4; ++i) {
+        const bool right = i % 2 != 0, rear = i >= 2;
+        const float pressure = hud.tpms_valid ? pressures[i] : 0.0f;
+        const uint32_t color = tire_color(pressure, bar);
+        const int tire_x = right ? body_x + kBodyW - 1 : body_x - kTireW + 1;
+        const int tire_y = rear ? body_y + kBodyH - kTireInset - kTireH : body_y + kTireInset;
+        canvas.fill_round_rect(tire_x, tire_y, kTireW, kTireH, 2, color ? color : kTrack);
+        canvas.text(right ? tire_x + kTireW + 6 : tire_x - 6, centered_line_top(kHudBodyFont, tire_y, kTireH),
+                    color ? format_text(bar ? "%.1f" : "%.0f", pressure) : "--", kHudBodyFont,
+                    color ? color : kTextSecondary, right ? HudAlign::left : HudAlign::right);
+    }
+}
+
+/* 오른쪽 아래 카메라 보정: 머리글에 상태(보정 중이면 진행률), 아래에 roll·pitch·yaw. */
+void draw_calibration(OverlayCanvas &canvas, const OverlayHudState &hud)
+{
+    const int x = canvas.width() - kMargin - kCornerCardW, y = canvas.height() - kMargin - kCornerCardH;
+    const int percent = std::clamp(hud.calibration_valid_blocks * 100 / OnlineCalibrator::kInputsNeeded, 0, 100);
+    std::string status = "--";
+    uint32_t color = kTextSecondary;
+    if (hud.calibration_available) {
+        switch (static_cast<CalibrationStatus>(hud.calibration_status)) {
+        case CalibrationStatus::Calibrated: status = "OK"; break;
+        case CalibrationStatus::Invalid: status = "INVALID"; color = kRed; break;
+        case CalibrationStatus::Recalibrating: status = format_text("RECAL %d%%", percent); color = kAmber; break;
+        default: status = format_text("%d%%", percent); color = kAmber; break;
+        }
+    }
+    corner_card(canvas, x, y, "CAL", status, color);
+
+    constexpr int kRowH = 17;
+    const struct { const char *name; float deg; } rows[] = {
+        {"ROLL", hud.calibration_roll_deg}, {"PITCH", hud.calibration_pitch_deg}, {"YAW", hud.calibration_yaw_deg}};
+    for (int i = 0; i < 3; ++i) {
+        const int baseline = y + kCornerCardH - kCardPad - (2 - i) * kRowH;
+        canvas.text(x + kCardPad, base_line(kHudCaptionFont, baseline), rows[i].name, kHudCaptionFont,
+                    kTextSecondary);
+        canvas.text(x + kCornerCardW - kCardPad, base_line(kHudBodyFont, baseline),
+                    hud.calibration_available ? format_text("%.2f\xb0", rows[i].deg) : "--", kHudBodyFont,
+                    hud.calibration_available ? kText : kTextSecondary, HudAlign::right);
+    }
+}
+
+void draw_torque_bar(OverlayCanvas &canvas, const OverlayHudState &hud)
+{
+    if (!hud.controller_engaged) return;
+    const float cx = canvas.width() / 2.0f;
+    const float y = static_cast<float>(canvas.height() - kMargin - kTorqueBarH);
+    canvas.fill_round_rect(cx - kTorqueBarW / 2.0f, y, kTorqueBarW, kTorqueBarH, kTorqueBarH / 2.0f,
+                           hud.controller_active ? kTrack : hud_fade(kTrack, 0.5f));
+    const float fraction = hud.controller_active ? std::clamp(hud.steer_torque_fraction, -1.0f, 1.0f) : 0.0f;
+    const float length = std::fabs(fraction) * kTorqueBarW / 2.0f;
+    if (length < 1.0f) return;
+    // openpilot mici 토크 바처럼 75%를 넘으면 흰색에서 주황으로. + = 왼쪽 조향은 왼쪽으로 찬다.
+    const uint32_t color = mix(kText, kAmber, (std::fabs(fraction) - 0.75f) * 4.0f);
+    canvas.fill_round_rect(fraction > 0.0f ? cx - length : cx, y, length, kTorqueBarH, kTorqueBarH / 2.0f, color);
+}
+
+// 아래 가운데 알림 카드. 아래 모서리 카드 사이에 들어간다.
+void draw_alert(OverlayCanvas &canvas, const Alert &alert)
+{
+    if (alert.empty()) return;
+    const int max_w = canvas.width() - 2 * (kMargin + kCornerCardW + kGap);
+    const int text_w = std::max(kHudTitleFont.width(alert.title), kHudBodyFont.width(alert.detail));
+    const int w = std::clamp(text_w + 56, kAlertMinW, max_w);
+    const int x = (canvas.width() - w) / 2, center = canvas.width() / 2;
+    const int y = canvas.height() - kMargin - kTorqueBarH - kGap - kAlertH;
+    canvas.fill_round_rect(x, y, w, kAlertH, kRadius + 4, kCardStrong);
+    canvas.fill_round_rect(x + 12, y + 14, 4, kAlertH - 28, 2.0f, alert.color);
+    canvas.text(center, cap_line(kHudTitleFont, y + 15), alert.title, kHudTitleFont, kText, HudAlign::center);
+    canvas.text(center, base_line(kHudBodyFont, y + kAlertH - 15), alert.detail, kHudBodyFont, kTextSecondary,
+                HudAlign::center);
+}
+
+// 왼쪽 열의 오토 홀드 칩. 다음 칩이 올 y를 돌려준다.
+int draw_brake_hold(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
+{
+    if (!hud.brake_hold) return y;
+    chip(canvas, kMargin, y, "AUTO HOLD", kGreen);
+    return y + kChipH + kGap;
+}
+
+// 웹 기기 설정의 HUD 진단: 예전 패널의 수치를 한 카드에(보정·TPMS·네트워크는 따로 있다).
+void draw_debug_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
+{
+    const std::string lines[] = {
+        format_text("AI %.1f  CAM %.1f  HUD %.1f FPS", hud.model_fps, hud.preview_fps, hud.overlay_fps),
+        format_text("CPU %.0f%%  %.0f\xb0" "C  MEM %.0f%%  DISK %.0f%%", hud.cpu_percent, hud.cpu_temp_c,
+                    hud.memory_percent, hud.storage_percent),
+        format_text("ANGLE %.0f  DES %d  APPLY %d  DRV %d", hud.steering_angle_deg, hud.desired_torque,
+                    hud.apply_torque, hud.driver_torque),
+        format_text("GEAR %s  CRUISE %s  PANDA %s  CAR %s", gear_text(hud.gear), hud.cruise_active ? "ON" : "OFF",
+                    hud.panda_connected && hud.panda_healthy ? "OK" : "--", hud.vehicle_fresh ? "OK" : "--"),
+    };
+    constexpr int kLineH = 17;
+    const int count = static_cast<int>(std::size(lines));
+    int w = 0;
+    for (const std::string &line : lines) w = std::max(w, kHudCaptionFont.width(line));
+    canvas.fill_round_rect(kMargin, y, w + 20, count * kLineH + 12, kRadius, kCard);
+    for (int i = 0; i < count; ++i)
+        canvas.text(kMargin + 10, y + 6 + i * kLineH, lines[i], kHudCaptionFont, kTextSecondary);
+}
+
+}  // namespace
 
 void OverlayRenderer::draw(const OverlayTarget &target, const ParsedModelOutput &output,
-                           const ProjectionState &projection,
-                           const OverlayHudState &hud,
-                           bool rotate_landscape) const
+                           const ProjectionState &projection, const OverlayHudState &hud)
 {
-    const int width = static_cast<int>(target.width);
-    const int height = static_cast<int>(target.height);
-    cv::Mat mat(height, width, CV_8UC4, target.map, static_cast<size_t>(target.stride));
-    mat.setTo(cv::Scalar(0, 0, 0, 0));
-    const int landscape_w = rotate_landscape ? height : width;
-    const Frame frame{mat, landscape_w, rotate_landscape ? width : height, rotate_landscape,
-                      layout_for_width(landscape_w)};
-
+    BufferDamage *damage = nullptr;
+    for (BufferDamage &known : damage_)
+        if (known.map == target.map && known.width == target.width && known.rows.size() == target.height)
+            damage = &known;
+    const bool known = damage != nullptr;
+    if (!known) {
+        damage = &damage_[next_slot_++ % damage_.size()];
+        *damage = BufferDamage{target.map, target.width, std::vector<uint16_t>(target.height, 0)};
+    }
+    OverlayCanvas canvas(target.map, static_cast<int>(target.width), static_cast<int>(target.height),
+                         static_cast<int>(target.stride), coverage_, damage->rows);
+    canvas.clear(known);
     const LeadInfo lead = lead_info(hud, output);
-    draw_scene(frame, output, projection, hud, lead);
-    draw_turn_signals(frame, hud);
-    draw_hud(frame, hud, output, lead, sprites_.get());
+    draw_scene(canvas, output, projection, hud, lead);
+    draw_border(canvas, state_color(hud));
+    draw_turn_signals(canvas, hud, draw_speed(canvas, hud));
+    const int left_y = draw_brake_hold(canvas, draw_cruise(canvas, hud), hud);
+    if (hud.debug_overlay) draw_debug_card(canvas, left_y, hud);
+    draw_status(canvas, hud, lead);
+    draw_tpms(canvas, hud);
+    draw_calibration(canvas, hud);
+    draw_torque_bar(canvas, hud);
+    draw_alert(canvas, select_alert(hud, output.valid));
+}
+
+bool hud_status_touch(int x, int y, int width)
+{
+    return x >= width - kStatusTouchW && y < kStatusTouchH;
 }

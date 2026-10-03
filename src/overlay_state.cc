@@ -83,6 +83,12 @@ void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState 
     hud->calibration_yaw_deg = rad_to_deg(calibration.yaw);
 }
 
+void hud_apply_record_state(const RecordState &record, bool fresh, OverlayHudState *hud)
+{
+    hud->recording = fresh && record.active != 0;
+    hud->storage_full = fresh && record.storage_blocked != 0;
+}
+
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
                              OverlayHudState *hud)
 {

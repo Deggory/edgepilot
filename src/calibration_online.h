@@ -41,9 +41,11 @@ public:
     Snapshot snapshot() const;
     void output_rpy(float rpy[3]) const;
 
+    // 보정 완료(Calibrated)에 필요한 블록 수. HUD가 보정 진행률을 이것으로 낸다.
+    static constexpr int kInputsNeeded = 5;
+
 private:
     static constexpr int kBlockSize = 100;
-    static constexpr int kInputsNeeded = 5;
     static constexpr int kInputsWanted = 50;
 
     void reset_to_rpy(const float rpy[3], int valid_blocks, const float *smooth_from = nullptr);

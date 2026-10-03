@@ -73,6 +73,17 @@ void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy)
 bool project_point(const ProjectionState &projection, float x_forward, float y_right, float z_down,
                    int width, int height, int *px, int *py)
 {
+    float u = 0.0f, v = 0.0f;
+    if (!project_point_subpixel(projection, x_forward, y_right, z_down, width, height, &u, &v))
+        return false;
+    *px = static_cast<int>(std::round(u));
+    *py = static_cast<int>(std::round(v));
+    return true;
+}
+
+bool project_point_subpixel(const ProjectionState &projection, float x_forward, float y_right,
+                            float z_down, int width, int height, float *px, float *py)
+{
     if (x_forward < 0.5f || x_forward > 120.0f) return false;
     // 가상 카메라가 오프셋만큼 오른쪽이라 모델은 실제 점을 y − 오프셋으로 본다. 실제 위치로 되돌린다.
     y_right += projection.lateral_offset_m;
@@ -102,11 +113,12 @@ bool project_point(const ProjectionState &projection, float x_forward, float y_r
     const float v_land = fy * vy / vz + cy;
 
     if (width > height) {
-        *px = static_cast<int>(std::round(u_land));
-        *py = static_cast<int>(std::round(v_land));
+        *px = u_land;
+        *py = v_land;
     } else {
-        *px = static_cast<int>(std::round(v_land));
-        *py = static_cast<int>(std::round(landscape_w - 1.0f - u_land));
+        *px = v_land;
+        *py = landscape_w - 1.0f - u_land;
     }
-    return *px > -200 && *px < width + 200 && *py > -200 && *py < height + 200;
+    return *px > -200.0f && *px < static_cast<float>(width + 200) && *py > -200.0f &&
+           *py < static_cast<float>(height + 200);
 }

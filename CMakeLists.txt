@@ -29,7 +29,7 @@ set(PROJECT_LOCAL_INCLUDES
 )
 set(PROJECT_SYSTEM_INCLUDES)
 
-# 오버레이 렌더러와 호스트 hud_snapshot만 쓴다. 보드 빌드는 보드의 OpenCV 4.11을
+# 카메라 보정 캡처(camcal)만 쓴다. 보드 빌드는 보드의 OpenCV 4.11을
 # deps/ax630(include/opencv4, opencv_lib)에 받아 그대로 링크한다(ABI를 맞춘다).
 set(AX_OPENCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/ax630" CACHE PATH
     "board OpenCV copy: include/opencv4 and opencv_lib/libopencv_*.so")
@@ -106,16 +106,13 @@ target_link_libraries(localization PUBLIC utils_json common)
 add_edgepilot_library(recording_writer src/recording_writer.cc)
 target_link_libraries(recording_writer PUBLIC common)
 
-# 오버레이 상태 매핑·알림 정책은 OpenCV가 없어 호스트 검사가 본다. 렌더러는
-# OpenCV를 쓰므로 OpenCV가 있는 곳에서만 만든다.
+# 오버레이 상태 매핑·알림 정책과 렌더러(자체 캔버스·구운 글꼴)는 외부 라이브러리 없이
+# 호스트에서도 빌드돼 검사와 hud_snapshot이 보드와 같은 그림을 그린다.
 add_edgepilot_library(overlay_state src/overlay_state.cc)
 target_link_libraries(overlay_state PUBLIC common)
 
-if(OpenCV_FOUND)
-  add_edgepilot_library(overlay src/overlay_renderer.cc)
-  target_include_directories(overlay SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-  target_link_libraries(overlay PUBLIC overlay_state ${OpenCV_LIBS})
-endif()
+add_edgepilot_library(overlay src/overlay_canvas.cc src/overlay_font.cc src/overlay_renderer.cc)
+target_link_libraries(overlay PUBLIC overlay_state)
 
 # 호스트 검사·도구: 로컬 헤더와 경고만 붙인 일반 실행 파일.
 function(add_host_tool target)
@@ -126,7 +123,7 @@ endfunction()
 
 if(EDGEPILOT_BUILD_RUNTIME)
   if(NOT OpenCV_FOUND)
-    message(FATAL_ERROR "overlayd needs the board OpenCV in ${AX_OPENCV_DIR} "
+    message(FATAL_ERROR "camcal needs the board OpenCV in ${AX_OPENCV_DIR} "
                         "(scripts/fetch_maixcam2_sdk.sh copies it)")
   endif()
   find_package(PkgConfig QUIET)
@@ -173,6 +170,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
   add_library(maixcam2_media STATIC
     platform/maixcam2/maix_camera.cc
     platform/maixcam2/maix_display.cc
+    platform/maixcam2/maix_touch.cc
     platform/maixcam2/maix_shim.cc
     platform/maixcam2/maix_cmm.cc
     "${MAIX_MSP_OVERRIDE}/common_vin.c"
@@ -202,9 +200,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
     src/alert_sound.cc
     src/system_monitor.cc
   )
-  target_include_directories(overlayd SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
   configure_board_target(overlayd common overlay maixcam2_media utils_json)
-  target_link_options(overlayd PRIVATE "-Wl,-rpath-link,${AX_OPENCV_DIR}/opencv_lib")
 
   add_executable(camerad src/camerad.cc)
   configure_board_target(camerad common maixcam2_media)

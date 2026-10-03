@@ -11,12 +11,9 @@ target_link_libraries(replay_lateral_learners PRIVATE control_core)
 add_host_tool(replay_planner replay_planner.cc)
 target_link_libraries(replay_planner PRIVATE planning)
 
-# HUD 스냅샷·타이밍 도구. overlay 라이브러리와 같은 OpenCV 조건을 따른다.
-if(OpenCV_FOUND)
-  add_host_tool(hud_snapshot hud_snapshot.cc)
-  target_include_directories(hud_snapshot SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-  target_link_libraries(hud_snapshot PRIVATE overlay)
-endif()
+# HUD 스냅샷·타이밍 도구. 호스트와 보드에서 같은 렌더러로 그린다.
+add_host_tool(hud_snapshot hud_snapshot.cc)
+target_link_libraries(hud_snapshot PRIVATE overlay)
 
 add_host_tool(replay_localization replay_localization.cc)
 target_link_libraries(replay_localization PRIVATE localization control_core)

@@ -42,6 +42,7 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 | `enabled` | true | bool | LCD 영상 파이프라인은 유지하고 백라이트만 켜거나 끈다(duty 0). |
 | `brightness_percent` | 100 | % | 백라이트 PWM3(pwmchip0/pwm3, 10 kHz, 정극성) 점등률. 실제 duty는 밝기 x 보드 최대치(`/boot/board`의 `disp_max_backlight`, 기본 95%)다. |
 | `alert_volume_percent` | 70 | % / 0~100 | 보드 스피커 알림음 크기. 0이면 소리를 내지 않는다. overlayd가 1초마다 파일을 보고 바뀌면 적용한 뒤 확인음을 한 번 낸다. 값이 없으면 `EDGEPILOT_ALERT_VOLUME`(기본 70)을 쓴다. |
+| `hud_debug` | false | bool | 주행 화면 왼쪽에 진단 카드(FPS, CPU·온도·메모리·저장소, 조향 토크, 기어·크루즈·연결)를 띄운다. TPMS와 카메라 보정은 늘 아래 모서리 카드에, 네트워크 정보는 오른쪽 위 상태 알약을 누르면 나온다. overlayd가 1초 안에 반영한다. |
 
 설정은 웹의 `기기 설정` 메뉴에서 바꾼다. 백라이트는 param server가 즉시 적용하고, 뜰 때마다
 다시 적용한다. 알림음 크기는 param server가 파일만 고치고 overlayd가 읽는다.

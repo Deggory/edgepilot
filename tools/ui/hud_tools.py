@@ -3,16 +3,16 @@
 
   hud_tools.py inputs <route_dir> <out_dir> [--time SECONDS]
       Extract hud_snapshot inputs from a recordd route: model.bin (raw
-      ModelState, 3256 bytes), control.bin (raw ControlState padded to
-      240 bytes) and camera.png (the matching road frame). Without --time the
-      moment is chosen automatically: controller active, 40-95 km/h, all lane
-      lines confident, a lead if any.
+      ModelState in the current v7 layout, 3528 bytes), control.bin (raw
+      ControlState padded to 240 bytes) and camera.png (the matching road
+      frame). Without --time the moment is chosen automatically: controller
+      active, 40-95 km/h, all lane lines confident, a lead if any.
 
   hud_tools.py compose <prefix> [camera.png]
-      Turn hud_snapshot K230ARGB frames (<prefix>_<scenario>.argb, native
-      480x800 portrait or 800x480 landscape) into PNGs: <name>_overlay.png
-      (800x480 logical view, transparent) and, with a camera frame,
-      <name>_composite.png.
+      Turn hud_snapshot K230ARGB frames (<prefix>_<scenario>.argb, 640x480)
+      into PNGs: <name>_overlay.png (transparent) and, with a camera frame,
+      <name>_composite.png over the centre 4:3 of the frame, as the screen
+      shows it.
 """
 from __future__ import annotations
 
@@ -29,13 +29,12 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa: E402
-                              iter_event_records, route_event_files,
-                              route_segments, segment_video)
+                              iter_event_records, model_state_layout,
+                              route_event_files, route_segments, segment_video)
 
-MODEL_STATE_SIZE = 3256   # hud_snapshot replays the v5 ModelState only
+MODEL_STATE_SIZE = model_state_layout(7)["__size__"]  # hud_snapshot reads the current struct
 CONTROL_STATE_SIZE = 240
 FRAME_MAGIC = b"K230ARGB"
-LOGICAL = (800, 480)
 
 
 # ---- inputs ----
@@ -54,7 +53,7 @@ def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment]]:
         for rec in iter_event_records(path):
             if rec.type == RECORD_CONTROL_STATE:
                 controls.append((rec.timestamp_ns, rec.control_state()))
-            elif rec.type == RECORD_MODEL_STATE and len(rec.payload) == MODEL_STATE_SIZE:
+            elif rec.type == RECORD_MODEL_STATE and rec.version == 7:
                 layout = rec.model_layout()
                 frame_id, = struct.unpack_from("<Q", rec.payload, 0)
                 lanes = struct.unpack_from("<4f", rec.payload, layout["lane_probabilities"])
@@ -102,13 +101,16 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     control = controls[cj][1]
 
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "model.bin").write_bytes(bytes(model.payload))
+    (args.out / "model.bin").write_bytes(bytes(model.payload[:MODEL_STATE_SIZE]))
     raw = control.tobytes()
     (args.out / "control.bin").write_bytes(raw + b"\0" * (CONTROL_STATE_SIZE - len(raw)))
     seconds = (int(model.ts) - int(model_ts[0])) / 1e9
     print(f"moment t={seconds:.1f}s frame_id={model.frame_id} speed={control['speed_kph']:.1f} "
           f"active={control['active']} lanes={np.round(model.lanes, 2)} lead={model.lead_valid}")
 
+    if not (args.route / "segments").is_dir():
+        print("no segments/ in this route copy: camera frame skipped", file=sys.stderr)
+        return 0
     for segment in route_segments(args.route):
         frames = segment.frames
         hits = np.nonzero(frames["frame_id"] == model.frame_id)[0]
@@ -133,24 +135,23 @@ def load_frame(path: Path) -> np.ndarray:
         raise ValueError(f"{path}: not a K230ARGB file")
     width, height = struct.unpack_from("<II", data, 8)
     pixels = np.frombuffer(data, np.uint8, count=width * height * 4, offset=16)
-    native = pixels.reshape(height, width, 4)  # B, G, R, A
-    if (width, height) == (LOGICAL[1], LOGICAL[0]):
-        logical = np.rot90(native, 1)  # logical (lx, ly) -> native (row lx, col 479 - ly)
-    elif (width, height) == LOGICAL or width > height:  # K230 가로, MaixCAM2 640x480
-        logical = native
-    else:
-        raise ValueError(f"{path}: unexpected size {width}x{height}")
-    return logical[..., [2, 1, 0, 3]].copy()
+    return pixels.reshape(height, width, 4)[..., [2, 1, 0, 3]].copy()  # BGRA -> RGBA
+
+
+def screen_camera(path: Path, size: tuple[int, int]) -> Image.Image:
+    """The camera frame as overlayd shows it: the centre 4:3 scaled to the screen."""
+    image = Image.open(path).convert("RGBA")
+    crop_w = image.height * 4 // 3
+    left = (image.width - crop_w) // 2
+    return image.crop((left, 0, left + crop_w, image.height)).resize(size, Image.BILINEAR)
 
 
 def cmd_compose(args: argparse.Namespace) -> int:
-    camera = None
-    if args.camera is not None:
-        camera = Image.open(args.camera).convert("RGBA").resize(LOGICAL, Image.BILINEAR)
     frames = sorted(glob.glob(f"{args.prefix}_*.argb"))
     if not frames:
         print(f"no frames matching {args.prefix}_*.argb", file=sys.stderr)
         return 1
+    camera = None
     for frame in frames:
         path = Path(frame)
         rgba = load_frame(path)
@@ -158,7 +159,8 @@ def cmd_compose(args: argparse.Namespace) -> int:
         overlay.save(path.with_name(path.stem + "_overlay.png"))
         coverage = (rgba[..., 3] > 0).mean() * 100.0
         line = f"{path.stem}: overlay coverage {coverage:.1f}%"
-        if camera is not None:
+        if args.camera is not None:
+            camera = camera or screen_camera(args.camera, overlay.size)
             composite = camera.copy()
             composite.alpha_composite(overlay)
             composite.convert("RGB").save(path.with_name(path.stem + "_composite.png"))

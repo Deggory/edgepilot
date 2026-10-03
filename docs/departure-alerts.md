@@ -33,8 +33,8 @@ engage 거부 토스트가 뜬다. 알림은 다음 상태 전이에 울린다.
 - `unavailable`: 제어/Panda 상태가 stale이 되거나 Panda/조향 fault가 검출됨
 - `unable`: engage 조건을 만족하지 못한 상태에서 engage 명령을 거부할 때
 
-실제 차량/제어 조건으로 engage가 거부되면 LCD 하단에
-`UNABLE TO ENGAGE: <사유>`를 3초간 표시한다. openpilot의 refuse 알림에 대응한다.
+실제 차량/제어 조건으로 engage가 거부되면 LCD 하단 알림 카드에 `UNABLE TO ENGAGE`와
+그 아래 줄에 사유를 3초간 표시한다. openpilot의 refuse 알림에 대응한다.
 Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정상적인
 비동기 구간이므로 최대 1초 동안 대기한다. 그 사이 Panda 허가가 들어오면
 `engage`만 한 번 알린다. 허가가 끝내 오지 않거나 Panda 회복 뒤 다른 정적 조건이
@@ -44,10 +44,10 @@ Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정�
 내고, 켜져 있는 동안 LCD 하단에 띄운다. openpilot의 두 알림에 대응한다.
 
 - `TAKE CONTROL: CALIBRATING / RECALIBRATING / CALIB INVALID`: 카메라 캘리브레이션이
-  완료 상태가 아니다. 이 상태에서는 engage를 거부한다(`UNABLE TO ENGAGE: CALIBRATING`).
+  완료 상태가 아니다. 이 상태에서는 engage를 거부한다(`UNABLE TO ENGAGE` / `CALIBRATING`).
   engage 중에 이 상태가 되면(마운트 변경 감지 등) 경고를 띄운 채 3초 더 조향하고
   해제한다(openpilot의 soft disable). 3초 안에 완료로 돌아오면 해제하지 않는다.
-- `TURN EXCEEDS STEER LIMIT`(openpilot steerSaturated): 시속 36 km 이상에서
+- `TAKE CONTROL` / `Turn exceeds steering limit`(openpilot steerSaturated): 시속 36 km 이상에서
   목표 곡률이 횡가속 한계(3.3 m/s²)에 잘리거나 출력이 한계에 붙은 채 0.4초 넘게 이어지고,
   목표 횡가속이 1 m/s²를 넘으며 실제의 1.2배 이상인데, 최근 2초 안에 핸들을 잡지 않았을
   때다. 2026-09-25~27 실차 3회 주행에서는 한 번도 해당하지 않았다.

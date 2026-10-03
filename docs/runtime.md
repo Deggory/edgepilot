@@ -89,20 +89,27 @@ keeps the AX system open.
   (960x720 of 1280x720), and scales it to 640x480, so the preview is not
   stretched; a frame overwritten during the read is dropped
 - layer 1 is the HUD: straight-alpha BGRA drawn by the CPU renderer directly
-  into a CMM block at native 640x480 (compact layout with 208 px panels) and
-  pushed without a copy
-- redraws the HUD when a new model, control, panda, or manager snapshot
+  into a CMM block at native 640x480 and pushed without a copy; when a pool
+  block comes back, only the 64 px tiles drawn into it last time are cleared
+- redraws the HUD when a new model, control, panda, manager, or record snapshot
   arrives and once a second, at most every 45 ms, which gives 20 Hz with the
-  model; lanes and path are anti-aliased; the turn-signal animation has its own
-  50 ms clock
-- HUD content: center speed, left `OPENPILOT`/`CONTROL`/`DRIVE`/`TPMS` panels,
-  right `SYSTEM`/`HEALTH`/`CALIBRATION`/`LEAD` panels, a centered status
-  alert, and below it at the bottom edge a steering torque bar while engaged (openpilot's mici UI
-  torque bar: sent torque / 384 from the center toward the turn, white, then
-  yellow to orange above 75%), filled with camera/model/HUD FPS, inference time,
-  CPU/temperature/memory/storage, process health, Panda state, vehicle speed,
-  steering torque, and K7 control state
-- loads the traffic-signal PNG sprites from `assets/ui` next to the executable
+  model; lanes and path are anti-aliased and fade with distance; the
+  turn-signal animation has its own 50 ms clock
+- HUD content: a border in the steering state colour, the speed with the turn
+  signals beside it, the set speed card and steering mode chip at the top left,
+  a status pill at the top right (red `REC` while `recordd` writes a route,
+  Wi-Fi bars or `OFFLINE`), TPMS and camera calibration cards in the bottom
+  corners, a steering torque bar at the bottom edge while engaged (openpilot's
+  mici UI torque bar: sent torque / 384 from the center toward the turn, white,
+  then orange above 75%), and an alert card above it. Temperature, panda,
+  storage, a radar-only lead, and the green-light wait appear as chips only
+  when they apply; the `hud_debug` device setting adds a card with
+  camera/model/HUD FPS, CPU/temperature/memory/storage, steering torques, and
+  gear/cruise/link state
+- reads the touchscreen (`hyn_ts`, rotated clockwise 90° like MaixCDK): a tap
+  on the status pill opens a network card (SSID, IPv4, interface, signal) for
+  10 s and the next tap closes it; every tap is logged as
+  `overlayd: tap x=... y=...`
 - turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`, level from
   `/boot/configs`)
 - plays the K230 piezo alert melodies on the board speaker, shows departure
@@ -177,6 +184,8 @@ keeps the AX system open.
   params snapshot), staged in tmpfs and moved to `recordings/` on the SD card
 - `params/recording.json` `enabled` starts/stops a route; `bitrate_bps` applies
   at the next start
+- publishes `recordState` (route being written, storage reserve exhausted)
+  twice a second; `overlayd` shows `REC` or a `STORAGE FULL` chip from it
 
 ## Measured load
 

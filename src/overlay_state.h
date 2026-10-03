@@ -43,7 +43,7 @@ struct OverlayHudState {
     float radar_lead_relative_speed_mps = 0.0f;
     DepartureAlertType departure_alert_type = DepartureAlertType::none;
     bool green_light_alert_armed = false;
-    char engage_alert_message[64] = {};
+    char engage_reject_label[48] = {};  // 비어 있지 않으면 engage 거부 알림(사유 라벨)
     bool tpms_valid = false;
     int tpms_unit = 0;
     float tpms_pressure_fl = 0.0f;
@@ -74,6 +74,11 @@ struct OverlayHudState {
     char active_block[32] = {};
     char network_interface[16] = {};
     char network_ipv4[16] = {};
+    char network_ssid[33] = {};
+    bool network_card = false;   // 상태 알약을 눌러 연 네트워크 카드
+    bool recording = false;      // recordd가 route를 쓰는 중
+    bool storage_full = false;   // 저장 공간이 모자라 녹화를 거부했거나 멈춤
+    bool debug_overlay = false;  // 웹 기기 설정의 HUD 진단: 수치 카드를 띄운다
 };
 
 /* 공유 상태 스냅샷 → HUD 표시 상태. fresh가 아니면 값을 0/false로 두어 HUD가 "--"를
@@ -81,6 +86,7 @@ struct OverlayHudState {
 void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud);
 void hud_apply_control_state(const ControlState &control, bool fresh, OverlayHudState *hud);
 void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud);
+void hud_apply_record_state(const RecordState &record, bool fresh, OverlayHudState *hud);
 /* model_ok: 유효하고 신선한 모델 출력이 있는지. services_healthy의 조건 중 하나. */
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
                              OverlayHudState *hud);

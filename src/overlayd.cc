@@ -10,12 +10,11 @@
 #include "projection.h"
 #include "system_monitor.h"
 #include "maix_display.h"
+#include "maix_touch.h"
 
 #include <linux/videodev2.h>
 #include <signal.h>
 #include <unistd.h>
-
-#include <opencv2/core.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -26,7 +25,8 @@
 /* MaixCAM2 HUD. LCD의 VO 하드웨어 두 레이어를 쓴다: 카메라 프레임 링의 최신
  * 프레임은 레이어 0(IVPS로 가운데 4:3을 640x480에), HUD 렌더러가 640x480 네이티브
  * 배치로 그린 BGRA는 레이어 1에 올리고 합성은 하드웨어가 한다. 알림은 화면 토스트와
- * 로그에 더해 K230 부저와 같은 멜로디를 보드 스피커로 낸다(alert_sound.h). */
+ * 로그에 더해 K230 부저와 같은 멜로디를 보드 스피커로 낸다(alert_sound.h). 터치스크린은
+ * 오른쪽 위 상태 알약을 누르면 네트워크 카드를 여는 데 쓴다. */
 
 namespace {
 
@@ -39,24 +39,14 @@ void on_test_sound_signal(int) { ++g_test_sound_requests; }
 constexpr int kOutW = MaixDisplay::kWidth;
 constexpr int kOutH = MaixDisplay::kHeight;
 constexpr uint64_t kStateFreshNs = 2000000000ULL;
-// 오버레이(HUD 그림, OpenCV CPU)는 상태가 바뀔 때 모델과 같은 20 Hz로 다시 그린다.
+// 오버레이(HUD 그림, CPU)는 상태가 바뀔 때 모델과 같은 20 Hz로 다시 그린다.
 // 상한을 50 ms가 아닌 45 ms로 두어 모델 출력 도착이 5 ms 루프만큼 흔들려도 프레임을
 // 건너뛰지 않는다. 영상은 하드웨어 레이어라 카메라 프레임마다 올린다.
 constexpr uint64_t kOverlayIntervalNs = 45000000ULL;
 constexpr useconds_t kPollUs = 5000;
 constexpr uint64_t kEngageAlertNs = 3000000000ULL;
 constexpr uint64_t kTurnSignalStepNs = 50000000ULL;
-
-std::string executable_dir()
-{
-    char path[512];
-    const ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
-    if (length <= 0) return ".";
-    path[length] = '\0';
-    const std::string full(path);
-    const size_t slash = full.rfind('/');
-    return slash == std::string::npos ? "." : full.substr(0, slash);
-}
+constexpr uint64_t kNetworkCardNs = 10000000000ULL;
 
 const char *engage_block_text(const char *block)
 {
@@ -91,15 +81,12 @@ public:
     explicit OverlayDisplay(const AppConfig &config)
         : profile_(config.profile)
     {
-        // OpenCV 스레드 풀은 대기 중에도 코어를 돌려서 modeld와 CPU를 다툰다.
-        cv::setNumThreads(0);
         // 차선 투영도 모델 워프와 같은 카메라 파라미터를 쓴다(EDGEPILOT_CAMERA_INTRINSICS).
         projection_set_camera_intrinsics(config.camera_fx, config.camera_fy, config.camera_cx,
                                          config.camera_cy);
         default_projection_ = make_projection_state(config.manual_roll,
                                                     config.manual_pitch,
                                                     config.manual_yaw);
-        overlay_.load_assets(executable_dir() + "/assets/ui");
     }
 
     int run()
@@ -114,6 +101,9 @@ public:
             throw std::runtime_error("open managerState ipc failed");
         if (!frame_sub_.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true))
             throw std::runtime_error("open roadAiFrame ipc failed");
+        if (!record_state_sub_.open(kRecordStateTopic, sizeof(RecordState), true))
+            throw std::runtime_error("open recordState ipc failed");
+        if (!touch_.open()) std::fprintf(stderr, "overlayd: no touchscreen; network card disabled\n");
 
         uint64_t window_start = monotonic_now_ns();
         while (!g_stop) {
@@ -121,6 +111,7 @@ public:
             pending_redraw_ = update_model() || pending_redraw_;
             pending_redraw_ = update_aux_state() || pending_redraw_;
             pending_redraw_ = update_turn_signal(loop_start) || pending_redraw_;
+            pending_redraw_ = update_touch(loop_start) || pending_redraw_;
             play_test_sound();
             apply_device_settings(loop_start);
             update_preview();
@@ -203,7 +194,7 @@ private:
         const OverlayTarget target{buffer, static_cast<uint32_t>(kOutW), static_cast<uint32_t>(kOutH),
                                    static_cast<uint32_t>(kOutW * 4)};
         overlay_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
-                      have_model_state_ ? latest_projection_ : default_projection_, hud_, false);
+                      have_model_state_ ? latest_projection_ : default_projection_, hud_);
         if (!display_.end_overlay()) ++errors_;
         if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
         ++overlay_frames_;
@@ -222,11 +213,14 @@ private:
         return true;
     }
 
-    /* 웹 기기 설정: 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다(시작 때 읽은 값은 소리 없이).
+    /* 웹 기기 설정: HUD 진단 카드를 켜고 끈다. 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다
+     * (시작 때 읽은 값은 소리 없이).
      * 카메라 장착 오프셋은 modeld가 그 프레임에 쓴 값을 ModelState로 받는다(projection_from_model_state). */
     void apply_device_settings(uint64_t now_ns)
     {
         if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
+        hud_.debug_overlay = device_settings_.hud_debug;
+        pending_redraw_ = true;
         const float percent = device_settings_.alert_volume_percent;
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
@@ -247,15 +241,32 @@ private:
         return true;
     }
 
-    /* 새 panda/control/manager 스냅샷이 있으면 true. 모델이 멈춰도 속도·토스트가
+    /* 새 panda/control/manager/record 스냅샷이 있으면 true. 모델이 멈춰도 속도·토스트가
      * 제어 상태를 따라가도록 재그리기 트리거가 된다. */
     bool update_aux_state()
     {
         bool changed = poll(panda_state_sub_, &latest_panda_state_, &latest_panda_seq_);
         changed = poll(control_state_sub_, &latest_control_state_, &latest_control_seq_) || changed;
         changed = poll(manager_state_sub_, &latest_manager_state_, &latest_manager_seq_) || changed;
+        changed = poll(record_state_sub_, &latest_record_state_, &latest_record_seq_) || changed;
         refresh_hud_state();
         return changed;
+    }
+
+    /* 상태 알약을 누르면 네트워크 카드를 열고, 열린 동안은 어디를 눌러도 닫는다. 카드는
+     * kNetworkCardNs 뒤 저절로 닫힌다. 탭 좌표는 회전 매핑 확인용으로 로그에 남긴다.
+     * 카드가 열리거나 닫히면 true. */
+    bool update_touch(uint64_t now_ns)
+    {
+        const bool was_open = hud_.network_card;
+        int x = 0, y = 0;
+        if (touch_.poll_tap(&x, &y)) {
+            std::fprintf(stderr, "\noverlayd: tap x=%d y=%d\n", x, y);
+            hud_.network_card = !hud_.network_card && hud_status_touch(x, y, kOutW);
+            network_card_until_ns_ = now_ns + kNetworkCardNs;
+        }
+        if (now_ns >= network_card_until_ns_) hud_.network_card = false;
+        return hud_.network_card != was_open;
     }
 
     /* 깜빡이 단계는 켜진 시각 기준으로 나간다. 단계가 바뀌면 true. */
@@ -287,6 +298,7 @@ private:
         bool panda = false;
         bool control = false;
         bool manager = false;
+        bool record = false;
     };
 
     Freshness freshness(uint64_t now) const
@@ -294,7 +306,8 @@ private:
         return {fresh(latest_model_state_.model_timestamp_ns, now),
                 fresh(latest_panda_state_.timestamp_ns, now),
                 fresh(latest_control_state_.timestamp_ns, now),
-                fresh(latest_manager_state_.timestamp_ns, now)};
+                fresh(latest_manager_state_.timestamp_ns, now),
+                fresh(latest_record_state_.timestamp_ns, now)};
     }
 
     /* 최신 스냅샷을 HUD 상태로 옮기고, control 이벤트 카운터로 토스트·알림을 낸다. */
@@ -307,6 +320,7 @@ private:
         hud_apply_control_state(latest_control_state_, f.control, &hud_);
         hud_apply_model_state(latest_model_state_, f.model, &hud_);
         hud_apply_manager_state(latest_manager_state_, f.manager, have_model_state_, &hud_);
+        hud_apply_record_state(latest_record_state_, f.record, &hud_);
         process_alert_events(f, now);
     }
 
@@ -341,8 +355,8 @@ private:
         sound_.play(kSounds[static_cast<int>(decision.alert)]);
         if (decision.alert == OverlayAlert::unable) {
             const ControlState &c = latest_control_state_;
-            std::snprintf(hud_.engage_alert_message, sizeof(hud_.engage_alert_message),
-                          "UNABLE TO ENGAGE: %s", engage_block_text(c.engage_reject_block));
+            std::snprintf(hud_.engage_reject_label, sizeof(hud_.engage_reject_label), "%s",
+                          engage_block_text(c.engage_reject_block));
             engage_alert_until_ns_ = now + kEngageAlertNs;
             std::fprintf(stderr, "overlayd: alert=unable event=%u block=%s\n",
                          decision.event_id, c.engage_reject_block);
@@ -377,7 +391,7 @@ private:
         OverlayAlertEvents::Decision decision;
         if (f.control) decision = alert_events_.update(latest_control_state_, hud_.departure_alert_type);
         bool played = play_alert(decision, now);
-        if (now >= engage_alert_until_ns_) hud_.engage_alert_message[0] = '\0';
+        if (now >= engage_alert_until_ns_) hud_.engage_reject_label[0] = '\0';
         played = play_take_control_alert(played) || played;
         play_availability_alert(f, played);
     }
@@ -414,7 +428,9 @@ private:
     LatestChannel control_state_sub_;
     LatestChannel manager_state_sub_;
     LatestChannel frame_sub_;
+    LatestChannel record_state_sub_;
     MaixDisplay display_;
+    MaixTouch touch_;
     FrameRing frame_ring_;
     uint64_t last_frame_seq_ = 0;
     uint64_t last_overlay_draw_ns_ = 0;
@@ -423,10 +439,12 @@ private:
     uint64_t latest_panda_seq_ = 0;
     uint64_t latest_control_seq_ = 0;
     uint64_t latest_manager_seq_ = 0;
+    uint64_t latest_record_seq_ = 0;
     ModelState latest_model_state_ {};
     PandaState latest_panda_state_ {};
     ControlState latest_control_state_ {};
     ManagerState latest_manager_state_ {};
+    RecordState latest_record_state_ {};
     ParsedModelOutput latest_output_ {};
     ProjectionState latest_projection_ {};
     ProjectionState default_projection_ {};
@@ -448,6 +466,7 @@ private:
     bool previous_left_blinker_ = false;
     bool previous_right_blinker_ = false;
     uint64_t turn_signal_start_ns_ = 0;
+    uint64_t network_card_until_ns_ = 0;
     OverlayHudState hud_;
 };
 

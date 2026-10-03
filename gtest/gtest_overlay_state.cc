@@ -121,4 +121,25 @@ TEST(OverlayState, ControlStateMapping) {
   }
 }
 
+TEST(OverlayState, RecordStateMapping) {
+  RecordState r;
+  r.active = 1;
+  OverlayHudState hud;
+  hud_apply_record_state(r, true, &hud);
+  // route를 쓰는 중이면 REC
+  ASSERT_TRUE(hud.recording);
+  ASSERT_FALSE(hud.storage_full);
+  r.active = 0;
+  r.storage_blocked = 1;
+  hud_apply_record_state(r, true, &hud);
+  // 저장 공간 때문에 멈추면 REC 대신 저장 공간 경고
+  ASSERT_FALSE(hud.recording);
+  ASSERT_TRUE(hud.storage_full);
+  r.active = 1;
+  hud_apply_record_state(r, false, &hud);
+  // recordd가 멈춰 스냅샷이 낡으면 둘 다 끈다
+  ASSERT_FALSE(hud.recording);
+  ASSERT_FALSE(hud.storage_full);
+}
+
 }  // namespace

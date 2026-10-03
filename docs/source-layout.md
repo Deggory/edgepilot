@@ -27,6 +27,10 @@ only in the board build, against `deps/ax630` from
     4:3 and scales it to 640x480; layer 1 is a cached CMM BGRA block the HUD is
     drawn into and pushed without a copy. VO rotates for the 480x640 panel and
     applies the board's flip/mirror. Also turns the backlight on.
+- `maix_touch.*`
+  - the touchscreen (`hyn_ts`, multi-touch type B) read without blocking;
+    reports short taps in screen coordinates, rotated clockwise 90° as
+    MaixCDK's `maix_touchscreen_maixcam2.hpp` does.
 - `maix_cmm.*`
   - physically contiguous CMM blocks shared across processes (allocate in one,
     map by physical address in another, uncached).
@@ -149,23 +153,32 @@ released after that short hold if they persist.
 - `src/camerad.cc`, `src/modeld.cc`, `src/overlayd.cc`
   - openpilot-style process split: capture into the ring, model, and the
     two-layer LCD HUD.
-- `src/overlay_renderer.*`
-  - draws the HUD (panels, plan/lane/road-edge ribbons, lead marker, turn
-    signals, alerts, traffic-signal sprites) with OpenCV into a straight-alpha
-    BGRA buffer. `HudLayout` picks the compact 640-wide layout (208 px panels)
-    or the 800-wide K230 layout by target width; lanes, path, and markers are
-    anti-aliased. Stateless apart from the preloaded sprites; the turn-signal
-    phase comes from `overlayd`.
+- `src/overlay_renderer.*`, `src/overlay_canvas.*`, `src/overlay_font.*`
+  - draw the 640x480 HUD into the straight-alpha BGRA buffer of VO layer 1:
+    state border, speed and set speed, steering mode, plan/lane/road-edge
+    ribbons faded with distance, lead chevron, torque bar, alerts, TPMS and
+    camera calibration cards, a recording/Wi-Fi status pill (and the network
+    card a tap opens), and chips that appear only when something needs
+    attention (temperature, panda, storage). The remaining numeric diagnostics
+    sit in a card behind the `hud_debug` device setting. `overlay_canvas`
+    fills polygons with 4-subrow anti-aliasing that touches only covered spans,
+    fills the straight rows of integer rounded rectangles directly, blends
+    without divisions, and records the 64 px tiles each row touched so the
+    next use of the same buffer clears only those; `overlay_font` holds the
+    glyphs that `tools/ui/make_hud_font.py` bakes from Pillow's Aileron (CC0).
+    No OpenCV, so `gtest_overlay_canvas` and `hud_snapshot` run on the host.
+    The renderer keeps only coverage scratch and the per-buffer tiles; the
+    turn-signal phase and the network card toggle come from `overlayd`.
 - `src/overlay_state.*`
   - `OverlayHudState`, the `K230*State` → `OverlayHudState` mapping shared by
     `overlayd` and `hud_snapshot`, the engage-block label table, and
     `OverlayAlertEvents`, which turns the controlsd event counters into the one
     toast/log alert a frame may raise (baseline on first sight, rebaseline on a
-    controlsd restart, reject > engage > disengage > departure). No OpenCV, so
+    controlsd restart, reject > engage > disengage > departure).
     `gtest_overlay_state` pins all of it on the host.
 - `src/system_monitor.*`
-  - `/proc`, thermal-zone, and network sampling into `OverlayHudState`, called
-    at 1 Hz by `overlayd`.
+  - `/proc`, thermal-zone, and network sampling (the Wi-Fi SSID through the
+    `SIOCGIWESSID` ioctl) into `OverlayHudState`, called at 1 Hz by `overlayd`.
 - `src/recording_writer.*`, `src/recording_format.h`
   - the event-log writer and on-disk contract of the K230 recorder, kept for
     the recorder port and for the host tools that read K230 drives.
