@@ -86,6 +86,8 @@ struct LateralControlResult {
    * 비트만 내린다. 85도 아래로 오면 풀리고, 운전자가 넘겨받은 회전이면 15도 아래에서 손을 떼야 풀린다.
    * 그동안 조향은 비활성처럼 쉰다(토크 0, 목표 곡률은 실제를 따라감). */
   bool large_angle_hold = false;
+  // 그중 운전자가 넘겨받은 회전이라 15도 아래에서 손을 떼야 풀리는 경우
+  bool large_angle_hold_by_driver = false;
   // 해제 예고: 캘리브레이션 같은 SoftDisable 사유로 3초 뒤 해제된다. 조향은 계속한다.
   bool soft_disabling = false;
   // openpilot steerSaturated: 커브가 조향 한계를 넘어 목표 곡률을 못 따라간다.

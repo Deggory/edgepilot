@@ -114,6 +114,10 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
 
     softmax(raw.data() + kDesireStateOffset,
             output.meta.desire_state.data(), kDesireLen);
+    for (int i = 0; i < kMetaPressHorizons; ++i) {
+        output.meta.gas_press[i] = sigmoid(raw[kMetaOffset + kMetaGasPressIndex + i * kMetaPressStride]);
+        output.meta.brake_press[i] = sigmoid(raw[kMetaOffset + kMetaBrakePressIndex + i * kMetaPressStride]);
+    }
 
     output.has_pose = true;
     const float *pose_src = raw.data() + kPoseOffset;
@@ -122,6 +126,11 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
         output.pose.rot[i] = pose_src[3 + i];
         output.pose.trans_std[i] = std::exp(pose_src[6 + i]);
         output.pose.rot_std[i] = std::exp(pose_src[9 + i]);
+    }
+    const float *road_src = raw.data() + kRoadTransformOffset;  // 평균 6, 이어서 log std 6
+    for (int i = 0; i < 3; ++i) {
+        output.pose.road_trans[i] = road_src[i];
+        output.pose.road_trans_std[i] = std::exp(road_src[6 + i]);
     }
 
     return output;

@@ -10,6 +10,9 @@ struct PoseObservation {
     float rot[3];
     float trans_std[3];
     float rot_std[3];
+    // road_transform 앞 3개(도로면 기준 카메라 위치, [2]가 높이)와 표준편차. upstream cameraOdometry.roadTransformTrans
+    float road_trans[3];
+    float road_trans_std[3];
 };
 
 constexpr int kTrajectorySize = 33;
@@ -47,6 +50,11 @@ constexpr int kPlanWidth = 15;
 constexpr int kPlanYawIndex = 11;
 constexpr int kPlanYawRateIndex = 14;
 constexpr int kDesireStateOffset = 2566;
+/* meta 안의 페달 예측(openpilot constants.Meta). GAS_PRESS = meta[31:55:4], BRAKE_PRESS = meta[32:55:4]:
+ * 운전자가 0, 2, 4, 6, 8, 10초 뒤 가속·브레이크 페달을 밟고 있을 확률(로짓, sigmoid). */
+constexpr int kMetaGasPressIndex = 31;
+constexpr int kMetaBrakePressIndex = 32;
+constexpr int kMetaPressStride = 4;
 static_assert(kLaneProbOffset == kLaneOffset + kLaneLineSize * 2 &&
                   kRoadEdgeOffset == kLaneProbOffset + 8 &&
                   kLeadOffset == kRoadEdgeOffset + kRoadEdgeMeanSize * 2 &&
@@ -105,8 +113,13 @@ struct ParsedRoadEdge {
     std::array<ModelPoint, kTrajectorySize> points{};
 };
 
+constexpr int kMetaPressHorizons = 6;  // 0, 2, 4, 6, 8, 10 s
+
 struct ParsedMeta {
     std::array<float, kDesireLen> desire_state{};
+    // 운전자가 그 시각에 가속·브레이크 페달을 밟고 있을 확률(openpilot disengagePredictions.gas/brakePressProbs)
+    std::array<float, kMetaPressHorizons> gas_press{};
+    std::array<float, kMetaPressHorizons> brake_press{};
 };
 
 struct ParsedLeadPoint {

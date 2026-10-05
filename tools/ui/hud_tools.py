@@ -3,7 +3,8 @@
 
   hud_tools.py inputs <route_dir> <out_dir> [--time SECONDS]
       Extract hud_snapshot inputs from a recordd route: model.bin (raw
-      ModelState in the current v7 layout, 3528 bytes), control.bin (raw
+      ModelState in the current v8 layout, 3576 bytes; a v7 record is
+      zero-filled at the end), control.bin (raw
       ControlState padded to 240 bytes) and camera.png (the matching road
       frame). Without --time the moment is chosen automatically: controller
       active, 40-95 km/h, all lane lines confident, a lead if any.
@@ -32,7 +33,7 @@ from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa:
                               iter_event_records, model_state_layout,
                               route_event_files, route_segments, segment_video)
 
-MODEL_STATE_SIZE = model_state_layout(7)["__size__"]  # hud_snapshot reads the current struct
+MODEL_STATE_SIZE = model_state_layout(8)["__size__"]  # hud_snapshot reads the current struct
 CONTROL_STATE_SIZE = 240
 FRAME_MAGIC = b"K230ARGB"
 
@@ -53,7 +54,7 @@ def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment]]:
         for rec in iter_event_records(path):
             if rec.type == RECORD_CONTROL_STATE:
                 controls.append((rec.timestamp_ns, rec.control_state()))
-            elif rec.type == RECORD_MODEL_STATE and rec.version == 7:
+            elif rec.type == RECORD_MODEL_STATE and rec.version >= 7:
                 layout = rec.model_layout()
                 frame_id, = struct.unpack_from("<Q", rec.payload, 0)
                 lanes = struct.unpack_from("<4f", rec.payload, layout["lane_probabilities"])
@@ -101,7 +102,9 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     control = controls[cj][1]
 
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "model.bin").write_bytes(bytes(model.payload[:MODEL_STATE_SIZE]))
+    # v7 has no pedal predictions at the end; zero-fill them to the current struct
+    raw_model = bytes(model.payload[:MODEL_STATE_SIZE])
+    (args.out / "model.bin").write_bytes(raw_model + b"\0" * (MODEL_STATE_SIZE - len(raw_model)))
     raw = control.tobytes()
     (args.out / "control.bin").write_bytes(raw + b"\0" * (CONTROL_STATE_SIZE - len(raw)))
     seconds = (int(model.ts) - int(model_ts[0])) / 1e9

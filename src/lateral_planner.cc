@@ -158,7 +158,8 @@ public:
      * 모델 경로는 차 기준이라 거기에 더하면 매 프레임 "지금 가려는 곳의 8 cm 옆"이 목표가
      * 되어 위치 고정점이 없다. 모델의 중앙 복원력이 약해(차선 1 m 벗어날 때 plan 0.28 m)
      * 교차로 랜리스 인계 때 차가 오프셋의 몇 배만큼 계속 밀렸다(2026-09-29 실차: 좌측 쏠림).
-     * 이렇게 하면 실제 적용량은 차선 가중치 d_prob x (1 - plan_mix)를 따라 줄어든다. */
+     * 이렇게 하면 실제 적용량은 차선 가중치 d_prob를 따르고, 모델 경로 구간으로 넘어가는 동안
+     * 출력 블렌드(1 - plan_mix)만큼 더 줄어든다. */
     std::array<double, kTrajectorySize> lane_path_y{};
     for (int i = 0; i < kTrajectorySize; ++i) {
       const double from_left = left_y_[i] + half_width;
@@ -239,6 +240,7 @@ struct LateralPlanner::Impl {
   void update_params(const SteeringParams &steering,
                      const DrivingParams &driving) {
     lane_planner.update_offsets(steering.path_offset_m);
+    lane_path_weight = steering.lane_path_weight;
     // desire_helper의 torque_applied는 carstate.steeringPressed에서 나오므로
     // 컨트롤러와 같은 임계값을 써야 한다.
     steering_pressed_threshold = steering.steering_pressed_threshold;
@@ -302,19 +304,18 @@ struct LateralPlanner::Impl {
     } else if (!lane_change_off) {
       laneless_buffer = false;
     }
-    /* 전환 임계값(유효확률 0.3)에서 블렌드 가중치는 아직 0.51이라, 경로 출처를
-     * 한 프레임에 바꾸면 목표가 8.5 cm 튄다(2026-09-13 실측, 전환 434회).
-     * 판정은 그대로 두고 인계만 섞는다. 차선을 버리는 방향은 0.5초로 늦추고,
-     * 되찾는 방향은 목표가 차선 중심 쪽으로 가므로 0.25초로 당긴다. */
+    /* 모델 경로 구간(교차로처럼 차선이 안 보일 때, 회전 desire)은 laneless 모드와 같은 openpilot
+     * 메인 계산(plan_yaw_target)으로 목표를 낸다. 예전에는 모델 경로 위치를 Lane MPC로 따라갔는데,
+     * 경로를 "지금 속도 x 시간" 거리에서 읽고 MPC가 곡률 변화를 눌러 25 km/h 아래에서 laneless보다
+     * 26~30% 덜 꺾고 0.3~0.4초 늦었다(2026-10-05 재생; 실주행 저속 회전의 운전자 토크 중앙값
+     * 152 vs laneless 80). MPC는 늘 차선 경로를 따르고, 둘 사이의 인계만 출력(psi·곡률)에서 섞는다.
+     * 전환 임계값(유효확률 0.3)에서는 차선 블렌드 가중치가 아직 0.51이라 한 프레임에 바꾸면 튄다
+     * (2026-09-13 실측, 전환 434회). 차선을 버리는 방향은 0.5초, 되찾는 방향은 0.25초에 섞는다. */
     const double mix_target = use_model_path ? 1.0 : 0.0;
     const double mix_step = (mix_target > plan_mix ? kPlanMixOutRatePerS
                                                    : kPlanMixInRatePerS) * kDtModel;
     plan_mix = std::clamp(mix_target, plan_mix - mix_step, plan_mix + mix_step);
-    if (plan_mix < 1.0) {
-      const auto blended = lane_planner.lane_path(path_t, path);
-      for (int i = 0; i < kTrajectorySize; ++i)
-        path[i][1] = plan_mix * path[i][1] + (1.0 - plan_mix) * blended[i][1];
-    }
+    path = lane_planner.lane_path(path_t, path);
 
     std::array<double, kTrajectorySize> distance{};
     std::array<double, kTrajectorySize> path_y{};
@@ -359,6 +360,7 @@ struct LateralPlanner::Impl {
         v_ego <= 5.0f ? 1.0 : v_ego >= 10.0f ? 0.15
                                              : 1.0 - (v_ego - 5.0) * 0.17;
     LateralMpcWeights weights;
+    weights.path = lane_path_weight;
     weights.heading = heading_weight;
     mpc.run(initial_curvature, std::max(0.0f, v_ego), lateral_factor, y_pts,
             heading_pts, weights);
@@ -374,9 +376,23 @@ struct LateralPlanner::Impl {
     }
     invalid_count = (mpc.cost() > 20000.0 || solver_failed) ? invalid_count + 1 : 0;
 
+    // 모델 경로 쪽 목표. 섞는 동안 MPC는 실제로 낸 곡률에서 다음 해를 시작해 되돌아올 때 튀지 않는다.
+    const double model_weight = plan_mix;
+    LateralTarget model_target;
+    if (model_weight > 0.0) {
+      model_target = plan_yaw_target(model, v_ego);
+      std::array<double, kLateralControlN> times{}, model_curvatures{};
+      for (int i = 0; i < kLateralControlN; ++i) {
+        times[i] = model_t_idx_double(i);
+        model_curvatures[i] = model_target.curvatures[i];
+      }
+      initial_curvature = (1.0 - model_weight) * initial_curvature +
+          model_weight * interp(kDtModel, times.data(), model_curvatures.data(), times.size());
+    }
+
     target.valid = true;
     target.capture_timestamp_ns = model.capture_timestamp_ns;
-    target.mpc_solution_valid = invalid_count < 2;
+    target.mpc_solution_valid = model_weight >= 1.0 || invalid_count < 2;
     target.laneless_mode = use_model_path;
     target.lane_left_y_m = static_cast<float>(lane_planner.near_left_y());
     target.lane_right_y_m = static_cast<float>(lane_planner.near_right_y());
@@ -392,9 +408,24 @@ struct LateralPlanner::Impl {
     target.curvature = static_cast<float>(mpc.nodes()[0].curvature);
     target.desire = desire;
     target.turn_desire = turn_desire_direction;
+    target.lane_change_state = lane_change_state;
+    target.lane_change_direction = direction;
     for (int i = 0; i < kLateralControlN; ++i) {
       target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
       target.curvatures[i] = static_cast<float>(mpc.nodes()[i].curvature);
+    }
+    if (model_weight > 0.0) {
+      // lag_adjusted_curvature는 psi와 곡률에 선형이라 입력을 섞으면 목표 곡률이 그대로 섞인다.
+      const auto mix = [model_weight](float lane_value, float model_value) {
+        return static_cast<float>((1.0 - model_weight) * lane_value + model_weight * model_value);
+      };
+      for (int i = 0; i < kLateralControlN; ++i) {
+        target.psis[i] = mix(target.psis[i], model_target.psis[i]);
+        target.curvatures[i] = mix(target.curvatures[i], model_target.curvatures[i]);
+      }
+      target.heading_rad = mix(target.heading_rad, model_target.heading_rad);
+      target.curvature = mix(target.curvature, model_target.curvature);
+      target.target_y_m = mix(target.target_y_m, model_target.target_y_m);
     }
     return target;
   }
@@ -405,6 +436,18 @@ struct LateralPlanner::Impl {
    * (메인은 t_d = lateralDelay + 프레임 지연 50 ms + 25 ms). 경로 오프셋은 laneless에서
    * 위치가 아니라 꾸준한 곡률 편향이 되므로 쓰지 않는다. */
   LateralTarget upstream_target(const ModelState &model, float v_ego, float measured_curvature) {
+    LateralTarget target = plan_yaw_target(model, v_ego);
+    // 차선 모드로 돌아가면 낡은 MPC 해가 아니라 지금 곡률에서 출발한다.
+    laneless_buffer = false;
+    plan_mix = 1.0;
+    mpc.reset();
+    initial_curvature = measured_curvature;
+    invalid_count = 0;
+    return target;
+  }
+
+  // openpilot 메인 get_curvature_from_plan 목표. 상태를 바꾸지 않아 Lane 모드의 모델 경로 구간도 쓴다.
+  LateralTarget plan_yaw_target(const ModelState &model, float v_ego) const {
     constexpr double kMinSpeed = 1.0;  // openpilot drive_helpers.MIN_SPEED
     const double speed = std::max<double>(v_ego, kMinSpeed);
     std::array<double, kTrajectorySize> t{}, yaw{}, yaw_rate{}, y{};
@@ -438,12 +481,8 @@ struct LateralPlanner::Impl {
     target.curvature = target.curvatures[0];
     target.desire = desire;
     target.turn_desire = turn_desire_direction;
-    // 차선 모드로 돌아가면 낡은 MPC 해가 아니라 지금 곡률에서 출발한다.
-    laneless_buffer = false;
-    plan_mix = 1.0;
-    mpc.reset();
-    initial_curvature = measured_curvature;
-    invalid_count = 0;
+    target.lane_change_state = lane_change_state;
+    target.lane_change_direction = direction;
     return target;
   }
 
@@ -545,6 +584,7 @@ struct LateralPlanner::Impl {
   double initial_curvature = 0.0;
   double factor1 = 0.0;
   double factor2 = 0.0;
+  double lane_path_weight = 3.0;
   int steering_pressed_threshold = 150;
   double lane_change_min_speed_mps = 30.0 / 3.6;
   bool laneless_mode = false;

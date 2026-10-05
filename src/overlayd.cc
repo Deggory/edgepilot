@@ -19,14 +19,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
-/* MaixCAM2 HUD. LCD의 VO 하드웨어 두 레이어를 쓴다: 카메라 프레임 링의 최신
- * 프레임은 레이어 0(IVPS로 가운데 4:3을 640x480에), HUD 렌더러가 640x480 네이티브
- * 배치로 그린 BGRA는 레이어 1에 올리고 합성은 하드웨어가 한다. 알림은 화면 토스트와
- * 로그에 더해 K230 부저와 같은 멜로디를 보드 스피커로 낸다(alert_sound.h). 터치스크린은
- * 오른쪽 위 상태 알약을 누르면 네트워크 카드를 여는 데 쓴다. */
+/* MaixCAM2 HUD. LCD의 VO 하드웨어 레이어 둘을 쓴다: 카메라 프레임 링의 최신 프레임은
+ * 비디오 레이어 0(IVPS로 가운데 4:3을 640x480에), HUD는 렌더러가 640x480 화면 좌표로
+ * 세로 패널 방향 그림판에 그려 그래픽 레이어 fb0로 옮기고, 합성은 하드웨어가 한다. 알림은
+ * 화면 카드와 로그에 더해 보드 스피커로 알림음을 낸다(alert_sound.h). 터치스크린은 오른쪽
+ * 위 상태 알약(네트워크 카드)과 왼쪽 열(진단 카드)을 켜고 끄는 데 쓴다. */
 
 namespace {
 
@@ -103,7 +104,11 @@ public:
             throw std::runtime_error("open roadAiFrame ipc failed");
         if (!record_state_sub_.open(kRecordStateTopic, sizeof(RecordState), true))
             throw std::runtime_error("open recordState ipc failed");
-        if (!touch_.open()) std::fprintf(stderr, "overlayd: no touchscreen; network card disabled\n");
+        if (!learner_state_sub_.open(kLearnerStateTopic, sizeof(LearnerState), true))
+            throw std::runtime_error("open learnerState ipc failed");
+        if (!localization_state_sub_.open(kLocalizationStateTopic, sizeof(LocalizationState), true))
+            throw std::runtime_error("open localization ipc failed");
+        if (!touch_.open()) std::fprintf(stderr, "overlayd: no touchscreen; tap toggles disabled\n");
 
         uint64_t window_start = monotonic_now_ns();
         while (!g_stop) {
@@ -181,21 +186,22 @@ private:
         return true;
     }
 
-    /* HUD를 화면 레이어 1의 CMM 블록(640x480 BGRA)에 바로 그리고 복사 없이 올린다.
-     * 가로로 누르지 않는 640 폭 배치라 글꼴이 네이티브 픽셀에 정수 배율로 맞는다. */
+    /* HUD를 세로 패널 방향 그림판에 화면 좌표(640x480)로 그리고(캔버스가 transpose), 바뀐 칸만
+     * 그래픽 레이어 fb0로 옮긴다. 회전 하드웨어(TDP)를 거치지 않아 그린 화소가 그대로 나간다. */
     void draw_overlay()
     {
         const uint64_t draw_start = profile_ ? monotonic_now_ns() : 0;
-        uint8_t *buffer = display_.begin_overlay();
-        if (!buffer) {
+        const MaixDisplay::OverlayBuffer buffer = display_.begin_overlay();
+        if (!buffer.pixels) {
             ++errors_;
             return;
         }
-        const OverlayTarget target{buffer, static_cast<uint32_t>(kOutW), static_cast<uint32_t>(kOutH),
-                                   static_cast<uint32_t>(kOutW * 4)};
+        const OverlayTarget target{buffer.pixels, static_cast<uint32_t>(kOutW), static_cast<uint32_t>(kOutH),
+                                   static_cast<uint32_t>(buffer.stride),
+                                   HudOrientation{true, buffer.flip_x, buffer.flip_y}};
         overlay_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
                       have_model_state_ ? latest_projection_ : default_projection_, hud_);
-        if (!display_.end_overlay()) ++errors_;
+        if (!display_.end_overlay(overlay_.last_damage().data(), overlay_.last_tile_shift())) ++errors_;
         if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
         ++overlay_frames_;
     }
@@ -213,14 +219,17 @@ private:
         return true;
     }
 
-    /* 웹 기기 설정: HUD 진단 카드를 켜고 끈다. 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다
-     * (시작 때 읽은 값은 소리 없이).
+    /* 웹 기기 설정: HUD 진단 카드의 기본값. 그 값이 바뀔 때만 적용해, 다른 설정(소리·밝기)을 바꿔도
+     * 터치로 켜고 끈 진단 카드가 되돌아가지 않는다. 알림음 크기는 바뀌면 적용하고 확인음을 한 번
+     * 낸다(시작 때 읽은 값은 소리 없이).
      * 카메라 장착 오프셋은 modeld가 그 프레임에 쓴 값을 ModelState로 받는다(projection_from_model_state). */
     void apply_device_settings(uint64_t now_ns)
     {
         if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
-        hud_.debug_overlay = device_settings_.hud_debug;
-        pending_redraw_ = true;
+        if (!device_settings_read_ || device_settings_.hud_debug != applied_hud_debug_) {
+            hud_.debug_overlay = applied_hud_debug_ = device_settings_.hud_debug;
+            pending_redraw_ = true;
+        }
         const float percent = device_settings_.alert_volume_percent;
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
@@ -238,35 +247,58 @@ private:
             fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
         latest_output_ = parsed_from_model_state(latest_model_state_);
         latest_projection_ = projection_from_model_state(latest_model_state_);
+        update_lane_center();
         return true;
     }
 
-    /* 새 panda/control/manager/record 스냅샷이 있으면 true. 모델이 멈춰도 속도·토스트가
-     * 제어 상태를 따라가도록 재그리기 트리거가 된다. */
+    /* 진단 카드의 차선 안 위치: 모델 프레임마다 0.5초 시간 상수로 다듬는다(20 Hz 숫자 떨림).
+     * 차선을 놓치면 비우고 다시 시작한다. */
+    void update_lane_center()
+    {
+        constexpr float kAlpha = 0.1f;
+        const float raw = have_model_state_ ? lane_center_offset_m(latest_output_)
+                                            : std::numeric_limits<float>::quiet_NaN();
+        float &smoothed = hud_.lane_center_offset_m;
+        smoothed = !std::isfinite(raw) ? raw : std::isfinite(smoothed) ? smoothed + kAlpha * (raw - smoothed) : raw;
+    }
+
+    /* 새 panda/control/manager/record/학습기/locationd 스냅샷이 있으면 true. 모델이 멈춰도
+     * 속도·토스트가 제어 상태를 따라가도록 재그리기 트리거가 된다. */
     bool update_aux_state()
     {
         bool changed = poll(panda_state_sub_, &latest_panda_state_, &latest_panda_seq_);
         changed = poll(control_state_sub_, &latest_control_state_, &latest_control_seq_) || changed;
         changed = poll(manager_state_sub_, &latest_manager_state_, &latest_manager_seq_) || changed;
         changed = poll(record_state_sub_, &latest_record_state_, &latest_record_seq_) || changed;
+        changed = poll(learner_state_sub_, &latest_learner_state_, &latest_learner_seq_) || changed;
+        changed = poll(localization_state_sub_, &latest_localization_state_, &latest_localization_seq_) || changed;
         refresh_hud_state();
         return changed;
     }
 
-    /* 상태 알약을 누르면 네트워크 카드를 열고, 열린 동안은 어디를 눌러도 닫는다. 카드는
-     * kNetworkCardNs 뒤 저절로 닫힌다. 탭 좌표는 회전 매핑 확인용으로 로그에 남긴다.
-     * 카드가 열리거나 닫히면 true. */
+    /* 터치: 상태 알약은 네트워크 카드를, 왼쪽 열은 진단 카드를 켜고 끈다. 그 밖을 누르면 열린
+     * 네트워크 카드를 닫는다. 네트워크 카드는 kNetworkCardNs 뒤 저절로 닫힌다. 진단 카드는 다음
+     * 웹 설정 변경이나 재시작까지만 간다. 탭은 로그에 남긴다. 화면이 바뀌면 true. */
     bool update_touch(uint64_t now_ns)
     {
-        const bool was_open = hud_.network_card;
+        const bool was_open = hud_.network_card, was_debug = hud_.debug_overlay;
         int x = 0, y = 0;
         if (touch_.poll_tap(&x, &y)) {
-            std::fprintf(stderr, "\noverlayd: tap x=%d y=%d\n", x, y);
-            hud_.network_card = !hud_.network_card && hud_status_touch(x, y, kOutW);
-            network_card_until_ns_ = now_ns + kNetworkCardNs;
+            const char *action = "close";
+            if (hud_status_touch(x, y, kOutW)) {
+                hud_.network_card = !hud_.network_card;
+                network_card_until_ns_ = now_ns + kNetworkCardNs;
+                action = "network card";
+            } else if (hud_left_column_touch(x, y, kOutH)) {
+                hud_.debug_overlay = !hud_.debug_overlay;
+                action = "debug card";
+            } else {
+                hud_.network_card = false;
+            }
+            std::fprintf(stderr, "\noverlayd: tap x=%d y=%d %s\n", x, y, action);
         }
         if (now_ns >= network_card_until_ns_) hud_.network_card = false;
-        return hud_.network_card != was_open;
+        return hud_.network_card != was_open || hud_.debug_overlay != was_debug;
     }
 
     /* 깜빡이 단계는 켜진 시각 기준으로 나간다. 단계가 바뀌면 true. */
@@ -299,6 +331,8 @@ private:
         bool control = false;
         bool manager = false;
         bool record = false;
+        bool learner = false;
+        bool localization = false;
     };
 
     Freshness freshness(uint64_t now) const
@@ -307,7 +341,9 @@ private:
                 fresh(latest_panda_state_.timestamp_ns, now),
                 fresh(latest_control_state_.timestamp_ns, now),
                 fresh(latest_manager_state_.timestamp_ns, now),
-                fresh(latest_record_state_.timestamp_ns, now)};
+                fresh(latest_record_state_.timestamp_ns, now),
+                fresh(latest_learner_state_.timestamp_ns, now),
+                fresh(latest_localization_state_.timestamp_ns, now)};
     }
 
     /* 최신 스냅샷을 HUD 상태로 옮기고, control 이벤트 카운터로 토스트·알림을 낸다. */
@@ -321,6 +357,8 @@ private:
         hud_apply_model_state(latest_model_state_, f.model, &hud_);
         hud_apply_manager_state(latest_manager_state_, f.manager, have_model_state_, &hud_);
         hud_apply_record_state(latest_record_state_, f.record, &hud_);
+        hud_apply_learner_state(latest_learner_state_, f.learner, &hud_);
+        hud_apply_localization_state(latest_localization_state_, f.localization, &hud_);
         process_alert_events(f, now);
     }
 
@@ -415,6 +453,7 @@ private:
     DeviceSettingsFile device_settings_file_;
     DeviceSettings device_settings_;
     bool device_settings_read_ = false;
+    bool applied_hud_debug_ = false;  // 마지막으로 적용한 웹 설정의 HUD 진단
     bool previous_soft_disabling_ = false;
     bool previous_steer_saturated_ = false;
     int test_sounds_played_ = 0;
@@ -426,6 +465,8 @@ private:
     LatestChannel manager_state_sub_;
     LatestChannel frame_sub_;
     LatestChannel record_state_sub_;
+    LatestChannel learner_state_sub_;
+    LatestChannel localization_state_sub_;
     MaixDisplay display_;
     MaixTouch touch_;
     FrameRing frame_ring_;
@@ -437,11 +478,15 @@ private:
     uint64_t latest_control_seq_ = 0;
     uint64_t latest_manager_seq_ = 0;
     uint64_t latest_record_seq_ = 0;
+    uint64_t latest_learner_seq_ = 0;
+    uint64_t latest_localization_seq_ = 0;
     ModelState latest_model_state_ {};
     PandaState latest_panda_state_ {};
     ControlState latest_control_state_ {};
     ManagerState latest_manager_state_ {};
     RecordState latest_record_state_ {};
+    LearnerState latest_learner_state_ {};
+    LocalizationState latest_localization_state_ {};
     ParsedModelOutput latest_output_ {};
     ProjectionState latest_projection_ {};
     ProjectionState default_projection_ {};

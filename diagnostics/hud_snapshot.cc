@@ -160,6 +160,25 @@ int main(int argc, char **argv)
     drive.calibration_pitch_deg = -2.3f;
     drive.calibration_yaw_deg = 0.85f;
     drive.recording = true;
+    drive.lane_center_offset_m = lane_center_offset_m(output);
+    std::snprintf(drive.wired_interface, sizeof(drive.wired_interface), "usb0");
+    std::snprintf(drive.wired_ipv4, sizeof(drive.wired_ipv4), "192.168.123.100");
+    // 학습 카드: paramsd는 쓰는 중, torqued·lagd는 아직 학습 중
+    drive.learner_fresh = true;
+    drive.params_valid = true;
+    drive.vehicle_learned = true;
+    drive.steer_ratio = 15.43f;
+    drive.stiffness = 1.0f;
+    drive.angle_offset_deg = -1.61f;
+    drive.angle_offset_fast_deg = -1.58f;
+    drive.torque_factor = 3.45f;
+    drive.torque_factor_filtered = 2.31f;
+    drive.torque_friction = 0.12f;
+    drive.torque_offset = -0.20f;
+    drive.torque_cal_percent = 74;
+    drive.lateral_delay_s = 0.42f;
+    drive.lag_blocks = 3;
+    drive.lag_estimate_s = 0.21f;
     if (have_control) {
         hud_apply_control_state(control_state, true, &drive);
     } else {
@@ -205,12 +224,53 @@ int main(int argc, char **argv)
     saturated.steer_torque_fraction = 0.95f;
     saturated.steer_saturated = true;
 
-    OverlayHudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면
+    OverlayHudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면(torqued·lagd는 아직 학습 중)
     debug.debug_overlay = true;
 
-    OverlayHudState network = drive;  // 상태 알약을 눌러 연 네트워크 카드
+    OverlayHudState learned = drive;  // 학습값을 다 쓰는 중, 후진
+    learned.torque_learned = learned.delay_learned = true;
+    learned.lag_blocks = 5;
+    learned.lateral_delay_s = 0.22f;
+    learned.gear = 7;
+    learned.cluster_speed_kph = 4.0f;
+
+    OverlayHudState lane_change = drive;  // 왼쪽 깜빡이: 핸들을 밀기를 기다림
+    lane_change.left_blinker = true;
+    lane_change.turn_signal_step = 8;
+    lane_change.lane_change = 1;
+    lane_change.lane_change_direction = -1;
+
+    OverlayHudState turn = drive;  // 교차로 우회전 desire, 운전자가 반대로 잡는 중
+    turn.right_blinker = true;
+    turn.turn_signal_step = 12;
+    turn.turn_direction = 1;
+    turn.cluster_speed_kph = 18.0f;
+    turn.steer_torque_fraction = -0.42f;
+    turn.driver_torque_fraction = 0.35f;
+
+    OverlayHudState paused = drive;  // 85도 위에서 운전자가 넘겨받은 회전
+    paused.steer_paused = true;
+    paused.steer_paused_by_driver = true;
+    paused.cluster_speed_kph = 9.0f;
+    paused.driver_torque_fraction = -0.6f;
+
+    OverlayHudState hazard = drive;  // 비상등, 세 자리 속도, 비전 크루즈가 설정보다 낮게
+    hazard.left_blinker = hazard.right_blinker = true;
+    hazard.turn_signal_step = 10;
+    hazard.cluster_speed_kph = 105.0f;
+    hazard.cruise_max_speed_kph = 110.0f;
+    hazard.cruise_command_speed_kph = 90.0f;
+
+    OverlayHudState network = drive;  // 상태 알약을 눌러 연 네트워크 카드, 뜨거운 보드
     network.network_card = true;
     network.cpu_temp_c = 74.0f;
+
+    OverlayHudState offline = drive;  // 와이파이가 끊기고 USB 링크만 있을 때의 네트워크 카드
+    offline.network_card = true;
+    offline.network_connected = false;
+    offline.wifi_signal_dbm = 0;
+    offline.network_ssid[0] = '\0';
+    offline.network_ipv4[0] = '\0';
 
     OverlayHudState warnings = drive;  // 재보정, 낮은·높은 타이어, 저장 공간 부족, 오프라인
     warnings.calibration_status = 3;
@@ -241,8 +301,14 @@ int main(int argc, char **argv)
         {"torque", true, torque},
         {"saturated", true, saturated},
         {"debug", true, debug},
+        {"learned", true, learned},
+        {"hazard", true, hazard},
         {"network", true, network},
+        {"offline", true, offline},
         {"warnings", true, warnings},
+        {"lane_change", true, lane_change},
+        {"turn", true, turn},
+        {"paused", true, paused},
     };
 
     constexpr uint32_t width = 640;

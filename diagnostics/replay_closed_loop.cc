@@ -219,9 +219,11 @@ int main(int argc, char **argv) {
    * 그만큼을 플랜트 이득이 아니라 미모델 외란으로 남긴다. */
   steering.live_bank_compensation = false;
 
-  /* route_711에서 폐루프 재현으로 식별한 값(홀드아웃 route_829 R2 0.96).
-   * docs/closed-loop-replay.md */
-  const float default_gain[kGainNodes] = {0.70f, 0.35f, 0.70f, 1.20f};
+  /* route_711(K230)에서 식별한 곡선 0.70/0.35/0.70/1.20의 1.5배. MaixCAM2 차선 주행(2026-10-03
+   * 00-05-56, 10-04 02-29-44)은 개루프 재현 R2가 1.5~1.8배에서 가장 높았다(1.0배 0.960/0.956 →
+   * 1.5배 0.971/0.976). 예전 값은 차의 토크 응답을 작게 잡아, 횡가속 계수를 올리면(torqued 3.15)
+   * 곡선 바깥으로 12 cm 밀린다는 잘못된 결론을 냈다. docs/closed-loop-replay.md */
+  const float default_gain[kGainNodes] = {1.05f, 0.525f, 1.05f, 1.80f};
   float gain_curve[kGainNodes];
   for (int i = 0; i < kGainNodes; ++i) gain_curve[i] = opt.gain.value_or(default_gain[i]);
   if (opt.gain_pts != nullptr) {

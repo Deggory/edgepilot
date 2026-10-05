@@ -12,10 +12,10 @@ enum class AlertSoundId { unable, engage, disengage, signal_changed, unavailable
 
 const char *alert_sound_name(AlertSoundId id);
 
-/* 모노 S16 샘플. 봉우리는 풀스케일의 kAlertTonePeak이고, 0에서 시작해 0으로 끝난다. 감쇠하는
- * 음은 같은 봉우리의 이어지는 음보다 작게 들리므로 예전 멜로디(0.6)보다 높게 잡아 체감 크기를
- * 맞춘다. */
-constexpr double kAlertTonePeak = 0.8;
+/* 모노 S16 샘플. 봉우리는 풀스케일의 kAlertTonePeak이고, 0에서 시작해 0으로 끝난다. 0.8에서는
+ * 보드 스피커가 찢어지는 소리를 내서(2026-10-04 실차) 예전 멜로디(0.6)보다 낮게 둔다. 크기는
+ * 웹 기기 설정의 알림음 크기로 맞춘다. */
+constexpr double kAlertTonePeak = 0.5;
 std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate);
 
 #endif

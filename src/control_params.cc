@@ -41,6 +41,7 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
     {"center_to_front_ratio", 0.2f, 0.7f, &SteeringParams::center_to_front_ratio},
     {"steer_ratio_rear", -0.5f, 0.5f, &SteeringParams::steer_ratio_rear},
     {"path_offset_m", -1.0f, 1.0f, &SteeringParams::path_offset_m},
+    {"lane_path_weight", 0.5f, 10.0f, &SteeringParams::lane_path_weight},
     {"min_steer_speed_mps", 0.0f, 5.0f, &SteeringParams::min_steer_speed_mps},
 };
 

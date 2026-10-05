@@ -249,10 +249,10 @@ private:
 void draw_osd(MaixDisplay &display, int width, int height, int saved, double sharp, bool saving,
               bool flash)
 {
-    uint8_t *buffer = display.begin_overlay();
-    if (!buffer) return;
-    cv::Mat osd(MaixDisplay::kHeight, MaixDisplay::kWidth, CV_8UC4, buffer);
-    osd.setTo(cv::Scalar(0, 0, 0, 0));
+    const MaixDisplay::OverlayBuffer buffer = display.begin_overlay();
+    if (!buffer.pixels) return;
+    // 가로 화면 좌표로 그린 뒤 세로 패널 방향 그림판으로 옮긴다(transpose, 보드 방향만큼 뒤집기).
+    cv::Mat osd(MaixDisplay::kHeight, MaixDisplay::kWidth, CV_8UC4, cv::Scalar(0, 0, 0, 0));
     const cv::Scalar white(255, 255, 255, 255), yellow(0, 220, 255, 255);
     char top[96], bottom[96];
     std::snprintf(top, sizeof(top), "CAMCAL %dx%d   saved %d", width, height, saved);
@@ -268,6 +268,10 @@ void draw_osd(MaixDisplay &display, int width, int height, int saved, double sha
     if (flash)
         cv::rectangle(osd, cv::Rect(0, kBarH, MaixDisplay::kWidth, MaixDisplay::kHeight - 2 * kBarH),
                       white, 8);
+    cv::Mat panel(MaixDisplay::kWidth, MaixDisplay::kHeight, CV_8UC4, buffer.pixels, buffer.stride);
+    cv::transpose(osd, panel);
+    if (buffer.flip_x) cv::flip(panel, panel, 1);
+    if (buffer.flip_y) cv::flip(panel, panel, 0);
     display.end_overlay();
 }
 

@@ -208,6 +208,58 @@ python3 /root/edgepilot/param_server.py --host 0.0.0.0 --port 8080
 > `controlsd` hot-reloads while driving. Expose it only on a trusted vehicle
 > or development network.
 
+The BEV tab shows what the model sees from above: lane lines, road edges, the
+planned path and the lead, round the ego car, with the HUD's colours and limits
+(`overlay_renderer.cc`). The browser does all the work. The board copies the
+`ModelState` and `ControlState` payloads, unparsed, into one streamed response
+(`/api/bev/stream`, a frame per new model frame, 3.8 kB at up to 20 Hz). It
+sleeps until the next model frame is due, so a viewer costs about 3% of one
+core at nice 10, and nothing once the tab is closed or hidden. `/api/bev` says
+where the fields sit. `ipc_messages.h` pins those offsets, and
+`check_param_server.py` checks the two match. The page refuses to draw, and says
+so, when the server lists different fields. Deploy `param_server.py` and `web/`
+together. The page loads `web/bev.js` and three.js from `web/` next to
+`param_server.py`. The server gzips each file once in memory (about 250 kB in
+all) and then answers with 304 while it is unchanged.
+
+The ego car is our own black 2017 K7 (`web/bev_k7.js`). It is built in code from the
+published dimensions and from measurements of Kia's studio photographs (side,
+front, back): its proportions, grille, lamps, chrome, plates and wheels. Its
+tail lamps are lit. It costs the browser 26k triangles in 22 meshes, and is
+made once when the tab opens. The lead is the generic car (`web/bev_car.js`).
+
+Beyond the HUD, the BEV shows the following:
+
+- **Planned slowdown.** The inside of the path turns amber, then red, where the
+  model plans to slow down. The `PLAN` chip gives the slowest planned speed and
+  where it is, or `STOP`, or the speed the plan reaches when moving off. The
+  speed comes from the plan's positions over openpilot's T_IDXS. Against the
+  model's own velocity output it is 0.04 m/s off at 2 s and 0.07 m/s at 4 s
+  (median, 2026-10-04 drives). The vision cruise does not use it.
+- **Curvature arcs.** A white arc shows the curvature `controlsd` asks for and a
+  cyan arc the curvature it measures. Each runs as far as the car goes in 2.5 s.
+  The gap between their end ticks shows where the error would take the car. The
+  `LAT` chip gives both as lateral acceleration.
+- **Steering strain.** The ego halo turns amber as the steering output nears its
+  limit. The HUD shows this on the path instead.
+- **Lead brake lights.** They light when the model's lead decelerates at
+  1 m/s² or more, and go out above −0.6 m/s².
+- **Ego turn signals.** The K7's mirror repeater, the block at its headlamp's
+  inner end and its tail lamp's amber lens flash, with a glow on the road, while
+  `controlsd` reports a blinker, every 0.7 s like the K7's own lamps. Hazards
+  light both sides.
+- **Ego brake lights.** The K7's tail lamps brighten, its high brake light comes
+  on and a red glow lights the road behind it, while the pedal is pressed or
+  AUTO HOLD holds the car
+  (`kHudFlagBrakeLights`; see [the K7 brake signals](k7-panda-port.md#brake-signals)).
+- **Departure card.** While the car stands in D, a card shows the departure
+  alert's inputs (`departure_alert.cc`):
+  - the 2 s gas press probability against the 0.3 that fires it, with its last
+    10 s;
+  - the plan's x at 10 s against the ±5 m that arms the alert and the 10 m that
+    fires it;
+  - `ARMED`, or `GREEN` / `LEAD GO` while an alert shows.
+
 ## Production defaults
 
 - Capture is `NV12 1280x720`, the full sensor field of view scaled (no crop),

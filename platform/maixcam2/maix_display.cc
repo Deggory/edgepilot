@@ -2,11 +2,19 @@
 
 #include "ax_middleware.hpp"
 
+#include <fcntl.h>
+#include <linux/fb.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace maix::middleware::maixcam2;
 
@@ -48,13 +56,13 @@ void config_vo(ax_vo_param_t *param, int width, int height)
     std::memcpy(&param->sync_info, &sync, sizeof(sync));
 }
 
-AX_POOL make_pool(AX_U64 block_size, AX_U32 count, bool cached = false)
+AX_POOL make_pool(AX_U64 block_size, AX_U32 count)
 {
     AX_POOL_CONFIG_T cfg = {};
     cfg.MetaSize = 512;
     cfg.BlkCnt = count;
     cfg.BlkSize = block_size;
-    cfg.CacheMode = cached ? AX_POOL_CACHE_MODE_CACHED : AX_POOL_CACHE_MODE_NONCACHE;
+    cfg.CacheMode = AX_POOL_CACHE_MODE_NONCACHE;
     std::strcpy(reinterpret_cast<char *>(cfg.PartitionName), "anonymous");
     return AX_POOL_CreatePool(&cfg);
 }
@@ -103,6 +111,17 @@ void enable_backlight()
 
 } // namespace
 
+/* HUD를 쓰는 그래픽 레이어 fb0. MaixCDK VO의 레이어 1 채널은 fb0를 화면에 묶어 두려고 그대로
+ * 만들되 프레임은 보내지 않는다. 그림판은 캐시 가능한 보통 메모리이고 fb0(쓰기 결합, 순차 쓰기
+ * 약 1 GB/s)에는 바뀐 칸만 옮긴다. */
+struct Framebuffer {
+    int fd = -1;
+    uint8_t *map = nullptr;
+    size_t length = 0;
+    uint8_t *page = nullptr;  // 지금 화면에 나오는 쪽
+    int line = 0;             // fb0 행 바이트
+};
+
 // VO 생성자도 AX SYS 초기화 뒤에 만든다.
 struct MaixDisplay::Impl {
     SYS sys{false};
@@ -112,9 +131,37 @@ struct MaixDisplay::Impl {
     int osd_ch = -1;
     AX_POOL dst_pool = AX_INVALID_POOLID;
     int errors = 0;
-    AX_POOL osd_pool = AX_INVALID_POOLID;
-    Frame *osd_frame = nullptr;
+    Framebuffer fb;
+    std::vector<uint32_t> canvas;     // 세로 HUD 그림판(kHeight x kWidth)
+    std::vector<uint16_t> last_dirty;  // 지난번 옮긴 칸(행마다 비트)
+    bool copy_all = true;              // 다음엔 전부 옮긴다(처음, 칸 정보 없음)
+    bool flip_x = false;
+    bool flip_y = false;
 };
+
+namespace {
+
+bool open_framebuffer(Framebuffer *fb, int width, int height)
+{
+    fb->fd = open("/dev/fb0", O_RDWR | O_CLOEXEC);
+    if (fb->fd < 0) return false;
+    fb_fix_screeninfo fix {};
+    fb_var_screeninfo var {};
+    if (ioctl(fb->fd, FBIOGET_FSCREENINFO, &fix) != 0 || ioctl(fb->fd, FBIOGET_VSCREENINFO, &var) != 0 ||
+        var.bits_per_pixel != 32 || static_cast<int>(var.xres) != width || static_cast<int>(var.yres) != height) {
+        std::fprintf(stderr, "display: fb0 is not %dx%d 32 bpp\n", width, height);
+        return false;
+    }
+    void *map = mmap(nullptr, fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fb->fd, 0);
+    if (map == MAP_FAILED) return false;
+    fb->map = static_cast<uint8_t *>(map);
+    fb->length = fix.smem_len;
+    fb->line = static_cast<int>(fix.line_length);
+    fb->page = fb->map + static_cast<size_t>(var.yoffset) * fb->line;
+    return true;
+}
+
+}  // namespace
 
 MaixDisplay::MaixDisplay() : impl_(new Impl)
 {
@@ -141,13 +188,26 @@ MaixDisplay::MaixDisplay() : impl_(new Impl)
     impl_->osd_ch = osd_vo.get_unused_channel(1);
     if (impl_->osd_ch < 0 || osd_vo.add_channel(1, impl_->osd_ch, &osd) != maix::err::ERR_NONE)
         throw std::runtime_error("VO OSD channel failed");
+    /* MaixCDK가 레이어 1을 TDP(90°, disp_flip이면 FLIP, disp_mirror면 MIRROR)로 fb0에 넣던 방향과
+     * 같게: 그림판 열 = 화면 y(disp_flip=0이면 거꾸로), 그림판 행 = 화면 x(disp_mirror면 거꾸로).
+     * disp_flip=1, disp_mirror=0인 이 보드는 그대로 transpose다(fb0 덤프로 확인). */
+    impl_->flip_x = flip == 0;
+    impl_->flip_y = mirror != 0;
+    if (!open_framebuffer(&impl_->fb, kHeight, kWidth)) throw std::runtime_error("fb0 open failed");
+    impl_->canvas.assign(static_cast<size_t>(kWidth) * kHeight, 0);
+    impl_->last_dirty.assign(kWidth, 0);
 
     enable_backlight();
 }
 
 MaixDisplay::~MaixDisplay()
 {
-    delete impl_->osd_frame;
+    Framebuffer &fb = impl_->fb;
+    if (fb.map) {  // 멈춘 HUD가 화면에 남지 않게 비운다
+        for (int y = 0; y < kWidth; ++y) std::memset(fb.page + static_cast<size_t>(y) * fb.line, 0, kHeight * 4);
+        munmap(fb.map, fb.length);
+    }
+    if (fb.fd >= 0) close(fb.fd);
     // VO가 마지막으로 받은 블록을 채널을 닫을 때 돌려주므로 풀은 그 뒤에 없앤다.
     if (impl_->osd_ptr) {
         if (impl_->osd_ch >= 0) impl_->osd_ptr->del_channel(1, impl_->osd_ch);
@@ -159,7 +219,6 @@ MaixDisplay::~MaixDisplay()
     }
     impl_->osd_ptr.reset();
     impl_->video_ptr.reset();
-    if (impl_->osd_pool != AX_INVALID_POOLID) AX_POOL_DestroyPool(impl_->osd_pool);
     if (impl_->dst_pool != AX_INVALID_POOLID) AX_POOL_DestroyPool(impl_->dst_pool);
     impl_->sys.deinit();
 }
@@ -208,31 +267,37 @@ bool MaixDisplay::show_video_phys(unsigned long long phys, int width, int height
     return ok;
 }
 
-uint8_t *MaixDisplay::begin_overlay()
+MaixDisplay::OverlayBuffer MaixDisplay::begin_overlay()
 {
-    if (impl_->osd_pool == AX_INVALID_POOLID) {
-        impl_->osd_pool = make_pool(kWidth * kHeight * 4, 3, true);
-        if (impl_->osd_pool == AX_INVALID_POOLID) return nullptr;
-    }
-    delete impl_->osd_frame;
-    impl_->osd_frame = nullptr;
-    try {
-        impl_->osd_frame = new Frame(impl_->osd_pool, kWidth, kHeight, nullptr, 0, AX_FORMAT_BGRA8888);
-    } catch (...) {
-        return nullptr;
-    }
-    return static_cast<uint8_t *>(impl_->osd_frame->data);
+    return {reinterpret_cast<uint8_t *>(impl_->canvas.data()), kHeight * 4, impl_->flip_x, impl_->flip_y};
 }
 
-bool MaixDisplay::end_overlay()
+/* 그림판 행마다 이번(dirty)과 지난번에 그린 칸을 합쳐, 이어진 칸끼리 한 번에 fb0로 옮긴다. 지난번
+ * 칸은 이번에 지워져 0이 된 자리라 함께 옮겨야 한다. */
+bool MaixDisplay::end_overlay(const uint16_t *dirty, int tile_shift)
 {
-    Frame *frame = impl_->osd_frame;
-    impl_->osd_frame = nullptr;
-    if (!frame) return false;
-    AX_VIDEO_FRAME_T info = {};
-    frame->get_video_frame(&info);
-    AX_SYS_MflushCache(info.u64PhyAddr[0], frame->data, static_cast<AX_U32>(kWidth * kHeight * 4));
-    const bool ok = impl_->osd_ptr->push(1, impl_->osd_ch, frame) == maix::err::ERR_NONE;
-    delete frame;
-    return ok;
+    Framebuffer &fb = impl_->fb;
+    if (!fb.page) return false;
+    constexpr int kRowBytes = kHeight * 4;
+    for (int y = 0; y < kWidth; ++y) {
+        const uint8_t *src = reinterpret_cast<const uint8_t *>(impl_->canvas.data()) + static_cast<size_t>(y) * kRowBytes;
+        uint8_t *dst = fb.page + static_cast<size_t>(y) * fb.line;
+        uint16_t &last = impl_->last_dirty[y];
+        if (!dirty || impl_->copy_all) {
+            std::memcpy(dst, src, kRowBytes);
+            last = dirty ? dirty[y] : 0xffffu;
+            continue;
+        }
+        uint32_t tiles = static_cast<uint32_t>(dirty[y] | last);
+        last = dirty[y];
+        while (tiles) {
+            const int first = __builtin_ctz(tiles);
+            const int end = first + __builtin_ctz(~(tiles >> first));  // 이어진 칸의 끝(제외)
+            const int x0 = (first << tile_shift) * 4, x1 = std::min(kRowBytes, (end << tile_shift) * 4);
+            if (x0 < x1) std::memcpy(dst + x0, src + x0, static_cast<size_t>(x1 - x0));
+            tiles &= ~((1u << end) - (1u << first));
+        }
+    }
+    impl_->copy_all = false;
+    return true;
 }

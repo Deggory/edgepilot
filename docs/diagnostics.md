@@ -10,9 +10,10 @@ their options, and how to build them are listed in
 ## HUD snapshots
 
 `hud_snapshot` renders the overlay renderer off-line for the idle / standby /
-drive / busy / depart / fault / torque / saturated / debug / network /
-warnings scenarios at the
-640x480 size `overlayd` puts on VO layer 1, writes each frame as a `K230ARGB`
+drive / busy / depart / fault / torque / saturated / debug / learned / hazard /
+network / offline / warnings / lane_change / turn / paused scenarios at the HUD's
+640x480 landscape size (on the board the canvas maps it onto the portrait
+panel), writes each frame as a `K230ARGB`
 file and prints draw timings. The renderer needs no OpenCV, so the tool builds
 on the host as well as in the container build with
 `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`; time it on the board, where the numbers
@@ -25,7 +26,7 @@ matter (the host is 20–40x faster).
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
 `ModelState` / `ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
-pair (current v7 layout), plus the matching camera frame when the route copy has
+pair (current v8 layout; v7 records are zero-filled), plus the matching camera frame when the route copy has
 its `segments/`. `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]`
 turns the frames into PNGs and composites them over the centre 4:3 of the
 camera frame, as the screen shows it.

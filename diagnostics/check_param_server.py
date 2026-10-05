@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import asyncio
+import gzip
 import json
 import re
 import struct
@@ -11,10 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.display_control import duty_cycle_ns
 from scripts.param_server import (
+    BEV_CONTROL_FIELDS,
+    BEV_FRAME,
+    BEV_FRAME_MAGIC,
+    BEV_HUD_FLAGS,
+    BEV_MODEL_FIELDS,
     CALIBRATION_STATE,
     CONTROL_STATE_HEAD,
+    CONTROL_STATE_SIZE,
     HTML,
     MODEL_CALIBRATION_OFFSET,
+    MODEL_STATE_SIZE,
     CalibrationControl,
     IPC_HEADER,
     IPC_MAGIC,
@@ -29,6 +38,10 @@ from scripts.param_server import (
     LOCALIZATION_INPUT_FLAGS,
     PARAM_METADATA,
     ParamStore,
+    WEB_DIR,
+    WebAssets,
+    bev_frames,
+    bev_layout,
     boottime_ns,
     fixed_lateral_values,
 )
@@ -400,6 +413,108 @@ class LocalizationStateTest(unittest.TestCase):
 
     def test_page_has_lag_card(self):
         self.assertIn("lagd · 조향 지연", HTML)
+
+
+class BevTest(unittest.TestCase):
+    def test_layout_matches_cpp_offsets(self):
+        """페이지가 위치로 읽는 필드는 ipc_messages.h가 offsetof로 고정한 그 위치여야 한다."""
+        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        self.assertEqual(int(re.search(r"sizeof\(ModelState\) == (\d+)", source).group(1)), MODEL_STATE_SIZE)
+        self.assertEqual(int(re.search(r"sizeof\(ControlState\) == (\d+)", source).group(1)), CONTROL_STATE_SIZE)
+        model = {name: int(at) for name, at in re.findall(r"EDGEPILOT_MODEL_STATE_AT\((\w+), (\d+)\);", source)}
+        self.assertEqual(model, BEV_MODEL_FIELDS)
+        control = {name: int(at) for name, at in re.findall(r"EDGEPILOT_CONTROL_STATE_AT\((\w+), (\d+)\);", source)}
+        for name, at in BEV_CONTROL_FIELDS.items():
+            self.assertEqual(control.get(name), at, name)
+        flags = {name: int(bit) for name, bit in re.findall(r"constexpr uint32_t kHudFlag(\w+) = 1U << (\d+);", source)}
+        for name, bit in BEV_HUD_FLAGS.items():
+            self.assertEqual(flags.get(name), bit, name)
+        layout = bev_layout()
+        self.assertEqual((layout["model"]["size"], layout["control"]["size"]), (MODEL_STATE_SIZE, CONTROL_STATE_SIZE))
+
+    def test_page_reads_what_the_server_says(self):
+        """bev_data.js NEEDS가 /api/bev 레이아웃과 같은 필드를 가져야 한다(어긋나면 페이지가 그리지 않는다)."""
+        text = (WEB_DIR / "bev_data.js").read_text(encoding="utf-8")
+        needs = re.search(r"const NEEDS = \{(.*?)\n\};", text, re.S).group(1)
+        parts = {part: set(re.findall(r'"(\w+)"', keys)) for part, keys in re.findall(r"(\w+): \[(.*?)\]", needs, re.S)}
+        self.assertEqual({part: set(fields) for part, fields in bev_layout().items()}, parts)
+
+    def test_stream_sends_new_model_frames_and_idles_without_them(self):
+        def publish(path, seq, fill, size):
+            payload = bytes([fill]) * size
+            path.write_bytes(IPC_HEADER.pack(IPC_MAGIC, 1, size, 0, seq, boottime_ns(), size, 0) + payload)
+
+        def split(frame):
+            magic, model, control, now = BEV_FRAME.unpack_from(frame)
+            self.assertEqual(magic, BEV_FRAME_MAGIC)
+            self.assertEqual(len(frame), BEV_FRAME.size + model + control)
+            body = frame[BEV_FRAME.size:]
+            return body[:model], body[model:], now
+
+        with tempfile.TemporaryDirectory() as directory:
+            model, control = Path(directory) / "model_state", Path(directory) / "control_state"
+            publish(model, 2, 1, MODEL_STATE_SIZE)
+            publish(control, 2, 7, CONTROL_STATE_SIZE)
+
+            async def take():
+                frames = bev_frames(20, str(model), str(control), idle_s=0.2)
+                first = await anext(frames)
+                publish(model, 4, 2, MODEL_STATE_SIZE)
+                second = await anext(frames)
+                control.unlink()
+                third = await anext(frames)  # 새 모델 프레임 없음: idle_s 뒤 머리만
+                await frames.aclose()
+                return first, second, third
+
+            first, second, third = (split(frame) for frame in asyncio.run(take()))
+        self.assertEqual((first[0], first[1]), (bytes([1]) * MODEL_STATE_SIZE, bytes([7]) * CONTROL_STATE_SIZE))
+        self.assertEqual(second[0], bytes([2]) * MODEL_STATE_SIZE)
+        self.assertEqual((third[0], third[1]), (b"", b""))
+        self.assertLess(first[2], third[2])
+
+    def test_stream_ends_when_the_server_stops(self):
+        """uvicorn은 응답이 끝나기를 기다리므로, 서버가 내려가기 시작하면 스트림이 스스로 끝나야 한다."""
+        stopping = [False]
+
+        async def take():
+            frames = bev_frames(20, "/nonexistent/model", "/nonexistent/control", idle_s=0.05,
+                               stopping=lambda: stopping[0])
+            first = await anext(frames)
+            stopping[0] = True
+            with self.assertRaises(StopAsyncIteration):
+                await asyncio.wait_for(anext(frames), 1.0)
+            return first
+
+        self.assertEqual(BEV_FRAME.unpack_from(asyncio.run(take()))[1:3], (0, 0))
+
+    def test_web_assets_are_gzipped_once_and_stay_in_web(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "web"
+            (root / "three").mkdir(parents=True)
+            (root / "three" / "a.js").write_text("export const a = 1;\n", encoding="utf-8")
+            (root / "notes.txt").write_text("x", encoding="utf-8")
+            (Path(directory) / "outside.js").write_text("x", encoding="utf-8")
+            assets = WebAssets(root)
+            etag, body = assets.get("three/a.js")
+            self.assertEqual(gzip.decompress(body), b"export const a = 1;\n")
+            self.assertIs(assets.get("three/a.js")[1], body)
+            for name in ("../outside.js", "notes.txt", "missing.js", "/etc/hosts", "three"):
+                self.assertIsNone(assets.get(name), name)
+            (root / "three" / "a.js").write_text("export const a = 22;\n", encoding="utf-8")
+            self.assertNotEqual(assets.get("three/a.js")[0], etag)
+
+    def test_page_has_bev_tab_and_its_modules_are_there(self):
+        self.assertIn('data-group="bev"', HTML)
+        self.assertIn('import("/web/bev.js")', HTML)
+        imports = json.loads(re.search(r'<script type="importmap">(.*?)</script>', HTML).group(1))["imports"]
+        self.assertTrue((WEB_DIR / Path(imports["three"]).relative_to("/web")).is_file())
+        self.assertTrue((WEB_DIR / "bev.js").is_file())
+        for module in [*WEB_DIR.glob("*.js"), *WEB_DIR.glob("three/*.js")]:
+            text = module.read_text(encoding="utf-8")
+            for target in re.findall(r"""(?:from|import)\s*["'](\./[^"']+)["']""", text):
+                self.assertTrue((module.parent / target).is_file(), f"{module.name} imports {target}")
+            for bare in re.findall(r"""^import[^;]*?from\s*["']([^"'./][^"']*)["']""", text, re.M):
+                self.assertIn(bare, imports, f"{module.name} imports {bare}")
 
 
 if __name__ == "__main__":

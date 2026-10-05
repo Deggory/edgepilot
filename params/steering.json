@@ -22,6 +22,7 @@
   "center_to_front_ratio": 0.4,
   "steer_ratio_rear": 0.0,
   "path_offset_m": 0.0,
+  "lane_path_weight": 3.0,
   "min_steer_speed_mps": 1.0,
   "live_bank_compensation": true,
   "use_live_vehicle_params": true,

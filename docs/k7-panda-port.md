@@ -31,6 +31,43 @@ While steering is active below the MDPS threshold, the bus-1 `CLU11` helper
 reports 60 kph (38 mph) and preserves the source decimal-speed field. This
 matches the K7 branch in the reference openpilot controller.
 
+### Brake signals
+
+The openpilot DBC's TCS13 brake signals do not report the brake pedal on this
+car. This was checked against the 2026-10-04 drives:
+
+- `DriverBraking` (bit 55) and `DriverOverride` are always 0. TCS13 also reports
+  SCC and FCA as not equipped.
+- `BrakeLight` (bit 11) lights only while the car stands, almost always during
+  AUTO HOLD.
+
+The pedal comes from `AHB1` (0x160), the hybrid's brake booster.
+`CR_Ahb_StDep_mm` (bits 8–23, signed, 0.1 mm) is the pedal stroke:
+
+- about 16 mm median while braking;
+- 3 mm or less in 99% of driving without braking;
+- above 3 mm, it agrees with the booster's active state 98% of the time while
+  moving.
+
+`brake_lights_on()` (`vehicle_can`) is true when the stroke is above 3 mm or
+when TCS13 `BrakeLight` is set, that is, while the pedal is pressed or AUTO HOLD
+holds the car. `controlsd` publishes it as `kHudFlagBrakeLights`.
+
+`VehicleCanState::brake_pressed` still reads `DriverBraking`, so it is never
+true on this car.
+
+### Body signals
+
+CGW1's two-bit B-CAN signals use 3 for a B-CAN signal timeout
+(`svrs_dl3_can_v6.dbc`). These are the blinkers, hazards, driver's door and
+seatbelt. `decode_cgw1()` reads a timeout as the safe value:
+
+- blinkers and hazards read as off, since on would start a lane-change or turn
+  desire;
+- the door reads as open and the seatbelt as unlatched, and both block engaging.
+
+No timeout appeared in the 2026-10-02 to 10-04 drives.
+
 Runtime parameters live in `params/`; see [params/README.md](../params/README.md).
 
 ## MaixCAM2 connection

@@ -212,6 +212,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
   result.cut_steer_temp = update_cut_steer_state(vehicle_state);
   result.large_angle_hold = update_large_angle_hold(result.active || steer_availability_hold_,
                                                     vehicle_state.steering_angle_deg, steering_pressed);
+  result.large_angle_hold_by_driver = result.large_angle_hold && driver_took_wheel_;
   // 요청을 끈 동안은 활성이라도 조향을 쉰다(상류 latActive=false처럼)
   const bool steering = result.active && !result.large_angle_hold;
   const SteeringParams &control_params = config_.steering_params;

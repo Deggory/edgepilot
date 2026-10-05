@@ -157,6 +157,53 @@ TEST(K7Can, Tcs13DriverOverride) {
   ASSERT_EQ(vehicle.driver_override, 2) << "TCS13 운전자 가속 개입으로 차량 상태 갱신";
 }
 
+TEST(K7Can, Cgw1BcanTimeout) {
+  std::array<uint8_t, 8> bytes{};
+  set_signal_le(&bytes, 10, 2, 1);   // 안전벨트 착용
+  set_signal_le(&bytes, 19, 2, 1);   // 왼쪽 깜빡이 켜짐
+  Cgw1Values decoded = decode_cgw1(bytes);
+  ASSERT_TRUE(decoded.left_blinker);
+  ASSERT_FALSE(decoded.right_blinker);
+  ASSERT_FALSE(decoded.seatbelt_unlatched);
+  ASSERT_FALSE(decoded.driver_door_open);
+
+  // 3 = B-CAN 신호 타임아웃: 모르는 값은 안전한 쪽으로
+  for (const int start : {8, 10, 19, 33, 62}) set_signal_le(&bytes, start, 2, 3);
+  decoded = decode_cgw1(bytes);
+  ASSERT_FALSE(decoded.left_blinker) << "타임아웃은 깜빡이 켜짐이 아니다(차선 변경 desire가 생긴다)";
+  ASSERT_FALSE(decoded.right_blinker);
+  ASSERT_FALSE(decoded.hazard);
+  ASSERT_TRUE(decoded.driver_door_open) << "타임아웃 문은 열린 것으로(결합을 막는다)";
+  ASSERT_TRUE(decoded.seatbelt_unlatched) << "타임아웃 안전벨트는 미착용으로(결합을 막는다)";
+}
+
+TEST(K7Can, Ahb1BrakeLights) {
+  std::array<uint8_t, 8> bytes{};
+  set_signal_le(&bytes, 8, 16, 165);
+  ASSERT_NEAR(decode_ahb1(bytes).pedal_stroke_mm, 16.5f, 1e-4f) << "AHB1 페달 스트로크 0.1 mm 단위";
+  set_signal_le(&bytes, 8, 16, 0xffff);
+  ASSERT_NEAR(decode_ahb1(bytes).pedal_stroke_mm, -0.1f, 1e-4f) << "부호 있는 값";
+
+  VehicleCanState vehicle;
+  ASSERT_FALSE(brake_lights_on(vehicle, 1.0)) << "신호가 없으면 꺼진 것";
+  set_signal_le(&bytes, 8, 16, 165);
+  update_vehicle_can_state(&vehicle, kHyundaiAhb1Address, bytes, bytes.size(), kCameraBus, 1.0);
+  ASSERT_FALSE(brake_lights_on(vehicle, 1.0)) << "AHB1은 파워트레인 버스 것만 쓴다";
+  update_vehicle_can_state(&vehicle, kHyundaiAhb1Address, bytes, bytes.size(), kPowertrainBus, 1.0);
+  ASSERT_TRUE(brake_lights_on(vehicle, 1.1)) << "페달 16.5 mm면 켜진다";
+  ASSERT_FALSE(brake_lights_on(vehicle, 2.0)) << "AHB1이 0.5 s 넘게 끊기면 꺼진 것";
+
+  set_signal_le(&bytes, 8, 16, 20);
+  update_vehicle_can_state(&vehicle, kHyundaiAhb1Address, bytes, bytes.size(), kPowertrainBus, 2.0);
+  ASSERT_FALSE(brake_lights_on(vehicle, 2.0)) << "2 mm는 밟지 않은 페달의 흔들림";
+
+  // AUTO HOLD: 페달은 놓았고 ESC가 잡고 있다(TCS13 BrakeLight)
+  std::array<uint8_t, 8> tcs13{};
+  set_signal_le(&tcs13, 11, 1, 1);
+  update_vehicle_can_state(&vehicle, kHyundaiTcs13Address, tcs13, tcs13.size(), kPowertrainBus, 2.0);
+  ASSERT_TRUE(brake_lights_on(vehicle, 2.1)) << "AUTO HOLD 중에도 켜진다";
+}
+
 TEST(K7Can, Scc11) {
   std::array<uint8_t, 8> bytes{};
   bytes[0] = 1;

@@ -861,6 +861,7 @@ TEST(ControlReplay, DriverTakeoverHoldsUntilCentered) {
   for (int i = 0; i < sp.avoid_lkas_fault_max_frames + 20; ++i) result = step(150.0f, 300);
   // 운전자가 150도까지 감아 85도 위에 머물면 89번째 프레임에 요청을 끈다
   ASSERT_TRUE(result.large_angle_hold);
+  ASSERT_TRUE(result.large_angle_hold_by_driver) << "HUD: 15도 아래에서 손을 떼야 다시 조향";
   ASSERT_FALSE(steer_req(result));
   for (int i = 0; i < 50; ++i) ASSERT_FALSE(steer_req(step(60.0f, 300))) << "잡고 펴는 중 " << i;
   for (int i = 0; i < 50; ++i) ASSERT_FALSE(steer_req(step(30.0f, 0))) << "손을 뗐지만 15도 위 " << i;
@@ -875,6 +876,7 @@ TEST(ControlReplay, DriverTakeoverHoldsUntilCentered) {
   ASSERT_GE(released, 0);
   ASSERT_TRUE(result.active);
   ASSERT_FALSE(result.large_angle_hold);
+  ASSERT_FALSE(result.large_angle_hold_by_driver);
   ASSERT_LE(std::abs(result.apply_torque), sp.steer_delta_up);
 }
 

@@ -12,6 +12,7 @@ constexpr int kSubRows = 4;
 constexpr int kSubRowWeight = 256 / kSubRows;
 constexpr int kMaxCrossings = 16;
 constexpr int kMaxEdges = 72;  // 궤적 띠(33쌍 = 66변)가 들어가는 크기
+constexpr int kMaxFadeColumns = 1024;  // 열마다 흐림 알파를 미리 셀 수 있는 버퍼 폭
 
 // 다각형 변: 위 끝(작은 y)에서 아래 끝까지, 위 끝의 x와 기울기 dx/dy.
 struct Edge {
@@ -96,18 +97,28 @@ struct RowCoverage {
 }  // namespace
 
 OverlayCanvas::OverlayCanvas(void *pixels, int width, int height, int stride_bytes,
-                             std::vector<uint16_t> &coverage, std::vector<uint16_t> &damage)
-    : base_(static_cast<uint8_t *>(pixels)), width_(width), height_(height), stride_(stride_bytes),
-      coverage_(coverage), damage_(damage)
+                             std::vector<uint16_t> &coverage, std::vector<uint16_t> &damage,
+                             HudOrientation orientation)
+    : base_(static_cast<uint8_t *>(pixels)), width_(width), height_(height),
+      buffer_w_(orientation.transpose ? height : width), buffer_h_(orientation.transpose ? width : height),
+      stride_(stride_bytes), orientation_(orientation), coverage_(coverage), damage_(damage)
 {
-    if (static_cast<int>(coverage_.size()) < width_) coverage_.assign(width_, 0);
-    if (static_cast<int>(damage_.size()) < height_) damage_.assign(height_, 0);
-    while ((width_ - 1) >> tile_shift_ >= 16) ++tile_shift_;  // 칸이 16개 안에 들게
+    if (static_cast<int>(coverage_.size()) < buffer_w_) coverage_.assign(buffer_w_, 0);
+    if (static_cast<int>(damage_.size()) < buffer_h_) damage_.assign(buffer_h_, 0);
+    while ((buffer_w_ - 1) >> tile_shift_ >= 16) ++tile_shift_;  // 칸이 16개 안에 들게
 }
 
 uint32_t *OverlayCanvas::row(int y) const
 {
     return reinterpret_cast<uint32_t *>(base_ + static_cast<size_t>(y) * stride_);
+}
+
+HudPoint OverlayCanvas::to_buffer(HudPoint p) const
+{
+    HudPoint b = orientation_.transpose ? HudPoint{p.y, p.x} : p;
+    if (orientation_.flip_x) b.x = static_cast<float>(buffer_w_) - b.x;
+    if (orientation_.flip_y) b.y = static_cast<float>(buffer_h_) - b.y;
+    return b;
 }
 
 void OverlayCanvas::mark(int y, int x0, int x1)
@@ -120,13 +131,13 @@ void OverlayCanvas::mark(int y, int x0, int x1)
 /* 이어진 칸은 memset 한 번으로 지운다. */
 void OverlayCanvas::clear(bool only_damaged)
 {
-    for (int y = 0; y < height_; ++y) {
+    for (int y = 0; y < buffer_h_; ++y) {
         uint32_t tiles = only_damaged ? damage_[y] : 0xffffu;
         damage_[y] = 0;
         while (tiles) {
             const int first = __builtin_ctz(tiles);
             const int end = first + __builtin_ctz(~(tiles >> first));  // 이어진 칸의 끝(제외)
-            const int x0 = first << tile_shift_, x1 = std::min(width_, end << tile_shift_);
+            const int x0 = first << tile_shift_, x1 = std::min(buffer_w_, end << tile_shift_);
             if (x0 < x1) std::memset(row(y) + x0, 0, static_cast<size_t>(x1 - x0) * 4);
             tiles &= ~((1u << end) - (1u << first));
         }
@@ -135,8 +146,16 @@ void OverlayCanvas::clear(bool only_damaged)
 
 void OverlayCanvas::fill_rect(int x, int y, int w, int h, uint32_t color)
 {
-    const int x0 = std::max(0, x), x1 = std::min(width_, x + w);
-    const int y0 = std::max(0, y), y1 = std::min(height_, y + h);
+    const HudPoint a = to_buffer({static_cast<float>(x), static_cast<float>(y)});
+    const HudPoint b = to_buffer({static_cast<float>(x + w), static_cast<float>(y + h)});
+    fill_buffer_rect(static_cast<int>(std::min(a.x, b.x)), static_cast<int>(std::min(a.y, b.y)),
+                     static_cast<int>(std::max(a.x, b.x)), static_cast<int>(std::max(a.y, b.y)), color);
+}
+
+void OverlayCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color)
+{
+    x0 = std::max(0, x0), x1 = std::min(buffer_w_, x1);
+    y0 = std::max(0, y0), y1 = std::min(buffer_h_, y1);
     if (x0 >= x1) return;
     const uint32_t rgb = color & 0x00ffffffu, a = color >> 24;
     for (int yy = y0; yy < y1; ++yy) {
@@ -193,14 +212,17 @@ void OverlayCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32
     fill_rows(points, count, color, near_y, far_y, far_alpha);
 }
 
-/* 행마다 부표본 행 4개가 변과 만나는 x로 짝홀 구간을 구한다. 변은 위 끝 순으로 정렬해 지금
+/* 버퍼 행마다 부표본 행 4개가 변과 만나는 x로 짝홀 구간을 구한다. 변은 위 끝 순으로 정렬해 지금
  * 걸친 변만 본다(띠는 66변 중 둘). 네 부표본 행이 모두 구간 하나면(이 HUD의 도형은 거의 다)
  * 넷 다 덮는 안쪽은 바로 합성하고 양쪽 가장자리 띠만 커버리지로 쌓는다. 아니면 구간 전부를
- * 쌓는다. near_y == far_y면 알파를 줄이지 않는다. */
-void OverlayCanvas::fill_rows(const HudPoint *points, int count, uint32_t color, float near_y,
+ * 쌓는다. 흐림은 화면 높이(near_y → far_y)를 따른다: 가로 버퍼에서는 행마다, 세로 패널 버퍼
+ * 에서는 화면 높이가 버퍼 열이라 열마다 알파를 미리 센다. near_y == far_y면 줄이지 않는다. */
+void OverlayCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t color, float near_y,
                               float far_y, float far_alpha)
 {
     if (count < 3 || count > kMaxEdges) return;
+    HudPoint points[kMaxEdges];
+    for (int i = 0; i < count; ++i) points[i] = to_buffer(screen_points[i]);
     Edge edges[kMaxEdges];
     int edge_count = 0;
     float max_y = points[0].y;
@@ -215,14 +237,26 @@ void OverlayCanvas::fill_rows(const HudPoint *points, int count, uint32_t color,
     std::sort(edges, edges + edge_count, [](const Edge &l, const Edge &r) { return l.top < r.top; });
 
     const int y0 = std::max(0, static_cast<int>(std::floor(edges[0].top)));
-    const int y1 = std::min(height_ - 1, static_cast<int>(std::ceil(max_y)));
+    const int y1 = std::min(buffer_h_ - 1, static_cast<int>(std::ceil(max_y)));
     const uint32_t rgb = color & 0x00ffffffu;
     const float alpha = static_cast<float>(color >> 24);
     const bool faded = near_y != far_y;
+    auto fade = [&](float screen_y) {  // 화면 높이 screen_y에서의 알파
+        const float t = std::clamp((near_y - screen_y) / (near_y - far_y), 0.0f, 1.0f);
+        return static_cast<uint32_t>(alpha * (1.0f - t * (1.0f - far_alpha)) + 0.5f);
+    };
+    const bool fade_columns = faded && orientation_.transpose && buffer_w_ <= kMaxFadeColumns;
+    std::array<uint8_t, kMaxFadeColumns> column_alpha;
+    if (fade_columns) {
+        for (int bx = 0; bx < buffer_w_; ++bx) {
+            const float center = static_cast<float>(bx) + 0.5f;
+            column_alpha[bx] = static_cast<uint8_t>(fade(orientation_.flip_x ? static_cast<float>(buffer_w_) - center : center));
+        }
+    }
 
     int next = 0, active[kMaxCrossings], active_count = 0;
     for (int y = y0; y <= y1; ++y) {
-        RowCoverage cover{coverage_.data(), width_, width_, -1};
+        RowCoverage cover{coverage_.data(), buffer_w_, buffer_w_, -1};
         float left[kSubRows], right[kSubRows];
         bool single = true;
         for (int s = 0; s < kSubRows; ++s) {
@@ -262,7 +296,7 @@ void OverlayCanvas::fill_rows(const HudPoint *points, int count, uint32_t color,
                 min_right = std::min(min_right, right[s]);
             }
             inner_l = std::max(0, static_cast<int>(std::ceil(max_left)));
-            inner_r = std::min(width_, static_cast<int>(std::floor(min_right)));
+            inner_r = std::min(buffer_w_, static_cast<int>(std::floor(min_right)));
             for (int s = 0; s < kSubRows; ++s) {
                 if (inner_l < inner_r) {
                     cover.add(left[s], static_cast<float>(inner_l));
@@ -274,22 +308,20 @@ void OverlayCanvas::fill_rows(const HudPoint *points, int count, uint32_t color,
         }
         if (inner_l >= inner_r && cover.max < cover.min) continue;
 
-        float row_alpha = alpha;
-        if (faded) {
-            const float t = std::clamp((near_y - (static_cast<float>(y) + 0.5f)) / (near_y - far_y), 0.0f, 1.0f);
-            row_alpha *= 1.0f - t * (1.0f - far_alpha);
-        }
-        const uint32_t a = static_cast<uint32_t>(row_alpha + 0.5f);
+        const float row_center = static_cast<float>(y) + 0.5f;
+        const uint32_t row_a = !faded || fade_columns ? static_cast<uint32_t>(alpha + 0.5f)
+                             : fade(orientation_.flip_y ? static_cast<float>(buffer_h_) - row_center : row_center);
+        auto a = [&](int x) { return fade_columns ? column_alpha[x] : row_a; };
         uint32_t *pixels = row(y);
         auto blend_covered = [&](int from, int to) {
             for (int x = from; x <= to; ++x) {
-                blend(pixels[x], rgb, div255(a * std::min<uint32_t>(cover.cells[x], 255)));
+                blend(pixels[x], rgb, div255(a(x) * std::min<uint32_t>(cover.cells[x], 255)));
                 cover.cells[x] = 0;
             }
         };
         if (inner_l < inner_r) {
             blend_covered(cover.min, std::min(cover.max, inner_l - 1));
-            for (int x = inner_l; x < inner_r; ++x) blend(pixels[x], rgb, a);
+            for (int x = inner_l; x < inner_r; ++x) blend(pixels[x], rgb, a(x));
             blend_covered(std::max(cover.min, inner_r), cover.max);
             mark(y, std::min(cover.min, inner_l), std::max(cover.max + 1, inner_r));
         } else {
@@ -310,20 +342,35 @@ int OverlayCanvas::text(int x, int y, std::string_view text, const HudFont &font
     return width;
 }
 
+/* 글리프 화소를 버퍼로 옮겨 합성한다. 가로 버퍼에서는 글리프 줄이, 세로 패널 버퍼에서는 글리프
+ * 열이 버퍼 행 하나가 되도록 돌아 버퍼 쪽 쓰기가 이어진다. */
 void OverlayCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color)
 {
     const uint32_t rgb = color & 0x00ffffffu, a = color >> 24;
+    const bool transpose = orientation_.transpose;
+    auto buffer_x = [&](int v) { return orientation_.flip_x ? buffer_w_ - 1 - v : v; };
+    auto buffer_y = [&](int v) { return orientation_.flip_y ? buffer_h_ - 1 - v : v; };
     for (char c : text) {
         const HudGlyph *g = font.glyph(c);
         if (!g) continue;
         const int gx = x + g->left, gy = y + g->top;
-        const int col0 = std::max(0, -gx), col1 = std::min<int>(g->w, width_ - gx);
-        for (int line = std::max(0, -gy); col0 < col1 && line < g->h && gy + line < height_; ++line) {
-            const uint8_t *coverage = font.pixels + g->offset + static_cast<size_t>(line) * g->w;
-            uint32_t *pixels = row(gy + line);
-            for (int col = col0; col < col1; ++col)
-                if (coverage[col]) blend(pixels[gx + col], rgb, div255(a * coverage[col]));
-            mark(gy + line, gx + col0, gx + col1);
+        const int col0 = std::max(0, -gx), col1 = std::min<int>(g->w, width_ - gx);  // 화면 안의 열·줄
+        const int line0 = std::max(0, -gy), line1 = std::min<int>(g->h, height_ - gy);
+        const uint8_t *bitmap = font.pixels + g->offset;
+        // 바깥 고리 하나가 버퍼 행 하나: 가로면 줄, 세로 패널이면 열
+        const int outer0 = transpose ? col0 : line0, outer1 = transpose ? col1 : line1;
+        const int inner0 = transpose ? line0 : col0, inner1 = transpose ? line1 : col1;
+        for (int outer = outer0; inner0 < inner1 && outer < outer1; ++outer) {
+            const int by = buffer_y(transpose ? gx + outer : gy + outer);
+            uint32_t *pixels = row(by);
+            for (int inner = inner0; inner < inner1; ++inner) {
+                const int line = transpose ? inner : outer, col = transpose ? outer : inner;
+                const uint8_t coverage = bitmap[static_cast<size_t>(line) * g->w + col];
+                if (coverage) blend(pixels[buffer_x(transpose ? gy + inner : gx + inner)], rgb, div255(a * coverage));
+            }
+            const int origin = transpose ? gy : gx;
+            const int bx0 = buffer_x(origin + inner0), bx1 = buffer_x(origin + inner1 - 1);
+            mark(by, std::min(bx0, bx1), std::max(bx0, bx1) + 1);
         }
         x += g->advance;
     }

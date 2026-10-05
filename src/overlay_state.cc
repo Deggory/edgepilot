@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 
 const char *engage_block_label(const char *block)
 {
@@ -38,6 +39,12 @@ void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState 
     hud->brake_hold = fresh && (c.hud_flags & kHudFlagBrakeHold) != 0;
     hud->soft_disabling = fresh && (c.hud_flags & kHudFlagSoftDisabling) != 0;
     hud->steer_saturated = fresh && (c.hud_flags & kHudFlagSteerSaturated) != 0;
+    const uint32_t flags = fresh ? c.hud_flags : 0U;
+    hud->lane_change = flags & kHudFlagLaneChanging ? 2 : flags & kHudFlagLaneChangePending ? 1 : 0;
+    hud->lane_change_direction = flags & kHudFlagLaneChangeRight ? 1 : -1;
+    hud->steer_paused = (flags & kHudFlagSteerPaused) != 0;
+    hud->steer_paused_by_driver = (flags & kHudFlagSteerPausedByDriver) != 0;
+    hud->turn_direction = flags & kHudFlagTurnLeft ? -1 : flags & kHudFlagTurnRight ? 1 : 0;
     hud->gear = fresh ? c.gear : 0;
     hud->cluster_speed_kph = fresh ? c.cluster_speed_kph : 0.0f;
     hud->ego_speed_kph = fresh ? c.ego_speed_kph : 0.0f;
@@ -68,6 +75,9 @@ void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState 
                      -1.0f, 1.0f)
         : 0.0f;
     hud->driver_torque = fresh ? c.driver_torque : 0;
+    hud->driver_torque_fraction = fresh
+        ? std::clamp(static_cast<float>(c.driver_torque) / static_cast<float>(SteeringParams{}.steer_max), -1.0f, 1.0f)
+        : 0.0f;
     std::snprintf(hud->active_block, sizeof(hud->active_block), "%s",
                   fresh ? c.active_block : "control_stale");
 }
@@ -87,6 +97,43 @@ void hud_apply_record_state(const RecordState &record, bool fresh, OverlayHudSta
 {
     hud->recording = fresh && record.active != 0;
     hud->storage_full = fresh && record.storage_blocked != 0;
+}
+
+void hud_apply_learner_state(const LearnerState &learner, bool fresh, OverlayHudState *hud)
+{
+    constexpr uint32_t kParamsValid = kLearnerSteerRatioValid | kLearnerStiffnessValid | kLearnerOffsetAverageValid;
+    hud->learner_fresh = fresh;
+    hud->params_valid = fresh && (learner.flags & kParamsValid) == kParamsValid;
+    hud->steer_ratio = learner.steer_ratio;
+    hud->stiffness = learner.stiffness_factor;
+    hud->angle_offset_deg = learner.angle_offset_average_deg;
+    hud->torque_valid = fresh && (learner.flags & kLearnerTorqueValid) != 0;
+    hud->torque_factor = learner.lat_accel_factor_raw;
+    hud->torque_friction = learner.friction_raw;
+    hud->torque_offset = learner.lat_accel_offset_raw;
+    hud->torque_cal_percent = learner.cal_perc;
+    hud->lateral_delay_s = learner.plan_delay_s;
+    hud->vehicle_learned = fresh && (learner.flags & kLearnerUseVehicle) != 0;
+    hud->torque_learned = fresh && (learner.flags & kLearnerUseTorque) != 0;
+    hud->delay_learned = fresh && (learner.flags & kLearnerUseDelay) != 0;
+    hud->angle_offset_fast_deg = learner.angle_offset_deg;
+    hud->torque_factor_filtered = learner.lat_accel_factor;
+}
+
+void hud_apply_localization_state(const LocalizationState &localization, bool fresh, OverlayHudState *hud)
+{
+    hud->lag_blocks = fresh ? localization.lag_valid_blocks : -1;
+    hud->lag_estimate_s = localization.lag_estimate_s;
+}
+
+float lane_center_offset_m(const ParsedModelOutput &output)
+{
+    constexpr float kMinProbability = 0.5f;
+    const ParsedLaneLine &left = output.lanes[1], &right = output.lanes[2];
+    if (!output.valid || !left.valid || !right.valid || left.probability < kMinProbability ||
+        right.probability < kMinProbability)
+        return std::numeric_limits<float>::quiet_NaN();
+    return (left.points[0].y + right.points[0].y) / 2.0f;
 }
 
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,

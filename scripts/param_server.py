@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import collections
+import gzip
 import json
 import math
 import mmap
@@ -276,6 +278,14 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "목표 주행 위치가 차량 기준 오른쪽으로 이동합니다.",
             "목표 주행 위치가 차량 기준 왼쪽으로 이동합니다.",
         ),
+        "lane_path_weight": param_meta(
+            "Lane 모드 차선 중앙 유지 강도", "차량 중심 보정", "weight", 0.1, 0.5, 10,
+            "Lane 모드 경로 계획(MPC)이 차선 중앙에서 벗어난 위치를 얼마나 강하게 되돌릴지 정합니다. "
+            "openpilot 원본은 1입니다. 3이면 커브에서 안쪽으로 붙는 정도가 줄고 좌우 움직임이 조금 늘어납니다. "
+            "Laneless 모드에는 영향이 없습니다.",
+            "차선 중앙으로 더 강하게 돌아가고, 조향이 조금 더 잦아집니다.",
+            "더 부드럽지만 커브에서 차선 중앙에서 더 벗어날 수 있습니다.",
+        ),
         "min_steer_speed_mps": param_meta(
             "최소 자동 조향 속도", "기본 토크 제한", "m/s", 0.1, 0, 5,
             "이 속도 미만에서 토크 컨트롤러 출력을 0으로 만듭니다.",
@@ -468,8 +478,9 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         "hud_debug": {
             "label": "HUD 진단 정보",
             "section": "화면 표시",
-            "description": "주행 화면 왼쪽에 진단 카드(FPS, CPU·온도, 조향 토크, 기어·크루즈·연결)를 "
-            "띄웁니다. TPMS와 카메라 보정은 늘 아래 모서리에, 네트워크 정보는 오른쪽 위를 누르면 나옵니다.",
+            "description": "주행 화면 왼쪽에 다른 카드에 없는 진단 수치(FPS, 조향 토크, 학습기 상세)를 "
+            "띄웁니다. 주행 화면 왼쪽 열을 눌러도 잠시 켜고 끌 수 있습니다. 기어, TPMS와 카메라 보정, 보드 "
+            "상태, 제어가 쓰는 학습값은 늘 보이고, 네트워크 정보는 오른쪽 위를 누르면 나옵니다.",
             "increase": "켜면 진단 수치를 계속 보여 줍니다.",
             "decrease": "끄면 주행에 필요한 정보만 보여 줍니다.",
         },
@@ -971,6 +982,115 @@ class CalibrationControl:
         return self.status()
 
 
+# ---------------------------------------------------------------- BEV(위에서 본 장면)
+
+# 웹 BEV 탭이 읽는 ModelState·ControlState 필드의 바이트 위치(src/ipc_messages.h). 보드는 두 페이로드를
+# 발행된 그대로 흘려보내기만 하고(해석·JSON 없음), 페이지(web/bev_data.js)가 /api/bev에서 이 위치를
+# 받아 직접 읽고 그린다. check_param_server.py가 EDGEPILOT_MODEL_STATE_AT·EDGEPILOT_CONTROL_STATE_AT과
+# 대조한다.
+MODEL_STATE_SIZE = 3576
+CONTROL_STATE_SIZE = 240
+BEV_MODEL_FIELDS = {
+    "model_timestamp_ns": 16, "valid": 28, "plan": 304, "lanes": 700, "lane_probabilities": 2284,
+    "road_edges": 2316, "road_edge_stds": 3108, "lead": 3148, "gas_press_probs": 3528,
+}
+BEV_CONTROL_FIELDS = {
+    "timestamp_ns": 0, "enabled": 8, "engaged": 12, "active": 16, "left_blinker": 40, "right_blinker": 44, "gear": 52,
+    "desired_curvature": 72,
+    "actual_curvature": 76, "normalized_output": 80, "departure_alert_type": 144, "green_light_alert_armed": 152,
+    "hud_flags": 184, "ego_speed_kph": 232,
+}
+BEV_HUD_FLAGS = {"Laneless": 0, "SteerPaused": 7, "BrakeLights": 11}  # ipc_messages.h kHudFlag<이름>의 비트
+# 스트림 한 프레임: 머리(매직 "BEV1", ModelState·ControlState 바이트 수, 보드 CLOCK_BOOTTIME ns)와 두
+# 페이로드. 새 모델 프레임마다(최대 BEV_MAX_HZ) 보내고, 모델이 멈추면 1초마다 모델 없이 보내 페이지가
+# 끊김과 멈춤을 구분한다.
+BEV_FRAME = struct.Struct("<IHHQ")
+BEV_FRAME_MAGIC = 0x31564542
+BEV_MAX_HZ = 20.0
+BEV_IDLE_S = 1.0
+# 스트림은 다음 모델 프레임이 나올 때(이번 발행 + 카메라 한 주기)까지 잔다. 늦으면 BEV_RETRY_S마다 다시
+# 보고, BEV_STALL_S 넘게 안 나오면 모델이 멈춘 것으로 보고 BEV_STALLED_POLL_S마다만 본다.
+BEV_MODEL_PERIOD_S = 0.05
+BEV_RETRY_S = 0.005
+BEV_STALL_S = 0.25
+BEV_STALLED_POLL_S = 0.1
+
+
+def bev_layout() -> Dict[str, Any]:
+    return {
+        "model": {"size": MODEL_STATE_SIZE, **BEV_MODEL_FIELDS},
+        "control": {"size": CONTROL_STATE_SIZE, **BEV_CONTROL_FIELDS},
+        "hud_flags": BEV_HUD_FLAGS,
+    }
+
+
+def bev_frame(model: bytes, control: bytes, now_ns: int) -> bytes:
+    return BEV_FRAME.pack(BEV_FRAME_MAGIC, len(model), len(control), now_ns) + model + control
+
+
+async def bev_frames(hz: float, model_path: str = MODEL_STATE_PATH, control_path: str = CONTROL_STATE_PATH,
+                     idle_s: float = BEV_IDLE_S, stopping: Callable[[], bool] = lambda: False):
+    """BEV 스트림. 새 모델 프레임이면 두 페이로드를 복사해 보낸다. 보드 CPU를 아끼려고 다음 프레임이 나올
+    때까지 자므로 프레임마다 한 번 남짓만 깬다(20 ms 폴링은 이것만으로 한 코어의 3.7%였다).
+    연결이 끊기면 Starlette가 이 제너레이터를 취소하고, 서버가 내려가기 시작하면(stopping) 스스로 끝난다.
+    끝나지 않으면 uvicorn이 응답이 끝나기를 기다려 매니저의 SIGKILL(3초)까지 내려가지 않는다."""
+    model = IpcReader(model_path, MODEL_STATE_SIZE)
+    control = IpcReader(control_path, CONTROL_STATE_SIZE)
+    period = 1.0 / min(max(hz, 1.0), BEV_MAX_HZ)
+    sent_seq = None
+    next_frame = sent_at = 0.0
+    while not stopping():
+        now = time.monotonic()
+        latest = model.read_payload()
+        pending = latest is not None and latest[0] != sent_seq
+        if (pending and now >= next_frame) or now - sent_at >= idle_s:
+            send = pending and now >= next_frame
+            current = control.read_payload()
+            yield bev_frame(latest[2] if send else b"", current[2] if current is not None else b"", boottime_ns())
+            sent_at = now
+            if send:
+                sent_seq, next_frame, pending = latest[0], now + period - BEV_RETRY_S, False
+        if pending:
+            wait = next_frame - now  # 보낼 프레임이 있다: 보낼 차례까지
+        elif latest is None:
+            wait = BEV_STALLED_POLL_S
+        else:
+            due = (latest[1] - boottime_ns()) * 1e-9 + BEV_MODEL_PERIOD_S  # 다음 모델 프레임까지
+            wait = due + 0.002 if due > 0 else BEV_RETRY_S if due > -BEV_STALL_S else BEV_STALLED_POLL_S
+        await asyncio.sleep(min(max(wait, BEV_RETRY_S), sent_at + idle_s - now))
+
+
+WEB_DIR = Path(__file__).resolve().parent / "web"
+
+
+class WebAssets:
+    """BEV 탭의 JS(이 파일 옆 web/: BEV 모듈과 three.js 0.186.1). 처음 요청 때 한 번 gzip해 메모리에
+    두고(three.js 800 KB가 200 KB로), ETag가 같으면 304로 끝낸다. 파일이 바뀌면(mtime·크기) 다시 읽는다.
+    web/ 밖과 .js가 아닌 파일은 내주지 않는다."""
+
+    def __init__(self, root: Path = WEB_DIR):
+        self.root = root.resolve()
+        self.lock = threading.Lock()
+        self.cache: Dict[str, tuple[str, bytes]] = {}
+
+    def get(self, name: str) -> tuple[str, bytes] | None:
+        """(ETag, gzip한 내용). 없으면 None."""
+        path = (self.root / name).resolve()
+        if path.suffix != ".js" or self.root not in path.parents:
+            return None
+        try:
+            info = path.stat()
+            etag = f'"{info.st_mtime_ns:x}-{info.st_size:x}"'
+            with self.lock:
+                cached = self.cache.get(name)
+                if cached is None or cached[0] != etag:
+                    cached = (etag, gzip.compress(path.read_bytes(), compresslevel=6, mtime=0))
+                    self.cache[name] = cached
+            return cached
+        except OSError:
+            return None
+
+
 HTML = """<!doctype html>
 <html lang="ko">
 <head>
@@ -1024,7 +1144,7 @@ HTML = """<!doctype html>
     .icon-button:hover { background: var(--btn-bg-hover); }
     .group-tabs {
       position: sticky; top: 64px; z-index: 4;
-      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+      display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
       padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
       background: #171a1d; border-bottom: 1px solid var(--line);
     }
@@ -1215,6 +1335,8 @@ HTML = """<!doctype html>
       .number-control { height: 54px; }
     }
   </style>
+  <!-- BEV 탭(/web/bev.js)이 처음 열릴 때 불러오는 three.js -->
+  <script type="importmap">{"imports": {"three": "/web/three/three.module.min.js"}}</script>
 </head>
 <body>
   <header class="app-header">
@@ -1231,6 +1353,7 @@ HTML = """<!doctype html>
     <button class="group-tab" data-group="recording" type="button">주행 기록</button>
     <button class="group-tab" data-group="display" type="button">기기 설정</button>
     <button class="group-tab" data-group="learners" type="button">실시간 학습</button>
+    <button class="group-tab" data-group="bev" type="button">BEV</button>
   </nav>
   <main>
     <div id="count" class="count"></div>
@@ -1277,6 +1400,7 @@ HTML = """<!doctype html>
       recording: "기록은 모델 입력과 같은 1280x720 프레임을 사용합니다. 영상·CAN·상태·파라미터가 한 경로에 함께 저장됩니다.",
       display: "화면을 꺼도 영상 파이프라인은 계속 동작하고, 밝기 값은 다음에 켤 때 그대로 복원됩니다. 알림음 크기는 1초 안에 반영되고 확인음이 한 번 납니다.",
       learners: "paramsd·torqued는 항상 계산하고 기록합니다. 제어에는 스위치를 켠 쪽만 씁니다. 1초마다 갱신하고 추이는 최근 10분입니다.",
+      bev: "모델이 본 길과 앞차입니다. 경로가 주황·빨강인 곳은 모델이 속도를 줄이려는 곳, 흰 호는 목표 곡률, 하늘색 호는 실제 곡률입니다. 끌어서 돌리고 두 손가락·휠로 확대합니다.",
     };
     // 학습 스위치는 학습값을 보면서 켜도록 실시간 학습 탭에만 둔다
     const hiddenKeys = {steering: ["use_live_vehicle_params", "use_live_torque_params", "use_live_delay",
@@ -1293,6 +1417,10 @@ HTML = """<!doctype html>
     }
 
     function refreshConnection(saved = false) {
+      if (activeGroup === "bev") {
+        showBevStatus();
+        return;
+      }
       if (activeGroup === "display") {
         const display = snapshot.display_status || {};
         const online = Boolean(display.available) && !display.error;
@@ -2100,7 +2228,60 @@ HTML = """<!doctype html>
       learnerPanel = null;
     }
 
+    // ------------------------------------------------------------ BEV
+    /* 보드는 모델·제어 상태를 바이트 그대로 흘려보내기만 하고 해석과 그리기는 /web/bev.js가 이 브라우저에서
+     * 한다. 패널과 WebGL은 한 번만 만들어 탭을 오가도 다시 쓰고, 스트림은 이 탭이 보일 때만 연다. */
+    let bev = null;
+    let bevLoading = null;
+    let bevStatus = {live: false, text: "불러오는 중"};
+
+    function showBevStatus() {
+      if (activeGroup !== "bev") return;
+      count.textContent = `BEV · ${bevStatus.text}`;
+      dot.classList.toggle("online", bevStatus.live);
+      status.textContent = bevStatus.live ? "모델 수신 중" : "모델 미수신";
+      connection.title = bevStatus.text;
+    }
+
+    async function renderBev() {
+      sections.replaceChildren();
+      groupNote.textContent = groupNotes.bev;
+      groupNote.classList.add("visible");
+      path.textContent = "/dev/shm/edgepilot_model_state · /dev/shm/edgepilot_control_state";
+      showBevStatus();
+      try {
+        bevLoading = bevLoading || import("/web/bev.js").then(module => module.createBev(update => {
+          bevStatus = update;
+          showBevStatus();
+        }));
+        bev = await bevLoading;
+      } catch (error) {
+        bevLoading = null;
+        setMessage(`BEV를 불러오지 못했습니다: ${error.message}`, true);
+        return;
+      }
+      if (activeGroup !== "bev") return;  // 불러오는 사이 다른 탭으로 갔다
+      sections.replaceChildren(bev.element);
+      if (!document.hidden) bev.start();
+    }
+
+    function stopBev() {
+      if (bev) bev.stop();
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!bev || activeGroup !== "bev") return;
+      if (document.hidden) bev.stop();
+      else bev.start();
+    });
+
     function render() {
+      if (activeGroup !== "bev") stopBev();
+      if (activeGroup === "bev") {
+        stopLearners();
+        renderBev();
+        return;
+      }
       if (!snapshot) return;
       if (activeGroup === "learners") {
         renderLearners();
@@ -2176,14 +2357,17 @@ HTML = """<!doctype html>
 def create_app(store: ParamStore | None = None,
                learner_monitor: LearnerMonitor | None = None,
                calibration: CalibrationControl | None = None,
-               localization: LocalizationReader | None = None) -> "FastAPI":
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse
+               localization: LocalizationReader | None = None,
+               web: WebAssets | None = None,
+               stopping: Callable[[], bool] = lambda: False) -> "FastAPI":
+    from fastapi import FastAPI, Header, HTTPException, Query
+    from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
     param_store = store or ParamStore(display_controller=DisplayBacklight())
     monitor = learner_monitor or LearnerMonitor()
     calibration_control = calibration or CalibrationControl()
     localization_reader = localization or LocalizationReader()
+    web_assets = web or WebAssets()
     application = FastAPI(title="K7 parameter server", docs_url="/docs")
 
     @application.on_event("startup")
@@ -2226,6 +2410,30 @@ def create_app(store: ParamStore | None = None,
     def get_learner_trend() -> Dict[str, Any]:
         return {"rows": monitor.trend(), "window_s": LEARNER_HISTORY_S}
 
+    @application.get("/api/bev")
+    def get_bev_layout() -> Dict[str, Any]:
+        return bev_layout()
+
+    @application.get("/api/bev/stream")
+    async def get_bev_stream(hz: float = Query(BEV_MAX_HZ, ge=1.0, le=BEV_MAX_HZ)):
+        return StreamingResponse(bev_frames(hz, stopping=stopping), media_type="application/octet-stream",
+                                 headers={"Cache-Control": "no-store"})
+
+    @application.get("/web/{name:path}")
+    def get_web_file(name: str, if_none_match: str | None = Header(None), accept_encoding: str = Header("")):
+        asset = web_assets.get(name)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="not found")
+        etag, body = asset
+        headers = {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+        if if_none_match == etag:
+            return Response(status_code=304, headers=headers)
+        if "gzip" in accept_encoding:
+            headers["Content-Encoding"] = "gzip"
+        else:
+            body = gzip.decompress(body)
+        return Response(body, media_type="text/javascript", headers=headers)
+
     @application.patch("/api/params/{group}")
     def patch_params(group: str, patch: ParamPatch) -> Dict[str, Any]:
         try:
@@ -2249,7 +2457,10 @@ def main() -> None:
         "--port", type=int, default=int(os.environ.get("EDGEPILOT_PARAM_PORT", "8080"))
     )
     args = parser.parse_args()
-    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
+    server: uvicorn.Server | None = None
+    application = create_app(stopping=lambda: server is not None and server.should_exit)
+    server = uvicorn.Server(uvicorn.Config(application, host=args.host, port=args.port, log_level="info"))
+    server.run()
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 | `enabled` | true | bool | LCD 영상 파이프라인은 유지하고 백라이트만 켜거나 끈다(duty 0). |
 | `brightness_percent` | 100 | % | 백라이트 PWM3(pwmchip0/pwm3, 10 kHz, 정극성) 점등률. 실제 duty는 밝기 x 보드 최대치(`/boot/board`의 `disp_max_backlight`, 기본 95%)다. |
 | `alert_volume_percent` | 70 | % / 0~100 | 보드 스피커 알림음 크기. 0이면 소리를 내지 않는다. overlayd가 1초마다 파일을 보고 바뀌면 적용한 뒤 확인음을 한 번 낸다. 값이 없으면 `EDGEPILOT_ALERT_VOLUME`(기본 70)을 쓴다. |
-| `hud_debug` | false | bool | 주행 화면 왼쪽에 진단 카드(FPS, CPU·온도·메모리·저장소, 조향 토크, 기어·크루즈·연결)를 띄운다. TPMS와 카메라 보정은 늘 아래 모서리 카드에, 네트워크 정보는 오른쪽 위 상태 알약을 누르면 나온다. overlayd가 1초 안에 반영한다. |
+| `hud_debug` | false | bool | 주행 화면 왼쪽에 다른 카드에 없는 수치를 모은 진단 카드(FPS, 조향 토크, paramsd 강성·평균 영점, torqued 원시 추정·진행률, lagd 블록)를 띄운다. 아직 유효하지 않은 학습기 줄은 주황이다. 기어는 설정 속도 옆 카드에, TPMS와 카메라 보정은 아래 모서리 카드에, 보드 상태(CPU 온도·CPU·RAM·디스크)는 TPMS 위 카드에, 제어가 쓰는 학습값(SR·영점·토크 계수·지연)은 보정 위 카드에 늘 있고, 네트워크 정보는 오른쪽 위 상태 알약을 누르면 나온다. overlayd가 1초 안에 반영한다. 주행 화면 왼쪽 열을 눌러도 켜고 끌 수 있고, 그건 이 값이 바뀌거나 overlayd가 다시 시작할 때까지만 간다. |
 
 설정은 웹의 `기기 설정` 메뉴에서 바꾼다. 백라이트는 param server가 즉시 적용하고, 뜰 때마다
 다시 적용한다. 알림음 크기는 param server가 파일만 고치고 overlayd가 읽는다.
@@ -79,7 +79,7 @@ panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화�
 
 | 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
 |---|---:|---|---|
-| `laneless_mode` | false | bool | `false`는 Lane 모드로, 차선 확률이 높으면 차선 중심 경로를 섞고 낮아지면 자동으로 모델 경로만 쓴다. `true`는 Laneless 모드로, openpilot 메인과 같은 방식(`get_curvature_from_plan`)이다. 차선·MPC·`path_offset_m` 없이 모델 plan의 yaw와 yaw rate로 목표 곡률 `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v`를 만든다(t_d = 조향 지연 + plan 나이). Lane 모드의 자동 모델 경로(차선이 안 보일 때)는 예전처럼 plan 위치를 MPC로 따른다. 웹의 `주행 제한` 메뉴에서 바꾸고, 현재 사용 중인 경로는 HUD에 `LANE`/`LANELESS`로 표시된다. 차로 변경은 두 모드 모두 모델의 desire 입력으로 동작한다. |
+| `laneless_mode` | false | bool | `false`는 Lane 모드로, 차선 확률이 높으면 차선 중심 경로를 섞고 낮아지면 자동으로 모델 경로만 쓴다. `true`는 Laneless 모드로, openpilot 메인과 같은 방식(`get_curvature_from_plan`)이다. 차선·MPC·`path_offset_m` 없이 모델 plan의 yaw와 yaw rate로 목표 곡률 `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v`를 만든다(t_d = 조향 지연 + plan 나이). Lane 모드에서 차선이 안 보이거나(교차로 등, 유효 확률 0.3 미만) 회전 desire를 줄 때도 같은 계산을 쓰고, 차선 MPC와의 인계는 목표 곡률에서 섞는다(차선을 버릴 때 0.5초, 되찾을 때 0.25초). 2026-10-06 전에는 이 구간에서 plan 위치를 차선 MPC로 따랐는데, 25 km/h 아래에서 laneless보다 26~30% 덜 꺾고 0.3~0.4초 늦었다(녹화 재생). 실주행 저속 회전의 운전자 토크 중앙값도 152로, laneless 80의 두 배였다. 웹의 `주행 제한` 메뉴에서 바꾸고, 현재 사용 중인 경로는 HUD에 `LANE`/`LANELESS`로 표시된다. 차로 변경은 두 모드 모두 모델의 desire 입력으로 동작한다. |
 
 ### 경로 제한
 
@@ -157,6 +157,7 @@ panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화�
 | `center_to_front_ratio` | 0.4 | wheelbase ratio / 0.2~0.7 | 무게중심에서 전축까지 거리의 축거 대비 비율이다. |
 | `steer_ratio_rear` | 0.0 | ratio / -0.5~0.5 | 후륜 조향 보정 계수다. K7은 후륜 조향이 없으므로 0을 사용한다. |
 | `path_offset_m` | 0.0 | m / -1~1 | 차선 중심 경로에 더하는 사용자 횡방향 보정이다. 양수는 목표 주행 위치를 우측, 음수는 좌측으로 이동한다. 차선이 안 보여 모델 경로를 따를 때(교차로 등)와 laneless 모드에는 적용하지 않는다: 차 기준인 모델 경로에 더하면 위치 고정점 없이 차가 그쪽으로 계속 밀린다. 실제 적용량은 차선 가중치를 따라 줄어든다. |
+| `lane_path_weight` | 3.0 | weight / 0.5~10 | Lane 모드 MPC의 경로(횡위치) 가중치다. openpilot 0.9.4 `PATH_COST`는 1이다. 2026-10-05 폐루프 재생에서 3이면 고속도로 오른쪽 커브의 안쪽 치우침이 13.4 cm에서 10.6 cm로 줄고(급커브 18→14 cm) 횡저크는 12~19% 늘었다. Laneless 모드에는 쓰지 않는다. |
 | `min_steer_speed_mps` | 1.0 | m/s / 0~5 | 이 속도 미만에서는 조향 토크를 내지 않는다(openpilot CP.minSteerSpeed). 1.1~3.6 km/h 크립에서 v0.9.4 plan이 포화 지시를 내는 대역을 덮는다. |
 
 ### 조향각 및 LKAS fault 보호
@@ -182,9 +183,10 @@ panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화�
 | 파라미터 | 현재값 | 단위 | 설명 |
 |---|---:|---|---|
 | `version` | 1 | schema version | 저장 형식 버전이다. 사용자가 변경하지 않는다. |
-| `rpy_rad` | `[-0.00134, -0.01746, -0.01960]` | radian `[roll, pitch, yaw]` | 카메라 자세 보정값이다. 약 `[-0.077, -1.001, -1.123]`도다. |
+| `rpy_rad` | `[-0.00134, -0.01746, -0.01960]` | radian `[roll, pitch, yaw]` | 카메라 자세 보정값이다. 약 `[-0.077, -1.001, -1.123]`도다. 유효 범위는 upstream과 같은 pitch -0.0907~0.17, yaw ±0.0691 rad이고, 범위를 벗어난 저장값도 불러와 invalid로 둔다. |
 | `spread_rad` | `[0, 0, 0]` | radian `[roll, pitch, yaw]` | 유효 블록 사이 캘리브레이션 값의 분산 범위다. 작을수록 관측이 안정적이다. |
 | `valid_blocks` | 0 | block | 저장된 유효 캘리브레이션 블록 수다. 5개 이상이면 calibrated 상태가 될 수 있다. |
+| `height_m` | (없음 → 1.22) | m | 모델 road_transform z로 블록 평균한 도로면에서 카메라까지 높이다(upstream `extrinsicsCalibration.height`, 2026-10-05 추가). 없는 예전 파일은 1.22로 시작한다. 보정 뒤에는 높이 표준편차가 e^-3.5(0.030 m)보다 큰 표본을 버린다. 장착 변경으로 다시 모으면 1.22로 돌아간다. `display.camera_height_m`(카메라 오프셋 크기)에는 아직 쓰지 않는다. |
 
 `valid_blocks`가 0인 것은 의도한 값이다. 2026-08-22에 카메라 내부 파라미터를
 다시 측정하면서 `fx`가 2.6% 바뀌었고, 여기 있던 자세값은 이전 내부 파라미터

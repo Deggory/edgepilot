@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 PRINTABLE = "".join(map(chr, range(32, 127)))
 DIGITS = " -0123456789"
+GEARS = "PRNDS"  # 기어 카드
 DEGREE = "\u00b0"  # Latin-1 0xB0, written as "\xb0" in C++ strings
 
 
@@ -30,10 +31,10 @@ class Spec(NamedTuple):
 
 SPECS = [
     Spec("Speed", 76, 2, DIGITS),
-    Spec("Value", 30, 1, DIGITS),
+    Spec("Value", 30, 1, DIGITS + GEARS),
     Spec("Title", 22, 1, PRINTABLE),
-    Spec("Body", 15, 0, PRINTABLE + DEGREE),
-    Spec("Caption", 12, 0, PRINTABLE + DEGREE),
+    Spec("Body", 18, 0, PRINTABLE + DEGREE),
+    Spec("Caption", 14, 0, PRINTABLE + DEGREE),
 ]
 
 

@@ -41,6 +41,10 @@ TEST(ModelOutputParser, Master)
         raw[kPoseOffset + i] = 20.0f + i;
         raw[kPoseOffset + 6 + i] = std::log(0.05f);
     }
+    // openpilot Meta: GAS_PRESS = meta[31:55:4], BRAKE_PRESS = meta[32:55:4](로짓). 2초 칸만 크게
+    raw[kMetaOffset + kMetaGasPressIndex + 1 * kMetaPressStride] = 2.0f;
+    raw[kMetaOffset + kMetaBrakePressIndex + 0 * kMetaPressStride] = 3.0f;
+    raw[kMetaOffset + 33] = 4.0f;  // 같은 칸 줄의 왼쪽 깜빡이 예측: 페달로 읽히면 안 된다
     const ParsedModelOutput parsed = ModelOutputParser::parse(raw);
     ParsedLeadPoint lead;
     float lead_prob = 0.0f;
@@ -56,6 +60,11 @@ TEST(ModelOutputParser, Master)
     ASSERT_NEAR(lead.x, 42.0f, 1e-6f);
     ASSERT_GT(lead_prob, 0.9f);
     ASSERT_GT(parsed.meta.desire_state[3], parsed.meta.desire_state[0]);
+    ASSERT_NEAR(parsed.meta.gas_press[1], 1.0f / (1.0f + std::exp(-2.0f)), 1e-6f);
+    ASSERT_NEAR(parsed.meta.gas_press[0], 0.5f, 1e-6f) << "로짓 0은 확률 0.5";
+    ASSERT_NEAR(parsed.meta.brake_press[0], 1.0f / (1.0f + std::exp(-3.0f)), 1e-6f);
+    for (int i = 1; i < kMetaPressHorizons; ++i)
+        ASSERT_NEAR(parsed.meta.brake_press[i], 0.5f, 1e-6f) << i;
     ASSERT_TRUE(parsed.has_pose);
     ASSERT_NEAR(parsed.pose.trans[2], 22.0f, 1e-6f);
     ASSERT_NEAR(parsed.pose.trans_std[0], 0.05f, 1e-6f);

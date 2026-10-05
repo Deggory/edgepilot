@@ -1,6 +1,7 @@
 /* HUD 캔버스와 렌더러: 스트레이트 알파 합성을 부동소수 기준식과, 다각형 커버리지 합을 기하
  * 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
- * 상태 테두리와 알림 카드, 아래 모서리 카드, 상태 알약 터치 영역도 본다. */
+ * 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
+ * 아래 모서리 카드, 상태 알약 터치 영역도 본다. */
 #include "overlay_canvas.h"
 #include "overlay_renderer.h"
 
@@ -175,21 +176,101 @@ TEST(OverlayRenderer, ReusedBufferMatchesFreshBuffer) {
     EXPECT_TRUE(reused.pixels == fresh.pixels);
 }
 
+// 세로 패널 버퍼(480x640)에 화면 좌표로 그린 HUD가 가로 버퍼 그림을 transpose한 것과 같다.
+// 글자·사각형은 화소까지 같고, 다각형은 부표본 행 방향이 바뀌어 가장자리만 조금 다르다.
+TEST(OverlayRenderer, PortraitBufferMatchesTransposedLandscape) {
+    ParsedModelOutput road;
+    road.valid = road.plan.valid = true;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        const float x = model_x_idx(i), curve = 0.0006f * x * x;
+        road.plan.points[i] = {x, curve, 0.0f};
+    }
+    OverlayHudState hud;
+    hud.services_healthy = hud.network_connected = hud.recording = true;
+    hud.controller_enabled = hud.controller_engaged = hud.controller_active = true;
+    hud.cluster_speed_kph = 64.0f;
+    hud.steer_saturated = true;  // 알림 카드
+    hud.debug_overlay = true;
+    const ProjectionState projection = make_projection_state(0, 0, 0);
+
+    Surface landscape(640, 480), portrait(480, 640), flipped(480, 640);
+    OverlayRenderer a, b, c;
+    a.draw({landscape.pixels.data(), 640, 480, 640 * 4}, road, projection, hud);
+    b.draw({portrait.pixels.data(), 640, 480, 480 * 4, {true, false, false}}, road, projection, hud);
+    c.draw({flipped.pixels.data(), 640, 480, 480 * 4, {true, true, true}}, road, projection, hud);
+    int exact = 0, close = 0, worst = 0;
+    double ink_l = 0.0, ink_p = 0.0;
+    for (int y = 0; y < 480; ++y) {
+        for (int x = 0; x < 640; ++x) {
+            const uint32_t l = landscape.at(x, y), p = portrait.at(y, x);
+            exact += l == p;
+            const int d = std::abs(static_cast<int>(l >> 24) - static_cast<int>(p >> 24));
+            close += d <= 64;
+            worst = std::max(worst, d);
+            ink_l += (l >> 24) / 255.0;
+            ink_p += (p >> 24) / 255.0;
+            // 뒤집은 버퍼는 뒤집지 않은 세로 버퍼를 그대로 거울에 비춘 것
+            ASSERT_EQ(flipped.at(479 - y, 639 - x), p) << x << "," << y;
+        }
+    }
+    EXPECT_GT(exact, 640 * 480 * 99 / 100) << "거의 모든 화소가 같다";
+    EXPECT_EQ(close, 640 * 480) << "다른 화소도 가장자리 커버리지 차이뿐(worst " << worst << ")";
+    EXPECT_NEAR(ink_p, ink_l, ink_l * 0.002) << "덮인 넓이가 같다";
+
+    // 글자와 사각형은 화소까지 같다
+    Surface text_l(200, 60), text_p(60, 200);
+    text_l.canvas().text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
+    text_l.canvas().fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
+    OverlayCanvas tp(text_p.pixels.data(), 200, 60, 60 * 4, text_p.coverage, text_p.damage, {true, false, false});
+    tp.text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
+    tp.fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
+    for (int y = 0; y < 60; ++y)
+        for (int x = 0; x < 200; ++x) ASSERT_EQ(text_p.at(y, x), text_l.at(x, y)) << x << "," << y;
+}
+
 TEST(OverlayRenderer, CornerCardsAndStatusTouch) {
     Surface s(640, 480);
     const OverlayTarget target{s.pixels.data(), 640, 480, 640 * 4};
     OverlayRenderer renderer;
     renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), OverlayHudState{});
-    // TPMS(왼쪽 아래)와 카메라 보정(오른쪽 아래) 카드는 값이 없어도 늘 있다
+    // TPMS(왼쪽 아래), 카메라 보정(오른쪽 아래), 그 위 보드 상태·학습값 카드는 값이 없어도 늘 있다
     EXPECT_EQ(s.at(40, 462) >> 24, 150);
     EXPECT_EQ(s.at(600, 462) >> 24, 150);
+    EXPECT_EQ(s.at(137, 300) >> 24, 150);
+    EXPECT_EQ(s.at(503, 300) >> 24, 150);
     EXPECT_EQ(s.at(320, 300) >> 24, 0) << "가운데는 비어 있다";
+    EXPECT_EQ(s.at(320, 120) >> 24, 0) << "오토 홀드가 아니면 속도 아래는 비어 있다";
+
+    OverlayHudState hold;
+    hold.brake_hold = true;
+    renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), hold);
+    EXPECT_EQ(s.at(320 - 90, 120) >> 24, 205) << "오토 홀드 배지는 속도 아래 가운데";
+
+    // 세 자리 속도의 왼쪽 깜빡이: 노란 화살표 셋이 다 켜져도 왼쪽 위 기어 카드(오른쪽 끝 168)에 닿지
+    // 않는다. 비전 크루즈 SET은 칩이 아니라 설정 속도 카드 안에 있다.
+    OverlayHudState signal;
+    signal.cluster_speed_kph = 120.0f;
+    signal.left_blinker = true;
+    signal.turn_signal_step = 10;
+    signal.cruise_max_speed_kph = 110.0f;
+    signal.cruise_command_speed_kph = 90.0f;
+    renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), signal);
+    EXPECT_EQ(s.at(180, 43), 0xffffcc00u) << "가장 바깥 화살표";
+    EXPECT_EQ(s.at(172, 43) >> 24, 0) << "카드와 화살표 사이";
+    EXPECT_EQ(s.at(20, 150) >> 24, 0) << "모드 칩 아래에 SET 칩이 없다";
 
     // 오른쪽 위 상태 알약 둘레만 네트워크 카드를 연다
     EXPECT_TRUE(hud_status_touch(620, 20, 640));
     EXPECT_TRUE(hud_status_touch(500, 60, 640));
     EXPECT_FALSE(hud_status_touch(320, 20, 640));
     EXPECT_FALSE(hud_status_touch(620, 200, 640));
+    // 왼쪽 열은 진단 카드를 켜고 끈다. 속도 숫자와 아래 TPMS 카드는 빠진다
+    EXPECT_TRUE(hud_left_column_touch(40, 40, 480));
+    EXPECT_TRUE(hud_left_column_touch(200, 300, 480));
+    EXPECT_FALSE(hud_left_column_touch(320, 40, 480));
+    EXPECT_FALSE(hud_left_column_touch(60, 430, 480));
+    for (int y = 0; y < 480; y += 10)  // 두 영역은 겹치지 않는다
+        for (int x = 0; x < 640; x += 10) EXPECT_FALSE(hud_status_touch(x, y, 640) && hud_left_column_touch(x, y, 480));
 }
 
 }  // namespace

@@ -12,6 +12,9 @@ namespace {
 
 constexpr int kMdpsToiUnavailableFaultFrames = 100;
 constexpr double kBlinkerHoldSeconds = 0.5;
+/* 이보다 깊으면 페달을 밟은 것이다. 2026-10-04 녹화 두 건: 제동 중 스트로크 중앙값 16 mm(하위 5%
+ * 4 mm), 비제동 주행의 99%가 3 mm 이하. 이 기준이 AHB1 작동 상태(CF_Ahb_Act)와 98% 같다. */
+constexpr float kBrakePedalStrokeMm = 3.0f;
 constexpr int kCruiseButtonResume = 1;
 constexpr int kCruiseButtonSet = 2;
 constexpr int kCruiseButtonCancel = 4;
@@ -39,6 +42,7 @@ bool expected_openpilot_bus(uint32_t address, uint8_t bus) {
     case kHyundaiCgw2Address:
     case kHyundaiLca11Address:
     case kHyundaiTpms11Address:
+    case kHyundaiAhb1Address:
       return bus == kPowertrainBus;
     case kHyundaiMdps12Address:
       return bus == kMdpsBus;
@@ -204,6 +208,13 @@ Tcs15Values decode_tcs15(const std::array<uint8_t, 8> &data) {
   return values;
 }
 
+Ahb1Values decode_ahb1(const std::array<uint8_t, 8> &data) {
+  Ahb1Values values;
+  // CR_Ahb_StDep_mm: 8|16 signed, 0.1 mm
+  values.pedal_stroke_mm = static_cast<float>(sign_extend(get_signal_le(data.data(), 8, 16), 16)) * 0.1f;
+  return values;
+}
+
 EEms11Values decode_e_ems11(const std::array<uint8_t, 8> &data) {
   EEms11Values values;
   values.gas = static_cast<int>(get_signal_le(data.data(), 56, 8));
@@ -217,15 +228,19 @@ ElectGearValues decode_elect_gear(const std::array<uint8_t, 8> &data) {
   return values;
 }
 
+/* CGW1의 2비트 B-CAN 신호는 0·1이 꺼짐·켜짐(닫힘·열림, 미착용·착용)이고 3이 "B-CAN 신호
+ * 타임아웃"이다(svrs_dl3_can_v6.dbc VAL_). 타임아웃은 모르는 값이라 안전한 쪽으로 읽는다:
+ * 깜빡이·비상등은 꺼짐(켜짐으로 읽으면 차선 변경·회전 desire가 생긴다), 문은 열림, 안전벨트는
+ * 미착용(둘 다 결합을 막는다). 2026-10-02~04 녹화 6건에서 3은 한 번도 나오지 않았다. */
 Cgw1Values decode_cgw1(const std::array<uint8_t, 8> &data) {
   Cgw1Values values;
   values.driver_door_open = get_signal_le(data.data(), 8, 2) != 0;
   values.passenger_door_open = get_signal_le(data.data(), 35, 1) != 0;
   values.front_door_open = values.driver_door_open || values.passenger_door_open;
-  values.seatbelt_unlatched = get_signal_le(data.data(), 10, 2) == 0;
-  values.left_blinker = get_signal_le(data.data(), 19, 2) != 0;
-  values.right_blinker = get_signal_le(data.data(), 62, 2) != 0;
-  values.hazard = get_signal_le(data.data(), 33, 2) != 0;
+  values.seatbelt_unlatched = get_signal_le(data.data(), 10, 2) != 1;
+  values.left_blinker = get_signal_le(data.data(), 19, 2) == 1;
+  values.right_blinker = get_signal_le(data.data(), 62, 2) == 1;
+  values.hazard = get_signal_le(data.data(), 33, 2) == 1;
   return values;
 }
 
@@ -346,6 +361,9 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
     state->esp_disabled = tcs.esp_disabled;
     state->brake_hold = tcs.brake_hold;
     state->tcs15_time_s = now_s;
+  } else if (address == kHyundaiAhb1Address && length >= 8) {
+    state->brake_pedal_stroke_mm = decode_ahb1(data).pedal_stroke_mm;
+    state->ahb1_time_s = now_s;
   } else if (address == kHyundaiEEms11Address && length >= 8) {
     const EEms11Values ems = decode_e_ems11(data);
     state->gas = ems.gas;
@@ -415,6 +433,13 @@ bool seed_frames_ready(const VehicleCanState &state) {
 bool tpms_state_fresh(const VehicleCanState &state, double now_s,
                       double timeout_s) {
   return signal_time_fresh(state.tpms11_time_s, now_s, timeout_s);
+}
+
+bool brake_lights_on(const VehicleCanState &state, double now_s, double timeout_s) {
+  const bool pedal = signal_time_fresh(state.ahb1_time_s, now_s, timeout_s) &&
+                     state.brake_pedal_stroke_mm > kBrakePedalStrokeMm;
+  const bool held = signal_time_fresh(state.tcs13_time_s, now_s, timeout_s) && state.brake_light;
+  return pedal || held;
 }
 
 float cruise_set_speed_kph(const VehicleCanState &state) {

@@ -48,6 +48,14 @@ constexpr uint32_t kHudFlagLaneless = 1U << 0;
 constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
 constexpr uint32_t kHudFlagSoftDisabling = 1U << 2;   // 3초 뒤 해제 예고(active_block이 사유)
 constexpr uint32_t kHudFlagSteerSaturated = 1U << 3;  // 커브가 조향 한계를 넘음
+constexpr uint32_t kHudFlagLaneChangePending = 1U << 4;  // 차선 변경 대기: 운전자가 그쪽으로 핸들을 밀어야 시작
+constexpr uint32_t kHudFlagLaneChanging = 1U << 5;       // 차선 변경 중(시작·마무리)
+constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;    // 차선 변경 방향(없으면 왼쪽)
+constexpr uint32_t kHudFlagSteerPaused = 1U << 7;        // 85도 위에서 조향 요청을 끄고 쉰다
+constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받아 15도 아래에서 손을 떼야 다시 조향
+constexpr uint32_t kHudFlagTurnLeft = 1U << 9;           // 회전 desire(교차로 좌회전)
+constexpr uint32_t kHudFlagTurnRight = 1U << 10;         // 회전 desire(교차로 우회전)
+constexpr uint32_t kHudFlagBrakeLights = 1U << 11;       // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
 constexpr char kRoadAiFrameRing[] = "/edgepilot_road_ai";
 constexpr unsigned kCanBatchMaxFrames = 256;
 constexpr unsigned kCanQueueSlots = 64;
@@ -153,17 +161,41 @@ struct ModelState {
      * 모델 점은 이만큼 오른쪽 가상 카메라 기준이라 HUD가 같은 값으로 되돌려 그린다. */
     float camera_offset_m = 0.0f;
     float camera_height_m = 0.0f;
+    /* 녹화 v8부터. 운전자가 0, 2, …, 10초 뒤 가속·브레이크 페달을 밟고 있을 확률(모델 meta). 정차
+     * 출발 알림이 2초 가속 확률로 녹색 신호를 잡는다(경로보다 빨리, 경로가 안 열려도 오른다). */
+    float gas_press_probs[kMetaPressHorizons] = {};
+    float brake_press_probs[kMetaPressHorizons] = {};
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
  * kRecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(ModelState) == 3528 && offsetof(ModelState, plan_yaw) == 3256 &&
-                  offsetof(ModelState, camera_offset_m) == 3520,
+static_assert(sizeof(ModelState) == 3576 && offsetof(ModelState, plan_yaw) == 3256 &&
+                  offsetof(ModelState, camera_offset_m) == 3520 &&
+                  offsetof(ModelState, gas_press_probs) == 3528,
               "ModelState layout is shared with the recording reader");
 // param_server.py(MODEL_CALIBRATION_OFFSET)가 이 위치에서 보정 상태를 읽는다.
 static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationState) == 32,
               "ModelState.calibration is read by param_server.py");
+/* 웹 BEV 탭(scripts/web/bev_data.js)이 위치로 읽는 필드. 서버는 페이로드를 그대로 보내고
+ * param_server.py BEV_MODEL_FIELDS가 페이지에 위치를 알려 준다(check_param_server.py가 대조). */
+#define EDGEPILOT_MODEL_STATE_AT(field, expected) \
+    static_assert(offsetof(ModelState, field) == (expected), \
+                  "ModelState." #field " moved: web BEV")
+EDGEPILOT_MODEL_STATE_AT(model_timestamp_ns, 16);
+EDGEPILOT_MODEL_STATE_AT(valid, 28);
+EDGEPILOT_MODEL_STATE_AT(plan, 304);
+EDGEPILOT_MODEL_STATE_AT(lanes, 700);
+EDGEPILOT_MODEL_STATE_AT(lane_probabilities, 2284);
+EDGEPILOT_MODEL_STATE_AT(road_edges, 2316);
+EDGEPILOT_MODEL_STATE_AT(road_edge_stds, 3108);
+EDGEPILOT_MODEL_STATE_AT(lead, 3148);
+EDGEPILOT_MODEL_STATE_AT(gas_press_probs, 3528);
+#undef EDGEPILOT_MODEL_STATE_AT
+static_assert(sizeof(IpcPoint) == 12 && sizeof(LeadState) == 24 && offsetof(LeadState, probability) == 4 &&
+                  offsetof(LeadState, x) == 8 && offsetof(LeadState, velocity) == 16 &&
+                  offsetof(LeadState, acceleration) == 20,
+              "web BEV reads IpcPoint and LeadState by position");
 
 struct ProcessState {
     char name[16] = {};
@@ -498,9 +530,9 @@ static_assert(sizeof(ControlState) == 240,
 static_assert(sizeof(PandaState) == 96,
               "PandaState is recorded as-is: bump kRecordingVersion");
 /* 기록 버전과 저장 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다. */
-static_assert(kRecordingVersion == 7 && sizeof(ModelState) == 3528 &&
+static_assert(kRecordingVersion == 8 && sizeof(ModelState) == 3576 &&
                   sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
-              "recording v7 pins these payloads; bump kRecordingVersion together");
+              "recording v8 pins these payloads; bump kRecordingVersion together");
 
 /* overlayd와 hud_snapshot이 소비 직후에 쓴다(채우는 쪽은 model_state_fill.h). */
 ParsedModelOutput parsed_from_model_state(const ModelState &state);

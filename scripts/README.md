@@ -31,6 +31,7 @@
 | --- | --- | --- |
 | `manager.py` | `python3 /root/edgepilot/manager.py [supercombo.axmodel]` | 런타임 감시자. 보드 UI 런처를 멈추고 프로세스를 순서대로 띄우며 죽으면 1초 뒤 다시 띄운다. 아직 부팅 때 자동으로 실행되지 않는다(init 스크립트·systemd 유닛 없음) |
 | `param_server.py` | `[--host 주소] [--port 포트]` | 파라미터 편집 웹 서버(FastAPI, 기본 `0.0.0.0:8080`). 매니저가 함께 띄운다 |
+| `web/` | (정적 파일) | 웹 콘솔 BEV 탭의 JS(`bev.js`, 자차 K7 모델 `bev_k7.js`, 앞차 모델 `bev_car.js`, `bev_data.js`)와 three.js 0.186.1(`three/`). 보드에는 `param_server.py` 옆 `web/`에 둔다. 아직 `upload_to_board.sh`가 올리지 않는다 |
 | `display_control.py` | (모듈) | LCD 백라이트 제어. 파라미터 서버가 `display.json`을 적용할 때 쓴다. 아직 K230 핀(IO25, `pwmchip3`) 기준이라 MaixCAM2 백라이트(`pwmchip0/pwm3`)와 맞지 않는다 |
 | `requirements-param-server.txt` | `python3 -m pip install -r ...` | 파라미터 서버 의존성(fastapi, uvicorn) |
 

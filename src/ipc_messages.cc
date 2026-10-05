@@ -74,6 +74,10 @@ void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
         state.road_edge_stds[edge] = parsed.road_edges[edge].std;
     for (int i = 0; i < kDesireLen; ++i)
         state.desire_state[i] = parsed.meta.desire_state[i];
+    for (int i = 0; i < kMetaPressHorizons; ++i) {
+        state.gas_press_probs[i] = parsed.meta.gas_press[i];
+        state.brake_press_probs[i] = parsed.meta.brake_press[i];
+    }
 
     ParsedLeadPoint lead;
     float lead_prob = 0.0f;
@@ -138,6 +142,10 @@ ParsedModelOutput parsed_from_model_state(const ModelState &state)
     }
     for (int i = 0; i < kDesireLen; ++i)
         parsed.meta.desire_state[i] = state.desire_state[i];
+    for (int i = 0; i < kMetaPressHorizons; ++i) {
+        parsed.meta.gas_press[i] = state.gas_press_probs[i];
+        parsed.meta.brake_press[i] = state.brake_press_probs[i];
+    }
 
     if (state.lead.valid) {
         parsed.leads.valid = true;

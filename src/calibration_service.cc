@@ -27,6 +27,7 @@ struct StoredCalibration {
     float rpy[3] = {};
     float spread[3] = {};
     int valid_blocks = 0;
+    float height_m = OnlineCalibrator::kHeightInit;  // 없으면(예전 파일) HEIGHT_INIT
 };
 
 bool load_stored_calibration(const std::string &path, StoredCalibration *stored,
@@ -50,6 +51,9 @@ bool load_stored_calibration(const std::string &path, StoredCalibration *stored,
             return false;
         }
         parse_json_float_array(text, "spread_rad", &spread);
+        float height = OnlineCalibrator::kHeightInit;
+        if (parse_json_float_value(text, "height_m", &height) && std::isfinite(height))
+            stored->height_m = height;
         for (int i = 0; i < 3; ++i) {
             stored->rpy[i] = rpy[static_cast<size_t>(i)];
             stored->spread[i] = spread[static_cast<size_t>(i)];
@@ -86,7 +90,8 @@ bool save_stored_calibration(const std::string &params_dir, const std::string &p
          << "  \"rpy_rad\": [" << rpy[0] << ", " << rpy[1] << ", " << rpy[2] << "],\n"
          << "  \"spread_rad\": [" << snapshot.spread[0] << ", "
          << snapshot.spread[1] << ", " << snapshot.spread[2] << "],\n"
-         << "  \"valid_blocks\": " << snapshot.valid_blocks << "\n"
+         << "  \"valid_blocks\": " << snapshot.valid_blocks << ",\n"
+         << "  \"height_m\": " << snapshot.height_m << "\n"
          << "}\n";
     file.flush();
     if (!file.good()) {
@@ -150,7 +155,8 @@ CalibrationService::CalibrationService(const AppConfig &config)
             copy_rpy(persisted_rpy_, stored.rpy);
             has_persisted_ = true;
         }
-    } else if (loaded && calibrator_.restore(stored.rpy, stored.valid_blocks, stored.spread)) {
+    } else if (loaded && calibrator_.restore(stored.rpy, stored.valid_blocks, stored.spread,
+                                             stored.height_m)) {
         restored_ = true;
         copy_rpy(persisted_rpy_, stored.rpy);
         has_persisted_ = true;
@@ -210,10 +216,10 @@ void CalibrationService::persist_loop()
                              calibration_path_.c_str(), std::strerror(errno));
         } else if (save_stored_calibration(params_dir_, calibration_path_, job.rpy, job.snapshot))
             std::fprintf(stderr,
-                         "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) validBlocks=%d\n",
+                         "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) height=%.3f m validBlocks=%d\n",
                          calibration_path_.c_str(), rad_to_deg(job.rpy[0]),
                          rad_to_deg(job.rpy[1]), rad_to_deg(job.rpy[2]),
-                         job.snapshot.valid_blocks);
+                         job.snapshot.height_m, job.snapshot.valid_blocks);
         lock.lock();
     }
 }
@@ -342,7 +348,7 @@ void CalibrationService::maybe_log(const OnlineCalibrator::UpdateResult &result)
     std::fprintf(stderr,
                  "\ncalib mode=%s status=%s accepted=%llu rejected=%llu "
                  "validBlocks=%d blockSamples=%d last=%s rpy_deg=(%.3f %.3f %.3f) "
-                 "spread_deg=(%.3f %.3f %.3f)\n",
+                 "spread_deg=(%.3f %.3f %.3f) height=%.3f m\n",
                  mode_name(result.snapshot),
                  calibration_status_name(result.snapshot.status),
                  static_cast<unsigned long long>(result.snapshot.accepted_samples),
@@ -355,5 +361,6 @@ void CalibrationService::maybe_log(const OnlineCalibrator::UpdateResult &result)
                  rad_to_deg(result.snapshot.rpy[2]),
                  rad_to_deg(result.snapshot.spread[0]),
                  rad_to_deg(result.snapshot.spread[1]),
-                 rad_to_deg(result.snapshot.spread[2]));
+                 rad_to_deg(result.snapshot.spread[2]),
+                 result.snapshot.height_m);
 }

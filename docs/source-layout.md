@@ -23,10 +23,14 @@ only in the board build, against `deps/ax630` from
     AI-ISP always on, sensor at the requested fps with auto exposure and a capped
     shutter, and copies each frame into a CMM block by IVPS TDP.
 - `maix_display.*`
-  - the LCD as two VO layers: layer 0 takes a CMM frame, IVPS crops the centre
-    4:3 and scales it to 640x480; layer 1 is a cached CMM BGRA block the HUD is
-    drawn into and pushed without a copy. VO rotates for the 480x640 panel and
-    applies the board's flip/mirror. Also turns the backlight on.
+  - the LCD: VO video layer 0 takes a CMM frame, IVPS crops the centre 4:3 and
+    scales it to 640x480, and VO rotates it for the 480x640 panel with the
+    board's flip/mirror. The HUD goes to the graphic layer: it is drawn in the
+    panel's portrait orientation into a cached 480x640 BGRA buffer, and only the
+    64 px tiles drawn this frame or last frame are copied into the visible page
+    of `/dev/fb0`. MaixCDK's layer-1 push rotates with IVPS TDP, which smears
+    G/R/A into the next pixel for 32-bit BGRA (stair-stepped, fringed edges), so
+    the HUD does not use it. Also turns the backlight on.
 - `maix_touch.*`
   - the touchscreen (`hyn_ts`, multi-touch type B) read without blocking;
     reports short taps in screen coordinates, rotated clockwise 90° as
@@ -49,8 +53,10 @@ only in the board build, against `deps/ax630` from
 - `src/model_output.*`
   - owns the openpilot master supercombo raw-output layout
     (`model_output_layout`, every block offset with a `static_assert`) and
-    exposes parsed plan, lanes, road edges, leads, and pose. Also owns the
-    shared `T_IDXS`/`X_IDXS` trajectory grids.
+    exposes parsed plan, lanes, road edges, leads, pose, and the meta pedal
+    predictions (the chance the driver presses gas or brake 0, 2, …, 10 s
+    ahead; the departure alert uses gas at 2 s). Also owns the shared
+    `T_IDXS`/`X_IDXS` trajectory grids.
 - `src/model_temporal.h`
   - the history queues the NPU core does not carry: 100-tick desire pulses
     pooled to 25x8, 96 ticks of hidden state strided to 24x512, and the
@@ -154,13 +160,21 @@ released after that short hold if they persist.
   - openpilot-style process split: capture into the ring, model, and the
     two-layer LCD HUD.
 - `src/overlay_renderer.*`, `src/overlay_canvas.*`, `src/overlay_font.*`
-  - draw the 640x480 HUD into the straight-alpha BGRA buffer of VO layer 1:
-    state border, speed and set speed, steering mode, plan/lane/road-edge
-    ribbons faded with distance, lead chevron, torque bar, alerts, TPMS and
-    camera calibration cards, a recording/Wi-Fi status pill (and the network
-    card a tap opens), and chips that appear only when something needs
-    attention (temperature, panda, storage). The remaining numeric diagnostics
-    sit in a card behind the `hud_debug` device setting. `overlay_canvas`
+  - draw the 640x480 HUD into a straight-alpha BGRA buffer (landscape
+    coordinates; `HudOrientation` maps them onto the portrait panel buffer):
+    state border, speed with yellow turn-signal/hazard chevrons, set speed
+    (with the vision cruise `SET` speed) and gear cards, steering mode and the
+    manoeuvre in progress (turn desire, lane change), an `AUTO HOLD` badge
+    under the speed, plan/lane/road-edge ribbons faded with distance, the
+    car's position in its lane marked on the road, lead chevron, torque bar
+    with the driver's torque, alerts (including the lane-change nudge and the
+    large-angle pause), TPMS and camera calibration cards with the board
+    state card above TPMS and the learned values card above calibration
+    (white while control uses them), a
+    recording/Wi-Fi status pill (and the network card a tap opens), and chips
+    that appear only when something needs attention (panda, storage). The
+    numbers no other card shows sit in a card behind the `hud_debug` device
+    setting. `overlay_canvas`
     fills polygons with 4-subrow anti-aliasing that touches only covered spans,
     fills the straight rows of integer rounded rectangles directly, blends
     without divisions, and records the 64 px tiles each row touched so the
@@ -185,6 +199,9 @@ released after that short hold if they persist.
 - `src/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling (the Wi-Fi SSID through the
     `SIOCGIWESSID` ioctl) into `OverlayHudState`, called at 1 Hz by `overlayd`.
+    Only a `wlan` link with an address and an associated SSID counts as
+    connected; another link (the USB virtual Ethernet, which always has an
+    address) is kept apart for the network card.
 - `src/recording_writer.*`, `src/recording_format.h`
   - the event-log writer and on-disk contract of the K230 recorder, kept for
     the recorder port and for the host tools that read K230 drives.
@@ -213,6 +230,12 @@ released after that short hold if they persist.
 - `scripts/param_server.py`, `scripts/display_control.py`
   - the FastAPI parameter editor (`EDGEPILOT_ENABLE_PARAM_SERVER`) and the
     MaixCAM2 backlight helper it calls (PWM3).
+- `scripts/web/`
+  - the editor's BEV tab, drawn by the browser: `bev.js` (three.js view, ported
+    from sv_recorder_bev), `bev_k7.js` (the ego car, a black 2017 K7 made in code),
+    `bev_car.js` (the lead's car model), `bev_data.js` (reads the ModelState and
+    ControlState bytes the editor streams), and three.js 0.186.1 in `three/`. The
+    board copies them next to `param_server.py` as `web/`.
 
 ## Scripts and tools
 

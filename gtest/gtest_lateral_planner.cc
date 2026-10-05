@@ -9,6 +9,8 @@
 #include "vehicle_can.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace {
@@ -70,9 +72,12 @@ TEST(LateralPlanner, LaneChangeFollowsUpstreamDesireHelper) {
   vehicle.left_blinker = true;
   r = planner.update(ms, vehicle, v, 0.0f, true);
   EXPECT_EQ(r.desire, 0) << "깜빡이만으로는 시작하지 않는다";
+  EXPECT_EQ(r.lane_change_state, 1) << "HUD: 핸들을 밀기를 기다린다";
+  EXPECT_EQ(r.lane_change_direction, -1);
   vehicle.driver_torque = 300;  // 왼쪽으로 민다
   r = planner.update(ms, vehicle, v, 0.0f, true);
   EXPECT_EQ(r.desire, 3) << "깜빡이 방향으로 밀면 laneChangeLeft";
+  EXPECT_EQ(r.lane_change_state, 2) << "HUD: 변경 중";
   // 모델이 차선 변경 중이라고 하는 동안(prob 높음)은 핸들을 놓아도 3초 넘게 이어진다.
   vehicle.driver_torque = 0;
   ms.desire_state[0] = 0.1f;
@@ -88,6 +93,7 @@ TEST(LateralPlanner, LaneChangeFollowsUpstreamDesireHelper) {
   EXPECT_EQ(r.desire, 3) << "마무리 단계";
   for (int i = 0; i < 12; ++i) r = planner.update(ms, vehicle, v, 0.0f, true);
   EXPECT_EQ(r.desire, 0) << "차선선을 되살리면 끝난다";
+  EXPECT_EQ(r.lane_change_state, 0);
 }
 
 /* 회전 desire(실험): 저속 + 깜빡이 + 결합 중이면 turnLeft/turnRight를 2.5초마다 다시 올리고,
@@ -192,6 +198,95 @@ TEST(LateralPlanner, PathOffsetOnlyShiftsLanePath) {
   for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.0f), vehicle, v, 0.0f, true);
   ASSERT_TRUE(r.laneless_mode);
   EXPECT_NEAR(r.target_y_m, 0.0f, 0.01f) << "모델 경로로 넘어가면 오프셋을 더하지 않는다";
+}
+
+/* Lane 모드에서 차선이 안 보이면(교차로) laneless 모드와 같은 openpilot 메인 계산으로 목표를 낸다:
+ * plan 위치가 직진이어도 plan yaw가 곡률 κ를 말하면 목표는 κ다. 차선을 잃는 순간에는 한 프레임에
+ * 바꾸지 않고 0.5초에 걸쳐 섞는다. */
+TEST(LateralPlanner, LaneModeFallbackMatchesLaneless) {
+  const float v = 6.0f;
+  const float kappa = 0.02f;
+  auto model_for = [&](float lane_prob) {
+    ModelState ms{};
+    ms.valid = 1;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+      const float t = model_t_idx(i);
+      ms.model_t[i] = t;
+      ms.lane_t[i] = t;
+      ms.plan[i] = {v * t, 0.0f, 0.0f};  // 위치는 직진
+      ms.plan_yaw[i] = kappa * v * t;   // yaw는 κ로 회전
+      ms.plan_yaw_rate[i] = kappa * v;
+      ms.lanes[1][i] = {v * t, -1.75f, 0.0f};
+      ms.lanes[2][i] = {v * t, 1.75f, 0.0f};
+    }
+    ms.lane_probabilities[1] = ms.lane_probabilities[2] = lane_prob;
+    ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;
+    ms.desire_state[0] = 1.0f;
+    return ms;
+  };
+  SteeringParams steering;
+  DrivingParams driving;
+  LateralPlanner lane_mode(steering, driving);
+  driving.laneless_mode = true;
+  LateralPlanner laneless(steering, driving);
+  VehicleCanState vehicle{};
+  LateralTarget r;
+  for (int i = 0; i < 60; ++i) r = lane_mode.update(model_for(0.99f), vehicle, v, 0.0f, true);
+  ASSERT_FALSE(r.laneless_mode);
+  const float with_lanes = lag_adjusted_curvature(r, v, 0.0f, 0.42f);
+  EXPECT_LT(std::fabs(with_lanes), 0.3f * kappa) << "차선이 보이면 차선(직진)을 따른다";
+
+  std::vector<float> handoff;
+  for (int i = 0; i < 40; ++i) {
+    r = lane_mode.update(model_for(0.0f), vehicle, v, 0.0f, true);
+    handoff.push_back(lag_adjusted_curvature(r, v, 0.0f, 0.42f));
+  }
+  ASSERT_TRUE(r.laneless_mode) << "차선을 잃으면 모델 경로 구간";
+  const LateralTarget ref = laneless.update(model_for(0.0f), vehicle, v, 0.0f, true);
+  EXPECT_NEAR(handoff.back(), lag_adjusted_curvature(ref, v, 0.0f, 0.42f), 1e-6f)
+      << "자리 잡은 뒤에는 laneless 모드와 같은 목표";
+  EXPECT_NEAR(handoff.back(), kappa, 1e-4f);
+  float max_step = 0.0f;
+  for (size_t i = 1; i < handoff.size(); ++i)
+    max_step = std::max(max_step, std::fabs(handoff[i] - handoff[i - 1]));
+  EXPECT_LT(max_step, 0.25f * kappa) << "인계는 한 프레임에 넘어가지 않는다";
+}
+
+/* lane_path_weight는 Lane 모드 MPC가 차선 중심에서 벗어난 위치를 되돌리는 세기다. 차가 차선 중심에서
+ * 0.3 m 오른쪽에 있으면 가중치 3이 1보다 왼쪽(음) 곡률을 더 크게 요구한다. */
+TEST(LateralPlanner, LanePathWeightStrengthensCentering) {
+  const float v = 20.0f;
+  auto model_for = [&]() {
+    ModelState ms{};
+    ms.valid = 1;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+      const float t = model_t_idx(i);
+      ms.model_t[i] = t;
+      ms.lane_t[i] = t;
+      ms.plan[i] = {v * t, 0.0f, 0.0f};
+      ms.lanes[1][i] = {v * t, -2.05f, 0.0f};  // 차가 차선 중심보다 0.3 m 오른쪽
+      ms.lanes[2][i] = {v * t, 1.45f, 0.0f};
+    }
+    ms.lane_probabilities[1] = ms.lane_probabilities[2] = 0.99f;
+    ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;
+    ms.desire_state[0] = 1.0f;
+    return ms;
+  };
+  auto desired = [&](float weight) {
+    SteeringParams steering;
+    steering.lane_path_weight = weight;
+    DrivingParams driving;
+    LateralPlanner planner(steering, driving);
+    VehicleCanState vehicle{};
+    LateralTarget r;
+    for (int i = 0; i < 40; ++i) r = planner.update(model_for(), vehicle, v, 0.0f, true);
+    EXPECT_FALSE(r.laneless_mode);
+    return lag_adjusted_curvature(r, v, 0.0f, 0.42f);
+  };
+  const float upstream = desired(1.0f);
+  const float stronger = desired(3.0f);
+  EXPECT_LT(upstream, 0.0f) << "차선 중심(왼쪽)으로 돌아간다";
+  EXPECT_LT(stronger, upstream * 1.2f) << "가중치 3은 더 강하게 되돌린다";
 }
 
 }  // namespace

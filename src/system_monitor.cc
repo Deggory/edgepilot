@@ -141,6 +141,9 @@ void SystemMonitor::sample_temperature(float *temperature_c)
     *temperature_c = maximum;
 }
 
+/* 와이파이(wlanN)와 그 밖의 링크(usb0 같은 USB 가상 이더넷)를 따로 본다. HUD의 연결 표시는
+ * 와이파이만이고, 주소가 있으면서 SSID가 잡혀야(AP에 붙어야) 연결로 친다. USB 링크는 늘 주소가
+ * 있어 예전에는 와이파이가 끊겨도 연결로 보였다(2026-10-04 실차). */
 void SystemMonitor::sample_network(OverlayHudState *hud)
 {
     hud->network_connected = false;
@@ -148,45 +151,32 @@ void SystemMonitor::sample_network(OverlayHudState *hud)
     hud->network_interface[0] = '\0';
     hud->network_ipv4[0] = '\0';
     hud->network_ssid[0] = '\0';
+    hud->wired_interface[0] = '\0';
+    hud->wired_ipv4[0] = '\0';
 
     ifaddrs *addresses = nullptr;
     if (getifaddrs(&addresses) != 0) return;
-
-    int best_score = -1;
     for (const ifaddrs *address = addresses; address; address = address->ifa_next) {
         if (!address->ifa_addr || address->ifa_addr->sa_family != AF_INET) continue;
-        if ((address->ifa_flags & IFF_UP) == 0 ||
-            (address->ifa_flags & IFF_LOOPBACK) != 0) {
-            continue;
-        }
-
+        if ((address->ifa_flags & IFF_UP) == 0 || (address->ifa_flags & IFF_LOOPBACK) != 0) continue;
         const char *name = address->ifa_name ? address->ifa_name : "";
-        const int score = std::strcmp(name, "wlan0") == 0 ? 3 :
-                          (std::strncmp(name, "wlan", 4) == 0 ? 2 : 1);
-        if (score <= best_score) continue;
-
         char ipv4[INET_ADDRSTRLEN] = {};
-        const sockaddr_in *socket_address =
-            reinterpret_cast<const sockaddr_in *>(address->ifa_addr);
-        if (!inet_ntop(AF_INET, &socket_address->sin_addr,
-                       ipv4, sizeof(ipv4))) {
-            continue;
-        }
-
-        best_score = score;
-        hud->network_connected = true;
-        std::snprintf(hud->network_interface, sizeof(hud->network_interface),
-                      "%s", name);
-        std::snprintf(hud->network_ipv4, sizeof(hud->network_ipv4),
-                      "%s", ipv4);
+        const sockaddr_in *socket_address = reinterpret_cast<const sockaddr_in *>(address->ifa_addr);
+        if (!inet_ntop(AF_INET, &socket_address->sin_addr, ipv4, sizeof(ipv4))) continue;
+        const bool wifi = std::strncmp(name, "wlan", 4) == 0;
+        char *interface = wifi ? hud->network_interface : hud->wired_interface;
+        char *ip = wifi ? hud->network_ipv4 : hud->wired_ipv4;
+        // 와이파이는 wlan0을 먼저, 그 밖의 링크는 처음 본 것
+        if (interface[0] != '\0' && !(wifi && std::strcmp(name, "wlan0") == 0)) continue;
+        std::snprintf(interface, sizeof(hud->network_interface), "%s", name);
+        std::snprintf(ip, sizeof(hud->network_ipv4), "%s", ipv4);
     }
     freeifaddrs(addresses);
 
-    if (!hud->network_connected ||
-        std::strncmp(hud->network_interface, "wlan", 4) != 0) {
-        return;
-    }
+    if (hud->network_interface[0] == '\0') return;
     read_ssid(hud->network_interface, hud->network_ssid, sizeof(hud->network_ssid));
+    hud->network_connected = hud->network_ssid[0] != '\0';
+    if (!hud->network_connected) return;
 
     FILE *file = std::fopen("/proc/net/wireless", "r");
     if (!file) return;

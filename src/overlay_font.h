@@ -34,9 +34,9 @@ struct HudFont {
 };
 
 extern const HudFont kHudSpeedFont;    // 76 px 굵은 숫자(현재 속도)
-extern const HudFont kHudValueFont;    // 30 px 숫자(설정 속도)
+extern const HudFont kHudValueFont;    // 30 px 숫자와 기어 글자(설정 속도, 기어)
 extern const HudFont kHudTitleFont;    // 22 px 세미볼드(알림 제목)
-extern const HudFont kHudBodyFont;     // 15 px(칩, 값)
-extern const HudFont kHudCaptionFont;  // 12 px(보조 글, 진단)
+extern const HudFont kHudBodyFont;     // 18 px(칩, 값)
+extern const HudFont kHudCaptionFont;  // 14 px(보조 글, 진단)
 
 #endif

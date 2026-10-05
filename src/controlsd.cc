@@ -310,6 +310,8 @@ DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicl
   input.model_updated = model_updated;
   input.model_valid = lead.model_fresh;
   input.plan_distance_m = lead.model_fresh ? model.plan[kTrajectorySize - 1].x : 0.0f;
+  input.gas_press_prob = lead.model_fresh ? model.gas_press_probs[1] : 0.0f;  // 2초 뒤
+  input.turn_signal_on = vehicle.left_blinker || vehicle.right_blinker;
   return input;
 }
 
@@ -485,7 +487,15 @@ ControlState make_control_state(const LateralControllerConfig &config,
       (target.laneless_mode ? kHudFlagLaneless : 0U) |
       (result.vehicle_fresh && vehicle.brake_hold ? kHudFlagBrakeHold : 0U) |
       (result.soft_disabling ? kHudFlagSoftDisabling : 0U) |
-      (result.steer_saturated ? kHudFlagSteerSaturated : 0U);
+      (result.steer_saturated ? kHudFlagSteerSaturated : 0U) |
+      (target.lane_change_state == 1 ? kHudFlagLaneChangePending : 0U) |
+      (target.lane_change_state >= 2 ? kHudFlagLaneChanging : 0U) |
+      (target.lane_change_direction > 0 ? kHudFlagLaneChangeRight : 0U) |
+      (result.large_angle_hold ? kHudFlagSteerPaused : 0U) |
+      (result.large_angle_hold_by_driver ? kHudFlagSteerPausedByDriver : 0U) |
+      (target.turn_desire == 1 ? kHudFlagTurnLeft : 0U) |
+      (target.turn_desire == 2 ? kHudFlagTurnRight : 0U) |
+      (result.vehicle_fresh && brake_lights_on(vehicle, now_s) ? kHudFlagBrakeLights : 0U);
   state.seeds_ready = result.seeds_ready ? 1U : 0U;
   state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
   state.steering_fault = vehicle.steering_fault ? 1U : 0U;
@@ -922,13 +932,14 @@ int main() {
         std::fprintf(
             stderr,
             "controlsd: departure alert=%s event=%u "
-            "visionLead=%.1fm rel=%.1fm/s p=%.2f plan=%.1fm\n",
+            "visionLead=%.1fm rel=%.1fm/s p=%.2f plan=%.1fm gas2=%.2f\n",
             departure_alert_name(departure_alert.type),
             departure_alert.event_id,
             alert_input.lead_distance_m,
             alert_input.lead_relative_speed_mps,
             model.lead.probability,
-            alert_input.plan_distance_m);
+            alert_input.plan_distance_m,
+            alert_input.gas_press_prob);
       }
 
       const ControlState control_state = make_control_state(

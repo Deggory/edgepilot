@@ -15,7 +15,8 @@ struct Note {
     double level;
 };
 
-/* 알림 하나: 음들과 밝기(2·3배음 비율). 거부·경고일수록 밝아 작은 스피커에서 또렷하다. */
+/* 알림 하나: 음들과 밝기(2·3배음 비율). 거부·경고일수록 밝아 작은 스피커에서 또렷하다. 배음은
+ * 작은 스피커가 거칠게 울리지 않을 만큼만 섞는다. */
 struct Tone {
     const char *name;
     std::vector<Note> notes;
@@ -67,8 +68,8 @@ std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate)
             const double phase = 2.0 * M_PI * note.hz * ms / 1000.0;
             mix[i] += note.level * attack *
                       (std::exp(-decays) * std::sin(phase) +
-                       tone.brightness * (0.5 * std::exp(-2.0 * decays) * std::sin(2.0 * phase) +
-                                          0.25 * std::exp(-3.0 * decays) * std::sin(3.0 * phase)));
+                       tone.brightness * (0.35 * std::exp(-2.0 * decays) * std::sin(2.0 * phase) +
+                                          0.12 * std::exp(-3.0 * decays) * std::sin(3.0 * phase)));
         }
     }
     double peak = 0.0;

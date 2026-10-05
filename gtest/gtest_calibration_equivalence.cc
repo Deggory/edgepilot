@@ -40,10 +40,12 @@ constexpr double kMaxAllowedYawSpread = 2.0 * kPi / 180.0;
 constexpr double kMaxAllowedPitchSpread = 4.0 * kPi / 180.0;
 constexpr double kSmoothCycles = 10.0;
 constexpr double kPitchMin = -0.09074112085129739;
-constexpr double kPitchMax = 0.14907572052989657;
+constexpr double kPitchMax = 0.17;  // upstream PITCH_LIMITS (mici 아님)
 constexpr double kYawMin = -0.06912048084718224;
 constexpr double kYawMax = 0.06912048084718235;
 constexpr double kSanityMargin = 0.005;
+const double kMaxHeightStd = std::exp(-3.5);
+constexpr double kHeightInit = 1.22;
 constexpr int kBlockSize = 100;
 constexpr int kInputsNeeded = 5;
 constexpr int kInputsWanted = 50;
@@ -129,6 +131,8 @@ bool finite3(const double v[3])
 /* openpilot calibrationd.py의 Calibrator를 double로 옮긴 참조 구현. */
 struct RefCalibrator {
     double rpys[kInputsWanted][3] = {};
+    double heights[kInputsWanted] = {};
+    double height = kHeightInit;
     double rpy[3] = {};
     double spread[3] = {};
     double old_rpy[3] = {};
@@ -140,9 +144,12 @@ struct RefCalibrator {
     uint64_t accepted = 0;
     uint64_t rejected = 0;
 
-    void reset(const double init[3], int blocks, const double *smooth_from = nullptr)
+    void reset(const double init[3], int blocks, const double *smooth_from = nullptr,
+               double height_init = kHeightInit)
     {
         valid_blocks = std::max(0, std::min(blocks, kInputsWanted));
+        height = std::isfinite(height_init) ? height_init : kHeightInit;
+        for (int b = 0; b < kInputsWanted; ++b) heights[b] = height;
         for (int i = 0; i < 3; ++i)
             rpy[i] = std::isfinite(init[i]) ? init[i] : 0.0;
         for (int b = 0; b < kInputsWanted; ++b) {
@@ -194,6 +201,7 @@ struct RefCalibrator {
     void update_status()
     {
         double sum[3] = {};
+        double height_sum = 0.0;
         double min_v[3] = {};
         double max_v[3] = {};
         int valid_count = 0;
@@ -204,6 +212,7 @@ struct RefCalibrator {
                 for (int i = 0; i < 3; ++i)
                     min_v[i] = max_v[i] = rpys[b][i];
             }
+            height_sum += heights[b];
             for (int i = 0; i < 3; ++i) {
                 sum[i] += rpys[b][i];
                 min_v[i] = std::min(min_v[i], rpys[b][i]);
@@ -213,6 +222,7 @@ struct RefCalibrator {
         }
 
         if (valid_count > 0) {
+            height = height_sum / valid_count;
             for (int i = 0; i < 3; ++i) {
                 rpy[i] = sum[i] / valid_count;
                 spread[i] = std::fabs(max_v[i] - min_v[i]);
@@ -252,9 +262,10 @@ struct RefCalibrator {
             v_ego > kMinSpeedFilter &&
             trans[0] > kMinSpeedFilter &&
             std::fabs(rot[2]) < kMaxYawRateFilter;
+        const bool rpy_certain = std::atan2(trans_std[1], trans[0]) < kMaxVelAngleStd;
+        const bool height_certain = pose.road_trans_std[2] < kMaxHeightStd;
         const bool certain_if_calib = valid_numbers &&
-            ((std::atan2(trans_std[1], trans[0]) < kMaxVelAngleStd) ||
-             (valid_blocks < kInputsNeeded));
+            ((rpy_certain && height_certain) || (valid_blocks < kInputsNeeded));
 
         if (!straight_and_fast || !certain_if_calib) {
             ++rejected;
@@ -281,6 +292,9 @@ struct RefCalibrator {
             rpys[block_idx][i] =
                 (idx * rpys[block_idx][i] + (kBlockSize - idx) * new_rpy[i]) /
                 static_cast<double>(kBlockSize);
+        const double new_height = std::isfinite(pose.road_trans[2]) ? pose.road_trans[2] : kHeightInit;
+        heights[block_idx] = (idx * heights[block_idx] + (kBlockSize - idx) * new_height) /
+                             static_cast<double>(kBlockSize);
 
         idx = (idx + 1) % kBlockSize;
         ++accepted;
@@ -310,6 +324,10 @@ PoseObservation make_pose(float tx = 20.0f, float ty = 0.2f, float tz = -0.4f,
     pose.rot_std[0] = 0.01f;
     pose.rot_std[1] = 0.01f;
     pose.rot_std[2] = 0.01f;
+    pose.road_trans[0] = 0.0f;
+    pose.road_trans[1] = 0.0f;
+    pose.road_trans[2] = 1.30f;
+    pose.road_trans_std[0] = pose.road_trans_std[1] = pose.road_trans_std[2] = 0.01f;
     return pose;
 }
 
@@ -325,6 +343,7 @@ void compare_snapshot(const OnlineCalibrator::Snapshot &actual, const RefCalibra
         << std::string(label) + " accepted";
     EXPECT_NEAR(actual.rejected_samples, expected.rejected, 0.0)
         << std::string(label) + " rejected";
+    EXPECT_NEAR(actual.height_m, expected.height, 1e-5) << std::string(label) + " height";
     for (int i = 0; i < 3; ++i) {
         EXPECT_NEAR(actual.rpy[i], expected.rpy[i], 1e-5) << std::string(label) + " rpy";
         EXPECT_NEAR(actual.spread[i], expected.spread[i], 1e-5) << std::string(label) + " spread";
@@ -383,6 +402,55 @@ TEST(CalibrationEquivalence, OnlineCalibrator)
         << "보정 뒤에도 trans 표준편차가 큰 표본은 버린다";
     EXPECT_FALSE(ref.update(uncertain)) << "참조식도 보정 뒤 trans 표준편차가 큰 표본을 버린다";
     compare_snapshot(actual.snapshot(), ref, "uncertain_after_calib");
+}
+
+/* upstream처럼 road_transform z로 카메라 높이를 블록 평균하고, 보정 뒤에는 높이 표준편차가
+ * e^-3.5보다 큰 표본을 버린다. 장착 변경으로 다시 모을 때 높이는 HEIGHT_INIT로 돌아간다. */
+TEST(CalibrationEquivalence, HeightFollowsUpstream)
+{
+    const double zero[3] = {};
+    RefCalibrator ref;
+    ref.reset(zero, 0);
+    OnlineCalibrator actual;
+    EXPECT_NEAR(actual.snapshot().height_m, 1.22f, 1e-6) << "시작 높이는 HEIGHT_INIT";
+    PoseObservation pose = make_pose(20.0f, 0.0f, 0.0f);
+    for (int i = 0; i < 5 * kBlockSize; ++i) {
+        actual.update(pose, 20.0f);
+        ref.update(pose);
+    }
+    compare_snapshot(actual.snapshot(), ref, "height_five_blocks");
+    EXPECT_NEAR(actual.snapshot().height_m, 1.30f, 1e-4) << "블록 평균 높이";
+
+    PoseObservation unsure = pose;
+    unsure.road_trans_std[2] = 0.05f;
+    EXPECT_FALSE(actual.update(unsure, 20.0f).accepted) << "보정 뒤 높이가 불확실한 표본은 버린다";
+    EXPECT_FALSE(ref.update(unsure));
+    compare_snapshot(actual.snapshot(), ref, "height_uncertain");
+
+    OnlineCalibrator fresh;
+    EXPECT_TRUE(fresh.update(unsure, 20.0f).accepted) << "보정 전에는 높이가 불확실해도 받는다";
+}
+
+/* upstream reset처럼 범위를 벗어난 저장값도 받아 Invalid로 두고, 저장된 높이로 시작한다. */
+TEST(CalibrationEquivalence, RestoreOutOfRangeLikeUpstream)
+{
+    OnlineCalibrator calibrator;
+    const float out_of_range[3] = {0.0f, 0.0f, 0.10f};  // yaw 5.7도: 한계 0.069 rad 밖
+    ASSERT_TRUE(calibrator.restore(out_of_range, 12, nullptr, 1.35f));
+    EXPECT_EQ(static_cast<int>(calibrator.snapshot().status), static_cast<int>(CalibrationStatus::Invalid));
+    float out[3] = {};
+    calibrator.output_rpy(out);
+    EXPECT_NEAR(out[2], 0.10f, 1e-7) << "범위 밖이어도 그 rpy를 쓴다(upstream modeld도 rpyCalib를 그대로 쓴다)";
+    EXPECT_NEAR(calibrator.snapshot().height_m, 1.35f, 1e-7) << "저장된 높이";
+    const float nan_rpy[3] = {NAN, 0.0f, 0.0f};
+    ASSERT_TRUE(calibrator.restore(nan_rpy, 3));
+    calibrator.output_rpy(out);
+    EXPECT_EQ(out[0], 0.0f) << "유한하지 않으면 RPY_INIT";
+    EXPECT_EQ(calibrator.snapshot().valid_blocks, 3);
+    const float pitch_016[3] = {0.0f, 0.16f, 0.0f};
+    ASSERT_TRUE(calibrator.restore(pitch_016, 12));
+    EXPECT_EQ(static_cast<int>(calibrator.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated))
+        << "pitch 상한은 upstream 0.17";
 }
 
 TEST(CalibrationEquivalence, MountChangeRecalibratesLikeUpstream)

@@ -61,7 +61,7 @@ of this branch; the piezo alerts are now bell-like tones on the board speaker.
 flowchart TB
   camera([ov_os04d10]) -->|VI 1280x720 NV12| camerad[camerad]
   camerad -->|"CMM frame ring (phys addr)"| modeld["modeld<br/>GDC warp · supercombo · NPU"]
-  camerad -->|CMM frame ring| overlayd["overlayd<br/>VO layer 0 video · layer 1 HUD"]
+  camerad -->|CMM frame ring| overlayd["overlayd<br/>VO video layer · fb0 HUD"]
   modeld -->|modelState| controlsd["controlsd<br/>planner · MPC · torque"]
   controlsd <-->|"sendcan · CAN RX"| pandad[pandad]
   pandad <--> panda(["Panda · vehicle CAN"])

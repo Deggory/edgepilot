@@ -83,33 +83,55 @@ keeps the AX system open.
 
 ### `overlayd`
 
-- drives the LCD with two VO layers; the hardware composes them and rotates the
-  result for the 480x640 panel
+- drives the LCD: the camera on VO video layer 0 and the HUD on the graphic
+  layer (`/dev/fb0`); the hardware composes them for the 480x640 panel
 - layer 0 is the camera: IVPS reads the newest ring slot, crops the centre 4:3
   (960x720 of 1280x720), and scales it to 640x480, so the preview is not
   stretched; a frame overwritten during the read is dropped
-- layer 1 is the HUD: straight-alpha BGRA drawn by the CPU renderer directly
-  into a CMM block at native 640x480 and pushed without a copy; when a pool
-  block comes back, only the 64 px tiles drawn into it last time are cleared
+- the HUD is straight-alpha BGRA drawn by the CPU renderer in the panel's
+  portrait orientation into a cached buffer (no rotation pass: IVPS TDP
+  rotation smears 32-bit BGRA edges); only the 64 px tiles drawn this frame or
+  last frame are cleared and copied into the visible fb0 page
 - redraws the HUD when a new model, control, panda, manager, or record snapshot
   arrives and once a second, at most every 45 ms, which gives 20 Hz with the
   model; lanes and path are anti-aliased and fade with distance; the
   turn-signal animation has its own 50 ms clock
-- HUD content: a border in the steering state colour, the speed with the turn
-  signals beside it, the set speed card and steering mode chip at the top left,
-  a status pill at the top right (red `REC` while `recordd` writes a route,
-  Wi-Fi bars or `OFFLINE`), TPMS and camera calibration cards in the bottom
-  corners, a steering torque bar at the bottom edge while engaged (openpilot's
-  mici UI torque bar: sent torque / 384 from the center toward the turn, white,
-  then orange above 75%), and an alert card above it. Temperature, panda,
-  storage, a radar-only lead, and the green-light wait appear as chips only
-  when they apply; the `hud_debug` device setting adds a card with
-  camera/model/HUD FPS, CPU/temperature/memory/storage, steering torques, and
-  gear/cruise/link state
+- HUD content: a border in the steering state colour (grey while engaged but
+  not steering, including the large-angle pause), the speed with yellow
+  turn-signal chevrons beside it (both sides for the hazard lights) and a large
+  green `AUTO HOLD` badge under it while the car holds the brake, the set speed
+  card (with the vision cruise speed as `SET` when it is lower) and gear card
+  and steering mode chip at the top left with a manoeuvre chip below it while
+  steering (`TURN LEFT/RIGHT` for turn desire, `CHANGING LANES`), a status pill
+  at the top right (red `REC`
+  while `recordd` writes a route, a Wi-Fi fan lit by signal, or `OFFLINE` unless
+  a `wlan` link is associated with an AP; the USB link does not count), TPMS
+  and camera calibration cards in the bottom corners with a pair of cards
+  above them: board state above TPMS (CPU temperature, CPU, RAM, disk; amber
+  from 70 °C / 90%) and the learned values above calibration (steer ratio,
+  angle offset, lateral-acceleration torque factor, steering delay; white
+  while control uses the learned value, dim while it still uses the
+  parameter), a lane-position marker across the
+  ego lane about 7 m ahead (ticks at both lane lines, the lane centre above the
+  line and the car below it at true scale, the offset in cm), a steering
+  torque bar at the bottom
+  edge while engaged (openpilot's mici UI torque bar: sent torque / 384 from the
+  center toward the turn, white, then orange above 75%; the driver's torque on
+  the same scale as a light-blue tick), and an alert card above it, which also
+  asks for the nudge that starts a lane change (`LANE CHANGE`) and says when the
+  wheel is past 85° or held by the driver (`STEERING PAUSED`). Panda,
+  storage, and a radar-only lead appear as chips only when they apply,
+  and the green-light wait as a traffic-light icon (red lamp lit); the `hud_debug` device setting
+  adds a card with what no other card shows: camera/model/HUD FPS, steering
+  torques, paramsd stiffness and average offset, torqued raw estimates and
+  progress, and lagd's blocks (amber until valid)
 - reads the touchscreen (`hyn_ts`, rotated clockwise 90° like MaixCDK): a tap
-  on the status pill opens a network card (SSID, IPv4, interface, signal) for
-  10 s and the next tap closes it; every tap is logged as
-  `overlayd: tap x=... y=...`
+  on the status pill opens a network card (SSID, IPv4, interface, signal, or
+  `Not connected`, plus the USB link's address) for
+  10 s and a second tap closes it, a tap on the left column (set speed and gear
+  cards, chips, board state card) shows or hides the diagnostics card until the `hud_debug` setting
+  changes or overlayd restarts, and a tap elsewhere closes the network card;
+  every tap is logged as `overlayd: tap x=... y=... <action>`
 - turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`, level from
   `/boot/configs`)
 - plays the alert sounds (short bell-like tones, `src/alert_tones.cc`) on the
@@ -204,18 +226,20 @@ recorder port.
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
 an 8-byte `K230LOG1` magic, a version word, and fixed 16-byte record headers.
-The current version is `7`: `ModelState` gained the camera mount the warp used
-for that frame (`camera_offset_m`, `camera_height_m`, 3528 B), so the HUD and
-the analysis tools use exactly what modeld applied. Version 6 added the plan
-yaw and yaw rate (`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode
-steers from. Readers take version 6 and older payloads as before, with the
-missing fields zeroed (`src/recorded_model_state.h`,
-`recording_reader.model_state_layout`).
+The current version is `8`: `ModelState` gained the model's pedal predictions
+(`gas_press_probs`, `brake_press_probs`: the chance the driver presses the
+pedal 0, 2, …, 10 s ahead, 3576 B), which the departure alert reads.
+Version 7 added the camera mount the warp used for that frame
+(`camera_offset_m`, `camera_height_m`, 3528 B), so the HUD and the analysis
+tools use exactly what modeld applied. Version 6 added the plan yaw and yaw
+rate (`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode steers from.
+Readers take version 7 and older payloads as before, with the missing fields
+zeroed (`src/recorded_model_state.h`, `recording_reader.model_state_layout`).
 
 | Record type | Payload |
 | --- | ---: |
 | `CanRx` / `CanTx` | variable CAN batch |
-| `ModelState` | 3528 B |
+| `ModelState` | 3576 B |
 | `ControlState` | 240 B |
 | `PandaState` | 96 B |
 | `LearnerState` | 128 B |

@@ -61,6 +61,10 @@ struct Tcs15Values {
   bool brake_hold = false;
 };
 
+struct Ahb1Values {
+  float pedal_stroke_mm = 0.0f;
+};
+
 struct EEms11Values {
   int gas = 0;
   bool gas_pressed = false;
@@ -124,6 +128,7 @@ struct VehicleCanState {
   double cgw2_time_s = -1.0;
   double lca11_time_s = -1.0;
   double tpms11_time_s = -1.0;
+  double ahb1_time_s = -1.0;
 
   int clu_button = 0;
   int clu_main_button = 0;
@@ -158,6 +163,7 @@ struct VehicleCanState {
   int driver_override = 0;
   bool esp_disabled = false;
   bool brake_hold = false;
+  float brake_pedal_stroke_mm = 0.0f;
   int gas = 0;
   bool gas_pressed = false;
   bool driver_door_open = false;
@@ -213,6 +219,10 @@ Tcs13Values decode_tcs13(const std::array<uint8_t, 8> &data);
 // K7 TCS15 ESP/brake-hold 상태를 해석한다.
 Tcs15Values decode_tcs15(const std::array<uint8_t, 8> &data);
 
+// K7 HEV AHB1(브레이크 부스터)의 페달 스트로크를 해석한다. 이 차는 TCS13 DriverBraking과
+// DriverOverride가 늘 0이고 BrakeLight가 정차 중(거의 AUTO HOLD)에만 켜져서, 페달은 이것으로 본다.
+Ahb1Values decode_ahb1(const std::array<uint8_t, 8> &data);
+
 // K7 E_EMS11 hybrid gas 값을 해석한다.
 EEms11Values decode_e_ems11(const std::array<uint8_t, 8> &data);
 
@@ -245,6 +255,11 @@ bool seed_frames_ready(const VehicleCanState &state);
 
 bool tpms_state_fresh(const VehicleCanState &state, double now_s,
                       double timeout_s = 5.0);
+
+// 브레이크등이 켜져 있는가: 페달을 밟았거나(AHB1 스트로크) ESC가 차를 잡고 있다(TCS13 BrakeLight,
+// AUTO HOLD). 오래된 신호는 꺼진 것으로 본다.
+bool brake_lights_on(const VehicleCanState &state, double now_s,
+                     double timeout_s = 0.5);
 
 // SCC11 설정 속도를 사용하고, 없으면 고정형 크루즈 추정값을 반환한다.
 float cruise_set_speed_kph(const VehicleCanState &state);

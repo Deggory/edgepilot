@@ -65,6 +65,18 @@ gain `0.7 / 0.35 / 0.7 / 1.2` at `3 / 8 / 15 / 25 m/s`:
 Per speed band on the held-out route: `0.90 / 0.93 / 0.96 / 0.96` for
 `<20 / 20-35 / 35-55 / >55 km/h`.
 
+Re-identified on MaixCAM2 drives (2026-10-04): the K230 curve under-estimates
+the car's torque response. Scaling it, the open-loop R² peaks at `1.5x` on the
+10-04 lane route (`0.960 -> 0.971`) and `1.7-2.0x` on the 10-03 lane route
+(`0.956 -> 0.977`), so the default is now `1.5x`
+(`1.05 / 0.525 / 1.05 / 1.80`). With the old curve, raising the controller's
+`lat_accel_factor` to the torqued estimate (3.15) looked like a 12 cm push to
+the outside of left curves; with the re-identified plant the same change is
+neutral (RMS `0.109 -> 0.110 m`). The DC gain is fixed relative to
+`torque_lat_accel_factor` in the route's steering.json, so **a feedforward
+factor can only be ranked with a plant identified on the same car setup**; check
+the open-loop R² against a gain scale before trusting such a comparison.
+
 ## What the numbers do and do not support
 
 A naive model that assumes the car follows the requested curvature exactly
