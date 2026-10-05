@@ -8,6 +8,24 @@ AI-ISP denoiser always uses the other. It is built with
 `scripts/upload_to_board.sh` puts it on the board as
 `/root/edgepilot/models/supercombo.axmodel`.
 
+The current build (2026-10-04, sha256 `4ef2b2ab…`) adds Pulsar2 SmoothQuant
+(`enable_smooth_quant`), which moves activation outliers of 124 convs into their
+weights before the U16/S8 quantization. Against the fp32 core on identical
+MaixCAM2 inputs (12 driving windows and 8 green-light stops, run on the board),
+it is equal to or better than the previous build on every head:
+- laneless lateral-acceleration error: mean 0.018 vs 0.020 m/s², p95 0.057 vs 0.063 m/s²;
+- hidden-state cosine: 0.952 vs 0.947;
+- green lights: the gas-press probability passes 0.3 within 0.25 s at 6 of the 8 stops, vs 4.
+
+On the older K230-camera evaluation set its laneless p95 is 0.29 vs 0.22 m/s²,
+while hidden cosine and desire are better. Other options did not help:
+- calibrating on MaixCAM2 recordings widened the MinMax ranges and was worse;
+- FP32 conv weights are ignored on AX620E, so weights stay S8;
+- highest mix precision does not build;
+- EasyQuant needs more than Docker's 9.7 GB.
+
+The fp32 core opens its plan at two of the stops where no U16 build does.
+
 The desire input is calibrated with one-hot pulses (half the samples carry one).
 The first build calibrated it with zeros only, so its range was [0, 0] and the
 NPU model ignored every lane-change desire; the rebuild of 2026-09-27 reacts

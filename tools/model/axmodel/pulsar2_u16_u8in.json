@@ -50,7 +50,8 @@
     ],
     "data_type": "U16"
    }
-  ]
+  ],
+  "enable_smooth_quant": true
  },
  "input_processors": [
   {
