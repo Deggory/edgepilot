@@ -1,0 +1,21 @@
+# AX 미디어 드라이버(ax_sys·ax_cmm·ax_npu …)를 부팅 초반에 올린다(scripts/install_boot_tuning.sh가 설치한다).
+# 순정 이미지는 이것을 rc.local에서 하는데, Debian 드롭인 때문에 rc-local.service가
+# network-online.target(Wi-Fi 연결) 뒤로 밀려 edgepilot이 그만큼 늦게 뜬다. 드라이버 로드는 네트워크와
+# 상관없고 /boot/configs(CMM 크기)와 /soc/ko만 있으면 된다. rc.local의 같은 줄은 이미 올라와 있으면 건너뛴다.
+[Unit]
+Description=Load AX media drivers early for edgepilot
+DefaultDependencies=no
+Requires=boot.mount
+After=local-fs.target boot.mount
+# sysinit.target은 기다리게 하지 않는다(다른 부팅 작업과 겹쳐 돈다).
+Before=rc-local.service edgepilot.service
+ConditionPathExists=!/sys/module/ax_sys
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /soc/scripts/auto_load_all_drv.sh
+ExecStart=/bin/bash /soc/scripts/npu_set_bw_limiter.sh start
+
+[Install]
+WantedBy=multi-user.target

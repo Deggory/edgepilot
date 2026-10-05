@@ -61,4 +61,16 @@ fi
   for f in .upload/*; do [ -f \"\$f\" ] && mv \"\$f\" .; done
   for name in ${param_files[*]}; do [ -e params/\$name ] || cp params.defaults/\$name params/; done
   rm -rf .upload; sync"
-echo "Uploaded runtime to $BOARD:$DEST ($model_note)"
+# camerad·overlayd는 deps/ax630/maix/libmaixcam_lib.so(보드에서 받은 1.2.5)에 맞춰 빌드한다. 새로 구운
+# v4.12.5 이미지의 /usr/lib/libmaixcam_lib.so는 크기만 같은 다른 빌드라 camerad가 SIGSEGV로 죽는다
+# (2026-10-02 SD 교체). 다르면 1.2.5를 올리고 링크를 건다(순정 파일은 .stock으로 남긴다).
+lib_note=""
+lib_sha="$(shasum -a 256 deps/ax630/maix/libmaixcam_lib.so | cut -d' ' -f1)"
+board_lib_sha="$("${SSH[@]}" "$BOARD" "sha256sum /usr/lib/libmaixcam_lib.so 2>/dev/null | cut -d' ' -f1" || true)"
+if [ "$lib_sha" != "$board_lib_sha" ]; then
+  "${SCP[@]}" deps/ax630/maix/libmaixcam_lib.so "$BOARD:/usr/lib/libmaixcam_lib.so.1.2.5"
+  "${SSH[@]}" "$BOARD" "cd /usr/lib && { [ -L libmaixcam_lib.so ] || [ ! -e libmaixcam_lib.so ] ||
+      mv libmaixcam_lib.so libmaixcam_lib.so.stock; } && ln -sfn libmaixcam_lib.so.1.2.5 libmaixcam_lib.so && sync"
+  lib_note=", libmaixcam_lib 1.2.5 installed"
+fi
+echo "Uploaded runtime to $BOARD:$DEST ($model_note$lib_note)"

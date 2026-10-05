@@ -20,7 +20,9 @@ fi
 
 # AI-ISP가 NPU 한 코어를 쓰도록 부팅 때 NPU를 분할한다(camerad·modeld가 이를 전제한다).
 if "${SSH[@]}" "grep -qx 'maix_npu_ai_isp=1' /boot/configs"; then :; else
-  "${SSH[@]}" "sed -i '/^maix_npu_ai_isp=/d' /boot/configs && echo maix_npu_ai_isp=1 >> /boot/configs && sync"
+  # 순정 이미지의 /boot/configs는 마지막 줄에 줄바꿈이 없어서, 그냥 덧붙이면 앞 줄에 이어 붙는다.
+  "${SSH[@]}" "sed -i '/^maix_npu_ai_isp=/d' /boot/configs && { [ -z \"\$(tail -c1 /boot/configs)\" ] || echo >> /boot/configs; } &&
+    echo maix_npu_ai_isp=1 >> /boot/configs && sync"
   echo "set maix_npu_ai_isp=1 in /boot/configs; reboot the board before starting the runtime"
 fi
 
