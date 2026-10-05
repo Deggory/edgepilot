@@ -15,7 +15,6 @@
 #include "vehicle_can.h"
 
 #include <signal.h>
-#include <sys/stat.h>
 
 #include <algorithm>
 #include <array>
@@ -26,8 +25,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <iterator>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -344,11 +341,6 @@ AdaptiveCruiseInput make_adaptive_input(double now_s, bool enabled,
   return input;
 }
 
-std::string read_file(const std::string &path) {
-  std::ifstream file(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-}
-
 /* 학습 상태 파일 쓰기. 제어 루프는 내용만 넘기고, 이 스레드가 임시 파일에 쓴 뒤 rename한다.
  * 같은 경로는 최신 내용만 남기고, 멈출 때 남은 쓰기를 마친다. */
 class LearnerStore {
@@ -392,14 +384,9 @@ private:
           std::remove(path.c_str());
           continue;
         }
-        const std::string temp = path + ".tmp";
-        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-        file.write(job.content.data(), static_cast<std::streamsize>(job.content.size()));
-        file.close();
-        if (!file || std::rename(temp.c_str(), path.c_str()) != 0) {
+        if (!write_file_atomic(path, job.content)) {
           std::fprintf(stderr, "controlsd: learner write %s failed: %s\n", path.c_str(),
                        std::strerror(errno));
-          std::remove(temp.c_str());
         }
       }
       if (stop) return;
@@ -773,8 +760,8 @@ int main() {
     LearnerStore learner_store;
     const std::string vehicle_learn_path = param_path("live_parameters.json");
     const std::string torque_learn_path = param_path("live_torque_parameters.bin");
-    const std::string vehicle_learn_json = read_file(vehicle_learn_path);
-    const std::string torque_learn_cache = read_file(torque_learn_path);
+    const std::string vehicle_learn_json = read_text_file(vehicle_learn_path);
+    const std::string torque_learn_cache = read_text_file(torque_learn_path);
     LateralLearners learners(config.steering_params, vehicle_learn_json, torque_learn_cache,
                              static_cast<uint64_t>(monotonic_now_ns()));
     if (learners.vehicle_restore_rejected()) learner_store.remove(vehicle_learn_path);

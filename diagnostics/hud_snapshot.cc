@@ -152,7 +152,6 @@ int main(int argc, char **argv)
     drive.panda_connected = true;
     drive.panda_healthy = true;
     drive.vehicle_fresh = true;
-    drive.lateral_mode_available = true;
     drive.calibration_available = true;
     drive.calibration_status = 1;
     drive.calibration_valid_blocks = 12;

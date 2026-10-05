@@ -37,8 +37,14 @@ big_input_imgs      [1, 12, 128, 256]  uint8   wide tower, same layout
 desire              [1, 25, 8]         float   100-tick 20 Hz pulse history, max-pooled by 4
 features_buffer     [1, 24, 512]       float   hidden states from slots 0, 4, ..., 92 of 96 ticks
 traffic_convention  [1, 2]             float   constant (right-hand traffic)
--> outputs          [1, 2576]          float
+-> 15 outputs                          float   out_meta ... out_desire_state,
+                                               reassembled into 2576 floats
 ```
+
+The heads are separate outputs, with the plan split into motion, orientation,
+and std parts (`tools/model/axmodel/split_outputs.py`), so each gets its own
+quantization range; `src/model_output_assembly.h` puts them back into the
+2576-float layout below. `modeld` also accepts a single `[1, 2576]` output.
 
 `modeld` checks every name, shape, dtype, and buffer size at load and
 refuses any other model, so a mismatched axmodel fails loudly instead of being
@@ -100,8 +106,8 @@ The source intrinsics are scaled from the measured `1920x1080` MaixCAM2
 - **Measurement:** 42 photos of an 11x6 inner-corner chessboard on a 65" TV, taken
   with `camcal` through the runtime's camera path (0.52 px RMS; see
   [camcal](camcal.md)).
-- **Earlier values:** `tools/calib/maixcam2_os04d10_intrinsics.json` came from the
-  stock camera app. It agrees on focal length, but `cx` differs by 7 px.
+- **Earlier values:** the stock camera app measured `fx=1132.33`, `fy=1131.47`,
+  `cx=932.80`, `cy=556.06`. That agrees on focal length, but `cx` differs by 7 px.
 
 Captures at
 1280x720, 1920x1080, and 2560x1440 register to each other by pure scaling, so
@@ -122,11 +128,11 @@ taken from the ONNX metadata `output_slices`:
 
 | Block | Offset | Floats | Contents |
 | --- | ---: | ---: | --- |
-| meta | 0 | 55 | unused by this runtime |
+| meta | 0 | 55 | gas and brake press probabilities 0, 2, …, 10 s ahead (the departure alert reads gas at 2 s); the rest unused |
 | desire prediction | 55 | 32 | unused by this runtime |
 | pose | 87 | 12 | translation, rotation, log stds |
 | wide_from_device_euler | 99 | 6 | unused by this runtime |
-| road_transform | 105 | 12 | unused by this runtime |
+| road_transform | 105 | 12 | 6 values (the first 3 are the camera position over the road), mean then log std; online calibration reads the camera height |
 | lane lines | 117 | 528 | 4 lines x 33 points x (y, z), mean then log std |
 | lane probabilities | 645 | 8 | 2 logits per line, the second is existence |
 | road edges | 653 | 264 | 2 edges x 33 points x (y, z), mean then log std |
@@ -138,4 +144,5 @@ taken from the ONNX metadata `output_slices`:
 
 Unlike v0.9.4, the plan is a single hypothesis and each lead time offset has
 its own trajectory. Of the 15 values per plan point, the parser consumes the
-position (0–2). The last two floats are not used.
+position (0–2) and the yaw (11) and yaw rate (14) that laneless mode steers
+from. The last two floats are not used.

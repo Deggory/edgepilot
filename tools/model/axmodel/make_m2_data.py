@@ -22,7 +22,7 @@ core's green-light response at some 2026-10-04 stops (plan stayed at 2.5 m where
 
   make_m2_data.py eval <spec.json> <route> <seg>[,<seg>...] <from> <to> <out_dir>
       Exact inputs of every frame in [from, to] (route seconds from the first ControlState) after
-      an 8 s warm-up, as frame-major .npy for eval/run_axmodel_assembled.py on the board, plus
+      an 8 s warm-up, as frame-major .npy for run_axmodel_assembled.py on the board, plus
       the fp32 outputs for the same inputs (ref.npy) and frame times (t.npy).
 """
 import io

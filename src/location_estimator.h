@@ -51,7 +51,7 @@ public:
     const Mat &p() const { return p_; }
     double t() const { return t_; }
 
-    // 모델 식(검사용으로 공개)
+    // 모델 식
     static Vec f(const Vec &x, double dt);
     static Vec3 h(Kind kind, const Vec &x);
 

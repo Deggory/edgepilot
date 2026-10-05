@@ -70,17 +70,6 @@ void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy)
     g_camera = {fx, fy, cx, cy};
 }
 
-bool project_point(const ProjectionState &projection, float x_forward, float y_right, float z_down,
-                   int width, int height, int *px, int *py)
-{
-    float u = 0.0f, v = 0.0f;
-    if (!project_point_subpixel(projection, x_forward, y_right, z_down, width, height, &u, &v))
-        return false;
-    *px = static_cast<int>(std::round(u));
-    *py = static_cast<int>(std::round(v));
-    return true;
-}
-
 bool project_point_subpixel(const ProjectionState &projection, float x_forward, float y_right,
                             float z_down, int width, int height, float *px, float *py)
 {
@@ -94,31 +83,23 @@ bool project_point_subpixel(const ProjectionState &projection, float x_forward, 
     const float vz = m[6] * x_forward + m[7] * y_right + m[8] * z_down;
     if (vz <= 0.1f) return false;
 
-    // 가로 화면(K230 800x480, MaixCAM2 640x480)은 카메라 영상 가운데의 kPreviewAspect
-    // 영역(1080p 기준 폭 kPreviewCropWidth1080)을 담는다(overlayd가 IVPS로 같은 영역을
-    // 자른다). 세로 버퍼(K230 480x800)면 긴 변이 가로 화면의 폭이다.
-    const float landscape_w = static_cast<float>(width > height ? width : height);
-    const float landscape_h = static_cast<float>(width > height ? height : width);
-    const float sx = landscape_w / kPreviewCropWidth1080;
-    const float sy = landscape_h / static_cast<float>(kDefaultSensorHeight);
+    // 화면(가로, MaixCAM2 640x480)은 카메라 영상 가운데의 kPreviewAspect 영역(1080p 기준 폭
+    // kPreviewCropWidth1080)을 담는다(overlayd가 IVPS로 같은 영역을 자른다). 세로 패널로 돌리는 것은
+    // OverlayCanvas가 한다.
+    const float screen_w = static_cast<float>(width);
+    const float screen_h = static_cast<float>(height);
+    const float sx = screen_w / kPreviewCropWidth1080;
+    const float sy = screen_h / static_cast<float>(kDefaultSensorHeight);
     const float crop_x = (static_cast<float>(kDefaultSensorWidth) - kPreviewCropWidth1080) * 0.5f;
     const float fx = g_camera.fx * sx;
     const float fy = g_camera.fy * sy;
     const float calibrated_cx = (g_camera.cx - crop_x) * sx;
     const float calibrated_cy = g_camera.cy * sy;
-    const float cx = landscape_w - 1.0f - calibrated_cx;
-    const float cy = landscape_h - 1.0f - calibrated_cy;
+    const float cx = screen_w - 1.0f - calibrated_cx;
+    const float cy = screen_h - 1.0f - calibrated_cy;
 
-    const float u_land = fx * vx / vz + cx;
-    const float v_land = fy * vy / vz + cy;
-
-    if (width > height) {
-        *px = u_land;
-        *py = v_land;
-    } else {
-        *px = v_land;
-        *py = landscape_w - 1.0f - u_land;
-    }
+    *px = fx * vx / vz + cx;
+    *py = fy * vy / vz + cy;
     return *px > -200.0f && *px < static_cast<float>(width + 200) && *py > -200.0f &&
            *py < static_cast<float>(height + 200);
 }

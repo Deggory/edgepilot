@@ -298,12 +298,10 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
     update_fixed_cruise_estimate(state, clu);
     state->cluster_speed_raw = clu.speed + clu.speed_decimal;
     state->speed_unit_mph = clu.speed_unit_mph;
-    state->clu_alive_count = clu.alive_count;
     state->clu11_time_s = now_s;
   } else if (address == kHyundaiSas11Address && length >= 5) {
     const Sas11Values sas = decode_sas11(data);
     state->steering_angle_deg = sas.steering_angle_deg;
-    state->steering_rate_deg = sas.steering_rate_deg;
     state->sas11_time_s = now_s;
   } else if (address == kHyundaiEsp12Address && length >= 8) {
     const Esp12Values esp = decode_esp12(data);
@@ -312,8 +310,6 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
     state->lat_accel_mps2 = esp.lat_accel_mps2;
     state->lat_accel_valid = esp.lat_accel_valid;
     state->long_accel_mps2 = esp.long_accel_mps2;
-    state->long_accel_valid = esp.long_accel_valid;
-    state->brake_pressure_bar = esp.brake_pressure_bar;
     state->esp12_time_s = now_s;
   } else if (address == kHyundaiWhlSpd11Address && length >= 8) {
     const WhlSpd11Values wheel = decode_whl_spd11(data);
@@ -327,7 +323,6 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
     state->has_mdps12_seed = true;
     const Mdps12Values mdps = decode_mdps12(data);
     state->driver_torque = mdps.driver_torque;
-    state->mdps_toi_unavailable = mdps.toi_unavailable;
     state->mdps_error_count = mdps.toi_unavailable ? state->mdps_error_count + 1 : 0;
     state->mdps_hard_fault = mdps.toi_fault || mdps.fail_state || mdps.sensor_error;
     state->steering_fault = state->mdps_error_count > kMdpsToiUnavailableFaultFrames;
@@ -396,7 +391,6 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
     const Lca11Values lca = decode_lca11(data);
     state->left_blindspot = lca.left_blindspot;
     state->right_blindspot = lca.right_blindspot;
-    state->lca11_time_s = now_s;
   } else if (address == kHyundaiTpms11Address && length >= 6) {
     const Tpms11Values tpms = decode_tpms11(data);
     state->tpms_unit = tpms.unit;

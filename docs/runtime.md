@@ -19,8 +19,10 @@ Stop it with Ctrl-C or `SIGTERM`: children get `SIGTERM`, then `SIGKILL` after
 3 s.
 
 For boot autostart, `scripts/install_autostart.sh [root@board]` installs
-`scripts/edgepilot.service` (after `rc-local.service`, which loads the AX
-drivers; `Conflicts=launcher.service`; `Restart=always`) and disables the stock
+`scripts/edgepilot.service` (after `edgepilot-drivers.service`, which loads the
+AX drivers early in boot and is installed by `scripts/install_boot_tuning.sh`,
+and after `usb-gadget.service`; `Conflicts=launcher.service`; `Restart=always`)
+and disables the stock
 launcher at boot. The unit reads `/etc/environment` for `LD_LIBRARY_PATH` and
 sets `EDGEPILOT_LOG_DIR=/run/edgepilot`, so each child's output goes to
 `/run/edgepilot/<name>.log` (tmpfs, emptied past 1 MiB). `systemctl start
@@ -54,15 +56,17 @@ keeps the AX system open.
   `EDGEPILOT_STOP_LAUNCHER=0`
 - with `EDGEPILOT_ENABLE_PANDA=1`, switches the USB-C port to host mode
   (`/sys/class/usb_role/8000000.dwc3-role-switch/role`) and restores the
-  previous role on exit
-- starts, in this order: `camerad`, `overlayd` (1 s later, after
-  camerad has opened VI and the AX pools), `modeld`, then `pandad`,
-  `controlsd`, and the parameter server when enabled; binaries that are
-  not installed are skipped
+  previous role on exit; `EDGEPILOT_USB_ROLE=host|device` instead fixes the
+  role at start and leaves it (the boot service sets `host`)
+- starts, in this order: `camerad`, `modeld`, `imud` and `locationd` (not in
+  rehearsal mode), then `pandad`, `controlsd`, and the parameter server when
+  enabled; `overlayd` and `recordd` start once `camerad` has run for 1.5 s
+  (opening VI resets the AX pools); binaries that are not installed are
+  skipped
 - restarts a process 1 s after it exits
 - publishes `managerState` to `/dev/shm/edgepilot_manager_state` every second
-- nice levels: `camerad=0`, `overlayd=10`, `modeld=-15`, `pandad=-10`,
-  `controlsd=-8`, `param_server=10`
+- nice levels: `camerad=0`, `overlayd=10`, `recordd=15`, `modeld=-15`,
+  `imud=10`, `locationd=5`, `pandad=-10`, `controlsd=-8`, `param_server=10`
 
 ### `camerad`
 
@@ -187,11 +191,24 @@ keeps the AX system open.
 - publishes batches of raw samples to `/dev/shm/edgepilot_imu` every 100 ms.
   The axes are the chip's and the gyro bias is not removed; `recordd` records
   them as `Imu` records (`recording_reader.read_route_imu`)
-- is for recording and validation only (camera extrinsics, perception checks
-  against the gyro). Nothing in the control path reads it. If the IMU cannot be
-  opened it retries every 10 s instead of exiting, so a missing IMU neither
-  loops the manager nor marks the runtime unhealthy. It is not started in
-  rehearsal mode
+- feeds `locationd`, whose pose filter gives paramsd and torqued their yaw
+  rate and roll (`use_locationd_learner_inputs` in `params/steering.json`) and
+  whose lagd estimate can set the steering delay (`use_live_delay`). Without
+  the IMU, `locationd` publishes nothing and `controlsd` falls back to ESP12
+  values. If the IMU cannot be opened it retries every 10 s instead of
+  exiting, so a missing IMU neither loops the manager nor marks the runtime
+  unhealthy. It is not started in rehearsal mode
+
+### `locationd`
+
+- runs the openpilot locationd pose filter on the IMU batches, the model's
+  camera odometry (`ModelState` pose) and `controlState`, and the lagd
+  steering-delay estimate (`src/localization_pipeline.*`)
+- publishes `LocalizationState` to `/dev/shm/edgepilot_localization`; with no
+  IMU input it publishes nothing and waits
+- saves the lagd estimate to `params/live_delay.json` every 60 s and on exit,
+  and resumes it at start when `steer_actuator_delay` is unchanged. It is not
+  started in rehearsal mode
 
 ### `recordd`
 
@@ -203,12 +220,20 @@ keeps the AX system open.
   replayed as recorded ([Rehearsal](rehearsal.md))
 - writes the recording format with the codec in the manifest
   (`segments/NNN/road.h264` + `frames.bin`; K230 routes are `road.hevc`),
-  event log with CAN, model, control, panda and learner state,
-  params snapshot), staged in tmpfs and moved to `recordings/` on the SD card
-- `params/recording.json` `enabled` starts/stops a route; `bitrate_bps` applies
-  at the next start
+  event log with CAN, model, control, panda, learner, IMU and localization
+  state, params snapshot), staged in tmpfs and moved to `recordings/` on the SD card
+- `params/recording.json` `enabled` starts/stops a route; `bitrate_bps` is read
+  once, when `recordd` starts
 - publishes `recordState` (route being written, storage reserve exhausted)
   twice a second; `overlayd` shows `REC` or a `STORAGE FULL` chip from it
+
+### `replayd` (rehearsal)
+
+- with `EDGEPILOT_REPLAY_ROUTE`, takes the place of `camerad` and `pandad`: it
+  decodes the route's H.264 into the frame ring with the hardware decoder and
+  replays its CAN and panda state in real time, while the other processes run
+  as in the car. Generated CAN is logged, never sent. See
+  [Rehearsal](rehearsal.md)
 
 ## Measured load
 
@@ -219,10 +244,10 @@ missed model frames.
 
 ## Recording format
 
-The recording format is kept as the K230 recorder wrote it, so the host tools
-(`recording_reader.py`, the replay tools, `lane_bias.py`) read K230 drives, and
-`src/recording_writer.*` stays covered by `gtest_recording_writer` for the
-recorder port.
+`recordd` writes the K230 recorder's format, with H.264 video instead of HEVC,
+so the host tools (`recording_reader.py`, the replay tools, `lane_bias.py`)
+read MaixCAM2 and K230 drives. `gtest_recording_writer` covers
+`src/recording_writer.*`.
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
 an 8-byte `K230LOG1` magic, a version word, and fixed 16-byte record headers.
@@ -244,6 +269,7 @@ zeroed (`src/recorded_model_state.h`, `recording_reader.model_state_layout`).
 | `PandaState` | 96 B |
 | `LearnerState` | 128 B |
 | `Imu` | 16 B + 40 B per sample (about 10 samples every 100 ms) |
+| `Localization` | 128 B |
 
 Older recordings are not `ModelState`-compatible: version 1 carried 4384 B
 including unused lateral draft fields, versions 2–3 carried 4080 B including the
@@ -253,7 +279,7 @@ Version 2 also kept a single route-level `events.bin`; CAN logging alone
 (~0.5 MB/s) filled the 988 MB tmpfs staging in about 30 minutes on long drives
 and silently killed the rest of the recording, which is why version 3 rotates
 event chunks alongside video segments. `tools/model/recording_reader.py` reads
-the v3, v4, and v5 layouts; `lane_bias.py`, `hud_tools.py`,
+the v2 to v8 layouts; `lane_bias.py`, `hud_tools.py`,
 `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event log
 through its `iter_event_records`.
 

@@ -5,32 +5,16 @@
 /cmake-build-*/
 # 교차 빌드 의존성은 scripts/fetch_maixcam2_sdk.sh가 버전을 고정해 받는다.
 /deps/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
 compile_commands.json
-camerad
-modeld
-overlayd
-pandad
-controlsd
-gtest_control_replay
-gtest_model_output_parser
-gtest_panda_can_codec
-hud_snapshot
-gtest_calibration_equivalence
 __pycache__/
 *.pyc
 *.raw
 *.scnv12
-core
-core.*
 *.mp4
 /recordings/
 models/*.onnx
 # 모델 파이프라인 중간·실험 산출물 (수 GB)
 models/onnx/
-models/quantization_work/
 
 # 코어덤프 (960MB급이 생긴다)
 core
@@ -41,4 +25,3 @@ core.*
 
 # 사내 DBC — 커밋 금지
 *.dbc
-gmodel_dump_dir/

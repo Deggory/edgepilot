@@ -31,23 +31,17 @@ The first build calibrated it with zeros only, so its range was [0, 0] and the
 NPU model ignored every lane-change desire; the rebuild of 2026-09-27 reacts
 like openpilot (laneChangeLeft 0.99 after a pulse) and is otherwise identical.
 
-Also tracked are the calibration data the axmodel build uses, and the records of
-the K230 v0.9.4 model.
+Also tracked are the calibration samples the axmodel build uses.
 
 ## Contents
 
 - `ptq/supercombo_calib.npz`, `ptq/supercombo_calib_k230_120.npz`
   (+ `_metadata.json`)
   - 60 + 120 samples captured from recorded K7 drives on the K230 (city,
-    highway, day/evening/night, standstill included) by
-    `tools/model/make_calibration.py`. `tools/model/axmodel/make_core_data.py`
-    turns all 180 into the Pulsar2 calibration set; the samples only hold frames
-    t-1/t, so t-1 stands in for the master core's t-4.
-- `ptq/supercombo_quant_scheme_bychannel.json`
-  - nncase's per-channel weight ranges for the v0.9.4 graph, used by the K230
-    weight pre-quantization. Unused on this branch.
-- `verification/quantization_094_20260906.*`
-  - the K230 v0.9.4 quantization candidate table.
+    highway, day/evening/night, standstill included) with the K230 v0.9.4
+    runtime's inputs. `tools/model/axmodel/make_core_data.py` turns all 180 into
+    the Pulsar2 calibration set; the samples only hold frames t-1/t, so t-1
+    stands in for the master core's t-4.
 - `manifest.sha256`
   - SHA-256 manifest for the tracked files.
 
@@ -101,7 +95,7 @@ v0.9.4's Elu at U16 (see [`tools/model/axmodel`](../tools/model/axmodel/README.m
 ### K230 v0.9.4 build (history)
 
 Board measurements for the K230 `supercombo.kmodel` (openpilot v0.9.4, nncase;
-removed from this branch, still on `main`) on the K230 (pipeline stopped; the
+removed from this branch, kept on the `k230` branch) on the K230 (pipeline stopped; the
 previous build is the 60-sample PTQ without weight pre-quantization, measured on
 the same frames):
 
@@ -116,8 +110,8 @@ the same frames):
 The weight pre-quantization with bias correction is what moved the plan
 numbers; a larger calibration set alone changed nothing, and SQuant lowered the
 raw-output MAE without improving the plan. About two thirds of the remaining
-error was the KPU's ELU table, not quantization. `verification/quantization_094_20260906.md`
-has the full candidate table.
+error was the KPU's ELU table, not quantization. The full candidate table is on
+the `k230` branch.
 
 Quality against the recorded drives (held-out routes, error against the path the
 car actually drove, reconstructed from CAN speed and steering): plan lateral

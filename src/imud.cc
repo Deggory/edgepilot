@@ -19,8 +19,9 @@
 #include <string>
 #include <thread>
 
-/* 보드 IMU(ST LSM6DSOW)를 읽어 공유 메모리(/edgepilot_imu)에 발행한다. 기록·검증용이다:
- * 제어 경로는 이 데몬을 쓰지 않으므로 IMU가 없거나 죽어도 주행에는 영향이 없다.
+/* 보드 IMU(ST LSM6DSOW)를 읽어 공유 메모리(/edgepilot_imu)에 발행한다. locationd의 입력이고
+ * 녹화된다. IMU가 없거나 죽으면 locationd가 발행을 멈추고 controlsd 학습기는 ESP12 값으로
+ * 돌아가므로 주행은 계속된다.
  *
  * MaixCAM2의 IMU는 i2c-1의 0x6B다(WHO_AM_I 0x6C). libmaixcam_lib에는 IMU 클래스가 없고
  * MaixPy 모듈은 불러올 때 UART4 핀을 바꾸는 부수효과가 있어, i2c-dev로 직접 읽는다.

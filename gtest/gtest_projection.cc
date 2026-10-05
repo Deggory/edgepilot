@@ -1,10 +1,10 @@
-/* project_point: 화면 크기가 달라도(K230 800x480·세로 480x800, MaixCAM2 640x480) 같은
- * 도로 점이 화면의 같은 비율 위치에 놓여야 한다. 폭을 하드코딩하면 오버레이가 영상과
- * 어긋난다. */
+/* project_point_subpixel: 화면 크기가 달라도(800x480, MaixCAM2 640x480) 같은 도로 점이 화면의
+ * 같은 비율 위치에 놓여야 한다. 폭을 하드코딩하면 오버레이가 영상과 어긋난다. */
 #include "app_config.h"
 #include "ipc_messages.h"
 #include "projection.h"
 
+#include <cmath>
 #include <cstdlib>
 
 #include <gtest/gtest.h>
@@ -18,7 +18,10 @@ struct Point {
 
 Point project(const ProjectionState &p, float fwd, float left, float up, int w, int h) {
   Point out{};
-  EXPECT_TRUE(project_point(p, fwd, left, up, w, h, &out.x, &out.y));
+  float x = 0.0f, y = 0.0f;
+  EXPECT_TRUE(project_point_subpixel(p, fwd, left, up, w, h, &x, &y));
+  out.x = static_cast<int>(std::round(x));
+  out.y = static_cast<int>(std::round(y));
   return out;
 }
 
@@ -31,14 +34,6 @@ TEST(Projection, SameRelativePositionAcrossLandscapeWidths) {
     EXPECT_NEAR(compact.x, (wide.x + 0.5f) * 640.0f / 800.0f - 0.5f, 1.0f);
     EXPECT_NEAR(compact.y, wide.y, 1.0f);
   }
-}
-
-TEST(Projection, PortraitBufferMatchesLandscape) {
-  const ProjectionState p = make_projection_state(0.0f, 0.02f, -0.01f);
-  const Point land = project(p, 30.0f, 1.0f, 0.5f, 800, 480);
-  const Point port = project(p, 30.0f, 1.0f, 0.5f, 480, 800);
-  EXPECT_EQ(port.x, land.y);
-  EXPECT_EQ(port.y, 800 - 1 - land.x);
 }
 
 TEST(Projection, FollowsConfiguredIntrinsics) {
@@ -68,7 +63,7 @@ TEST(Projection, CameraOffsetDrawsModelPointsAtRealPosition) {
     EXPECT_EQ(drawn.x, real.x) << fwd;
     EXPECT_EQ(drawn.y, real.y) << fwd;
   }
-  // 오른쪽 점은 화면 오른쪽에 찍힌다(모델 y는 오른쪽 양수). project_point 좌표는 180° 돌아간
+  // 오른쪽 점은 화면 오른쪽에 찍힌다(모델 y는 오른쪽 양수). 투영 좌표는 180° 돌아간
   // 버퍼라 표시할 때 뒤집는다(overlay_renderer project_display_point).
   auto shown_x = [&](float y) { return 640 - 1 - project(plain, 15.0f, y, 1.2f, 640, 480).x; };
   EXPECT_GT(shown_x(1.8f), 320);

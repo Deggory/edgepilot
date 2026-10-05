@@ -29,7 +29,6 @@ void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState 
     hud->controller_enabled = fresh && c.enabled != 0;
     hud->controller_engaged = fresh && c.engaged != 0;
     hud->controller_active = fresh && c.active != 0;
-    hud->lateral_mode_available = fresh;
     hud->laneless_mode = fresh && (c.hud_flags & kHudFlagLaneless) != 0;
     hud->vehicle_fresh = fresh && c.vehicle_fresh != 0;
     hud->steering_fault = fresh && c.steering_fault != 0;

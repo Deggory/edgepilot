@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(edgepilot LANGUAGES C CXX)
 
-option(EDGEPILOT_BUILD_DIAGNOSTICS "Build standalone benchmark/diagnostic utilities" OFF)
+option(EDGEPILOT_BUILD_DIAGNOSTICS "Build the host unit tests and diagnostic tools" OFF)
 option(EDGEPILOT_BUILD_PANDA "Build optional panda USB/CAN bridge" ON)
 option(EDGEPILOT_BUILD_RUNTIME "Build AX630C runtime binaries" ON)
 
@@ -27,7 +27,6 @@ set(PROJECT_WARNINGS -Wall -Wextra)
 set(PROJECT_LOCAL_INCLUDES
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
-set(PROJECT_SYSTEM_INCLUDES)
 
 # 카메라 보정 캡처(camcal)만 쓴다. 보드 빌드는 보드의 OpenCV 4.11을
 # deps/ax630(include/opencv4, opencv_lib)에 받아 그대로 링크한다(ABI를 맞춘다).
@@ -208,18 +207,18 @@ if(EDGEPILOT_BUILD_RUNTIME)
   add_executable(camerad src/camerad.cc)
   configure_board_target(camerad common maixcam2_media)
 
-  # 보드 IMU(LSM6DSOW) 기록용. 제어 경로와 무관하고 i2c-dev만 쓴다.
+  # 보드 IMU(LSM6DSOW)를 읽어 locationd에 넘기고 기록한다. i2c-dev만 쓴다.
   add_executable(imud src/imud.cc)
   configure_board_target(imud common)
 
-  # 자세 칼만 필터 + 조향 지연 추정(상류 locationd·lagd). 지금은 관찰 전용이다.
+  # 자세 칼만 필터 + 조향 지연 추정(상류 locationd·lagd). paramsd·torqued 입력과 경로 지연에 쓴다.
   add_executable(locationd src/locationd.cc)
   configure_board_target(locationd common localization)
 
   # 카메라 내부 파라미터 측정용 스틸 캡처(docs/camcal.md).
   add_executable(camcal src/camcal.cc src/alert_sound.cc)
   target_include_directories(camcal SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-  configure_board_target(camcal common alert_tones maixcam2_media ${OpenCV_LIBS})
+  configure_board_target(camcal alert_tones maixcam2_media ${OpenCV_LIBS})
   target_link_options(camcal PRIVATE "-Wl,-rpath-link,${AX_OPENCV_DIR}/opencv_lib")
 
   # 모델 입력 워프용 GDC. MSP SDK 헤더만 쓰고 미들웨어는 쓰지 않는다(NPU 세션과 같은
@@ -280,22 +279,4 @@ if(EDGEPILOT_BUILD_DIAGNOSTICS)
     add_subdirectory(gtest)
   endif()
   add_subdirectory(diagnostics)
-endif()
-
-if(EDGEPILOT_BUILD_RUNTIME)
-  install(TARGETS camerad camcal imud locationd modeld overlayd controlsd recordd replayd
-    RUNTIME DESTINATION .)
-  install(FILES
-    assets/ui/traffic_wait_red_retro-270x155-v3.png
-    assets/ui/traffic_go_green_retro-270x155-v3.png
-    DESTINATION assets/ui)
-  if(EDGEPILOT_BUILD_PANDA)
-    install(TARGETS pandad RUNTIME DESTINATION .)
-  endif()
-  install(PROGRAMS scripts/manager.py scripts/param_server.py
-    scripts/display_control.py
-    DESTINATION .)
-  install(FILES scripts/requirements-param-server.txt DESTINATION .)
-  install(DIRECTORY models DESTINATION . OPTIONAL FILES_MATCHING PATTERN "*.axmodel")
-  install(DIRECTORY params DESTINATION . FILES_MATCHING PATTERN "*.json")
 endif()

@@ -8,7 +8,8 @@
 #include "calibration_online.h"
 
 #include <gtest/gtest.h>
-#include <sys/stat.h>
+
+#include <filesystem>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -58,18 +59,6 @@ void matmul3d(const double *a, const double *b, double *out)
             for (int k = 0; k < 3; ++k)
                 sum += a[r * 3 + k] * b[k * 3 + c];
             out[r * 3 + c] = sum;
-        }
-    }
-}
-
-void matmul34d(const double *a3, const double *b34, double *out34)
-{
-    for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 4; ++c) {
-            double sum = 0.0;
-            for (int k = 0; k < 3; ++k)
-                sum += a3[r * 3 + k] * b34[k * 4 + c];
-            out34[r * 4 + c] = sum;
         }
     }
 }
@@ -524,12 +513,27 @@ ParsedModelOutput parsed_from_pose(const PoseObservation &pose)
     return output;
 }
 
+// 소스 트리를 더럽히지 않게 테스트마다 시스템 임시 폴더를 params 디렉터리로 쓰고 끝나면 지운다.
+struct TempParamsDir {
+    std::string dir;
+    explicit TempParamsDir(const char *name)
+        : dir((std::filesystem::temp_directory_path() / (std::string("edgepilot_test_") + name)).string())
+    {
+        std::filesystem::remove_all(dir);
+        std::filesystem::create_directories(dir);
+        setenv("EDGEPILOT_PARAMS_DIR", dir.c_str(), 1);
+    }
+    ~TempParamsDir()
+    {
+        unsetenv("EDGEPILOT_PARAMS_DIR");
+        std::filesystem::remove_all(dir);
+    }
+    std::string file(const char *name) const { return dir + "/" + name; }
+};
+
 TEST(CalibrationEquivalence, CalibrationService)
 {
-    constexpr const char *kTestParamsDir = "params/work";
-    constexpr const char *kTestCalibration = "params/work/calibration.json";
-    std::remove(kTestCalibration);
-    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
+    const TempParamsDir params("calibration_service");
 
     OnlineCalibrator restored_calibrator;
     const float restored_rpy[3] = {0.0f, deg_to_rad(2.0f), deg_to_rad(-0.75f)};
@@ -590,18 +594,14 @@ TEST(CalibrationEquivalence, CalibrationService)
               static_cast<int>(CalibrationStatus::Calibrated))
         << "다시 읽은 보정은 보정 완료 상태다";
 
-    unsetenv("EDGEPILOT_PARAMS_DIR");
-    std::remove(kTestCalibration);
 }
 
 TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
 {
-    constexpr const char *kTestParamsDir = "params/work";
-    constexpr const char *kTestCalibration = "params/work/calibration.json";
-    constexpr const char *kResetRequest = "params/work/calibration_reset";
-    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
-    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", kResetRequest, 1);
-    std::remove(kResetRequest);
+    const TempParamsDir params("calibration_reset");
+    const std::string calibration = params.file("calibration.json");
+    const std::string reset_request = params.file("calibration_reset");
+    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
 
     AppConfig manual_config;
     manual_config.manual_calibration = true;
@@ -618,7 +618,7 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
         service.update(no_pose, 0.0f);
         EXPECT_EQ(service.snapshot().valid_blocks, 5) << "요청이 없으면 그대로다";
 
-        std::FILE *request = std::fopen(kResetRequest, "w");
+        std::FILE *request = std::fopen(reset_request.c_str(), "w");
         ASSERT_NE(request, nullptr);
         std::fclose(request);
         // 요청은 1초에 한 번 본다. 첫 update에서 이미 봤으므로 간격을 넘겨 다시 부른다.
@@ -633,17 +633,15 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
         float rpy[3] = {1.0f, 1.0f, 1.0f};
         service.input_rpy(rpy);
         EXPECT_NEAR(rpy[1], 0.0f, 1e-7) << "모델 입력도 0에서 다시 시작한다";
-        EXPECT_NE(access(kResetRequest, F_OK), 0) << "요청 파일은 한 번 쓰고 지운다";
+        EXPECT_NE(access(reset_request.c_str(), F_OK), 0) << "요청 파일은 한 번 쓰고 지운다";
     }  // 저장 스레드가 끝날 때까지 기다린다
-    EXPECT_NE(access(kTestCalibration, F_OK), 0) << "저장된 보정 파일을 지운다";
+    EXPECT_NE(access(calibration.c_str(), F_OK), 0) << "저장된 보정 파일을 지운다";
     {
         CalibrationService restarted(auto_config);
         EXPECT_EQ(restarted.snapshot().valid_blocks, 0) << "재시작해도 예전 값을 다시 읽지 않는다";
     }
 
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
-    unsetenv("EDGEPILOT_PARAMS_DIR");
-    std::remove(kTestCalibration);
 }
 
 /* 초기화 뒤 다시 수렴한 보정은 저장된다(2026-10-01: 초기화의 삭제 표시가 남아 저장 대신 파일을
@@ -651,14 +649,10 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
 TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
 {
     // ctest가 병렬로 돌리므로 ResetRequestRecalibratesFromScratch와 다른 디렉터리를 쓴다.
-    constexpr const char *kTestParamsDir = "params/work_reset_save";
-    constexpr const char *kTestCalibration = "params/work_reset_save/calibration.json";
-    constexpr const char *kResetRequest = "params/work_reset_save/calibration_reset";
-    mkdir("params", 0755);
-    mkdir(kTestParamsDir, 0755);
-    setenv("EDGEPILOT_PARAMS_DIR", kTestParamsDir, 1);
-    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", kResetRequest, 1);
-    std::remove(kResetRequest);
+    const TempParamsDir params("calibration_reset_save");
+    const std::string calibration = params.file("calibration.json");
+    const std::string reset_request = params.file("calibration_reset");
+    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
 
     AppConfig manual_config;
     manual_config.manual_calibration = true;
@@ -672,7 +666,7 @@ TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
         CalibrationService service(auto_config);
         const ParsedModelOutput no_pose{};
         service.update(no_pose, 0.0f);
-        std::FILE *request = std::fopen(kResetRequest, "w");
+        std::FILE *request = std::fopen(reset_request.c_str(), "w");
         ASSERT_NE(request, nullptr);
         std::fclose(request);
         for (int i = 0; i < 12 && service.snapshot().valid_blocks != 0; ++i) {
@@ -688,15 +682,13 @@ TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
         for (int i = 0; i < 5 * 100; ++i) service.update(straight, 20.0f);
         ASSERT_EQ(static_cast<int>(service.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated));
     }  // 저장 스레드가 끝날 때까지 기다린다
-    EXPECT_EQ(access(kTestCalibration, F_OK), 0) << "다시 수렴한 보정을 저장한다";
+    EXPECT_EQ(access(calibration.c_str(), F_OK), 0) << "다시 수렴한 보정을 저장한다";
     {
         CalibrationService restarted(auto_config);
         EXPECT_EQ(restarted.snapshot().valid_blocks, 5) << "재시작하면 새 보정으로 시작한다";
     }
 
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
-    unsetenv("EDGEPILOT_PARAMS_DIR");
-    std::remove(kTestCalibration);
 }
 
 /* openpilot과 같이 저장된 블록 수를 그대로 쓴다: 5 미만(저장소 기본값 0)이면 rpy는 출발점일 뿐
@@ -720,18 +712,15 @@ TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated)
     EXPECT_EQ(static_cast<int>(converged.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated));
 
     // 서비스: 저장소 기본값 같은 파일(valid_blocks 0)로 시작하면 미보정
-    constexpr const char *kDir = "params/work_uncalibrated";
-    constexpr const char *kFile = "params/work_uncalibrated/calibration.json";
-    mkdir("params", 0755);
-    mkdir(kDir, 0755);
+    const TempParamsDir params("calibration_uncalibrated");
+    const std::string calibration = params.file("calibration.json");
     {
-        std::FILE *f = std::fopen(kFile, "w");
+        std::FILE *f = std::fopen(calibration.c_str(), "w");
         ASSERT_NE(f, nullptr);
         std::fprintf(f, "{\n  \"version\": 1,\n  \"rpy_rad\": [0, %.9f, %.9f],\n  \"spread_rad\": [0, 0, 0],\n"
                         "  \"valid_blocks\": 0\n}\n", stored[1], stored[2]);
         std::fclose(f);
     }
-    setenv("EDGEPILOT_PARAMS_DIR", kDir, 1);
     AppConfig auto_config;
     auto_config.calibration_auto = true;
     auto_config.manual_calibration = false;
@@ -742,8 +731,6 @@ TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated)
         service.input_rpy(rpy);
         EXPECT_NEAR(rpy[2], stored[2], 1e-6);
     }
-    unsetenv("EDGEPILOT_PARAMS_DIR");
-    std::remove(kFile);
 }
 
 TEST(CalibrationEquivalence, AppConfigEnvFeedback)

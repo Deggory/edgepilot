@@ -443,13 +443,14 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "label": "디스플레이 전원",
             "section": "백라이트",
             "description": "LCD 영상 출력은 유지한 채 백라이트만 켜거나 끕니다.",
-            "increase": "GPIO25를 High로 설정하거나 저장된 밝기의 PWM을 다시 켭니다.",
-            "decrease": "GPIO25를 Low로 설정해 백라이트를 완전히 끕니다.",
+            "increase": "백라이트 PWM을 저장된 밝기로 다시 켭니다.",
+            "decrease": "백라이트 PWM duty를 0으로 내려 화면을 완전히 끕니다.",
         },
         "brightness_percent": param_meta(
             "화면 밝기", "백라이트", "%", 1, 1, 100,
-            "패널의 저·고밝기 구간을 나누어 실측 보정한 20 kHz PWM입니다. 전원을 꺼도 이 값은 유지됩니다.",
-            "화면이 밝아집니다. 100%에서는 GPIO High를 사용합니다.",
+            "백라이트 PWM3(10 kHz) 점등률입니다. 실제 duty는 밝기 x 보드 최대치(/boot/board의 "
+            "disp_max_backlight)입니다. 전원을 꺼도 이 값은 유지됩니다.",
+            "화면이 밝아집니다.",
             "화면이 어두워집니다. 완전히 끄려면 전원 스위치를 사용합니다.",
             control="slider",
         ),

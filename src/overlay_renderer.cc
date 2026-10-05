@@ -160,7 +160,7 @@ uint32_t state_color(const OverlayHudState &hud)
 std::string mode_text(const OverlayHudState &hud)
 {
     if (hud.controller_active)
-        return hud.lateral_mode_available && hud.laneless_mode ? "LANELESS" : "LANE";
+        return hud.laneless_mode ? "LANELESS" : "LANE";
     if (!hud.controller_engaged) return hud.controller_enabled ? "READY" : "OFF";
     if (hud.active_block[0] == '\0') return "READY";
     if (const char *label = engage_block_label(hud.active_block)) return label;
@@ -199,8 +199,6 @@ struct LeadInfo {
     float probability = 0.0f;
     float distance_m = 0.0f;
     float relative_speed_kph = 0.0f;
-
-    bool any() const { return radar || vision; }
 };
 
 LeadInfo lead_info(const OverlayHudState &hud, const ParsedModelOutput &output)

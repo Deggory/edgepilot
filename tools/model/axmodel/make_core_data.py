@@ -21,11 +21,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 Q = os.environ.get("QEXP094_DIR", os.path.join(HERE, "../../../models/work/qexp094"))
 P = os.environ.get("PTQ_DIR", os.path.join(HERE, "../../../models/ptq"))
 CORE = os.environ.get("CORE_ONNX", "core_fp32.onnx")
-ACTION_T = np.array([[0.3, 0.3]], np.float32)   # lat/long delay + frame + half-step, typical
 sess = ort.InferenceSession(CORE)
 ev = np.load(f"{Q}/eval094_all.npz"); meta = json.load(open(f"{Q}/eval094_all.json"))
 
-keep = {k: [] for k in ["input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic_convention", "action_t"]}
+keep = {k: [] for k in ["input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic_convention"]}
 refs, tags = [], []
 off = 0
 for r in meta:
@@ -37,7 +36,7 @@ for r in meta:
         feed = {"input_imgs": np.concatenate([road[k-4], road[k]])[None].astype(np.float32),
                 "big_input_imgs": np.concatenate([wide[k-4], wide[k]])[None].astype(np.float32),
                 "desire": desire_q.reshape(25, 4, 8).max(1)[None],
-                "features_buffer": feat_q[0::4][None].copy(), "traffic_convention": tc, "action_t": ACTION_T}
+                "features_buffer": feat_q[0::4][None].copy(), "traffic_convention": tc}
         out = sess.run(None, feed)[0]
         if k >= 8:
             for key in keep: keep[key].append(feed[key][0])
@@ -66,7 +65,7 @@ for i in range(1, len(road), 2):
 cal = {"input_imgs": road.astype(np.float32), "big_input_imgs": wide.astype(np.float32),
        "desire": desire_cal,
        "features_buffer": feats[rng.integers(0, len(feats), len(road))],
-       "traffic_convention": tcs, "action_t": np.repeat(ACTION_T, len(road), 0)}
+       "traffic_convention": tcs}
 os.makedirs("calib", exist_ok=True)
 for key, v in cal.items():
     with tarfile.open(f"calib/{key}.tar", "w") as t:

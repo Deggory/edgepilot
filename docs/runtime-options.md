@@ -11,7 +11,7 @@ true.
 - `EDGEPILOT_MODEL=/path/to/supercombo.axmodel`
   - overrides the model selected by `manager.py` (default
     `models/supercombo.axmodel` in the install directory). A command-line
-    argument wins over it. This replaces the K230 `K230_KMODEL`.
+    argument wins over it.
 - `EDGEPILOT_STOP_LAUNCHER=0`
   - leaves the stock `launcher.service` and `/maixapp/apps/` running. The
     default stops them, since they hold the camera and NPU.
@@ -22,7 +22,8 @@ true.
   - the only argument. The runtime targets the openpilot master supercombo core:
     5 inputs (`input_imgs` and `big_input_imgs` uint8 `[1,12,128,256]`,
     `desire` `[1,25,8]`, `features_buffer` `[1,24,512]`, `traffic_convention`
-    `[1,2]`) and 2576 output floats. `modeld` checks names, shapes, dtypes,
+    `[1,2]`) and 2576 output floats (15 head outputs reassembled, or one
+    `[1,2576]` output). `modeld` checks names, shapes, dtypes,
     and buffer sizes at startup and refuses any other axmodel rather than
     misreading it.
 - `EDGEPILOT_PROFILE=1`
@@ -73,6 +74,11 @@ true.
     read from the replay header; the warp uses the same GDC path as live. This is
     for validating inference and online calibration from collected logs. It
     still runs on the board, since it needs the NPU.
+- `EDGEPILOT_CAMERA_OFFSET_M=m`, `EDGEPILOT_CAMERA_HEIGHT_M=m`
+  - the camera mount for replay mode, which does not read
+    `params/display.json` (defaults `0` and the model height, 1.22 m). Live
+    capture uses `camera_offset_m` and `camera_height_m` from the device
+    settings.
 - `EDGEPILOT_MAX_FRAMES=N`
   - stops after `N` frames (`modeld` inferred frames, `camerad`
     captured frames). This is mainly useful with replay mode.
@@ -82,8 +88,8 @@ true.
     [diagnostics](diagnostics.md#model-swap-verification).
 
 `recordd` reads `EDGEPILOT_RECORD_ROOT` (default `recordings` under the install
-directory) and `EDGEPILOT_RECORD_STAGING`; `K230_RECORD_CODEC` (the K230 V4L2 device)
-is gone. `params/recording.json` `enabled` toggles recording.
+directory) and `EDGEPILOT_RECORD_STAGING`. `params/recording.json` `enabled`
+toggles recording.
 
 ## IMU
 
@@ -94,8 +100,8 @@ is gone. `params/recording.json` `enabled` toggles recording.
 
 - `EDGEPILOT_ENABLE_PANDA=1`
   - manager also starts `pandad` and switches the USB-C port to host mode
-    (restored on exit). Off by default on the MaixCAM2 until the Panda wiring
-    exists. The binary must have been built with `-DEDGEPILOT_BUILD_PANDA=ON`.
+    (restored on exit). The manager default is off; `edgepilot.service` sets
+    it. The binary must have been built with `-DEDGEPILOT_BUILD_PANDA=ON`.
 - `EDGEPILOT_USB_ROLE=host|device`
   - fixes the USB-C role at manager start and leaves it on exit.
     `edgepilot.service` sets `host` (the Panda plugs into the USB-C port);
@@ -149,10 +155,17 @@ is gone. `params/recording.json` `enabled` toggles recording.
   - directory the editor reads factory defaults from. The default is
     `params.defaults/` under the runtime working directory; the upload script
     fills it from the repository's `params/`.
-- `EDGEPILOT_LEARNER_STATE_PATH=/dev/shm/...`
-  - shared-memory file the editor reads the live learner state from (default
-    `/dev/shm/edgepilot_learner_state`, written by `controlsd`). Tests point it
-    at a temporary file.
+- `EDGEPILOT_LEARNER_STATE_PATH`, `EDGEPILOT_MODEL_STATE_PATH`,
+  `EDGEPILOT_CONTROL_STATE_PATH`, `EDGEPILOT_LOCALIZATION_STATE_PATH`
+  - shared-memory files the editor reads live state from (defaults
+    `/dev/shm/edgepilot_learner_state`, `edgepilot_model_state`,
+    `edgepilot_control_state`, `edgepilot_localization`). Tests point them at
+    temporary files.
+- `EDGEPILOT_CALIBRATION_RESET_PATH`
+  - the request file behind the editor's calibration reset (default
+    `/dev/shm/edgepilot_calibration_reset`). `modeld` checks it every second;
+    when it exists, `modeld` deletes it and restarts calibration from the
+    beginning. Both sides read the same variable.
 
 `overlayd` turns the backlight on at start (`pwmchip0/pwm3`, level from
 `maix_backlight_value` in `/boot/configs` and `disp_max_backlight` in
@@ -178,8 +191,7 @@ signal plays the next sound in the order engage, disengage, unable,
 signal_changed, unavailable.
 
 Departure alerts and engage refusals are also shown on the HUD, and every alert
-is written as a `overlayd: alert=...` log line. The K230
-`K230_PIEZO_BUZZER` and `K230_PIEZO_PIN` are gone. Which events alert
+is written as a `overlayd: alert=...` log line. Which events alert
 is described in [Departure alerts](departure-alerts.md).
 
 ## Parameter files
@@ -265,10 +277,11 @@ Beyond the HUD, the BEV shows the following:
 - Capture is `NV12 1280x720`, the full sensor field of view scaled (no crop),
   sensor at 20 fps.
 - The frame ring has 8 CMM slots.
-- `overlayd` starts 1 s after `camerad`, because opening VI resets
-  the AX pools.
+- `overlayd` and `recordd` start once `camerad` has run for 1.5 s, because
+  opening VI resets the AX pools.
 - Child process nice levels are fixed as `camerad=0`, `overlayd=10`,
-  `modeld=-15`, optional `pandad=-10`, `controlsd=-8`, and `param_server=10`.
+  `recordd=15`, `modeld=-15`, `imud=10`, `locationd=5`, optional `pandad=-10`,
+  `controlsd=-8`, and `param_server=10`.
 - The front-vehicle marker is always enabled with probability threshold `0.5`.
 - Desired curvature is clamped to openpilot's `0.2 1/m`; it is intentionally not
   a runtime tuning option.

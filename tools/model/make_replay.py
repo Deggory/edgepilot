@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Build an SCNV12R1 replay plus host reference outputs for board verification.
+"""Build an SCNV12R1 replay of recorded frames for modeld replay mode on the board.
 
-The same recorded frames then go through the board runtime (RVV warp, temporal
-plumbing, kmodel) and through the host (numpy warp port, ONNX), so any
-mismatch points at the runtime rather than at the model. See
-docs/diagnostics.md for the board side.
+modeld reads the file instead of the camera ring (EDGEPILOT_REPLAY_NV12) and runs the same GDC
+warp, temporal plumbing and axmodel as live. See docs/diagnostics.md for the board side.
 
 Usage:
-  python make_replay.py --route ROUTE --out DIR --frames 100 --skip 400 \
-      --model models/onnx/supercombo_uint8.onnx --rpy r,p,y
+  python make_replay.py --route ROUTE --out DIR --frames 100 --skip 400
 """
 
 from __future__ import annotations
@@ -20,10 +17,19 @@ from pathlib import Path
 
 import numpy as np
 
-from op094_runner import Op094Runner
-from route_frames import iter_model_inputs, route_calibration
+from recording_reader import decode_route_yuv, route_segments
 
 MAGIC = b"SCNV12R1"
+
+
+def nv12_bytes(y: np.ndarray, u: np.ndarray, v: np.ndarray) -> bytes:
+    """One decoded frame (planar Y, U, V) as NV12: Y plane then interleaved UV."""
+    nv12 = np.empty(y.size + u.size + v.size, np.uint8)
+    nv12[: y.size] = y.reshape(-1)
+    uv = nv12[y.size:].reshape(y.shape[0] // 2, y.shape[1])
+    uv[:, 0::2] = u
+    uv[:, 1::2] = v
+    return nv12.tobytes()
 
 
 def main() -> None:
@@ -32,51 +38,36 @@ def main() -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--frames", type=int, default=100)
     parser.add_argument("--skip", type=int, default=400)
-    parser.add_argument("--model", default=None,
-                        help="ONNX for the host reference outputs")
-    parser.add_argument("--rpy", default=None,
-                        help="roll,pitch,yaw in radians. Use the board's "
-                             "params/calibration.json so both warps match; on "
-                             "the board the calibration service feeds the "
-                             "input warp every frame.")
     args = parser.parse_args()
 
     route = Path(args.route)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    rpy = (np.array([float(x) for x in args.rpy.split(",")], np.float32)
-           if args.rpy else route_calibration(route))
-    print("warp rpy:", np.round(rpy, 6))
+    segments = route_segments(route)
+    if not segments:
+        raise SystemExit(f"{route}: no usable segments")
+    width, height = segments[0].width, segments[0].height
 
-    runner = Op094Runner(args.model) if args.model else None
-    frames, outputs = [], []
-    width = height = 0
-    for _, img, big, nv12 in iter_model_inputs(route, rpy=rpy, skip=args.skip,
-                                               limit=args.frames):
-        frames.append(nv12)
-        if runner is not None:
-            outputs.append(runner.run(img, big))
+    frames = []
+    for index, (_, y, u, v) in enumerate(decode_route_yuv(segments)):
+        if index < args.skip:
+            continue
+        frames.append(nv12_bytes(y, u, v))
+        if len(frames) >= args.frames:
+            break
     if len(frames) < args.frames:
         raise SystemExit(f"route yielded only {len(frames)} frames")
 
-    from recording_reader import route_segments
-    segments = route_segments(route)
-    width, height = segments[0].width, segments[0].height
     replay = out_dir / "replay.scnv12"
     with open(replay, "wb") as f:
         f.write(MAGIC)
         f.write(struct.pack("<III", width, height, len(frames)))
-        for nv12 in frames:
-            f.write(nv12.tobytes())
+        for frame in frames:
+            f.write(frame)
     print(f"replay: {len(frames)} frames {width}x{height} -> {replay} "
           f"({replay.stat().st_size / 1e6:.0f} MB)")
-
-    if runner is not None:
-        np.save(out_dir / "host_ref.npy", np.stack(outputs))
-        print(f"host reference: {len(outputs)} x {len(outputs[0])} floats")
     (out_dir / "replay_meta.json").write_text(json.dumps({
         "route": str(route), "skip": args.skip, "frames": len(frames),
-        "rpy_rad": [float(v) for v in rpy], "model": args.model,
     }, indent=2))
 
 

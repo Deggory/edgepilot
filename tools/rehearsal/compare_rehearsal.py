@@ -39,7 +39,7 @@ def resample(t, values, grid):
     return np.interp(grid, t, values.astype(np.float64))
 
 
-def align(t_ref, v_ref, t_new, v_new, max_lag_s=None):
+def align(t_ref, v_ref, t_new, v_new):
     """Offset (s) to add to t_new so its speed trace lines up with the reference."""
     dt = 0.05
     grid_new = np.arange(t_new[0], t_new[-1], dt)

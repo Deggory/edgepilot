@@ -40,7 +40,6 @@ public:
   explicit CarKalman(const Globals &g) : g_(g) {}
   void init(const Vec &x, const Mat &p, bool has_time, double t);
   void set_time(double t) { t_ = t; has_time_ = true; }
-  bool has_time() const { return has_time_; }
   double time() const { return t_; }
   /* rednose predict_and_observe. 한 상태를 직접 보는 관측만 있다(H가 단위행). */
   void predict_and_observe(double t, int state, double z, double r);

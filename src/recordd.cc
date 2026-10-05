@@ -4,9 +4,9 @@
 #include "ipc_channels.h"
 #include "maix_venc.h"
 #include "recording_writer.h"
+#include "utils_file.h"
 
 #include <signal.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -60,19 +60,6 @@ unsigned read_recording_bitrate(const std::string &path, unsigned fallback) {
   int bitrate = static_cast<int>(fallback);
   parse_json_optional_int(text, "bitrate_bps", 1000000, 20000000, &bitrate);
   return static_cast<unsigned>(bitrate);
-}
-
-uint64_t file_revision(const std::string &path) {
-  struct stat status {};
-  if (stat(path.c_str(), &status) != 0) return 0;
-#if defined(__APPLE__)
-  const uint64_t nanoseconds = status.st_mtimespec.tv_nsec;
-#else
-  const uint64_t nanoseconds = status.st_mtim.tv_nsec;
-#endif
-  return static_cast<uint64_t>(status.st_ino) ^
-      (static_cast<uint64_t>(status.st_mtime) << 24) ^ nanoseconds ^
-      static_cast<uint64_t>(status.st_size);
 }
 
 void open_optional_channel(LatestChannel &channel, bool *opened,
@@ -154,7 +141,7 @@ int main() {
     uint64_t imu_seq = 0;
     uint64_t localization_seq = 0;
     uint64_t frame_seq = 0;
-    uint64_t config_revision = UINT64_MAX;
+    FileStamp config_stamp;
     uint64_t next_config_poll_ns = 0;
     uint64_t next_state_publish_ns = 0;
     uint64_t next_log_ns = monotonic_now_ns() + 1000000000ULL;
@@ -168,9 +155,9 @@ int main() {
       const uint64_t now_ns = monotonic_now_ns();
       if (now_ns >= next_config_poll_ns) {
         next_config_poll_ns = now_ns + kConfigPollIntervalNs;
-        const uint64_t revision = file_revision(config_path);
-        if (revision != config_revision) {
-          config_revision = revision;
+        const FileStamp stamp = file_stamp(config_path);
+        if (stamp != config_stamp) {
+          config_stamp = stamp;
           try {
             const bool enabled = read_recording_enabled(config_path, false);
             if (!enabled && writer.requested_enabled()) drain_encoder();

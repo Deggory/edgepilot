@@ -24,7 +24,6 @@ public:
 
   bool ok() const { return ok_; }  // 이벤트 로그 머리가 맞다
   uint32_t version() const { return header_.version; }
-  const EventFileHeader &header() const { return header_; }
 
   /* 다음 레코드와 페이로드. 끝났거나 끊겼으면 false. */
   bool next(EventRecordHeader *record, std::vector<char> *payload) {

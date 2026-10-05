@@ -43,6 +43,10 @@ only in the board build, against `deps/ax630` from
     512x256 views from a physical source address, unpacked to YUV6. Uses only
     MSP SDK headers, not the middleware, so the NPU process initialises AX SYS
     once.
+- `maix_venc.*`, `maix_vdec.*`
+  - the hardware H.264 encoder and decoder. `recordd` copies a ring slot into
+    the encoder's own pool block with IVPS before encoding; `replayd` decodes a
+    recorded frame into a ring slot. Both use only MSP SDK headers.
 - `maix_shim.cc`, `stub/`
   - the few MaixCDK runtime pieces (log, err, board config lookup) and Kconfig
     stubs that the inline code in `ax_middleware.hpp` references but
@@ -102,13 +106,19 @@ only in the board build, against `deps/ax630` from
 - `src/vehicle_params_learner.*`, `src/torque_estimator.*`,
   `src/lateral_learners.*`, `src/localizer_inputs.h`
   - the paramsd/torqued ports that estimate steer ratio and torque response
-    while driving (opt-in). `vehicle_params_learner` is paramsd with its
+    while driving (`use_live_vehicle_params`, `use_live_torque_params`, both on
+    by default). `vehicle_params_learner` is paramsd with its
     car_kf EKF and saved-value restore; `torque_estimator` is torqued with its
     cache; `lateral_learners` is the controlsd glue that turns vehicle CAN and
     locationd samples into learner inputs and collects the outputs as
     `LiveLateralParams`. `localizer_inputs.h` converts the IPC
     `LocalizationState` into a learner sample, so the learner library does not
     depend on the IPC layout.
+- `src/location_estimator.*`, `src/lateral_lag.*`, `src/localization_pipeline.*`
+  - ports of openpilot locationd (the 18-state pose EKF over the board IMU and
+    the model's camera odometry) and lagd (the steering delay from desired vs
+    actual lateral acceleration), and the pipeline that feeds them in time
+    order. `locationd` and `replay_localization` share it.
 - `src/lateral_path.*`
   - reduces `modelState` to the steering-usability gate (reach and point
     count). It computes no path geometry; curvature comes from the MPC.
@@ -141,9 +151,10 @@ released after that short hold if they persist.
 
 - `src/ipc_messages.*`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
-    the `K230*State` snapshots with their `static_assert`s, and the
+    the state snapshots (`ModelState`, `ControlState`, `PandaState`, …) with
+    their `static_assert`s, and the
     `ModelState` → `ParsedModelOutput`/`ProjectionState` unpacking. Recording
-    v5 stores `ModelState`, `ControlState`, and `PandaState` as-is, so their
+    v8 stores `ModelState`, `ControlState`, and `PandaState` as-is, so their
     offsets are pinned here and tied to `kRecordingVersion`. Code that only
     reads or fills a message includes this and nothing else.
 - `src/model_state_fill.h`
@@ -184,7 +195,8 @@ released after that short hold if they persist.
     The renderer keeps only coverage scratch and the per-buffer tiles; the
     turn-signal phase and the network card toggle come from `overlayd`.
 - `src/overlay_state.*`
-  - `OverlayHudState`, the `K230*State` → `OverlayHudState` mapping shared by
+  - `OverlayHudState`, the IPC state (`ControlState`, `ModelState`, …) →
+    `OverlayHudState` mapping shared by
     `overlayd` and `hud_snapshot`, the engage-block label table, and
     `OverlayAlertEvents`, which turns the controlsd event counters into the one
     toast/log alert a frame may raise (baseline on first sight, rebaseline on a
@@ -203,12 +215,11 @@ released after that short hold if they persist.
     connected; another link (the USB virtual Ethernet, which always has an
     address) is kept apart for the network card.
 - `src/recording_writer.*`, `src/recording_format.h`
-  - the event-log writer and on-disk contract of the K230 recorder, kept for
-    the recorder port and for the host tools that read K230 drives.
+  - the event-log writer and on-disk contract that `recordd` writes. It is the
+    K230 recorder's format, so the host tools read MaixCAM2 and K230 drives.
     `gtest_recording_writer` pins the layout; `recording_format.h`
     (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
-    is mirrored by `tools/model/recording_reader.py`. No process uses it on the
-    MaixCAM2 yet.
+    is mirrored by `tools/model/recording_reader.py`.
 - `src/event_log_reader.h`
   - the one C++ reader of `events/NNN.bin`, shared by `replayd` and the replay
     and dataset tools. It checks the magic, skips `header_size`, and stops
@@ -221,6 +232,18 @@ released after that short hold if they persist.
   - standalone K7 YG HEV lateral controller using the validated Hyundai CAN bus
     split, torque limits, counters, checksums, 60 kph MDPS helper, and a 20 Hz
     planner worker separated from the 100 Hz control loop.
+- `src/recordd.cc`
+  - the drive recorder: encodes the frames `modeld` used and writes the CAN
+    and state channels through `recording_writer`.
+- `src/imud.cc`, `src/locationd.cc`
+  - the board IMU reader (LSM6DSOW over `i2c-dev`) and the process that runs
+    `localization_pipeline` on its samples and publishes `LocalizationState`.
+- `src/replayd.cc`
+  - rehearsal: plays a recorded route in place of `camerad` and `pandad`
+    ([Rehearsal](rehearsal.md)).
+- `src/camcal.cc`
+  - still capture through the runtime's camera path for the intrinsics
+    measurement ([Camera calibration](camcal.md)).
 - `scripts/manager.py`
   - minimal supervisor and heartbeat publisher. It is intentionally not a full
     openpilot manager clone. It stops the stock launcher, switches USB-C to host
@@ -234,8 +257,9 @@ released after that short hold if they persist.
   - the editor's BEV tab, drawn by the browser: `bev.js` (three.js view, ported
     from sv_recorder_bev), `bev_k7.js` (the ego car, a black 2017 K7 made in code),
     `bev_car.js` (the lead's car model), `bev_data.js` (reads the ModelState and
-    ControlState bytes the editor streams), and three.js 0.186.1 in `three/`. The
-    board copies them next to `param_server.py` as `web/`.
+    ControlState bytes the editor streams), and three.js 0.186.1 in `three/`. On
+    the board they go next to `param_server.py` as `web/`;
+    `scripts/upload_to_board.sh` does not upload them, so copy them by hand.
 
 ## Scripts and tools
 
@@ -245,18 +269,22 @@ released after that short hold if they persist.
     host tests. See `scripts/README.md` and
     [Build and deploy](build-and-deploy.md).
 - `tools/model/axmodel/`
-  - the openpilot master → axmodel pipeline (core extraction, calibration data,
-    Pulsar2 config).
+  - the openpilot master → axmodel pipeline (core extraction, output split,
+    calibration and evaluation data, the board evaluation runner, Pulsar2
+    config).
 - `tools/model/`
-  - the recording readers and the v0.9.4-era model helpers:
-    `recording_reader.py` decodes `recordd` routes (frame index, event log,
-    H.264 from MaixCAM2 or HEVC from K230) and is the one Python mirror of `recording_format.h` /
-    `ipc_messages.h`; `lane_bias.py`, `route_frames.py`, `make_replay.py`, and
-    `make_calibration.py` build on it. See `tools/model/README.md`.
+  - the recording readers: `recording_reader.py` decodes `recordd` routes
+    (frame index, event log, H.264 from MaixCAM2 or HEVC from K230) and mirrors
+    `recording_format.h` / `ipc_messages.h` for the analysis tools;
+    `lane_bias.py` and `make_replay.py` build on it. See
+    `tools/model/README.md`.
+- `tools/camcal/`
+  - intrinsics from `camcal` captures (`calibrate_intrinsics.py`), the TV
+    checkerboard generator and the measured MaixCAM2 intrinsics. See
+    [Camera calibration](camcal.md).
 - `tools/calib/`
-  - camera calibration: board-side chessboard capture, the PC-side solver, the
-    chessboard image, the resulting MaixCAM2 intrinsics, and the model-view
-    preview.
+  - the IMU-to-camera extrinsic estimate, the model-view preview and the
+    12x7 chessboard image.
 - `tools/control/`
   - `fit_lateral_params.py` (torque regression and actuator-lag estimate from
     drives) and `export_can_fixture.py` (recorded CAN → `gtest_control_replay`
@@ -289,3 +317,7 @@ released after that short hold if they persist.
   - minimal JSON value readers, the clamped `parse_json_optional_*` helpers, and
     the `Json*Field` tables that `control_params` and `adaptive_cruise` fill
     their structs from: one `{key, min, max, member}` row per parameter.
+- `src/utils_file.h`
+  - `file_stamp` (the stat fingerprint the processes poll parameter files
+    with), `read_text_file`, and `write_file_atomic` (temporary file + rename,
+    so a reader never sees a half-written file).

@@ -10,10 +10,10 @@ directories are generated output and are not tracked:
 | `build-ax630/` | MaixCAM2 runtime (`tools/docker_ax630/build.sh`), the upload default |
 | `build-host/` | host tests and tools (`scripts/run_host_tests.sh`) |
 
-The runtime build produces `camerad`, `modeld`, `overlayd`,
-`controlsd`, and `pandad`. `-DEDGEPILOT_BUILD_PANDA=OFF` drops
-`pandad` and the libusb dependency; the manager skips a binary that is not
-installed. `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON` adds the tools in
+The runtime build produces `camerad`, `modeld`, `overlayd`, `controlsd`,
+`pandad`, `recordd`, `imud`, `locationd`, `replayd`, and `camcal`.
+`-DEDGEPILOT_BUILD_PANDA=OFF` drops `pandad` and the libusb dependency; the
+manager skips a binary that is not installed. `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON` adds the tools in
 [diagnostics/](../diagnostics/README.md) without changing the runtime.
 
 ## 1. Fetch the SDK and board libraries
@@ -73,6 +73,13 @@ UI sprites, the parameter defaults and `models/supercombo.axmodel`
 - Runtime tuning and calibration JSON files already in `params/` are never
   overwritten. Repository defaults go to `params.defaults/` and seed a runtime
   file only when it does not exist.
+- When the board's `/usr/lib/libmaixcam_lib.so` differs from
+  `deps/ax630/maix/libmaixcam_lib.so` (the 1.2.5 copy the build links against),
+  the script installs that copy as `/usr/lib/libmaixcam_lib.so.1.2.5` and points
+  `libmaixcam_lib.so` at it. A stock file is kept as `libmaixcam_lib.so.stock`.
+- It does not upload `replayd` ([rehearsal](rehearsal.md)) or `scripts/web/`
+  (the editor's BEV tab). Copy them into the install directory by hand, as
+  `replayd` and `web/`.
 - `EDGEPILOT_BOARD_DIR` changes the install directory and `EDGEPILOT_BIN_DIR` the binary
   directory.
 
@@ -83,5 +90,5 @@ scripts/run_host_tests.sh
 ```
 
 Builds `build-host/` with the runtime off and runs every test through `ctest`:
-88 googletest cases and `check_param_server.py`. It needs neither the board nor
+158 googletest cases and `check_param_server.py`. It needs neither the board nor
 `deps/`; googletest is downloaded on the first configure.

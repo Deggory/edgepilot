@@ -1,5 +1,5 @@
-# Host environment for the recording-driven model tools. The nncase compile
-# itself runs in the Docker image, so nothing here needs a GPU or a compiler.
+# Host environment for the model and recording tools. The Pulsar2 compile
+# itself runs in its Docker image, so nothing here needs a GPU or a compiler.
 numpy
 onnx
 onnxruntime

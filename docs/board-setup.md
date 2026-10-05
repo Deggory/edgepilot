@@ -69,5 +69,5 @@ them on exit; `systemctl start launcher.service` brings the stock UI back.
 
 ## Physical mounting
 
-The printable [windshield mount](hardware/windshield_mount/README.md) was
-designed for the K230 board and its LCD; it does not fit the MaixCAM2.
+The printable windshield mount on the `k230` branch (`docs/hardware/windshield_mount`)
+was designed for the K230 board and its LCD; it does not fit the MaixCAM2.

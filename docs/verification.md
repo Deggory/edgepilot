@@ -115,9 +115,11 @@ byte-identical CSV to the board build.
 low speed, matching the synthetic A/B; 1.4e-5 1/m is about 0.002 degrees of front
 wheel angle, well below the torque command quantum.
 
-To re-run the A/B, restore `deps/acados`, `benchmarks/acados_lateral_mpc.h`, and
-`benchmarks/check_lateral_mpc_vs_acados.cc` from the commit that removed them
-(they predate the `benchmarks/` -> `diagnostics/` rename).
+The A/B harness (`benchmarks/acados_lateral_mpc.h`,
+`benchmarks/check_lateral_mpc_vs_acados.cc`) was never committed, so the A/B
+cannot be re-run from this repository. Only the prebuilt acados runtime
+(`deps/acados`) is in the history, up to the commit that replaced it with
+`src/lateral_mpc.*`.
 
 ### Steering-rate cost term (from 0.9.4)
 

@@ -42,8 +42,8 @@ speaker.
 `modeld` can run headless from a recorded route: replay mode reads an
 `SCNV12R1` file instead of the camera ring and feeds the same GDC warp as live
 capture, so it validates model execution and online calibration from stored
-segments. It needs the NPU, so it runs on the board. The recordings available
-today come from the K230 camera, so pass its intrinsics.
+segments. It needs the NPU, so it runs on the board. A K230 route needs the
+K230 camera's intrinsics, as below; a MaixCAM2 route needs none.
 
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
@@ -80,11 +80,12 @@ output. With `EDGEPILOT_CALIB_AUTO=0`, the host reference must use the rpy the
 board restored from `params/calibration.json`, because the calibration service
 feeds the input warp on every frame.
 
-The host reference in `tools/model/make_replay.py --model` runs the v0.9.4 ONNX
-and does not fit the master contract. For the master core, the fp32 reference
-with the runtime's queue semantics is built by
-`tools/model/axmodel/make_core_data.py` (its `eval/` set); a host runner that
-takes an `SCNV12R1` replay is not in the repository yet.
+For the master core, the fp32 reference with the runtime's queue semantics is
+built by `tools/model/axmodel/make_m2_data.py eval` from a MaixCAM2 recording
+(or by `make_core_data.py` from the K230 evaluation bundle), and
+`tools/model/axmodel/run_axmodel_assembled.py` runs an axmodel on the same
+inputs on the board. A host runner that takes an `SCNV12R1` replay is not in
+the repository yet.
 
 Measured when the master axmodel was brought up (200-frame K230 replay): the
 board output against the host axengine runner gave a plan lateral difference of
@@ -93,8 +94,8 @@ numbers (int16 PTQ vs fp32) are in [models/README.md](../models/README.md).
 
 ## Lateral bias
 
-The tools below run on the host over recorded drives. The recorder is not
-ported to the MaixCAM2 yet, so today their input is K230 recordings.
+The tools below run on the host over recorded drives: `recordd` routes from
+the MaixCAM2, or older K230 routes.
 
 If the car holds one side of the lane, `tools/model/lane_bias.py` says whether
 the camera calibration is responsible:

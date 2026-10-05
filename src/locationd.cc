@@ -2,12 +2,14 @@
  * 추정(상류 lagd)을 돌려 /edgepilot_localization에 발행한다. 본체는 LocalizationPipeline이고
  * 이 파일은 공유 메모리 입출력과 lagd 저장만 맡는다.
  *
- * 지금은 관찰 전용이다: controlsd는 이 출력을 쓰지 않는다. 입력이 없으면(IMU 없음 등)
- * 발행하지 않고 기다린다. lagd 추정은 params/live_delay.json에 60초마다와 종료 때 저장하고,
+ * controlsd는 이 출력을 paramsd·torqued 입력(use_locationd_learner_inputs)과 경로 지연
+ * (use_live_delay)에 쓴다. 입력이 없으면(IMU 없음 등) 발행하지 않고 기다리고, 그동안 controlsd는
+ * ESP12 값으로 돌아간다. lagd 추정은 params/live_delay.json에 60초마다와 종료 때 저장하고,
  * 시작 때 초기값(steering.json steer_actuator_delay)이 같으면 이어서 쓴다. */
 #include "ipc_channels.h"
 #include "ipc_messages.h"
 #include "localization_pipeline.h"
+#include "utils_file.h"
 #include "utils_json.h"
 #include "utils_process.h"
 #include "utils_time.h"
@@ -16,8 +18,6 @@
 #include <unistd.h>
 
 #include <cstdio>
-#include <fstream>
-#include <iterator>
 #include <string>
 
 namespace {
@@ -26,22 +26,6 @@ volatile sig_atomic_t g_stop = 0;
 
 constexpr uint64_t kPersistIntervalNs = 60'000'000'000ULL;
 constexpr uint64_t kLogIntervalNs = 10'000'000'000ULL;
-
-std::string read_file(const std::string &path)
-{
-    std::ifstream file(path, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-}
-
-bool write_file_atomic(const std::string &path, const std::string &content)
-{
-    const std::string tmp = path + ".tmp";
-    {
-        std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
-        if (!(file << content)) return false;
-    }
-    return std::rename(tmp.c_str(), path.c_str()) == 0;
-}
 
 void open_optional(LatestChannel &channel, bool *opened, const char *name, size_t size)
 {
@@ -56,13 +40,13 @@ int main()
 
     LateralLagConfig lag_config;
     float actuator_delay = 0.0f;
-    if (parse_json_float_value(read_file(param_path("steering.json")), "steer_actuator_delay", &actuator_delay) &&
+    if (parse_json_float_value(read_text_file(param_path("steering.json")), "steer_actuator_delay", &actuator_delay) &&
         actuator_delay > 0.0f && actuator_delay < 1.0f)
         lag_config.initial_lag = actuator_delay;
     LocalizationPipeline pipeline(lag_config);
 
     const std::string lag_path = param_path("live_delay.json");
-    const std::string lag_cache = read_file(lag_path);
+    const std::string lag_cache = read_text_file(lag_path);
     const bool restored = !lag_cache.empty() && pipeline.lag().restore(lag_cache);
     if (!lag_cache.empty() && !restored) std::remove(lag_path.c_str());
     pipeline.set_lag_restored(restored);

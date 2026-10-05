@@ -39,7 +39,7 @@ of this branch; the piezo alerts are now bell-like tones on the board speaker.
   controller, and online camera calibration, with no openpilot checkout, Python
   native extension, or Qt on the board. The in-tree MPC solver replaces acados.
   Ports of paramsd and torqued estimate the steer ratio and torque response
-  while driving (opt-in).
+  while driving, and the controller uses them.
 - **K7 YG HEV integration.** `LKAS11` and `MDPS12` at 100 Hz, `CLU11` at 50 Hz,
   the 60 kph MDPS speed helper, and a torque ramp that cuts the request before
   the MDPS fault angle.
@@ -48,11 +48,11 @@ of this branch; the piezo alerts are now bell-like tones on the board speaker.
 - **Driving HUD.** Plan, lanes, road edges, and lead over the camera preview on
   the 640x480 LCD, drawn at 20 Hz on a hardware overlay layer, with status
   panels and stop-and-go departure alerts (on screen and on the board speaker).
-- **Replay and tune.** Host tools replay a K230 recording open- or closed-loop,
+- **Replay and tune.** Host tools replay a recorded drive open- or closed-loop,
   and a web parameter editor pushes changes the controller picks up within
   100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite (89 tests) that needs neither the
+  macOS or Linux, with a googletest suite (158 tests) that needs neither the
   board nor its SDK.
 
 ## Architecture
@@ -75,7 +75,7 @@ starts and supervises them, and `param_server.py` serves the tuning UI. See
 
 `scripts/install_autostart.sh` installs a systemd unit that starts the runtime at
 boot in place of the stock launcher. `recordd` records drives with the
-AX630C hardware HEVC encoder in the K230 recording format.
+AX630C hardware H.264 encoder in the K230 recording format.
 
 ## Safety model
 
@@ -101,7 +101,7 @@ Every layer must agree before steering torque reaches the car:
 - a KIA K7 YG HEV
 
 The MaixCAM2 has a single USB-C port, so a Panda setup needs power from another
-source; the Panda wiring is not finished yet.
+source.
 
 ## Getting started
 
@@ -158,7 +158,7 @@ source; the Panda wiring is not finished yet.
 src/            runtime processes and their libraries
 platform/       MaixCAM2 camera (VI), display (VO), CMM, and GDC wrappers
 params/         runtime parameters, hot-reloaded by the processes
-models/         PTQ calibration samples, K230 verification records
+models/         the axmodel, its manifest, PTQ calibration samples
 gtest/          host unit tests
 diagnostics/    replay, dataset, and HUD tools
 scripts/        SDK fetch, deploy, host tests, board-side Python
@@ -169,7 +169,8 @@ docs/           documentation
 
 ## Documentation
 
-- **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md)
+- **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md) ·
+  [Boot time](docs/boot_time.md)
 - **How it works:** [Split runtime](docs/runtime.md) · [Model pipeline](docs/model-pipeline.md) ·
   [Model package](models/README.md) · [Source layout](docs/source-layout.md)
 - **Operating:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·

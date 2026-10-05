@@ -185,7 +185,7 @@ TEST(Localization, GyroCrossCheckToleratesOneBadCameraFrame)
                 loc.handle_imu(t, accel_chip, gyro_chip);
             }
         };
-        for (; i < 104 * 20;) {
+        while (i < 104 * 20) {  // imu()가 i를 올린다
             const double t = 20.0 + i / 104.0;
             if (i % 5 == 0) loc.handle_camera_odometry(t + 0.1, trans, rot, stds, stds);
             imu(1);

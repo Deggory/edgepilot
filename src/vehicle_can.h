@@ -126,7 +126,6 @@ struct VehicleCanState {
   double elect_gear_time_s = -1.0;
   double cgw1_time_s = -1.0;
   double cgw2_time_s = -1.0;
-  double lca11_time_s = -1.0;
   double tpms11_time_s = -1.0;
   double ahb1_time_s = -1.0;
 
@@ -134,23 +133,18 @@ struct VehicleCanState {
   int clu_main_button = 0;
   float cluster_speed_raw = 0.0f;
   bool speed_unit_mph = false;
-  int clu_alive_count = 0;
 
   float steering_angle_deg = 0.0f;
-  float steering_rate_deg = 0.0f;
   float yaw_rate_rad_s = 0.0f;
   bool yaw_rate_valid = true;
   float lat_accel_mps2 = 0.0f;
   bool lat_accel_valid = false;
   float long_accel_mps2 = 0.0f;
-  bool long_accel_valid = false;
-  float brake_pressure_bar = 0.0f;
   float wheel_speed_fl_kph = 0.0f;
   float wheel_speed_fr_kph = 0.0f;
   float wheel_speed_rl_kph = 0.0f;
   float wheel_speed_rr_kph = 0.0f;
   int driver_torque = 0;
-  bool mdps_toi_unavailable = false;
   bool mdps_hard_fault = false;
   int mdps_error_count = 0;
   bool steering_fault = false;

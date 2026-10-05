@@ -49,14 +49,6 @@ void SystemMonitor::sample(OverlayHudState *hud)
     sample_network(hud);
 }
 
-float SystemMonitor::canaan_temperature_c(float raw_value)
-{
-    const unsigned register_value = static_cast<unsigned>(raw_value);
-    const float data = static_cast<float>(register_value & 0x0fffU);
-    return ((((1.01472e-10f * data - 1.10063e-6f) * data + 4.36150e-3f) * data -
-             7.10128f) * data + 3565.87f);
-}
-
 void SystemMonitor::sample_cpu(float *percent)
 {
     FILE *file = std::fopen("/proc/stat", "r");
@@ -121,21 +113,7 @@ void SystemMonitor::sample_temperature(float *temperature_c)
         const bool read = std::fscanf(file, "%f", &value) == 1;
         std::fclose(file);
         if (!read) continue;
-
-        char type_path[96];
-        std::snprintf(type_path, sizeof(type_path),
-                      "/sys/class/thermal/thermal_zone%d/type", i);
-        FILE *type_file = std::fopen(type_path, "r");
-        char type[64] = {};
-        const bool type_read = type_file && std::fgets(type, sizeof(type), type_file);
-        if (type_file) std::fclose(type_file);
-
-        if (type_read && std::strncmp(type, "canaan_thermal_zone", 19) == 0 &&
-            value >= 4096.0f) {
-            value = canaan_temperature_c(value);
-        } else if (value > 1000.0f) {
-            value /= 1000.0f;
-        }
+        if (value > 1000.0f) value /= 1000.0f;  // 밀리도
         if (value > 0.0f && value < 200.0f) maximum = std::max(maximum, value);
     }
     *temperature_c = maximum;

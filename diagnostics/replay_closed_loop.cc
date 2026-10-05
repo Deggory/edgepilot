@@ -140,8 +140,6 @@ public:
     return a_;
   }
 
-  float value() const { return a_; }
-
   // 자유 주행 구간의 시작을 실측 상태에 맞춘다. 지연선까지 채워야 첫 틱이 안 튄다.
   void resync(float a) {
     a_ = a;

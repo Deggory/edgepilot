@@ -76,9 +76,8 @@ Panda의 `not ready`/`controls off`는 SET edge와 health 응답 사이의 정�
   목표 횡가속이 1 m/s²를 넘으며 실제의 1.2배 이상인데, 최근 2초 안에 핸들을 잡지 않았을
   때다. 2026-09-25~27 실차 3회 주행에서는 한 번도 해당하지 않았다.
 
-K230의 피에조 환경 변수(`K230_PIEZO_BUZZER`, `K230_PIEZO_PIN`)는 없어졌고, 대신
-`EDGEPILOT_ALERT_SOUND=0`(끄기), `EDGEPILOT_ALERT_VOLUME`(0~100, 기본 70), `EDGEPILOT_ALERT_PCM`
-(ALSA 장치, 기본 `plughw:0,1`)를 쓴다. 크기는 웹 `기기 설정`의 알림음 크기
+알림음은 `EDGEPILOT_ALERT_SOUND=0`(끄기), `EDGEPILOT_ALERT_VOLUME`(0~100, 기본 70),
+`EDGEPILOT_ALERT_PCM`(ALSA 장치, 기본 `plughw:0,1`)로 정한다. 크기는 웹 `기기 설정`의 알림음 크기
 (`params/display.json`의 `alert_volume_percent`)로 실행 중에 바꾸며, 이 값이 있으면 환경 변수보다 우선한다.
 
 ## 판단 근거

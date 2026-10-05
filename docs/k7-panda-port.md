@@ -8,8 +8,10 @@
   the ordered `/dev/shm/edgepilot_can` shared-memory ring queue.
 - `controlsd` runs the standalone K7 controller at 100 Hz and publishes
   generated CAN batches to the ordered `/dev/shm/edgepilot_sendcan` ring queue.
-- `pandad` is the final TX gate. `EDGEPILOT_PANDA_TX=0` is the default and
-  prevents every generated frame from reaching USB.
+- `pandad` is the final TX gate. `EDGEPILOT_PANDA_TX=0` prevents every
+  generated frame from reaching USB. `pandad` alone treats an unset value as
+  `0`, but `manager.py` sets `EDGEPILOT_PANDA_TX=1` when it is unset, so under
+  the manager (and the boot service) TX is on unless you set it to `0`.
 - No openpilot checkout or Python DBC extension is required on the board.
 
 The CAN queues have 64 slots, reject new batches instead of overwriting older
@@ -73,11 +75,12 @@ Runtime parameters live in `params/`; see [params/README.md](../params/README.md
 ## MaixCAM2 connection
 
 The MaixCAM2 has a single USB-C port, which carries the Panda in host mode, so
-the board needs power from another source; this wiring is not finished yet.
-Until it is, the manager starts `pandad` only with `EDGEPILOT_ENABLE_PANDA=1`.
+the board needs power from another source. The manager starts `pandad` only
+with `EDGEPILOT_ENABLE_PANDA=1`, which `scripts/edgepilot.service` sets.
 With it set, the manager switches the port to host
 (`/sys/class/usb_role/8000000.dwc3-role-switch/role`) before starting the
-processes and restores the previous role on exit.
+processes and restores the previous role on exit. `EDGEPILOT_USB_ROLE` fixes
+the role instead and leaves it on exit; the service sets `host`.
 
 ## Build
 
@@ -87,8 +90,8 @@ library for `pandad`.
 
 ## Offline Validation
 
-Export one 60 s chunk of a continuous drive (a K230 recording, until the recorder
-is ported) to a `K230CAN1` fixture and replay it through the controller (see
+Export one 60 s chunk of a continuous drive (a `recordd` route from the
+MaixCAM2 or the K230) to a `K230CAN1` fixture and replay it through the controller (see
 [gtest/README.md](../gtest/README.md) for why a parked chunk fails):
 
 ```sh
@@ -118,7 +121,9 @@ vehicle report `mdpsBus=1`, `sasBus=1`, and `hyundaiCommunity:0`.
 
 ## TX Gates
 
-Vehicle transmission requires every explicit setting below:
+Vehicle transmission requires the settings below. `manager.py` defaults all of
+them except `EDGEPILOT_ENABLE_PANDA=1`, and `scripts/edgepilot.service` sets
+that one, so the boot service has TX enabled with no extra setting:
 
 ```sh
 EDGEPILOT_ENABLE_PANDA=1

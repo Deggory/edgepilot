@@ -116,25 +116,27 @@ into `src/app_config.h` `kCamera*`. They can also be set per run with
 
 ## 2026-09-26 measurement
 
-The TV showed a 12 x 7 checkerboard (11 x 6 inner corners, `--corners 11x6`)
-instead of the 18 x 9 target. The intrinsics do not depend on the pattern size.
+The TV showed a 12 x 7 checkerboard (11 x 6 inner corners, `--corners 11x6`,
+`tools/calib/chessboard_3840x2160_12x7_280px.png`) instead of the 18 x 9 target.
+The intrinsics do not depend on the pattern size. These values are now the
+runtime `kCamera*`.
 
 - 58 shots taken, 54 detected.
 - Views over 0.8 px reprojection error were dropped, leaving 42 views at
   0.52 px RMS.
 - The full result is in `tools/camcal/intrinsics_20260926.json`.
 
-| | Measured (1920x1080) | Bootstrap 1σ | Runtime `kCamera*` | Difference |
+| | Measured (1920x1080) | Bootstrap 1σ | Earlier value (stock camera app) | Difference |
 | --- | --- | --- | --- | --- |
 | `fx` | 1131.24 | ±2.1 | 1132.3 | -1.06 (-0.09%) |
 | `fy` | 1130.85 | ±2.0 | 1131.5 | -0.65 (-0.06%) |
 | `cx` | 940.13 | ±2.6 | 932.8 | **+7.33 (+0.79%)** |
 | `cy` | 552.60 | ±1.7 | 556.1 | -3.50 (-0.63%) |
 
-- **Focal length:** it matches the runtime constants within the measurement
+- **Focal length:** it matches the earlier values within the measurement
   error. `fx` and `fy` agree to 0.03%, as square pixels should.
-- **Principal point:** `cx` differs by about 2.8σ, which is 0.37° of yaw. The
-  online calibration absorbs most of that as a yaw offset.
+- **Principal point:** `cx` differed by about 2.8σ, which is 0.37° of yaw. The
+  online calibration had absorbed most of that as a yaw offset.
 - **Stability:** dropping views barely moves the result. Keeping all 54 gives
   fx 1131.8 and cx 942.3; a 0.6 px cut (31 views) gives fx 1129.8 and cx 939.4.
 - **Field of view:** 80.6 x 51.0°.

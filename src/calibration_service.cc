@@ -1,5 +1,6 @@
 #include "calibration_service.h"
 
+#include "utils_file.h"
 #include "utils_json.h"
 #include "utils_process.h"
 #include "utils_math.h"
@@ -10,9 +11,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
-#include <iterator>
+#include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -34,10 +34,8 @@ bool load_stored_calibration(const std::string &path, StoredCalibration *stored,
                              std::string *error)
 {
     if (!stored) return false;
-    std::ifstream file(path);
-    if (!file.is_open()) return false;
-    const std::string text((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
+    const std::string text = read_text_file(path);
+    if (text.empty()) return false;
     try {
         float version = 0.0f;
         float valid_blocks = 0.0f;
@@ -78,13 +76,8 @@ bool save_stored_calibration(const std::string &params_dir, const std::string &p
                              const float rpy[3], const OnlineCalibrator::Snapshot &snapshot)
 {
     if (!ensure_params_dir(params_dir)) return false;
-    const std::string temp_path = path + ".tmp";
-    std::ofstream file(temp_path, std::ios::trunc);
-    if (!file.is_open()) {
-        std::fprintf(stderr, "calibration: open %s failed\n", temp_path.c_str());
-        return false;
-    }
-    file << std::setprecision(9)
+    std::ostringstream json;
+    json << std::setprecision(9)
          << "{\n"
          << "  \"version\": " << kPersistVersion << ",\n"
          << "  \"rpy_rad\": [" << rpy[0] << ", " << rpy[1] << ", " << rpy[2] << "],\n"
@@ -93,17 +86,9 @@ bool save_stored_calibration(const std::string &params_dir, const std::string &p
          << "  \"valid_blocks\": " << snapshot.valid_blocks << ",\n"
          << "  \"height_m\": " << snapshot.height_m << "\n"
          << "}\n";
-    file.flush();
-    if (!file.good()) {
-        file.close();
-        std::remove(temp_path.c_str());
-        return false;
-    }
-    file.close();
-    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
-        std::fprintf(stderr, "calibration: rename %s failed: %s\n",
+    if (!write_file_atomic(path, json.str())) {
+        std::fprintf(stderr, "calibration: write %s failed: %s\n",
                      path.c_str(), std::strerror(errno));
-        std::remove(temp_path.c_str());
         return false;
     }
     return true;

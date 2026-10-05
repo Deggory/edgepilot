@@ -381,7 +381,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
         model.set_desire(ego.desire(), ego.left_blinker(), ego.right_blinker());
         mount.apply(model);
 
-        // 녹화기(아직 포팅 전)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
+        // 녹화기(recordd)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
         if (!record_frame_pub.publish(&meta, sizeof(meta))) {
             std::fprintf(stderr, "\nmodeld: publish recordFrame failed\n");
         }

@@ -142,12 +142,12 @@ def process_specs(model: str) -> List[ProcSpec]:
         ProcSpec("recordd", ["./recordd"], 15),
         ProcSpec("modeld", ["./modeld", model], -15),
     ]
-    # 보드 IMU 기록(검증용). 없거나 죽어도 주행과 무관하고, 리허설에서는 책상 위라 뺀다.
+    # 보드 IMU와 locationd. 없거나 죽으면 학습기가 ESP12 값으로 돌아가고, 리허설에서는 책상 위라 뺀다.
     if not replay:
         specs.append(ProcSpec("imud", ["./imud"], 10))
-        # 자세 추정·조향 지연 학습(관찰 전용). IMU가 없으면 발행 없이 기다린다.
+        # 자세 추정(paramsd·torqued 입력)과 조향 지연 학습. IMU가 없으면 발행 없이 기다린다.
         specs.append(ProcSpec("locationd", ["./locationd"], 5))
-    # MaixCAM2에서는 Panda USB(Y 케이블) 배선 전이라 명시적으로 켤 때만 띄운다.
+    # Panda는 USB-C를 호스트로 바꿔 쓰므로 명시적으로 켤 때만 띄운다(edgepilot.service가 켠다).
     if env_enabled("EDGEPILOT_ENABLE_PANDA") and not replay:
         specs.append(ProcSpec("pandad", ["./pandad"], -10))
     if enable_control:

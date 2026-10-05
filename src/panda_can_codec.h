@@ -3,8 +3,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
-
 
 constexpr uint32_t kPandaCanMaxAddress = 0x1fffffffU;
 constexpr uint8_t kPandaCanMaxTxBus = 3U;
@@ -18,11 +18,6 @@ struct PandaCanFrame {
     bool returned = false;
     bool rejected = false;
 };
-
-
-#include <cstdint>
-#include <string>
-#include <vector>
 
 bool panda_can_is_valid_data_len(uint8_t len);
 bool panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames,

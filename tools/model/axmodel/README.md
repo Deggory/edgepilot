@@ -23,7 +23,7 @@ MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmod
    진짜 특징 이력. `make_core_data.py`는 K230 카메라 표본에 t−1을 t−4 대신 쓰고 특징을 아무
    프레임에서 가져와, 그 U16 모델이 2026-10-04 녹화의 일부 녹색 신호에서 코어의 반응(경로 열림,
    가속 확률)을 잃었다. 같은 도구의 `eval`은 보드 비교용 입력과 fp32 출력을 만든다
-   (`eval/run_axmodel_assembled.py`). 영상 세그먼트는 `video_dir`(보드 녹화에서 받은 사본),
+   (보드에서 `run_axmodel_assembled.py`). 영상 세그먼트는 `video_dir`(보드 녹화에서 받은 사본),
    이벤트는 `routes_dir`에서 읽는다.
 3. 변환(Pulsar2 6.0-lite, docker amd64):
    작업 디렉터리를 `/data`로 마운트하고 `pulsar2 build --config /data/pulsar2_u16_u8in.json`.

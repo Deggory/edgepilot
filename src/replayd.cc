@@ -9,7 +9,6 @@
  *    않고 송신 로그로만 넘긴다(recordd가 기록한다).
  * 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
  * 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지) */
-#include "app_config.h"
 #include "event_log_reader.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
@@ -28,7 +27,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <stdexcept>
 #include <string>
 #include <vector>

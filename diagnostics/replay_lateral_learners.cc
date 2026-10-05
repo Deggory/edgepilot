@@ -22,6 +22,7 @@
 #include "localizer_inputs.h"
 #include "lateral_torque.h"
 #include "recording_format.h"
+#include "utils_file.h"
 #include "vehicle_can.h"
 
 #include <algorithm>
@@ -30,7 +31,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
 
@@ -99,16 +99,8 @@ int main(int argc, char **argv) {
   }
   const DrivingParams dp;
   const double timeout_s = dp.vehicle_state_timeout_ms / 1000.0;
-  std::string cache;
-  if (!torque_cache_path.empty()) {
-    std::ifstream f(torque_cache_path, std::ios::binary);
-    cache.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-  }
-  std::string vehicle_json;
-  if (!vehicle_json_path.empty()) {
-    std::ifstream f(vehicle_json_path, std::ios::binary);
-    vehicle_json.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-  }
+  const std::string cache = torque_cache_path.empty() ? std::string() : read_text_file(torque_cache_path);
+  const std::string vehicle_json = vehicle_json_path.empty() ? std::string() : read_text_file(vehicle_json_path);
   const bool use_locationd = source == "steering" ? sp.use_locationd_learner_inputs : source == "locationd";
   std::printf("요레이트·롤 출처: %s\n", use_locationd ? "locationd(무효·낡으면 ESP12)" : "ESP12");
   LateralLearners learners(sp, vehicle_json, cache, 1, options);
