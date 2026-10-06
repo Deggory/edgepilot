@@ -155,7 +155,7 @@ source.
 ## Repository layout
 
 ```text
-src/            runtime processes and their libraries
+src/            runtime code, one folder per subsystem (docs/source-layout.md)
 platform/       MaixCAM2 camera (VI), display (VO), CMM, and GDC wrappers
 params/         runtime parameters, hot-reloaded by the processes
 models/         the axmodel, its manifest, PTQ calibration samples
