@@ -40,7 +40,7 @@ float interp_lateral(float x, const float *values) {
 }  // namespace
 
 LateralController::LateralController(LateralControllerConfig config)
-    : config_(config) {
+    : config_(config), clock_(monotonic_now_ns) {
   config_.can_config.main_bus = kPowertrainBus;
   config_.can_config.mdps_bus = kMdpsBus;
   config_.can_config.scc_bus = kPowertrainBus;
@@ -135,7 +135,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
    * gate가 함께 쓴다. 타임스탬프가 없으면(테스트, 초기값) 0으로 둔다. */
   float plan_age_s = 0.0f;
   if (target.valid && target.capture_timestamp_ns != 0) {
-    const uint64_t control_now_ns = monotonic_now_ns();
+    const uint64_t control_now_ns = clock_();
     if (control_now_ns > target.capture_timestamp_ns) {
       plan_age_s = static_cast<float>(
           static_cast<double>(control_now_ns - target.capture_timestamp_ns) * 1e-9);

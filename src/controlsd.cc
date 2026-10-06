@@ -1,79 +1,32 @@
+/* controlsd: K7 횡제어 프로세스(100 Hz). 로직은 ControlsTick(controls_tick.h)에 있고, 이 파일은
+ * 공유 메모리 입출력, 파라미터 파일 감시, 학습 상태 파일 쓰기, 1초 통계만 맡는다. */
+#include "controls_tick.h"
 #include "ipc_channels.h"
-#include "departure_alert.h"
-#include "adaptive_cruise.h"
-#include "control_holds.h"
-#include "lateral_controller.h"
-#include "lateral_lag.h"
-#include "lateral_learners.h"
-#include "localizer_inputs.h"
-#include "lateral_path.h"
-#include "lateral_planner.h"
 #include "utils_file.h"
 #include "utils_process.h"
 #include "utils_time.h"
-#include "control_params.h"
-#include "vehicle_can.h"
 
 #include <signal.h>
 
 #include <algorithm>
-#include <array>
 #include <cerrno>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <mutex>
 
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
 volatile sig_atomic_t g_reload_params = 0;
-constexpr uint64_t kAlertModelTimeoutNs = 500000000ULL;
-constexpr float kLeadProbabilityThreshold = 0.5f;
-constexpr float kRadarToCameraDistanceM = 1.52f;
-constexpr uint64_t kMaxCanRxAgeNs = 100000000ULL;
-constexpr int kParamPollIntervalMs = 100;
 
 void reload_signal_handler(int) {
   g_reload_params = 1;
-}
-
-bool load_runtime_params(const std::string &steering_path,
-                         const std::string &driving_path,
-                         const std::string &adaptive_cruise_path,
-                         LateralControllerConfig *config,
-                         AdaptiveCruiseConfig *adaptive_cruise_config,
-                         std::string *error) {
-  SteeringParams steering = config->steering_params;
-  DrivingParams driving = config->driving_params;
-  AdaptiveCruiseConfig adaptive_cruise = *adaptive_cruise_config;
-  std::string load_error;
-  if (!load_steering_params_json(steering_path, &steering, &load_error)) {
-    if (error) *error = "steering " + steering_path + ": " + load_error;
-    return false;
-  }
-  if (!load_driving_params_json(driving_path, &driving, &load_error)) {
-    if (error) *error = "driving " + driving_path + ": " + load_error;
-    return false;
-  }
-  if (!load_adaptive_cruise_params_json(
-          adaptive_cruise_path, &adaptive_cruise, &load_error)) {
-    if (error) {
-      *error = "adaptive cruise " + adaptive_cruise_path + ": " + load_error;
-    }
-    return false;
-  }
-  config->steering_params = steering;
-  config->driving_params = driving;
-  *adaptive_cruise_config = adaptive_cruise;
-  return true;
 }
 
 bool open_when_ready(LatestChannel *channel, const char *topic,
@@ -95,21 +48,6 @@ bool open_when_ready(CanQueue *queue, const char *topic, bool create) {
   return false;
 }
 
-void apply_can_batch(const CanBatch &batch, double now_s,
-                     VehicleCanState *vehicle) {
-  if (!batch.valid) return;
-  const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
-  for (uint32_t i = 0; i < count; ++i) {
-    const IpcCanFrame &frame = batch.frames[i];
-    if (frame.flags != 0 || frame.data_len > 8 || frame.src > 7) continue;
-    std::array<uint8_t, 8> data = {};
-    std::copy_n(frame.data, frame.data_len, data.begin());
-    update_vehicle_can_state(vehicle, frame.address, data,
-                             static_cast<uint8_t>(frame.data_len),
-                             static_cast<uint8_t>(frame.src), now_s);
-  }
-}
-
 CanBatch make_send_batch(const std::vector<CanFrame> &frames) {
   return make_can_batch(frames, [](IpcCanFrame *dst, const CanFrame &src) {
     dst->address = src.address;
@@ -117,228 +55,6 @@ CanBatch make_send_batch(const std::vector<CanFrame> &frames) {
     dst->data_len = src.length;
     std::copy_n(src.data.begin(), src.length, dst->data);
   });
-}
-
-float vehicle_speed_mps(const VehicleCanState &vehicle, double now_s,
-                        double timeout_s) {
-  return std::max(0.0f, vehicle_speed_kph(vehicle, now_s, timeout_s) / 3.6f);
-}
-
-/* steering/driving/adaptive_cruise JSON을 stat으로 감시하고, 바뀌었거나 SIGHUP이
- * 오면 셋을 다시 읽는다. 하나라도 거부되면 셋 다 이전 값을 유지한다. */
-class RuntimeParams {
-public:
-  RuntimeParams(std::string steering_path, std::string driving_path,
-                std::string adaptive_cruise_path,
-                std::chrono::steady_clock::time_point now)
-      : steering_path_(std::move(steering_path)),
-        driving_path_(std::move(driving_path)),
-        adaptive_cruise_path_(std::move(adaptive_cruise_path)),
-        next_check_(now + std::chrono::milliseconds(kParamPollIntervalMs)) {
-    stamp();
-  }
-
-  // 적용됐으면 true. 호출자가 컨트롤러/플래너에 새 값을 넘긴다.
-  bool poll(std::chrono::steady_clock::time_point now, bool reload_requested,
-            LateralControllerConfig *config,
-            AdaptiveCruiseConfig *adaptive_cruise_config) {
-    if (!reload_requested && now < next_check_) return false;
-    next_check_ = now + std::chrono::milliseconds(kParamPollIntervalMs);
-    const FileStamp steering = file_stamp(steering_path_);
-    const FileStamp driving = file_stamp(driving_path_);
-    const FileStamp adaptive = file_stamp(adaptive_cruise_path_);
-    const bool changed = steering != steering_stamp_ || driving != driving_stamp_ ||
-                         adaptive != adaptive_cruise_stamp_;
-    if (!reload_requested && !changed) return false;
-    steering_stamp_ = steering;
-    driving_stamp_ = driving;
-    adaptive_cruise_stamp_ = adaptive;
-    LateralControllerConfig candidate = *config;
-    AdaptiveCruiseConfig adaptive_candidate = *adaptive_cruise_config;
-    std::string error;
-    if (!load_runtime_params(steering_path_, driving_path_, adaptive_cruise_path_,
-                             &candidate, &adaptive_candidate, &error)) {
-      std::fprintf(stderr, "controlsd: params reload rejected: %s\n",
-                   error.c_str());
-      return false;
-    }
-    config->steering_params = candidate.steering_params;
-    config->driving_params = candidate.driving_params;
-    *adaptive_cruise_config = adaptive_candidate;
-    ++generation_;
-    std::fprintf(stderr,
-                 "controlsd: params reloaded generation=%u "
-                 "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs "
-                 "decel=%.1fkph/s\n",
-                 generation_, config->driving_params.mdps_speed_spoof_kph,
-                 adaptive_cruise_config->enabled ? 1U : 0U,
-                 adaptive_cruise_config->standstill_gap_m,
-                 adaptive_cruise_config->following_time_s,
-                 adaptive_cruise_config->deceleration_rate_kph_per_s);
-    return true;
-  }
-
-  unsigned generation() const { return generation_; }
-
-private:
-  void stamp() {
-    steering_stamp_ = file_stamp(steering_path_);
-    driving_stamp_ = file_stamp(driving_path_);
-    adaptive_cruise_stamp_ = file_stamp(adaptive_cruise_path_);
-  }
-
-  std::string steering_path_;
-  std::string driving_path_;
-  std::string adaptive_cruise_path_;
-  FileStamp steering_stamp_;
-  FileStamp driving_stamp_;
-  FileStamp adaptive_cruise_stamp_;
-  std::chrono::steady_clock::time_point next_check_;
-  unsigned generation_ = 1;
-};
-
-/* engage/disengage/거부 이벤트 id와 전이 로그. id는 0을 건너뛰어 HUD가 새
- * 이벤트를 구분한다. */
-struct EngageEvents {
-  uint32_t engage_id = 0;
-  uint32_t disengage_id = 0;
-  uint32_t reject_id = 0;
-  char reject_block[32] = {};
-  bool have_previous = false;
-  bool previous_engaged = false;
-  bool previous_active = false;
-
-  void update(const LateralControlResult &result, const VehicleCanState &vehicle,
-              const PandaGateOutput &panda, const PandaState &panda_state,
-              const PathHoldOutput &held, const ModelState &model,
-              uint64_t now_ns) {
-    if (result.engage_rejected) {
-      if (++reject_id == 0) reject_id = 1;
-      std::snprintf(reject_block, sizeof(reject_block), "%s",
-                    block_reason_name(result.active_block));
-      std::fprintf(stderr,
-                   "controlsd: engage rejected block=%s event=%u\n",
-                   reject_block, reject_id);
-    } else if (have_previous && result.engaged != previous_engaged) {
-      if (result.engaged) {
-        if (++engage_id == 0) engage_id = 1;
-      } else {
-        if (++disengage_id == 0) disengage_id = 1;
-      }
-      std::fprintf(stderr,
-                   "controlsd: engaged transition %u->%u "
-                   "active=%u block=%s button=%d gear=%d "
-                   "panda=%u/%u\n",
-                   previous_engaged ? 1U : 0U, result.engaged ? 1U : 0U,
-                   result.active ? 1U : 0U,
-                   block_reason_name(result.active_block), vehicle.clu_button,
-                   vehicle.gear, panda.ready ? 1U : 0U,
-                   panda.controls_allowed ? 1U : 0U);
-    }
-    if (have_previous && result.active != previous_active) {
-      std::fprintf(stderr,
-                   "controlsd: active transition %u->%u "
-                   "engaged=%u block=%s raw=%s rawPoints=%d rawReachM=%.1f "
-                   "pathPoints=%d hold=%u modelAgeMs=%llu panda=%u/%u "
-                   "state=%u/%u/%u/%u safety=%u:%u hb=%u fresh=%u\n",
-                   previous_active ? 1U : 0U, result.active ? 1U : 0U,
-                   result.engaged ? 1U : 0U,
-                   block_reason_name(result.active_block),
-                   held.raw.invalid_reason.empty() ? "none" :
-                       held.raw.invalid_reason.c_str(),
-                   held.raw.point_count, static_cast<double>(held.raw.reach_m),
-                   held.path.point_count,
-                   held.hold_applied ? 1U : 0U,
-                   model.model_timestamp_ns != 0 && now_ns >= model.model_timestamp_ns
-                       ? static_cast<unsigned long long>(
-                             (now_ns - model.model_timestamp_ns) / 1000000ULL)
-                       : 0ULL,
-                   panda.ready ? 1U : 0U,
-                   panda.controls_allowed ? 1U : 0U,
-                   panda_state.connected, panda_state.comms_healthy,
-                   panda_state.tx_enabled, panda_state.controls_allowed,
-                   panda_state.safety_mode, panda_state.safety_param,
-                   panda_state.heartbeat_lost, panda.state_fresh ? 1U : 0U);
-    }
-    previous_engaged = result.engaged;
-    previous_active = result.active;
-    have_previous = true;
-  }
-};
-
-/* 모델 lead 출력을 알림/크루즈 입력으로 환산한다. signal_valid는 값이 유효한지,
- * valid는 확률 문턱까지 넘었는지. 거리는 레이더 기준점으로 옮긴다. */
-struct VisionLead {
-  bool model_fresh = false;
-  bool signal_valid = false;
-  bool valid = false;
-  float distance_m = 0.0f;
-  float relative_speed_mps = 0.0f;
-};
-
-VisionLead observe_vision_lead(const ModelState &model, uint64_t now_ns,
-                               float ego_speed_mps) {
-  VisionLead lead;
-  lead.model_fresh = model.valid != 0 &&
-                     timestamp_fresh_ns(model.model_timestamp_ns, now_ns, kAlertModelTimeoutNs);
-  lead.signal_valid =
-      lead.model_fresh && model.lead.valid != 0 &&
-      std::isfinite(model.lead.x) && std::isfinite(model.lead.velocity);
-  lead.valid = lead.signal_valid && model.lead.probability >= kLeadProbabilityThreshold;
-  lead.distance_m = lead.signal_valid ? model.lead.x - kRadarToCameraDistanceM : 0.0f;
-  lead.relative_speed_mps = lead.signal_valid ? model.lead.velocity - ego_speed_mps : 0.0f;
-  return lead;
-}
-
-DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicle,
-                                     const LateralControlResult &result,
-                                     const ModelState &model, bool model_updated,
-                                     const VisionLead &lead, float ego_speed_mps) {
-  DepartureAlertInput input;
-  input.now_s = now_s;
-  input.vehicle_valid = result.vehicle_fresh;
-  input.gear = vehicle.gear;
-  input.speed_mps = ego_speed_mps;
-  input.gas_pressed = vehicle.gas_pressed;
-  input.lead_updated = model_updated;
-  input.lead_valid = lead.valid;
-  input.lead_distance_m = lead.valid ? lead.distance_m : 0.0f;
-  input.lead_relative_speed_mps = lead.valid ? lead.relative_speed_mps : 0.0f;
-  input.model_updated = model_updated;
-  input.model_valid = lead.model_fresh;
-  input.plan_distance_m = lead.model_fresh ? model.plan[kTrajectorySize - 1].x : 0.0f;
-  input.gas_press_prob = lead.model_fresh ? model.gas_press_probs[1] : 0.0f;  // 2초 뒤
-  input.turn_signal_on = vehicle.left_blinker || vehicle.right_blinker;
-  return input;
-}
-
-AdaptiveCruiseInput make_adaptive_input(double now_s, bool enabled,
-                                        const VehicleCanState &vehicle,
-                                        const LateralControlResult &result,
-                                        const PandaGateOutput &panda,
-                                        const ModelState &model, bool model_updated,
-                                        const VisionLead &lead, float ego_speed_kph) {
-  AdaptiveCruiseInput input;
-  input.now_s = now_s;
-  input.enabled = enabled;
-  input.controls_ready = result.active && panda.ready && panda.controls_allowed &&
-                         vehicle.has_clu11_seed;
-  input.cruise_active = vehicle.cruise_active;
-  input.brake_pressed = vehicle.brake_pressed;
-  input.gas_pressed = vehicle.gas_pressed;
-  input.driver_accelerator_override = vehicle.driver_override != 0;
-  input.speed_unit_mph = vehicle.speed_unit_mph;
-  input.driver_button = vehicle.clu_button;
-  input.driver_main_button = vehicle.clu_main_button;
-  input.ego_speed_kph = ego_speed_kph;
-  input.cluster_speed_kph = result.cluster_speed_kph;
-  input.driver_set_speed_kph = cruise_set_speed_kph(vehicle);
-  input.vision_lead_updated = model_updated;
-  input.vision_lead_valid = lead.signal_valid;
-  input.vision_lead_probability = model.lead.probability;
-  input.vision_lead_distance_m = lead.distance_m;
-  input.vision_lead_relative_speed_mps = lead.relative_speed_mps;
-  return input;
 }
 
 /* 학습 상태 파일 쓰기. 제어 루프는 내용만 넘기고, 이 스레드가 임시 파일에 쓴 뒤 rename한다.
@@ -400,134 +116,6 @@ private:
   std::thread thread_;
 };
 
-LearnerState make_learner_state(const LateralLearners &learners,
-                                    const SteeringParams &params, float road_bank_lat_accel,
-                                    bool live_delay_in_use, float plan_delay_s) {
-  const VehicleParams &v = learners.vehicle_params();
-  const TorqueParams &t = learners.torque_params();
-  const LiveLateralParams live = learners.live();
-  LearnerState state;
-  state.timestamp_ns = monotonic_now_ns();
-  state.flags = (v.inputs_ok ? kLearnerVehicleInputsOk : 0U) |
-                (v.valid ? kLearnerVehicleValid : 0U) |
-                (v.sensor_valid ? kLearnerSensorValid : 0U) |
-                (v.steer_ratio_valid ? kLearnerSteerRatioValid : 0U) |
-                (v.stiffness_factor_valid ? kLearnerStiffnessValid : 0U) |
-                (v.angle_offset_average_valid ? kLearnerOffsetAverageValid : 0U) |
-                (v.angle_offset_valid ? kLearnerOffsetValid : 0U) |
-                (t.inputs_ok ? kLearnerTorqueInputsOk : 0U) |
-                (t.valid ? kLearnerTorqueValid : 0U) |
-                (live.use_vehicle && params.use_live_vehicle_params ? kLearnerUseVehicle : 0U) |
-                (live.use_torque && params.use_live_torque_params ? kLearnerUseTorque : 0U) |
-                (learners.vehicle_restored() ? kLearnerVehicleRestored : 0U) |
-                (learners.torque_restore_status() == TorqueRestore::Restored
-                     ? kLearnerTorqueRestored : 0U) |
-                (live_delay_in_use ? kLearnerUseDelay : 0U) |
-                (learners.localizer_inputs() ? kLearnerLocalizerInputs : 0U);
-  state.steer_ratio = static_cast<float>(v.steer_ratio);
-  state.stiffness_factor = static_cast<float>(v.stiffness_factor);
-  state.roll_rad = static_cast<float>(v.roll_rad);
-  state.angle_offset_average_deg = static_cast<float>(v.angle_offset_average_deg);
-  state.angle_offset_deg = static_cast<float>(v.angle_offset_deg);
-  state.steer_ratio_std = static_cast<float>(v.steer_ratio_std);
-  state.stiffness_factor_std = static_cast<float>(v.stiffness_factor_std);
-  state.angle_offset_average_std = static_cast<float>(v.angle_offset_average_std);
-  state.angle_offset_fast_std = static_cast<float>(v.angle_offset_fast_std);
-  state.yaw_bias_rad_s = static_cast<float>(learners.yaw_bias_rad_s());
-  state.lat_accel_factor_raw = static_cast<float>(t.lat_accel_factor_raw);
-  state.lat_accel_offset_raw = static_cast<float>(t.lat_accel_offset_raw);
-  state.friction_raw = static_cast<float>(t.friction_raw);
-  state.lat_accel_factor = static_cast<float>(t.lat_accel_factor);
-  state.lat_accel_offset = static_cast<float>(t.lat_accel_offset);
-  state.friction = static_cast<float>(t.friction);
-  state.decay = static_cast<float>(t.decay);
-  state.max_resets = static_cast<float>(t.max_resets);
-  state.total_bucket_points = t.total_bucket_points;
-  state.cal_perc = t.cal_perc;
-  state.road_bank_lat_accel = road_bank_lat_accel;
-  state.prior_steer_ratio = static_cast<float>(learners.prior_steer_ratio());
-  state.prior_lat_accel_factor = static_cast<float>(learners.torque_estimator().tuning().lat_accel_factor);
-  state.prior_friction = static_cast<float>(learners.torque_estimator().tuning().friction);
-  for (int i = 0; i < TorqueEstimator::kBuckets; ++i)
-    state.bucket_points[i] = static_cast<int16_t>(learners.torque_estimator().bucket_size(i));
-  state.plan_delay_s = plan_delay_s;
-  return state;
-}
-
-// overlayd/recordd가 읽는 100 Hz 스냅샷. 필드 순서는 ipc_messages.h가 고정한다.
-ControlState make_control_state(const LateralControllerConfig &config,
-                                    const LateralControlResult &result,
-                                    const LateralTarget &target,
-                                    const VehicleCanState &vehicle,
-                                    const AdaptiveCruiseOutput &adaptive_cruise,
-                                    const DepartureAlertOutput &departure_alert,
-                                    const EngageEvents &events, bool radar_lead_fresh,
-                                    float ego_speed_kph, double now_s) {
-  ControlState state;
-  state.timestamp_ns = monotonic_now_ns();
-  state.enabled = config.steering_params.enabled ? 1U : 0U;
-  state.engaged = result.engaged ? 1U : 0U;
-  state.active = result.active ? 1U : 0U;
-  state.should_send = result.should_send ? 1U : 0U;
-  state.path_usable = result.path_usable ? 1U : 0U;
-  state.hud_flags =
-      (target.laneless_mode ? kHudFlagLaneless : 0U) |
-      (result.vehicle_fresh && vehicle.brake_hold ? kHudFlagBrakeHold : 0U) |
-      (result.soft_disabling ? kHudFlagSoftDisabling : 0U) |
-      (result.steer_saturated ? kHudFlagSteerSaturated : 0U) |
-      (target.lane_change_state == 1 ? kHudFlagLaneChangePending : 0U) |
-      (target.lane_change_state >= 2 ? kHudFlagLaneChanging : 0U) |
-      (target.lane_change_direction > 0 ? kHudFlagLaneChangeRight : 0U) |
-      (result.large_angle_hold ? kHudFlagSteerPaused : 0U) |
-      (result.large_angle_hold_by_driver ? kHudFlagSteerPausedByDriver : 0U) |
-      (target.turn_desire == 1 ? kHudFlagTurnLeft : 0U) |
-      (target.turn_desire == 2 ? kHudFlagTurnRight : 0U) |
-      (result.vehicle_fresh && brake_lights_on(vehicle, now_s) ? kHudFlagBrakeLights : 0U);
-  state.seeds_ready = result.seeds_ready ? 1U : 0U;
-  state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
-  state.steering_fault = vehicle.steering_fault ? 1U : 0U;
-  state.left_blinker = vehicle.left_blinker ? 1U : 0U;
-  state.right_blinker = vehicle.right_blinker ? 1U : 0U;
-  state.cruise_active = vehicle.cruise_active ? 1U : 0U;
-  state.gear = vehicle.gear;
-  state.cluster_speed_kph = result.cluster_speed_kph;
-  const float driver_set_speed_kph = cruise_set_speed_kph(vehicle);
-  state.cruise_max_speed_kph = adaptive_cruise.session_valid
-      ? adaptive_cruise.maximum_speed_kph : driver_set_speed_kph;
-  state.cruise_command_speed_kph = adaptive_cruise.session_valid
-      ? adaptive_cruise.commanded_speed_kph : driver_set_speed_kph;
-  state.steering_angle_deg = vehicle.steering_angle_deg;
-  state.desired_curvature = result.desired_curvature;
-  state.actual_curvature = result.actual_curvature;
-  state.normalized_output = result.normalized_output;
-  state.desired_torque = result.desired_torque;
-  state.apply_torque = result.apply_torque;
-  state.driver_torque = vehicle.driver_torque;
-  state.desire = static_cast<uint32_t>(target.desire);
-  std::snprintf(state.active_block, sizeof(state.active_block), "%s",
-                block_reason_name(result.active_block));
-  state.radar_lead_valid = radar_lead_fresh && vehicle.radar_lead_valid ? 1U : 0U;
-  state.radar_lead_distance_m = vehicle.radar_lead_distance_m;
-  state.radar_lead_relative_speed_mps = vehicle.radar_lead_relative_speed_mps;
-  state.departure_alert_type = static_cast<uint32_t>(departure_alert.type);
-  state.departure_alert_event_id = departure_alert.event_id;
-  state.green_light_alert_armed = departure_alert.green_light_armed ? 1U : 0U;
-  state.tpms_valid = tpms_state_fresh(vehicle, now_s) ? 1U : 0U;
-  state.tpms_unit = static_cast<uint32_t>(vehicle.tpms_unit);
-  state.tpms_pressure_fl = vehicle.tpms_pressure_fl;
-  state.tpms_pressure_fr = vehicle.tpms_pressure_fr;
-  state.tpms_pressure_rl = vehicle.tpms_pressure_rl;
-  state.tpms_pressure_rr = vehicle.tpms_pressure_rr;
-  state.tpms_warning = vehicle.tpms_warning ? 1U : 0U;
-  state.engage_event_id = events.engage_id;
-  state.disengage_event_id = events.disengage_id;
-  state.engage_reject_event_id = events.reject_id;
-  std::memcpy(state.engage_reject_block, events.reject_block,
-              sizeof(state.engage_reject_block));
-  state.ego_speed_kph = ego_speed_kph;
-  return state;
-}
-
 /* 1초 창의 루프 통계. 창이 끝나면 한 줄로 찍고 비운다. */
 struct TickStats {
   unsigned can_frames = 0;
@@ -548,11 +136,14 @@ struct TickStats {
   }
 
   void log(double window_s, unsigned long long tx_depth, unsigned long long rx_depth,
-           unsigned param_generation, const LateralControlResult &result,
-           const PandaGateOutput &panda, const LateralTarget &target,
-           const VehicleCanState &vehicle, float road_bank_lat_accel,
-           const AdaptiveCruiseOutput &adaptive_cruise,
-           const DepartureAlertInput &alert_input) {
+           unsigned param_generation, const ControlsTick &tick) {
+    const LateralControlResult &result = tick.result();
+    const PandaGateOutput &panda = tick.panda();
+    const LateralTarget &target = tick.target();
+    const VehicleCanState &vehicle = tick.vehicle();
+    const float road_bank_lat_accel = tick.controller().road_bank_lat_accel();
+    const AdaptiveCruiseOutput &adaptive_cruise = tick.adaptive_cruise();
+    const DepartureAlertInput &alert_input = tick.alert_input();
     std::fprintf(stderr,
                  "controlsd: hz=%.3f work_avg_us=%.1f work_max_us=%.1f "
                  "misses=%u can=%u generated=%u errors=%u txFull=%u rxStale=%u "
@@ -594,112 +185,6 @@ struct TickStats {
                  block_reason_name(result.active_block));
     *this = TickStats{};
   }
-};
-
-class LateralPlannerWorker {
-public:
-  LateralPlannerWorker(const SteeringParams &params,
-                       const DrivingParams &driving)
-      : planner_(params, driving), pending_steering_(params),
-        pending_driving_(driving),
-        thread_(&LateralPlannerWorker::run, this) {}
-
-  ~LateralPlannerWorker() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      stop_ = true;
-    }
-    condition_.notify_one();
-    thread_.join();
-  }
-
-  void submit(const ModelState &model, const VehicleCanState &vehicle,
-              float v_ego, float measured_curvature, bool active) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      request_.model = model;
-      request_.vehicle = vehicle;
-      request_.v_ego = v_ego;
-      request_.measured_curvature = measured_curvature;
-      request_.active = active;
-      pending_ = true;
-    }
-    condition_.notify_one();
-  }
-
-  void update_params(const SteeringParams &params,
-                     const DrivingParams &driving) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      pending_steering_ = params;
-      pending_driving_ = driving;
-      params_pending_ = true;
-    }
-    condition_.notify_one();
-  }
-
-  LateralTarget latest() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return latest_;
-  }
-
-private:
-  struct Request {
-    ModelState model;
-    VehicleCanState vehicle;
-    float v_ego = 0.0f;
-    float measured_curvature = 0.0f;
-    bool active = false;
-  };
-
-  void run() {
-    while (true) {
-      Request request;
-      SteeringParams steering;
-      DrivingParams driving;
-      bool has_request = false;
-      bool apply_params = false;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        condition_.wait(lock, [this] {
-          return stop_ || pending_ || params_pending_;
-        });
-        if (stop_) return;
-        if (params_pending_) {
-          steering = pending_steering_;
-          driving = pending_driving_;
-          params_pending_ = false;
-          apply_params = true;
-        }
-        if (pending_) {
-          request = request_;
-          pending_ = false;
-          has_request = true;
-        }
-      }
-      if (apply_params) planner_.update_params(steering, driving);
-      if (!has_request) continue;
-      const LateralTarget result = planner_.update(
-          request.model, request.vehicle, request.v_ego,
-          request.measured_curvature, request.active);
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        latest_ = result;
-      }
-    }
-  }
-
-  LateralPlanner planner_;
-  mutable std::mutex mutex_;
-  std::condition_variable condition_;
-  Request request_;
-  SteeringParams pending_steering_;
-  DrivingParams pending_driving_;
-  LateralTarget latest_;
-  bool pending_ = false;
-  bool params_pending_ = false;
-  bool stop_ = false;
-  std::thread thread_;
 };
 
 }  // namespace
@@ -754,7 +239,6 @@ int main() {
                  adaptive_cruise_config.standstill_gap_m,
                  adaptive_cruise_config.following_time_s,
                  adaptive_cruise_config.deceleration_rate_kph_per_s);
-    LateralController controller(config);
     /* paramsd·torqued. 사전값은 시작 때 파라미터로 고정한다. 복원이 거부된 저장은 상류처럼
      * 지운다(torqued는 깨진 캐시만, 튜닝이 바뀐 캐시는 둔다). */
     LearnerStore learner_store;
@@ -762,8 +246,11 @@ int main() {
     const std::string torque_learn_path = param_path("live_torque_parameters.bin");
     const std::string vehicle_learn_json = read_text_file(vehicle_learn_path);
     const std::string torque_learn_cache = read_text_file(torque_learn_path);
-    LateralLearners learners(config.steering_params, vehicle_learn_json, torque_learn_cache,
-                             static_cast<uint64_t>(monotonic_now_ns()));
+    LateralPlannerWorker lateral_planner(config.steering_params,
+                                         config.driving_params);
+    ControlsTick tick(config, adaptive_cruise_config, lateral_planner, vehicle_learn_json,
+                      torque_learn_cache, static_cast<uint64_t>(monotonic_now_ns()));
+    const LateralLearners &learners = tick.learners();
     if (learners.vehicle_restore_rejected()) learner_store.remove(vehicle_learn_path);
     if (learners.torque_restore_status() == TorqueRestore::Corrupt)
       learner_store.remove(torque_learn_path);
@@ -778,25 +265,9 @@ int main() {
                                                                                     : "fresh",
                  config.steering_params.use_live_vehicle_params ? 1U : 0U,
                  config.steering_params.use_live_torque_params ? 1U : 0U);
-    AdaptiveCruiseController adaptive_cruise_controller(
-        adaptive_cruise_config);
-    DepartureAlertDetector departure_alert_detector;
-    LateralPlannerWorker lateral_planner(config.steering_params,
-                                         config.driving_params);
-    PandaHealthGate panda_gate;
-    PathHoldGate path_gate;
-    EngageEvents events;
     TickStats stats;
-    VehicleCanState vehicle;
-    ModelState model;
-    PandaState panda_state;
-    LateralTarget lateral_target;
-    AdaptiveCruiseOutput adaptive_cruise;
-    LateralControlResult last_result;
     uint64_t model_seq = 0;
     uint64_t panda_state_seq = 0;
-    int control_frame = 0;
-    uint32_t last_logged_alert_event_id = 0;
 
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
@@ -814,169 +285,71 @@ int main() {
       if (reload_requested) g_reload_params = 0;
       if (runtime_params.poll(work_start, reload_requested, &config,
                               &adaptive_cruise_config)) {
-        controller.update_params(config.steering_params, config.driving_params);
-        lateral_planner.update_params(config.steering_params, config.driving_params);
-        adaptive_cruise_controller.update_config(adaptive_cruise_config);
+        tick.apply_params(config, adaptive_cruise_config);
       }
 
       CanBatch can_batch;
       while (can_sub.pop(&can_batch)) {
-        if (!can_batch_is_fresh(can_batch, can_now_ns, kMaxCanRxAgeNs)) {
+        if (!tick.on_can_batch(can_batch, can_now_ns, now_s)) {
           ++stats.stale_can_batches;
           continue;
         }
-        apply_can_batch(can_batch, now_s, &vehicle);
         stats.can_frames += std::min<uint32_t>(can_batch.count, kCanBatchMaxFrames);
       }
-      bool model_updated = false;
+      ModelState model;
       uint64_t next_model_seq = model_seq;
       if (model_sub.read(&model, sizeof(model), &next_model_seq) &&
           next_model_seq != model_seq) {
         model_seq = next_model_seq;
-        model_updated = true;
-        lateral_planner.submit(
-            model, vehicle, vehicle_speed_mps(
-                vehicle, now_s,
-                static_cast<double>(config.driving_params.vehicle_state_timeout_ms) / 1000.0),
-            last_result.actual_curvature, last_result.active);
+        tick.on_model(model, now_s);
       }
+      PandaState panda_state;
       uint64_t next_panda_state_seq = panda_state_seq;
       if (panda_state_sub.read(&panda_state, sizeof(panda_state),
                                &next_panda_state_seq) &&
           next_panda_state_seq != panda_state_seq) {
         panda_state_seq = next_panda_state_seq;
+        tick.on_panda(panda_state);
       }
-      lateral_target = lateral_planner.latest();
-      /* lagd(locationd) 추정 지연. locationd가 없어도 제어는 그대로라 붙을 때까지 1초마다
-       * 다시 열어 본다. 확정(5블록)이고 2초 안의 값만 쓴다. */
+      /* locationd가 없어도 제어는 그대로라 붙을 때까지 1초마다 다시 열어 본다. */
       if (!localization_open && now_s >= next_localization_open_s) {
         localization_open = localization_sub.open(kLocalizationStateTopic, sizeof(LocalizationState), false);
         next_localization_open_s = now_s + 1.0;
       }
+      LocalizationRead localization;
+      localization.open = localization_open;
       if (localization_open) {
-        LocalizationState localization;
-        const bool read = localization_sub.read(&localization, sizeof(localization));
-        const uint64_t age_ns = monotonic_now_ns() - localization.timestamp_ns;
-        const bool fresh = read && age_ns < 2'000'000'000ULL;
-        controller.set_live_delay(localization.lateral_delay_s,
-                                  fresh && localization.lag_status ==
-                                      static_cast<uint32_t>(LateralLagStatus::Estimated));
-        /* 상류 paramsd·torqued 입력(localizer_sample_from). 표본 시각은 학습기 시계(now_s)로
-         * 옮긴다. 읽기가 쓰기와 겹쳐 실패한 틱은 직전 판단을 그대로 둔다. */
-        if (read) {
-          const double age_s =
-              static_cast<double>(static_cast<int64_t>(can_now_ns - localization.timestamp_ns)) * 1e-9;
-          LocalizerSample sample;
-          const bool use = localizer_sample_from(
-              localization, config.steering_params.use_locationd_learner_inputs, age_s, now_s - age_s,
-              &sample);
-          learners.set_localizer(use, sample);
-        }
-      } else {
-        learners.set_localizer(false, LocalizerSample{});
+        localization.read = localization_sub.read(&localization.state, sizeof(localization.state));
+        localization.read_ns = monotonic_now_ns();
       }
+      tick.on_localization(localization, can_now_ns, now_s);
 
       /* IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness
        * 판정에는 공유 상태를 읽은 직후의 시간을 사용한다. */
-      const uint64_t now_ns = monotonic_now_ns();
-      const PandaGateOutput panda =
-          panda_gate.update(panda_state, now_ns, config.force_engaged);
-      const uint64_t model_timeout_ns =
-          static_cast<unsigned long long>(config.driving_params.model_timeout_ms) *
-          1000000ULL;
-      const PathHoldOutput held = path_gate.update(model, now_ns, model_timeout_ns);
-      const int frame = control_frame++;
-      last_result = controller.update(held.path, lateral_target, vehicle, now_s,
-                                      frame, panda.ready, panda.controls_allowed);
-      events.update(last_result, vehicle, panda, panda_state, held, model, now_ns);
-
-      const bool radar_lead_fresh = signal_time_fresh(vehicle.scc11_time_s, now_s, 0.5);
-      const float ego_speed_kph = vehicle_speed_kph(vehicle, now_s);
-      const float ego_speed_mps = ego_speed_kph / 3.6f;
-      const VisionLead lead = observe_vision_lead(model, now_ns, ego_speed_mps);
-      const DepartureAlertInput alert_input = make_alert_input(
-          now_s, vehicle, last_result, model, model_updated, lead, ego_speed_mps);
-      adaptive_cruise = adaptive_cruise_controller.update(make_adaptive_input(
-          now_s, adaptive_cruise_config.enabled, vehicle, last_result, panda, model,
-          model_updated, lead, ego_speed_kph));
-
-      if (adaptive_cruise.command_button != 0) {
-        const HyundaiClu11Values clu_seed = decode_clu11(vehicle.clu11_seed);
-        HyundaiCluCommand command;
-        command.button = adaptive_cruise.command_button;
-        command.speed = clu_seed.speed;
-        command.frame = frame;
-        last_result.frames.push_back(
-            create_clu11_frame(clu_seed, command, kPowertrainBus));
-        last_result.should_send = true;
-      }
-
-      const DepartureAlertOutput departure_alert =
-          departure_alert_detector.update(alert_input);
-      if (departure_alert.event_id != 0 &&
-          departure_alert.event_id != last_logged_alert_event_id) {
-        last_logged_alert_event_id = departure_alert.event_id;
-        std::fprintf(
-            stderr,
-            "controlsd: departure alert=%s event=%u "
-            "visionLead=%.1fm rel=%.1fm/s p=%.2f plan=%.1fm gas2=%.2f\n",
-            departure_alert_name(departure_alert.type),
-            departure_alert.event_id,
-            alert_input.lead_distance_m,
-            alert_input.lead_relative_speed_mps,
-            model.lead.probability,
-            alert_input.plan_distance_m,
-            alert_input.gas_press_prob);
-      }
-
-      const ControlState control_state = make_control_state(
-          config, last_result, lateral_target, vehicle, adaptive_cruise, departure_alert,
-          events, radar_lead_fresh, ego_speed_kph, now_s);
+      ControlState control_state = tick.step(now_s, monotonic_now_ns());
+      control_state.timestamp_ns = monotonic_now_ns();
       if (!control_state_pub.publish(&control_state, sizeof(control_state))) {
         ++stats.publish_errors;
       }
 
-      if (last_result.should_send && !last_result.frames.empty()) {
-        const CanBatch send_batch = make_send_batch(last_result.frames);
+      const LateralControlResult &result = tick.result();
+      if (result.should_send && !result.frames.empty()) {
+        const CanBatch send_batch = make_send_batch(result.frames);
         if (!sendcan_pub.push(send_batch)) {
           ++stats.publish_errors;
           ++stats.send_queue_full;
         } else {
-          stats.generated_frames += static_cast<unsigned>(last_result.frames.size());
+          stats.generated_frames += static_cast<unsigned>(result.frames.size());
         }
       }
 
-      /* 학습기는 이번 틱에 실제로 보낸 토크로 갱신하고, 컨트롤러는 다음 틱에 쓴다.
-       * 송신 뒤에 둬서 적합·직렬화 틱이 CAN 송신을 늦추지 않게 한다. torqued 지연은
-       * 컨트롤러와 같은 조향 지연(상류는 lateralDelay). */
-      learners.set_lateral_delay(controller.plan_delay_s());
-      learners.update(vehicle, now_s,
-                      static_cast<double>(config.driving_params.vehicle_state_timeout_ms) / 1000.0,
-                      last_result.active, last_result.apply_torque, last_result.steering_pressed);
-      controller.set_live_params(learners.live(), learners.vehicle_valid(),
-                                 model.calibration.status == 1U);
-      controller.set_calibration_status(model.calibration.status);
-      if (learners.vehicle_persist_due()) {
-        learner_store.write(vehicle_learn_path, learners.vehicle_persist_json());
-        const VehicleParams &v = learners.vehicle_params();
-        const TorqueParams &t = learners.torque_params();
-        std::fprintf(stderr,
-                     "controlsd: learners sr=%.2f stiffness=%.2f offset=%.2f/%.2f "
-                     "roll=%.2f valid=%d | torque points=%d cal=%d%% factor=%.2f/%.2f "
-                     "offset=%.3f friction=%.3f/%.3f valid=%d\n",
-                     v.steer_ratio, v.stiffness_factor, v.angle_offset_average_deg,
-                     v.angle_offset_deg, v.roll_rad * 57.29577951308232, v.valid ? 1 : 0,
-                     t.total_bucket_points, t.cal_perc, t.lat_accel_factor_raw,
-                     t.lat_accel_factor, t.lat_accel_offset, t.friction_raw, t.friction,
-                     t.valid ? 1 : 0);
-      }
-      if (learners.torque_persist_due())
-        learner_store.write(torque_learn_path, learners.torque_cache());
-      if (learners.vehicle_published()) {
-        const LearnerState learner_state =
-            make_learner_state(learners, config.steering_params, controller.road_bank_lat_accel(),
-                               controller.live_delay_in_use(), controller.plan_delay_s());
-        if (!learner_state_pub.publish(&learner_state, sizeof(learner_state)))
+      /* 송신 뒤에 둬서 적합·직렬화 틱이 CAN 송신을 늦추지 않게 한다. */
+      LearnerOutputs learned = tick.update_learners(now_s);
+      if (learned.vehicle_json) learner_store.write(vehicle_learn_path, *learned.vehicle_json);
+      if (learned.torque_cache) learner_store.write(torque_learn_path, *learned.torque_cache);
+      if (learned.learner_state) {
+        learned.learner_state->timestamp_ns = monotonic_now_ns();
+        if (!learner_state_pub.publish(&*learned.learner_state, sizeof(LearnerState)))
           ++stats.publish_errors;
       }
 
@@ -988,9 +361,7 @@ int main() {
         stats.log(std::chrono::duration<double>(work_end - log_start).count(),
                   static_cast<unsigned long long>(sendcan_pub.depth()),
                   static_cast<unsigned long long>(can_sub.depth()),
-                  runtime_params.generation(), last_result, panda, lateral_target,
-                  vehicle, controller.road_bank_lat_accel(), adaptive_cruise,
-                  alert_input);
+                  runtime_params.generation(), tick);
         log_start = work_end;
       }
 

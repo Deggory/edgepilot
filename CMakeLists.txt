@@ -88,6 +88,10 @@ add_edgepilot_library(planning
 )
 target_link_libraries(planning PUBLIC control_core common)
 
+# controlsd 한 틱의 로직(ControlsTick). 공유 메모리 없이 돌아 호스트 검사와 재생 도구가 같은 코드를 쓴다.
+add_edgepilot_library(controls src/controls_tick.cc)
+target_link_libraries(controls PUBLIC planning)
+
 add_edgepilot_library(perception
   src/calibration_service.cc
   src/model_input_transform.cc
@@ -268,7 +272,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
   endif()
 
   add_executable(controlsd src/controlsd.cc)
-  configure_board_target(controlsd common control_core planning)
+  configure_board_target(controlsd common control_core planning controls)
 endif()
 
 if(EDGEPILOT_BUILD_DIAGNOSTICS)

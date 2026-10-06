@@ -228,10 +228,17 @@ released after that short hold if they persist.
 - `src/panda_client.*`, `src/panda_can_codec.*`, `src/pandad.cc`
   - optional panda USB bridge. It handles USB, health, heartbeat, receive CAN,
     and the final TX gate, but does not generate vehicle control messages.
+- `src/controls_tick.*`
+  - one 100 Hz controlsd tick without shared memory or files: CAN, model, Panda
+    and locationd inputs in; the lateral controller, departure alerts, vision
+    cruise and learners in between; the frames to send, `ControlState` and
+    `LearnerState` out. The 20 Hz planner sits behind `PlannerPort`: a worker
+    thread on the board (`LateralPlannerWorker`), computed in place in tools
+    and tests (`SyncPlanner`). It also holds the parameter-file watcher.
 - `src/controlsd.cc`
-  - standalone K7 YG HEV lateral controller using the validated Hyundai CAN bus
-    split, torque limits, counters, checksums, 60 kph MDPS helper, and a 20 Hz
-    planner worker separated from the 100 Hz control loop.
+  - the controlsd process: opens the channels, reads them each tick in the
+    order `ControlsTick` documents, publishes, sends, writes the learner files
+    on a background thread, and logs the one-second stats line.
 - `src/recordd.cc`
   - the drive recorder: encodes the frames `modeld` used and writes the CAN
     and state channels through `recording_writer`.

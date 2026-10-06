@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -120,6 +122,9 @@ public:
   bool live_delay_in_use() const;
   // 목표 곡률을 읽는 경로 지연: lagd 사용 중이면 추정값(0.15~0.65 s), 아니면 steer_actuator_delay
   float plan_delay_s() const;
+  /* plan 나이를 잴 시계(monotonic_now_ns와 같은 시간축). 기본은 monotonic_now_ns이고, 검사와 재생
+   * 도구가 기록 시각으로 바꾼다. */
+  void set_clock(std::function<uint64_t()> clock) { clock_ = std::move(clock); }
 
   // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
   LateralControlResult update(const LateralPath &path,
@@ -174,6 +179,7 @@ private:
   LiveLateralParams live_params() const;
 
   LateralControllerConfig config_{};
+  std::function<uint64_t()> clock_;
   TorqueController torque_controller_;
   LiveLateralParams live_{};
   bool live_vehicle_valid_ = true;
