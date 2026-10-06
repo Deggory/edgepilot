@@ -129,7 +129,13 @@ only in the board build, against `deps/ax630` from
   - reduces `modelState` to the steering-usability gate (reach and point
     count). It computes no path geometry; curvature comes from the MPC.
 - `src/adaptive_cruise.*`, `src/departure_alert.*`
-  - vision cruise setpoint control and departure alerting.
+  - vision cruise setpoint control and departure alerting. The cruise
+    controller dead-reckons the car's set speed per session (this car does not
+    report it), re-anchors to the cluster speed once the driver's buttons
+    settle and after a long mismatch, and paces SET-/RES+ pulses from a
+    filtered vision lead and the learned cluster/wheel speed ratio. The
+    departure detector runs three trackers per stop: close lead, lead
+    departure and green light.
 - `src/can_frame.h`, `src/vehicle_can.*`, `src/hyundai_can.*`
   - `can_frame.h` holds the transport type and the K7 YG HEV address/bus table;
     `vehicle_can` decodes received frames into vehicle state, `hyundai_can`
