@@ -118,6 +118,19 @@ void update_fixed_cruise_estimate(VehicleCanState *state,
     state->cruise_active = state->estimated_cruise_active;
 }
 
+/* 제동은 TCS13 DriverBraking이나 AHB1 페달 스트로크로 본다. K7 HEV는 TCS13 비트가 늘 0이라
+ * AHB1만 실제로 보인다. 둘을 따로 두고 합쳐야 0만 보내는 TCS13이 AHB1의 제동을 덮어쓰지 않는다.
+ * 제동은 순정 크루즈를 끄므로 고정형 크루즈 추정도 끈다. 예전에는 TCS13만 봐서 추정이 꺼지지 않았고,
+ * 비전 크루즈가 브레이크 뒤에도 SET-/RES+를 눌러 순정 크루즈를 다시 켰다(2026-09-27 주행). */
+void update_brake_pressed(VehicleCanState *state) {
+  state->brake_pressed = state->tcs13_driver_braking ||
+                         state->brake_pedal_stroke_mm > kBrakePedalStrokeMm;
+  if (state->brake_pressed) {
+    state->estimated_cruise_active = false;
+    if (!state->has_scc_cruise_state) state->cruise_active = false;
+  }
+}
+
 }  // namespace
 
 Sas11Values decode_sas11(const std::array<uint8_t, 8> &data) {
@@ -345,11 +358,8 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
     state->brake_error = tcs.brake_error;
     state->park_brake = tcs.park_brake;
     state->driver_override = tcs.driver_override;
-    state->brake_pressed = tcs.brake_pressed;
-    if (state->brake_pressed) {
-      state->estimated_cruise_active = false;
-      if (!state->has_scc_cruise_state) state->cruise_active = false;
-    }
+    state->tcs13_driver_braking = tcs.brake_pressed;
+    update_brake_pressed(state);
     state->tcs13_time_s = now_s;
   } else if (address == kHyundaiTcs15Address && length >= 4) {
     const Tcs15Values tcs = decode_tcs15(data);
@@ -359,6 +369,7 @@ void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
   } else if (address == kHyundaiAhb1Address && length >= 8) {
     state->brake_pedal_stroke_mm = decode_ahb1(data).pedal_stroke_mm;
     state->ahb1_time_s = now_s;
+    update_brake_pressed(state);
   } else if (address == kHyundaiEEms11Address && length >= 8) {
     const EEms11Values ems = decode_e_ems11(data);
     state->gas = ems.gas;

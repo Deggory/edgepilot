@@ -150,7 +150,10 @@ struct VehicleCanState {
   bool steering_fault = false;
 
   int gear = 0;
+  /* 운전자가 브레이크 페달을 밟고 있다: TCS13 DriverBraking 또는 AHB1 페달 스트로크 3 mm 초과.
+   * K7 HEV는 TCS13 비트가 늘 0이라 AHB1이 실제 신호다. 고정형 크루즈 추정과 비전 크루즈가 쓴다. */
   bool brake_pressed = false;
+  bool tcs13_driver_braking = false;
   bool brake_light = false;
   bool brake_error = false;
   bool park_brake = false;

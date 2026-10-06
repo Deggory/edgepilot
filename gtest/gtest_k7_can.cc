@@ -1,5 +1,5 @@
-/* K7 YG HEV CAN: 받은 신호 해석(vehicle_can: LCA11, WHL_SPD11, TPMS11, TCS13/15, SCC11, CLU11
- * 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 보낼 프레임 구성(hyundai_can: MDPS용
+/* K7 YG HEV CAN: 받은 신호 해석(vehicle_can: LCA11, WHL_SPD11, TPMS11, TCS13/15, AHB1 페달, SCC11,
+ * CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 보낼 프레임 구성(hyundai_can: MDPS용
  * CLU11 속도 바꿔치기). 신호 배치대로 손으로 채운 바이트로 검사한다. */
 #include "can_frame.h"
 #include "hyundai_can.h"
@@ -319,6 +319,37 @@ TEST(K7Can, FixedCruiseSpeedEstimate) {
                            scc11.size(), kPowertrainBus, 1.3);
   ASSERT_NEAR(cruise_set_speed_kph(imperial), 141.622272f, 0.001f)
       << "유효한 SCC 설정 속도가 고정형 추정보다 우선한다";
+}
+
+/* K7 HEV는 TCS13 DriverBraking이 늘 0이라 페달은 AHB1 스트로크로만 보인다. 예전에는 추정이 꺼지지 않아
+ * 비전 크루즈가 브레이크 뒤에도 SET-/RES+를 눌러 순정 크루즈를 다시 켰다. */
+TEST(K7Can, Ahb1PedalCancelsFixedCruiseEstimate) {
+  VehicleCanState vehicle;
+  update_clu11(&vehicle, 64.0f, 2, false, 1.0);
+  release_cruise_button(&vehicle, 64.0f, false, 1.1);
+  ASSERT_TRUE(vehicle.cruise_active);
+
+  std::array<uint8_t, 8> ahb1{};
+  set_signal_le(&ahb1, 8, 16, 165);  // 16.5 mm
+  update_vehicle_can_state(&vehicle, kHyundaiAhb1Address, ahb1, ahb1.size(), kPowertrainBus, 2.0);
+  ASSERT_TRUE(vehicle.brake_pressed) << "AHB1 페달 16.5 mm는 제동이다";
+  ASSERT_FALSE(vehicle.cruise_active) << "페달은 추정한 크루즈 작동을 끈다";
+
+  const std::array<uint8_t, 8> tcs13{};  // DriverBraking 0
+  update_vehicle_can_state(&vehicle, kHyundaiTcs13Address, tcs13, tcs13.size(), kPowertrainBus, 2.01);
+  ASSERT_TRUE(vehicle.brake_pressed) << "TCS13의 0이 AHB1 제동을 덮어쓰지 않는다";
+
+  update_clu11(&vehicle, 60.0f, 1, false, 2.1);
+  ASSERT_FALSE(vehicle.cruise_active) << "밟은 채 누른 RES는 크루즈를 켜지 않는다";
+  release_cruise_button(&vehicle, 60.0f, false, 2.2);
+
+  set_signal_le(&ahb1, 8, 16, 20);  // 2 mm: 놓은 페달
+  update_vehicle_can_state(&vehicle, kHyundaiAhb1Address, ahb1, ahb1.size(), kPowertrainBus, 2.3);
+  ASSERT_FALSE(vehicle.brake_pressed);
+  ASSERT_FALSE(vehicle.cruise_active) << "페달을 떼도 운전자가 다시 켜기 전까지 꺼진 채다";
+  update_clu11(&vehicle, 60.0f, 1, false, 2.4);
+  ASSERT_TRUE(vehicle.cruise_active) << "놓은 뒤 RES는 다시 켠다";
+  ASSERT_NEAR(cruise_set_speed_kph(vehicle), 64.0f, 0.001f) << "RES는 이전 목표 속도로 돌아간다";
 }
 
 TEST(K7Can, MdpsFaultFilter) {

@@ -55,8 +55,12 @@ The pedal comes from `AHB1` (0x160), the hybrid's brake booster.
 when TCS13 `BrakeLight` is set, that is, while the pedal is pressed or AUTO HOLD
 holds the car. `controlsd` publishes it as `kHudFlagBrakeLights`.
 
-`VehicleCanState::brake_pressed` still reads `DriverBraking`, so it is never
-true on this car.
+`VehicleCanState::brake_pressed` is `DriverBraking` or a stroke above 3 mm, so
+on this car it comes from AHB1. A press cancels the fixed-cruise estimate, as
+the brake cancels the stock cruise, and vision cruise sends no button while the
+pedal is down. Until 2026-10-06 it read only `DriverBraking`: the estimate
+survived the brake, and vision cruise kept pressing `SET-`/`RES+`, which
+re-engaged the stock cruise after the driver had braked.
 
 ### Body signals
 
