@@ -67,7 +67,7 @@ the CPU warp in `src/model/model_input_transform.cc`.
     complaint is a camera-calibration problem or not. See
     `../../docs/diagnostics.md`.
 - `model_warp.py`
-  - also used by `tools/calib/warp_preview.py` to show the MaixCAM2 model views.
+  - also used by `tools/camera/warp_preview.py` to show the MaixCAM2 model views.
     It holds the MaixCAM2 intrinsics once (`maixcam2_intrinsics`, the
     `src/common/app_config.h` values) for the preview, the calibration report and the
     axmodel calibration data; its default intrinsics stay the K230 camera's for

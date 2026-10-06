@@ -65,7 +65,7 @@ only in the board build, against `deps/ax630` from
   - the history queues the NPU core does not carry: 100-tick desire pulses
     pooled to 25x8, 96 ticks of hidden state strided to 24x512, and the
     5-frame image history per tower. No engine dependency, so
-    `gtest_model_output_parser` pins the convention on the host.
+    `gtest_model_output` pins the convention on the host.
 - `src/model/model_input_transform.*`
   - the CPU input warp: direct `NV12 -> calibrated warped YUV6`, fusing
     homography sampling and YUV6 packing through a compact fixed-point LUT.
@@ -249,7 +249,7 @@ released after that short hold if they persist.
     K230 recorder's format, so the host tools read MaixCAM2 and K230 drives.
     `StateRecorder` copies each new state snapshot (model, control, Panda,
     learner, IMU, locationd) into the log, attaching to a channel once its
-    producer has created it. `gtest_recording_writer` pins the layout and the
+    producer has created it. `gtest_recording` pins the layout and the
     state recording; `recording_format.h`
     (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
     is mirrored by `tools/model/recording_reader.py`.
@@ -284,7 +284,7 @@ released after that short hold if they persist.
   - rehearsal: plays a recorded route in place of `camerad` and `pandad`
     ([Rehearsal](rehearsal.md)). `ReplayRoute` reads the route (frame
     indexes, the frames with their parameter sets, and the CAN/Panda events
-    in time order) without the decoder, so `gtest_recording_writer` reads back
+    in time order) without the decoder, so `gtest_recording` reads back
     a route the writer made.
 - `src/camera/camcal.cc`
   - still capture through the runtime's camera path for the intrinsics
@@ -323,17 +323,15 @@ released after that short hold if they persist.
     `recording_format.h` / `ipc_messages.h` for the analysis tools;
     `lane_bias.py` and `make_replay.py` build on it. See
     `tools/model/README.md`.
-- `tools/camcal/`
+- `tools/camera/`
   - intrinsics from `camcal` captures (`calibrate_intrinsics.py`), the TV
-    checkerboard generator and the measured MaixCAM2 intrinsics. See
-    [Camera calibration](camcal.md).
-- `tools/calib/`
-  - the IMU-to-camera extrinsic estimate, the model-view preview and the
-    12x7 chessboard image.
+    checkerboard generator and the measured MaixCAM2 intrinsics (see
+    [Camera calibration](camcal.md)), the IMU-to-camera extrinsic estimate,
+    the model-view preview and the 12x7 chessboard image.
 - `tools/control/`
   - `fit_lateral_params.py` (torque regression and actuator-lag estimate from
     drives, both on the wheel speed as openpilot's torqued and lagd use
-    `vEgo`) and `export_can_fixture.py` (recorded CAN → `gtest_control_replay`
+    `vEgo`) and `export_can_fixture.py` (recorded CAN → `gtest_lateral_controller`
     fixture).
 - `tools/ui/hud_tools.py`
   - extracts `hud_snapshot` inputs from a route and composes its frames.

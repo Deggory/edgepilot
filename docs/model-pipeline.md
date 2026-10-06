@@ -116,7 +116,7 @@ corners, so the warp stays pinhole. The camera's horizontal field of view is
 80.6°, so 720p gives 13.2 px/° against the 17.9 px/° of the camera supercombo
 was trained on.
 
-`tools/calib/warp_preview.py` shows what the model sees from a captured frame:
+`tools/camera/warp_preview.py` shows what the model sees from a captured frame:
 both model views and their footprints on the source image.
 `EDGEPILOT_CAMERA_INTRINSICS` overrides the matrix, for example with the K230
 camera (`1583.3981,1583.7622,954.9441,545.1774`) to replay K230 recordings.

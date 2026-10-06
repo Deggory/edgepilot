@@ -51,7 +51,7 @@ TEST(Projection, FollowsConfiguredIntrinsics) {
 }
 
 /* 카메라 장착 오프셋(set_camera_mount): 가상 카메라가 실제보다 오프셋만큼 오른쪽이라 모델은 실제 점
- * y를 y − 오프셋으로 본다(gtest_calibration_equivalence CameraMountShiftsGroundPlane). HUD는 모델 점을
+ * y를 y − 오프셋으로 본다(gtest_calibration CameraMountShiftsGroundPlane). HUD는 모델 점을
  * 실제 위치에 그려야 한다. */
 TEST(Projection, CameraOffsetDrawsModelPointsAtRealPosition) {
   const ProjectionState plain = make_projection_state(0.0f, 0.02f, -0.01f);

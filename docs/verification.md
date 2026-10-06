@@ -4,7 +4,7 @@
 
 ## Calibration and input-warp equivalence
 
-- `tests/gtest_calibration_equivalence.cc` is a host-only verifier for the
+- `tests/gtest_calibration.cc` is a host-only verifier for the
   openpilot-derived calibration and input-warp math. It checks the pose-based
   calibration state machine, manual-vs-online feedback policy,
   medmodel/sbigmodel homography matrices, UV `transform_scale_buffer(0.5)`
@@ -41,8 +41,8 @@ cmake -S . -B build-host \
   -DCMAKE_BUILD_TYPE=Release \
   -DEDGEPILOT_BUILD_RUNTIME=OFF \
   -DEDGEPILOT_BUILD_DIAGNOSTICS=ON
-cmake --build build-host --target gtest_calibration_equivalence -j2
-build-host/bin/gtest_calibration_equivalence
+cmake --build build-host --target gtest_calibration -j2
+build-host/bin/gtest_calibration
 ```
 
 ## Lateral MPC solver

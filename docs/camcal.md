@@ -8,13 +8,13 @@ workflow. The runtime uses these values for the model input warp and the HUD
 projection (`src/common/app_config.h` `kCamera*`, given at 1920x1080).
 
 ```
-tools/camcal/calib_checkerboard_65in_4k.png   target to show on the TV
+tools/camera/calib_checkerboard_65in_4k.png   target to show on the TV
         |
         v  photographed with the Func button
 camcal (board)                           LCD preview + shutter -> PNG
         |
         v
-tools/camcal/calibrate_intrinsics.py          detect corners, solve fx/fy/cx/cy
+tools/camera/calibrate_intrinsics.py          detect corners, solve fx/fy/cx/cy
 ```
 
 ## Capture app
@@ -67,9 +67,9 @@ Options (environment, for a foreground run):
 
 ## Target and TV
 
-`tools/camcal/calib_checkerboard_65in_4k.png` is 3840x2160 with 18 x 9 squares of
+`tools/camera/calib_checkerboard_65in_4k.png` is 3840x2160 with 18 x 9 squares of
 180 px, which gives 17 x 8 inner corners. Each square is 67.45 mm on a 65" panel.
-Regenerate it with `tools/camcal/make_calibration_target.py` for another panel.
+Regenerate it with `tools/camera/make_calibration_target.py` for another panel.
 
 The pattern is only a rigid lattice if the TV shows it pixel for pixel:
 
@@ -105,7 +105,7 @@ The MaixCAM2 lens is wider than the K230's: about 80 x 51 degrees against
 Copy the shots to the host and solve. The solver needs `opencv-python` and `numpy`.
 
     scp -r root@192.168.219.117:/root/camcal/snapshots ./camcal_snapshots
-    python3 tools/camcal/calibrate_intrinsics.py camcal_snapshots \
+    python3 tools/camera/calibrate_intrinsics.py camcal_snapshots \
         --corners 17x8 --square-mm 67.45 --max-view-error 0.5 --json intrinsics.json
 
 The solver prints `fx fy cx cy` at the capture size, the difference from the
@@ -117,14 +117,14 @@ into `src/common/app_config.h` `kCamera*`. They can also be set per run with
 ## 2026-09-26 measurement
 
 The TV showed a 12 x 7 checkerboard (11 x 6 inner corners, `--corners 11x6`,
-`tools/calib/chessboard_3840x2160_12x7_280px.png`) instead of the 18 x 9 target.
+`tools/camera/chessboard_3840x2160_12x7_280px.png`) instead of the 18 x 9 target.
 The intrinsics do not depend on the pattern size. These values are now the
 runtime `kCamera*`.
 
 - 58 shots taken, 54 detected.
 - Views over 0.8 px reprojection error were dropped, leaving 42 views at
   0.52 px RMS.
-- The full result is in `tools/camcal/intrinsics_20260926.json`.
+- The full result is in `tools/camera/intrinsics_20260926.json`.
 
 | | Measured (1920x1080) | Bootstrap 1σ | Earlier value (stock camera app) | Difference |
 | --- | --- | --- | --- | --- |

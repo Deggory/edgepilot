@@ -246,7 +246,7 @@ missed model frames.
 
 `recordd` writes the K230 recorder's format, with H.264 video instead of HEVC,
 so the host tools (`recording_reader.py`, the replay tools, `lane_bias.py`)
-read MaixCAM2 and K230 drives. `gtest_recording_writer` covers
+read MaixCAM2 and K230 drives. `gtest_recording` covers
 `src/recording/recording_writer.*`.
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with

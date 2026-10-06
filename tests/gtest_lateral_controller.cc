@@ -1,7 +1,7 @@
 /* 횡제어기(LateralController): engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피, 곡률 제한, Panda
  * 게이트와 넘겨받기, LKAS HUD, 그리고 학습값(paramsd·torqued)과 lagd 지연 소비. CanFixture는 녹화 CAN
  * 픽스처를 컨트롤러에 흘려 openpilot 참조식과 대조하며, 픽스처를 인자로 줄 때만 돈다. CAN 신호는
- * gtest_k7_can, 토크 제어기는 gtest_lateral_torque, 홀드는 gtest_control_holds, 플래너는
+ * gtest_car, 토크 제어기는 gtest_lateral_torque, 홀드는 gtest_control_holds, 플래너는
  * gtest_lateral_planner가 본다. */
 #include "controls/control_params.h"
 #include "car/hyundai_can.h"
@@ -112,7 +112,7 @@ float reference_clip_curvature(float speed_mps, float prev_curvature, float desi
   return std::clamp(desired, -kMaxCurvature, kMaxCurvature);
 }
 
-TEST(ControlReplay, BrakingDoesNotDisengage) {
+TEST(LateralController, BrakingDoesNotDisengage) {
   LateralControllerConfig config;
   config.force_engaged = true;
   LateralController controller(config);
@@ -135,7 +135,7 @@ TEST(ControlReplay, BrakingDoesNotDisengage) {
  * 프레임으로 묶어 89번째 프레임에 0에 닿게 하고, 그때부터 85도 아래로 돌아올 때까지 steer 요청을
  * ToiFlt 없이 끈다. 2프레임 컷처럼 85도 위에서 요청을 다시 켜지 않는다(2026-10-03: 다시 켜는
  * 순간 고장). 85도 아래로 오면 요청을 켜고 토크를 0부터 올린다. */
-TEST(ControlReplay, LargeAngleFaultAvoidance) {
+TEST(LateralController, LargeAngleFaultAvoidance) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -209,7 +209,7 @@ TEST(ControlReplay, LargeAngleFaultAvoidance) {
 /* 정차 대기(Stopped)도 steer 요청을 잡고 있으므로 같은 회피를 건다. 예전에는 active일 때만 세어,
  * 정차에서 핸들을 85도 넘게 감고 출발하면 1초 뒤 고장이 났다(2026-10-03 2:54). 85도 위에서
  * 결합하면 요청을 켜지 않고 85도 아래로 올 때까지 기다린다. */
-TEST(ControlReplay, LargeAngleHoldCoversStopAndEngage) {
+TEST(LateralController, LargeAngleHoldCoversStopAndEngage) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -267,7 +267,7 @@ TEST(ControlReplay, LargeAngleHoldCoversStopAndEngage) {
 }
 
 // 정지 부근 path 깜빡임: active 재진입은 0.5s 연속 유효 후에만.
-TEST(ControlReplay, PathFlickerDebounce) {
+TEST(LateralController, PathFlickerDebounce) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -293,7 +293,7 @@ TEST(ControlReplay, PathFlickerDebounce) {
 }
 
 // 정차(path 무효)에서도 engage는 받아야 한다 — 조향만 쉰다.
-TEST(ControlReplay, EngageAllowedWithUnavailablePath) {
+TEST(LateralController, EngageAllowedWithUnavailablePath) {
   LateralControllerConfig config;
   config.driving_params.vehicle_state_timeout_ms = 2000;
   LateralController controller(config);
@@ -345,7 +345,7 @@ TEST(ControlReplay, EngageAllowedWithUnavailablePath) {
 }
 
 /* openpilot calibrationIncomplete/Recalibrating/Invalid(SOFT_DISABLE + NO_ENTRY). */
-TEST(ControlReplay, CalibrationGatesEngageAndSoftDisables) {
+TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
   LateralControllerConfig config;
   config.driving_params.vehicle_state_timeout_ms = 2000;
   LateralController controller(config);
@@ -402,7 +402,7 @@ TEST(ControlReplay, CalibrationGatesEngageAndSoftDisables) {
   EXPECT_TRUE(r.engaged && r.active && !r.soft_disabling);
 }
 
-TEST(ControlReplay, ClipCurvatureReportsAccelLimit) {
+TEST(LateralController, ClipCurvatureReportsAccelLimit) {
   bool limited = true;
   clip_curvature(20.0f, 0.0f, 0.001f, 0.0f, &limited);
   EXPECT_FALSE(limited);
@@ -416,7 +416,7 @@ TEST(ControlReplay, ClipCurvatureReportsAccelLimit) {
 
 /* openpilot steerSaturated: 목표 횡가속이 한계에 잘려 0.4초 넘게 포화이고, 실제가 목표의
  * 1/1.2에 못 미치는 커브에서만 경고한다. */
-TEST(ControlReplay, SteerSaturatedWarnsWhenTurnExceedsLimit) {
+TEST(LateralController, SteerSaturatedWarnsWhenTurnExceedsLimit) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -452,7 +452,7 @@ TEST(ControlReplay, SteerSaturatedWarnsWhenTurnExceedsLimit) {
 /* openpilot처럼 운전자가 핸들을 잡아도 요청 토크를 줄이지 않는다. 2026-09-27 고속도로 램프:
  * 같은 방향으로 거들자 예전 1초 페이드가 토크를 0으로 만들었다. 운전자와 반대 방향 토크만
  * panda와 같은 운전자 클램프가 줄인다. */
-TEST(ControlReplay, DriverTorqueDoesNotFadeRequest) {
+TEST(LateralController, DriverTorqueDoesNotFadeRequest) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -475,7 +475,7 @@ TEST(ControlReplay, DriverTorqueDoesNotFadeRequest) {
   EXPECT_GT(std::abs(r.desired_torque), 20) << "커브 요청이 남아 있다";
 }
 
-TEST(ControlReplay, FixedMaxCurvature) {
+TEST(LateralController, FixedMaxCurvature) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -507,7 +507,7 @@ TEST(ControlReplay, FixedMaxCurvature) {
 }
 
 // 라이브 뱅크: 커브(|yaw*v| >= 0.4)에서는 갱신을 멈추고 직선 값을 유지해야 한다.
-TEST(ControlReplay, BankHoldsDuringCurves) {
+TEST(LateralController, BankHoldsDuringCurves) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -535,7 +535,7 @@ TEST(ControlReplay, BankHoldsDuringCurves) {
       << "커브 중에는 뱅크를 유지하고 롤 누설을 따라가지 않는다";
 }
 
-TEST(ControlReplay, RuntimeParamsApplyImmediately) {
+TEST(LateralController, RuntimeParamsApplyImmediately) {
   LateralControllerConfig config;
   config.force_engaged = true;
   LateralController controller(config);
@@ -562,7 +562,7 @@ TEST(ControlReplay, RuntimeParamsApplyImmediately) {
   ASSERT_TRUE(resumed.active) << "런타임 파라미터를 바꿔도 컨트롤러 동작이 이어진다";
 }
 
-TEST(ControlReplay, LkasHudStateStability) {
+TEST(LateralController, LkasHudStateStability) {
   LateralControllerConfig config;
   config.force_engaged = true;
   LateralController controller(config);
@@ -593,7 +593,7 @@ TEST(ControlReplay, LkasHudStateStability) {
       << "engage 중 비활성이어도 부저가 울리지 않게 sys_state를 유지한다";
 }
 
-TEST(ControlReplay, PandaGateAndHandoff) {
+TEST(LateralController, PandaGateAndHandoff) {
   LateralControllerConfig config;
   LateralController controller(config);
   VehicleCanState vehicle = ready_vehicle();
@@ -716,7 +716,7 @@ TEST(ControlReplay, PandaGateAndHandoff) {
 /* 시동 직후 첫 engage: Panda health 가 아직 없고 안전벨트/기어가 막고 있을 때.
  * 실차(2026-09-12)에서 engage 톤이 울린 뒤 해제되고, 두 번째 시도부터만
  * 거절음이 났다. 하드 결함이 panda_not_ready 뒤로 밀려 가려졌기 때문이다. */
-TEST(ControlReplay, ColdStartEngageReportsHardBlock) {
+TEST(LateralController, ColdStartEngageReportsHardBlock) {
   const auto cold_start_attempt = [](bool panda_ready, bool seatbelt_unlatched,
                                      int gear) {
     LateralControllerConfig config;
@@ -753,7 +753,7 @@ TEST(ControlReplay, ColdStartEngageReportsHardBlock) {
 }
 
 // 2026-09-24 실차: 663 ms 멈춤 뒤 NaN 속도가 좌측 최대 곡률을 심어 재활성 때 32° 조향했다.
-TEST(ControlReplay, StaleSpeedKeepsCurvature) {
+TEST(LateralController, StaleSpeedKeepsCurvature) {
   LateralControllerConfig config;
   config.force_engaged = true;
   LateralController controller(config);
@@ -776,7 +776,7 @@ TEST(ControlReplay, StaleSpeedKeepsCurvature) {
 }
 
 // 보드는 JSON을 읽고 재생·테스트는 기본값을 쓴다. 둘이 갈리면 재생 대조가 보드를 대변하지 못한다.
-TEST(ControlReplay, SteeringJsonMatchesDefaults) {
+TEST(LateralController, SteeringJsonMatchesDefaults) {
   SteeringParams json, defaults;
   std::string error;
   ASSERT_TRUE(load_steering_params_json("params/steering.json", &json, &error))
@@ -786,7 +786,7 @@ TEST(ControlReplay, SteeringJsonMatchesDefaults) {
   ASSERT_EQ(json.torque_kp, defaults.torque_kp);
   ASSERT_EQ(json.torque_ki, defaults.torque_ki);
   ASSERT_EQ(json.torque_friction, defaults.torque_friction);
-  const std::string path = "/tmp/gtest_control_replay_raw_keys.json";
+  const std::string path = "/tmp/gtest_lateral_controller_raw_keys.json";
   std::FILE *f = std::fopen(path.c_str(), "w");
   ASSERT_NE(f, nullptr) << "raw 키 픽스처 쓰기";
   std::fputs("{\"torque_kf_raw\": 20}\n", f);
@@ -800,7 +800,7 @@ TEST(ControlReplay, SteeringJsonMatchesDefaults) {
 }
 
 /* 상류 controlsd: 비활성 중 목표 곡률은 실제 곡률을 따라가고, 재활성 때 거기서 한계 안으로 출발한다. */
-TEST(ControlReplay, InactiveDesiredTracksActual) {
+TEST(LateralController, InactiveDesiredTracksActual) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.steering_params.angle_offset_deg = 0.0f;
@@ -835,7 +835,7 @@ TEST(ControlReplay, InactiveDesiredTracksActual) {
 /* 운전자가 85도 넘게 돌려 넘겨받은 회전(steering pressed)에서는 요청을 끈 뒤 핸들이 15도 아래로
  * 오고 손을 뗄 때까지 끈 채로 둔다(carrotpilot 해제 조건). 빠져나오며 펴는 핸들을 밀지 않는다.
  * 운전자가 손대지 않은 체류는 85도 아래로 오면 바로 다시 켠다(LargeAngleFaultAvoidance). */
-TEST(ControlReplay, DriverTakeoverHoldsUntilCentered) {
+TEST(LateralController, DriverTakeoverHoldsUntilCentered) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -883,7 +883,7 @@ TEST(ControlReplay, DriverTakeoverHoldsUntilCentered) {
 /* 운전자가 핸들을 잡지 않으면 컨트롤러 목표를 avoid_lkas_fault_hold_angle_deg(80도) 조향각이 내는
  * 곡률 안으로 묶는다. 85도를 넘겨 토크가 끊겼다 다시 잡는 반복 대신 그 각도에서 버틴다. 운전자가
  * 조향 중이거나 0으로 끄면 묶지 않는다. */
-TEST(ControlReplay, HoldAngleCapsOwnSteeringOnly) {
+TEST(LateralController, HoldAngleCapsOwnSteeringOnly) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -927,7 +927,7 @@ TEST(ControlReplay, HoldAngleCapsOwnSteeringOnly) {
 
 /* 회전 desire 중(계획의 turn_desire) 운전자가 깜빡이 방향으로 돌리고 있으면 반대 방향 토크는 내지
  * 않는다. 회전 desire가 없거나, 운전자가 반대로 돌리거나, 손만 얹은 정도면 평소대로다. */
-TEST(ControlReplay, TurnDesireDoesNotPushAgainstDriver) {
+TEST(LateralController, TurnDesireDoesNotPushAgainstDriver) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -982,7 +982,7 @@ LiveLateralParams odd_live_params() {
 
 /* 스위치를 끄면 학습값을 넣어도 모든 틱이 비트 단위로 같아야 한다. 무효·캘리브 완료도
  * 끈 쪽에서는 차단하지 않는다. */
-TEST(ControlReplay, LiveParamsSwitchOffIsIdentical) {
+TEST(LateralController, LiveParamsSwitchOffIsIdentical) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -1014,7 +1014,7 @@ TEST(ControlReplay, LiveParamsSwitchOffIsIdentical) {
   }
 }
 
-TEST(ControlReplay, ParamsdInvalidBlocksOnlyWhenUsed) {
+TEST(LateralController, ParamsdInvalidBlocksOnlyWhenUsed) {
   LateralControllerConfig config;
   config.force_engaged = true;
   config.driving_params.vehicle_state_timeout_ms = 2000;
@@ -1039,7 +1039,7 @@ TEST(ControlReplay, ParamsdInvalidBlocksOnlyWhenUsed) {
       << "paramsd가 발행하기 전에는 막지 않는다(상류 sm.seen)";
 }
 
-TEST(ControlReplay, CurvatureLimitFollowsRoll) {
+TEST(LateralController, CurvatureLimitFollowsRoll) {
   LateralTarget target = replay_target();
   for (int i = 0; i < kLateralControlN; ++i) {
     target.curvatures[i] = 0.05f;
@@ -1059,7 +1059,7 @@ TEST(ControlReplay, CurvatureLimitFollowsRoll) {
 }
 
 // lagd 지연: 스위치를 켜고 확정된 값이 있을 때만 경로 지연을 바꾼다(범위 0.15~0.65 s).
-TEST(ControlReplay, LiveDelaySwitch) {
+TEST(LateralController, LiveDelaySwitch) {
   LateralControllerConfig config;
   config.steering_params.steer_actuator_delay = 0.34f;
   LateralController controller(config);
@@ -1150,9 +1150,9 @@ std::vector<TimedCanFrame> read_can_fixture(const std::string &path) {
 /* 픽스처는 60초 연속 주행 구간이어야 한다(active > 5900틱, 토크 > 0). 정차
  * 구간은 이 전제에 걸려 실패한다. tools/control/export_can_fixture.py가 녹화
  * events/NNN.bin 하나를 이 형식으로 내보낸다. */
-TEST(ControlReplay, CanFixture) {
+TEST(LateralController, CanFixture) {
   if (g_fixture_path == nullptr)
-    GTEST_SKIP() << "gtest_control_replay <fixture.can>으로 준 경우만 돈다";
+    GTEST_SKIP() << "gtest_lateral_controller <fixture.can>으로 준 경우만 돈다";
   const std::vector<TimedCanFrame> records = read_can_fixture(g_fixture_path);
   ASSERT_FALSE(records.empty()) << "CAN 픽스처에 프레임이 없다";
   LateralControllerConfig config;

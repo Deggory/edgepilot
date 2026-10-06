@@ -100,7 +100,7 @@ MaixCAM2 or the K230) to a `K230CAN1` fixture and replay it through the controll
 
 ```sh
 python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.can
-./build-host/bin/gtest_control_replay drive.can
+./build-host/bin/gtest_lateral_controller drive.can
 ```
 
 The 60.001 second K7 YG HEV fixture contains 43,273 CAN records. The expected

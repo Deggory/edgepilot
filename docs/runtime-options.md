@@ -84,7 +84,7 @@ true.
     captured frames). This is mainly useful with replay mode.
 - `EDGEPILOT_RAW_DUMP=/path/to/dump.bin`
   - during replay, writes every raw model output to an `SCODMP1` file that
-    `gtest_model_output_parser` reads; see
+    `gtest_model_output` reads; see
     [diagnostics](diagnostics.md#model-swap-verification).
 
 `recordd` reads `EDGEPILOT_RECORD_ROOT` (default `recordings` under the install
