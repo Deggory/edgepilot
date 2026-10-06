@@ -147,51 +147,6 @@ void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model
 
 /* ---- 이벤트 카운터 → 알림 ---- */
 
-bool OverlayAlertEvents::baseline(const ControlState &control)
-{
-    const auto counter_reset = [](uint32_t current, uint32_t previous) {
-        return previous != 0 && current < previous;
-    };
-    const bool counters_reset =
-        initialized_ &&
-        (counter_reset(control.engage_event_id, last_engage_) ||
-         counter_reset(control.disengage_event_id, last_disengage_) ||
-         counter_reset(control.engage_reject_event_id, last_reject_) ||
-         counter_reset(control.departure_alert_event_id, last_departure_));
-    if (initialized_ && !counters_reset) return false;
-    last_engage_ = control.engage_event_id;
-    last_disengage_ = control.disengage_event_id;
-    last_reject_ = control.engage_reject_event_id;
-    last_departure_ = control.departure_alert_event_id;
-    initialized_ = true;
-    return true;
-}
-
-OverlayAlertEvents::Decision OverlayAlertEvents::update(const ControlState &control,
-                                                        DepartureAlertType departure_type)
-{
-    Decision decision;
-    if (baseline(control)) return decision;
-    if (control.engage_reject_event_id != 0 && control.engage_reject_event_id != last_reject_) {
-        last_reject_ = control.engage_reject_event_id;
-        return {OverlayAlert::unable, last_reject_};
-    }
-    if (control.engage_event_id != 0 && control.engage_event_id != last_engage_) {
-        last_engage_ = control.engage_event_id;
-        return {OverlayAlert::engage, last_engage_};
-    }
-    if (control.disengage_event_id != 0 && control.disengage_event_id != last_disengage_) {
-        last_disengage_ = control.disengage_event_id;
-        return {OverlayAlert::disengage, last_disengage_};
-    }
-    if (departure_type != DepartureAlertType::none && control.departure_alert_event_id != 0 &&
-        control.departure_alert_event_id != last_departure_) {
-        last_departure_ = control.departure_alert_event_id;
-        return {OverlayAlert::signal_changed, last_departure_};
-    }
-    return decision;
-}
-
 ParsedModelOutput parsed_from_model_state(const ModelState &state)
 {
     ParsedModelOutput parsed;

@@ -115,7 +115,7 @@ target_link_libraries(recording_writer PUBLIC common)
 add_edgepilot_library(overlay_state src/overlay_state.cc)
 target_link_libraries(overlay_state PUBLIC common)
 
-add_edgepilot_library(overlay src/overlay_canvas.cc src/overlay_font.cc src/overlay_renderer.cc)
+add_edgepilot_library(overlay src/overlay_canvas.cc src/overlay_font.cc src/overlay_renderer.cc src/overlay_policy.cc)
 target_link_libraries(overlay PUBLIC overlay_state)
 
 # 알림음 합성(재생은 보드의 alert_sound.cc). 호스트에서 alert_sound_preview가 같은 소리를 낸다.

@@ -10,10 +10,6 @@
 #include <cstdint>
 #include <vector>
 
-/* 깜빡이 애니메이션은 켜진 순간을 0으로 하는 단계 수로 그린다. 단계 진행은
- * overlayd가 시각 기준으로 계산하므로 재그리기 빈도에 영향받지 않는다. */
-constexpr int kTurnSignalSteps = 25;
-
 /* HUD를 그릴 BGRA8888(스트레이트 알파) 버퍼. width·height는 화면(가로 640x480) 크기, stride는
  * 버퍼 행 바이트. 보드에서는 세로 패널 방향의 그림판이라 orientation이 transpose다. */
 struct OverlayTarget {

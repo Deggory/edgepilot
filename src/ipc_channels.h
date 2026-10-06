@@ -52,6 +52,30 @@ private:
     uint8_t *payload_ = nullptr;
 };
 
+/* LatestChannel 하나의 타입 있는 구독: 마지막으로 받은 스냅샷과 그 seq. poll()은 새 스냅샷을 끝까지
+ * 읽었을 때만 latest()를 바꾼다(찢어진 읽기는 버리고 전 값을 둔다). */
+template <typename T>
+class Subscription {
+public:
+    bool open(const char *topic, bool create = true) { return channel_.open(topic, sizeof(T), create); }
+    // 새 스냅샷이면 latest()에 두고 true.
+    bool poll()
+    {
+        T candidate;
+        uint64_t seq = seq_;
+        if (!channel_.read(&candidate, sizeof(candidate), &seq) || seq == seq_) return false;
+        latest_ = candidate;
+        seq_ = seq;
+        return true;
+    }
+    const T &latest() const { return latest_; }
+
+private:
+    LatestChannel channel_;
+    uint64_t seq_ = 0;
+    T latest_{};
+};
+
 class CanQueue {
 public:
     CanQueue() = default;

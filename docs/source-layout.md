@@ -176,6 +176,8 @@ released after that short hold if they persist.
 - `src/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
     and the camera frame ring, all on one `ShmRegion` (open, size, map, close).
+    `Subscription<T>` wraps a latest-message channel with the last snapshot
+    and its sequence number, replacing it only after a complete read.
     The frame ring (version 5) keeps only its header in shm; the slots are
     camerad's CMM blocks, listed by physical address, each with a seqlock that
     hardware readers check before and after reading.
@@ -205,16 +207,25 @@ released after that short hold if they persist.
     glyphs that `tools/ui/make_hud_font.py` bakes from Pillow's Aileron (CC0).
     No OpenCV, so `gtest_overlay_canvas` and `hud_snapshot` run on the host.
     The renderer keeps only coverage scratch and the per-buffer tiles; the
-    turn-signal phase and the network card toggle come from `overlayd`.
+    turn-signal phase and the card toggles come from `overlay_policy`.
 - `src/overlay_state.*`
   - `OverlayHudState`, the IPC state (`ControlState`, `ModelState`, …) →
     `OverlayHudState` mapping shared by
     `overlayd` and `hud_snapshot`, the `ModelState` →
-    `ParsedModelOutput`/`ProjectionState` unpacking, the engage-block label table, and
-    `OverlayAlertEvents`, which turns the controlsd event counters into the one
-    toast/log alert a frame may raise (baseline on first sight, rebaseline on a
-    controlsd restart, reject > engage > disengage > departure).
-    `gtest_overlay_state` pins all of it on the host.
+    `ParsedModelOutput`/`ProjectionState` unpacking, and the engage-block label
+    table. `gtest_overlay_state` pins it on the host.
+- `src/overlay_policy.*`
+  - what `overlayd` decides besides drawing, without the screen, speaker or
+    touch device: `OverlayAlertEvents` turns the controlsd event counters into
+    one alert a frame (baseline on first sight, rebaseline on a controlsd
+    restart, reject > engage > disengage > departure), `OverlayAlertPolicy`
+    picks the one sound a frame plays (a take-control edge waits for a quiet
+    frame, an available → unavailable transition is skipped in a frame that
+    already sounded) and holds the engage-reject toast for 3 s,
+    `TurnSignalClock` steps the blinker animation from the time the blinkers
+    changed, `HudTouch` opens and closes the network and debug cards, and
+    `smooth_lane_center_offset` filters the lane-position readout.
+    `gtest_overlay_policy` pins it on the host.
 - `src/alert_tones.*`, `src/alert_sound.*`
   - the alert sounds: `alert_tones` synthesises them (overlapping bell-like
     notes with soft attacks and decaying overtones; portable, so

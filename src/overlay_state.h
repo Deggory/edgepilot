@@ -15,6 +15,10 @@
  * 호출부가 정한다. */
 const char *engage_block_label(const char *block);
 
+/* 깜빡이 애니메이션은 켜진 순간을 0으로 하는 단계 수로 그린다. 단계 진행은
+ * overlayd가 시각 기준으로 계산하므로(TurnSignalClock) 재그리기 빈도에 영향받지 않는다. */
+constexpr int kTurnSignalSteps = 25;
+
 struct OverlayHudState {
     bool panda_connected = false;
     bool panda_healthy = false;
@@ -114,13 +118,13 @@ struct OverlayHudState {
     float lane_center_offset_m = std::numeric_limits<float>::quiet_NaN();
 };
 
-/* 공유 상태 스냅샷 → HUD 표시 상태. fresh가 아니면 값을 0/false로 두어 HUD가 "--"를
- * 그린다. overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
 /* 받은 ModelState를 렌더러가 그리는 모델 출력과 투영으로 되돌린다(overlayd·hud_snapshot). lead는
  * t=0 하나뿐이고 road_transform은 ModelState에 없다. */
 ParsedModelOutput parsed_from_model_state(const ModelState &state);
 ProjectionState projection_from_model_state(const ModelState &state);
 
+/* 공유 상태 스냅샷 → HUD 표시 상태. fresh가 아니면 값을 0/false로 두어 HUD가 "--"를
+ * 그린다. overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
 void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud);
 void hud_apply_control_state(const ControlState &control, bool fresh, OverlayHudState *hud);
 void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud);
@@ -135,32 +139,5 @@ float lane_center_offset_m(const ParsedModelOutput &output);
 /* model_ok: 유효하고 신선한 모델 출력이 있는지. services_healthy의 조건 중 하나. */
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
                              OverlayHudState *hud);
-
-/* 오버레이가 울리는 알림. 열거 순서가 같은 프레임 안의 우선순위다. */
-enum class OverlayAlert { none, unable, engage, disengage, signal_changed };
-
-/* controlsd 이벤트 카운터 → 이 프레임에 울릴 알림 하나. 신선한 제어 스냅샷에만
- * 부른다. overlay가 독립적으로 재시작될 수 있으므로 첫 스냅샷은 사용자 이벤트가
- * 아니라 기준값이고, controlsd 재시작으로 카운터가 줄어들면 기준값을 다시 잡는다.
- * 거부 > engage > disengage > 출발 순으로 새 이벤트 하나만 고르고, 같은 프레임의
- * 나머지는 다음 프레임에 잡힌다. 출발은 표시 중인 알림 유형이 있을 때만 소비한다. */
-class OverlayAlertEvents {
-public:
-    struct Decision {
-        OverlayAlert alert = OverlayAlert::none;
-        uint32_t event_id = 0;
-    };
-    Decision update(const ControlState &control, DepartureAlertType departure_type);
-
-private:
-    // 기준값을 (다시) 잡은 프레임이면 true.
-    bool baseline(const ControlState &control);
-
-    bool initialized_ = false;
-    uint32_t last_engage_ = 0;
-    uint32_t last_disengage_ = 0;
-    uint32_t last_reject_ = 0;
-    uint32_t last_departure_ = 0;
-};
 
 #endif

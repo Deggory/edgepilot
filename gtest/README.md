@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 173개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 181개와
 Python 1개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -45,7 +45,8 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_model_output_parser` | 6 | supercombo raw 출력 레이아웃과 시간축 입력 규약(desire 펄스·풀링과 깜빡이로 끝나는 회전 desire, 특징 이력, 이미지 이력) |
 | `gtest_model_state` | 2 | modeld가 채우고 overlayd가 되돌리는 `ModelState` 왕복(남는 값, t=0 lead만, road_transform 없음, 보정 칸)과 `compute_lane_t`(일정 속도면 거리/속도, 짧은 plan 끝 뒤 NaN, 뒤로 뛰는 knot에도 단조) |
 | `gtest_overlay_canvas` | 10 | HUD 캔버스: 스트레이트 알파 합성(부동소수 기준식 대조), 다각형 커버리지 합 = 기하 넓이, 먼 쪽 흐림, 둥근 사각형 곧은 행(이음매 없음), 그린 칸만 지우기, 글자 폭, 세로 패널 버퍼 = 가로 그림의 전치. 렌더러의 상태 테두리와 알림 카드, 다시 받은 버퍼 = 새 버퍼, 늘 있는 카드(TPMS·보정·보드 상태·학습값), 오토 홀드 배지, 세 자리 속도에서도 카드에 닿지 않는 노란 깜빡이, 설정 속도 카드 안의 SET, 상태 알약·왼쪽 열 터치 영역 |
-| `gtest_overlay_state` | 8 | 제어·녹화·학습기·locationd 상태 → HUD 매핑(차선 변경·회전·조향 쉼 플래그, 운전자 토크 눈금, 제어가 쓰는 학습값), 차선 안 위치, 모든 `BlockReason`의 라벨, 알림 선택(기준값, 카운터 리셋, 우선순위) |
+| `gtest_overlay_policy` | 12 | overlayd의 그리기 밖 판단: 제어 이벤트 알림(기준값, 카운터 리셋, 우선순위), 프레임마다 알림음 하나(해제 예고는 미루고 불가용 천이는 넘김, engage 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활 |
+| `gtest_overlay_state` | 4 | 제어·녹화·학습기·locationd 상태 → HUD 매핑(차선 변경·회전·조향 쉼 플래그, 운전자 토크 눈금, 제어가 쓰는 학습값), 차선 안 위치, 모든 `BlockReason`의 라벨 |
 | `gtest_panda_can_codec` | 1 | panda USB CAN 패킹·언패킹 |
 | `gtest_projection` | 4 | 화면 크기와 무관한 도로 점 투영, 설정된 카메라 내부 파라미터, 카메라 장착 오프셋 |
 | `gtest_recording_writer` | 4 | 디스크의 route 구조: K230LOG1 청크, K230IDX1 인덱스, 매니페스트, params 스냅샷, 스테이징 비우기. 이벤트 로그 리더(끊긴 꼬리에서 멈춤, 큰 파일 머리), 옛 버전 ModelState 해석, 기록한 CAN 페이로드 왕복(CAN-FD, 끊긴 꼬리, 256 프레임 상한) |

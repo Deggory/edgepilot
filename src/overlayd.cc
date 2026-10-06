@@ -2,6 +2,7 @@
 #include "app_config.h"
 #include "utils_process.h"
 #include "utils_time.h"
+#include "overlay_policy.h"
 #include "overlay_state.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
@@ -45,16 +46,6 @@ constexpr uint64_t kStateFreshNs = 2000000000ULL;
 // 건너뛰지 않는다. 영상은 하드웨어 레이어라 카메라 프레임마다 올린다.
 constexpr uint64_t kOverlayIntervalNs = 45000000ULL;
 constexpr useconds_t kPollUs = 5000;
-constexpr uint64_t kEngageAlertNs = 3000000000ULL;
-constexpr uint64_t kTurnSignalStepNs = 50000000ULL;
-constexpr uint64_t kNetworkCardNs = 10000000000ULL;
-
-const char *engage_block_text(const char *block)
-{
-    if (!block || block[0] == '\0') return "NOT READY";
-    const char *label = engage_block_label(block);
-    return label ? label : block;
-}
 
 struct StageStats {
     uint64_t total_ns = 0;
@@ -92,21 +83,15 @@ public:
 
     int run()
     {
-        if (!model_state_sub_.open(kModelStateTopic, sizeof(ModelState), true))
-            throw std::runtime_error("open modelState ipc failed");
-        if (!panda_state_sub_.open(kPandaStateTopic, sizeof(PandaState), true))
-            throw std::runtime_error("open pandaState ipc failed");
-        if (!control_state_sub_.open(kControlStateTopic, sizeof(ControlState), true))
-            throw std::runtime_error("open controlState ipc failed");
-        if (!manager_state_sub_.open(kManagerStateTopic, sizeof(ManagerState), true))
-            throw std::runtime_error("open managerState ipc failed");
+        if (!model_state_.open(kModelStateTopic)) throw std::runtime_error("open modelState ipc failed");
+        if (!panda_state_.open(kPandaStateTopic)) throw std::runtime_error("open pandaState ipc failed");
+        if (!control_state_.open(kControlStateTopic)) throw std::runtime_error("open controlState ipc failed");
+        if (!manager_state_.open(kManagerStateTopic)) throw std::runtime_error("open managerState ipc failed");
         if (!frame_sub_.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true))
             throw std::runtime_error("open roadAiFrame ipc failed");
-        if (!record_state_sub_.open(kRecordStateTopic, sizeof(RecordState), true))
-            throw std::runtime_error("open recordState ipc failed");
-        if (!learner_state_sub_.open(kLearnerStateTopic, sizeof(LearnerState), true))
-            throw std::runtime_error("open learnerState ipc failed");
-        if (!localization_state_sub_.open(kLocalizationStateTopic, sizeof(LocalizationState), true))
+        if (!record_state_.open(kRecordStateTopic)) throw std::runtime_error("open recordState ipc failed");
+        if (!learner_state_.open(kLearnerStateTopic)) throw std::runtime_error("open learnerState ipc failed");
+        if (!localization_state_.open(kLocalizationStateTopic))
             throw std::runtime_error("open localization ipc failed");
         if (!touch_.open()) std::fprintf(stderr, "overlayd: no touchscreen; tap toggles disabled\n");
 
@@ -115,7 +100,7 @@ public:
             const uint64_t loop_start = monotonic_now_ns();
             pending_redraw_ = update_model() || pending_redraw_;
             pending_redraw_ = update_aux_state() || pending_redraw_;
-            pending_redraw_ = update_turn_signal(loop_start) || pending_redraw_;
+            pending_redraw_ = turn_signal_clock_.update(loop_start, &hud_) || pending_redraw_;
             pending_redraw_ = update_touch(loop_start) || pending_redraw_;
             play_test_sound();
             apply_device_settings(loop_start);
@@ -206,19 +191,6 @@ private:
         ++overlay_frames_;
     }
 
-    /* 새 스냅샷이면 저장하고 true. */
-    template <typename State>
-    static bool poll(LatestChannel &channel, State *state, uint64_t *seq)
-    {
-        State candidate;
-        uint64_t candidate_seq = *seq;
-        if (!channel.read(&candidate, sizeof(candidate), &candidate_seq) || candidate_seq == *seq)
-            return false;
-        *state = candidate;
-        *seq = candidate_seq;
-        return true;
-    }
-
     /* 웹 기기 설정: HUD 진단 카드의 기본값. 그 값이 바뀔 때만 적용해, 다른 설정(소리·밝기)을 바꿔도
      * 터치로 켜고 끈 진단 카드가 되돌아가지 않는다. 알림음 크기는 바뀌면 적용하고 확인음을 한 번
      * 낸다(시작 때 읽은 값은 소리 없이).
@@ -241,83 +213,43 @@ private:
 
     bool update_model()
     {
-        if (!poll(model_state_sub_, &latest_model_state_, &latest_model_seq_)) return false;
+        if (!model_state_.poll()) return false;
+        const ModelState &model = model_state_.latest();
         ++model_updates_;
-        have_model_state_ = latest_model_state_.valid != 0 &&
-            fresh(latest_model_state_.model_timestamp_ns, monotonic_now_ns());
-        latest_output_ = parsed_from_model_state(latest_model_state_);
-        latest_projection_ = projection_from_model_state(latest_model_state_);
-        update_lane_center();
+        have_model_state_ = model.valid != 0 && fresh(model.model_timestamp_ns, monotonic_now_ns());
+        latest_output_ = parsed_from_model_state(model);
+        latest_projection_ = projection_from_model_state(model);
+        const float lane_center = have_model_state_ ? lane_center_offset_m(latest_output_)
+                                                    : std::numeric_limits<float>::quiet_NaN();
+        hud_.lane_center_offset_m = smooth_lane_center_offset(hud_.lane_center_offset_m, lane_center);
         return true;
-    }
-
-    /* 진단 카드의 차선 안 위치: 모델 프레임마다 0.5초 시간 상수로 다듬는다(20 Hz 숫자 떨림).
-     * 차선을 놓치면 비우고 다시 시작한다. */
-    void update_lane_center()
-    {
-        constexpr float kAlpha = 0.1f;
-        const float raw = have_model_state_ ? lane_center_offset_m(latest_output_)
-                                            : std::numeric_limits<float>::quiet_NaN();
-        float &smoothed = hud_.lane_center_offset_m;
-        smoothed = !std::isfinite(raw) ? raw : std::isfinite(smoothed) ? smoothed + kAlpha * (raw - smoothed) : raw;
     }
 
     /* 새 panda/control/manager/record/학습기/locationd 스냅샷이 있으면 true. 모델이 멈춰도
      * 속도·토스트가 제어 상태를 따라가도록 재그리기 트리거가 된다. */
     bool update_aux_state()
     {
-        bool changed = poll(panda_state_sub_, &latest_panda_state_, &latest_panda_seq_);
-        changed = poll(control_state_sub_, &latest_control_state_, &latest_control_seq_) || changed;
-        changed = poll(manager_state_sub_, &latest_manager_state_, &latest_manager_seq_) || changed;
-        changed = poll(record_state_sub_, &latest_record_state_, &latest_record_seq_) || changed;
-        changed = poll(learner_state_sub_, &latest_learner_state_, &latest_learner_seq_) || changed;
-        changed = poll(localization_state_sub_, &latest_localization_state_, &latest_localization_seq_) || changed;
+        bool changed = panda_state_.poll();
+        changed = control_state_.poll() || changed;
+        changed = manager_state_.poll() || changed;
+        changed = record_state_.poll() || changed;
+        changed = learner_state_.poll() || changed;
+        changed = localization_state_.poll() || changed;
         refresh_hud_state();
         return changed;
     }
 
-    /* 터치: 상태 알약은 네트워크 카드를, 왼쪽 열은 진단 카드를 켜고 끈다. 그 밖을 누르면 열린
-     * 네트워크 카드를 닫는다. 네트워크 카드는 kNetworkCardNs 뒤 저절로 닫힌다. 진단 카드는 다음
-     * 웹 설정 변경이나 재시작까지만 간다. 탭은 로그에 남긴다. 화면이 바뀌면 true. */
+    /* 터치로 네트워크·진단 카드를 여닫고(HudTouch) 탭은 로그에 남긴다. 화면이 바뀌면 true. */
     bool update_touch(uint64_t now_ns)
     {
         const bool was_open = hud_.network_card, was_debug = hud_.debug_overlay;
         int x = 0, y = 0;
         if (touch_.poll_tap(&x, &y)) {
-            const char *action = "close";
-            if (hud_status_touch(x, y, kOutW)) {
-                hud_.network_card = !hud_.network_card;
-                network_card_until_ns_ = now_ns + kNetworkCardNs;
-                action = "network card";
-            } else if (hud_left_column_touch(x, y, kOutH)) {
-                hud_.debug_overlay = !hud_.debug_overlay;
-                action = "debug card";
-            } else {
-                hud_.network_card = false;
-            }
+            const char *action = hud_touch_.tap(x, y, kOutW, kOutH, now_ns, &hud_);
             std::fprintf(stderr, "\noverlayd: tap x=%d y=%d %s\n", x, y, action);
         }
-        if (now_ns >= network_card_until_ns_) hud_.network_card = false;
+        hud_touch_.expire(now_ns, &hud_);
         return hud_.network_card != was_open || hud_.debug_overlay != was_debug;
-    }
-
-    /* 깜빡이 단계는 켜진 시각 기준으로 나간다. 단계가 바뀌면 true. */
-    bool update_turn_signal(uint64_t now_ns)
-    {
-        if (hud_.left_blinker != previous_left_blinker_ ||
-            hud_.right_blinker != previous_right_blinker_) {
-            previous_left_blinker_ = hud_.left_blinker;
-            previous_right_blinker_ = hud_.right_blinker;
-            turn_signal_start_ns_ = now_ns;
-        }
-        const bool blinking = hud_.left_blinker || hud_.right_blinker;
-        const int step = blinking
-            ? static_cast<int>(((now_ns - turn_signal_start_ns_) / kTurnSignalStepNs) %
-                               kTurnSignalSteps)
-            : 0;
-        const bool changed = step != hud_.turn_signal_step;
-        hud_.turn_signal_step = step;
-        return changed && blinking;
     }
 
     static bool fresh(uint64_t timestamp_ns, uint64_t now)
@@ -337,29 +269,30 @@ private:
 
     Freshness freshness(uint64_t now) const
     {
-        return {fresh(latest_model_state_.model_timestamp_ns, now),
-                fresh(latest_panda_state_.timestamp_ns, now),
-                fresh(latest_control_state_.timestamp_ns, now),
-                fresh(latest_manager_state_.timestamp_ns, now),
-                fresh(latest_record_state_.timestamp_ns, now),
-                fresh(latest_learner_state_.timestamp_ns, now),
-                fresh(latest_localization_state_.timestamp_ns, now)};
+        return {fresh(model_state_.latest().model_timestamp_ns, now),
+                fresh(panda_state_.latest().timestamp_ns, now),
+                fresh(control_state_.latest().timestamp_ns, now),
+                fresh(manager_state_.latest().timestamp_ns, now),
+                fresh(record_state_.latest().timestamp_ns, now),
+                fresh(learner_state_.latest().timestamp_ns, now),
+                fresh(localization_state_.latest().timestamp_ns, now)};
     }
 
-    /* 최신 스냅샷을 HUD 상태로 옮기고, control 이벤트 카운터로 토스트·알림을 낸다. */
+    /* 최신 스냅샷을 HUD 상태로 옮기고, 이 프레임의 알림음을 낸다(OverlayAlertPolicy). */
     void refresh_hud_state()
     {
         const uint64_t now = monotonic_now_ns();
         const Freshness f = freshness(now);
-        have_model_state_ = latest_model_state_.valid != 0 && f.model;
-        hud_apply_panda_state(latest_panda_state_, f.panda, &hud_);
-        hud_apply_control_state(latest_control_state_, f.control, &hud_);
-        hud_apply_model_state(latest_model_state_, f.model, &hud_);
-        hud_apply_manager_state(latest_manager_state_, f.manager, have_model_state_, &hud_);
-        hud_apply_record_state(latest_record_state_, f.record, &hud_);
-        hud_apply_learner_state(latest_learner_state_, f.learner, &hud_);
-        hud_apply_localization_state(latest_localization_state_, f.localization, &hud_);
-        process_alert_events(f, now);
+        have_model_state_ = model_state_.latest().valid != 0 && f.model;
+        hud_apply_panda_state(panda_state_.latest(), f.panda, &hud_);
+        hud_apply_control_state(control_state_.latest(), f.control, &hud_);
+        hud_apply_model_state(model_state_.latest(), f.model, &hud_);
+        hud_apply_manager_state(manager_state_.latest(), f.manager, have_model_state_, &hud_);
+        hud_apply_record_state(record_state_.latest(), f.record, &hud_);
+        hud_apply_learner_state(learner_state_.latest(), f.learner, &hud_);
+        hud_apply_localization_state(localization_state_.latest(), f.localization, &hud_);
+        play_alert(alert_policy_.update(control_state_.latest(), f.control, panda_state_.latest(), f.panda, now,
+                                        &hud_));
     }
 
     void play_test_sound()
@@ -376,76 +309,27 @@ private:
         std::fprintf(stderr, "\noverlayd: test sound %s\n", alert_sound_name(id));
     }
 
-    /* 고른 알림을 소리 내고 기록한다. engage 거부는 토스트도 띄운다. 알렸으면 true. */
-    bool play_alert(const OverlayAlertEvents::Decision &decision, uint64_t now)
+    void play_alert(const OverlaySoundDecision &decision)
     {
-        static constexpr const char *kAlertNames[] = {
-            "none", "unable", "engage", "disengage", "signal_changed",
-        };
-        static constexpr AlertSoundId kSounds[] = {
-            AlertSoundId::count, AlertSoundId::unable, AlertSoundId::engage,
-            AlertSoundId::disengage, AlertSoundId::signal_changed,
-        };
-        if (decision.alert == OverlayAlert::none) return false;
-        sound_.play(kSounds[static_cast<int>(decision.alert)]);
-        if (decision.alert == OverlayAlert::unable) {
-            const ControlState &c = latest_control_state_;
-            std::snprintf(hud_.engage_reject_label, sizeof(hud_.engage_reject_label), "%s",
-                          engage_block_text(c.engage_reject_block));
-            engage_alert_until_ns_ = now + kEngageAlertNs;
-            std::fprintf(stderr, "overlayd: alert=unable event=%u block=%s\n",
-                         decision.event_id, c.engage_reject_block);
-            return true;
-        }
-        std::fprintf(stderr, "overlayd: alert=%s event=%u\n",
-                     kAlertNames[static_cast<int>(decision.alert)], decision.event_id);
-        return true;
-    }
-
-    /* 가용 → 불가용 천이에만 울린다. active 천이는 정차 부근 path 깜빡임마다
-     * 울리므로 소리내지 않는다. 같은 프레임에 다른 알림이 울렸으면 생략. */
-    void play_availability_alert(const Freshness &f, bool suppressed)
-    {
-        const bool panda_unavailable =
-            latest_panda_state_.timestamp_ns != 0 &&
-            (!f.panda || !hud_.panda_connected || !hud_.panda_healthy ||
-             latest_panda_state_.faults != 0);
-        const bool unavailable =
-            !f.control || panda_unavailable || latest_control_state_.steering_fault != 0;
-        if (!alert_state_initialized_) {
-            alert_state_initialized_ = true;
-        } else if (unavailable && !previous_unavailable_ && !suppressed) {
-            sound_.play(AlertSoundId::unavailable);
+        if (decision.sound == OverlaySound::none) return;
+        sound_.play(overlay_sound_id(decision.sound));
+        switch (decision.sound) {
+        case OverlaySound::unable:
+            std::fprintf(stderr, "overlayd: alert=unable event=%u block=%s\n", decision.event_id,
+                         control_state_.latest().engage_reject_block);
+            break;
+        case OverlaySound::take_control:
+            std::fprintf(stderr, "overlayd: alert=take_control soft_disable=%d steer_saturated=%d block=%s\n",
+                         hud_.soft_disabling ? 1 : 0, hud_.steer_saturated ? 1 : 0, hud_.active_block);
+            break;
+        case OverlaySound::unavailable:
             std::fprintf(stderr, "overlayd: alert=unavailable\n");
+            break;
+        default:
+            std::fprintf(stderr, "overlayd: alert=%s event=%u\n", overlay_sound_name(decision.sound),
+                         decision.event_id);
+            break;
         }
-        previous_unavailable_ = unavailable;
-    }
-
-    void process_alert_events(const Freshness &f, uint64_t now)
-    {
-        OverlayAlertEvents::Decision decision;
-        if (f.control) decision = alert_events_.update(latest_control_state_, hud_.departure_alert_type);
-        bool played = play_alert(decision, now);
-        if (now >= engage_alert_until_ns_) hud_.engage_reject_label[0] = '\0';
-        played = play_take_control_alert(played) || played;
-        play_availability_alert(f, played);
-    }
-
-    /* 해제 예고와 조향 한계 경고는 켜지는 순간 한 번 울린다. 해제 자체는 disengage
-     * 이벤트가 따로 울린다. 같은 프레임에 다른 알림이 울렸으면 다음 프레임으로 미룬다. */
-    bool play_take_control_alert(bool suppressed)
-    {
-        const bool soft = hud_.soft_disabling, saturated = hud_.steer_saturated;
-        const bool rising = (soft && !previous_soft_disabling_) ||
-                            (saturated && !previous_steer_saturated_);
-        if (suppressed) return false;
-        previous_soft_disabling_ = soft;
-        previous_steer_saturated_ = saturated;
-        if (!rising) return false;
-        sound_.play(AlertSoundId::unable);
-        std::fprintf(stderr, "overlayd: alert=take_control soft_disable=%d steer_saturated=%d block=%s\n",
-                     soft ? 1 : 0, saturated ? 1 : 0, hud_.active_block);
-        return true;
     }
 
     OverlayRenderer overlay_;
@@ -454,39 +338,23 @@ private:
     DeviceSettings device_settings_;
     bool device_settings_read_ = false;
     bool applied_hud_debug_ = false;  // 마지막으로 적용한 웹 설정의 HUD 진단
-    bool previous_soft_disabling_ = false;
-    bool previous_steer_saturated_ = false;
     int test_sounds_played_ = 0;
     bool profile_ = false;
 
-    LatestChannel model_state_sub_;
-    LatestChannel panda_state_sub_;
-    LatestChannel control_state_sub_;
-    LatestChannel manager_state_sub_;
+    Subscription<ModelState> model_state_;
+    Subscription<PandaState> panda_state_;
+    Subscription<ControlState> control_state_;
+    Subscription<ManagerState> manager_state_;
+    Subscription<RecordState> record_state_;
+    Subscription<LearnerState> learner_state_;
+    Subscription<LocalizationState> localization_state_;
     LatestChannel frame_sub_;
-    LatestChannel record_state_sub_;
-    LatestChannel learner_state_sub_;
-    LatestChannel localization_state_sub_;
     MaixDisplay display_;
     MaixTouch touch_;
     FrameRing frame_ring_;
     uint64_t last_frame_seq_ = 0;
     uint64_t last_overlay_draw_ns_ = 0;
 
-    uint64_t latest_model_seq_ = 0;
-    uint64_t latest_panda_seq_ = 0;
-    uint64_t latest_control_seq_ = 0;
-    uint64_t latest_manager_seq_ = 0;
-    uint64_t latest_record_seq_ = 0;
-    uint64_t latest_learner_seq_ = 0;
-    uint64_t latest_localization_seq_ = 0;
-    ModelState latest_model_state_ {};
-    PandaState latest_panda_state_ {};
-    ControlState latest_control_state_ {};
-    ManagerState latest_manager_state_ {};
-    RecordState latest_record_state_ {};
-    LearnerState latest_learner_state_ {};
-    LocalizationState latest_localization_state_ {};
     ParsedModelOutput latest_output_ {};
     ProjectionState latest_projection_ {};
     ProjectionState default_projection_ {};
@@ -501,14 +369,9 @@ private:
     StageStats overlay_stats_;
     StageStats present_stats_;
     SystemMonitor system_monitor_;
-    OverlayAlertEvents alert_events_;
-    bool alert_state_initialized_ = false;
-    bool previous_unavailable_ = false;
-    uint64_t engage_alert_until_ns_ = 0;
-    bool previous_left_blinker_ = false;
-    bool previous_right_blinker_ = false;
-    uint64_t turn_signal_start_ns_ = 0;
-    uint64_t network_card_until_ns_ = 0;
+    OverlayAlertPolicy alert_policy_;
+    TurnSignalClock turn_signal_clock_;
+    HudTouch hud_touch_;
     OverlayHudState hud_;
 };
 
