@@ -184,7 +184,8 @@ released after that short hold if they persist.
 - `src/camerad.cc`, `src/modeld.cc`, `src/overlayd.cc`
   - openpilot-style process split: capture into the ring, model, and the
     two-layer LCD HUD.
-- `src/overlay_renderer.*`, `src/overlay_canvas.*`, `src/overlay_font.*`
+- `src/overlay_renderer.*`, `src/overlay_scene.cc`, `src/overlay_cards.cc`,
+  `src/overlay_draw.h`, `src/overlay_canvas.*`, `src/overlay_font.*`
   - draw the 640x480 HUD into a straight-alpha BGRA buffer (landscape
     coordinates; `HudOrientation` maps them onto the portrait panel buffer):
     state border, speed with yellow turn-signal/hazard chevrons, set speed
@@ -199,7 +200,10 @@ released after that short hold if they persist.
     recording/Wi-Fi status pill (and the network card a tap opens), and chips
     that appear only when something needs attention (panda, storage). The
     numbers no other card shows sit in a card behind the `hud_debug` device
-    setting. `overlay_canvas`
+    setting. `overlay_renderer` lays out the frame and the top and bottom-edge
+    widgets, `overlay_scene` draws the road scene (ribbons, lead chevron, lane
+    position), `overlay_cards` the cards, and `overlay_draw.h` holds what they
+    share (design tokens, text placement, state colours). `overlay_canvas`
     fills polygons with 4-subrow anti-aliasing that touches only covered spans,
     fills the straight rows of integer rounded rectangles directly, blends
     without divisions, and records the 64 px tiles each row touched so the
