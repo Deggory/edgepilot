@@ -212,8 +212,10 @@ released after that short hold if they persist.
   - `OverlayHudState`, the IPC state (`ControlState`, `ModelState`, …) →
     `OverlayHudState` mapping shared by
     `overlayd` and `hud_snapshot`, the `ModelState` →
-    `ParsedModelOutput`/`ProjectionState` unpacking, and the engage-block label
-    table. `gtest_overlay_state` pins it on the host.
+    `ParsedModelOutput`/`ProjectionState` unpacking, the engage-block label
+    table, and `hud_select_alert`, the one alert card a HUD state shows (its
+    priority, text and severity; the renderer only colours it).
+    `gtest_overlay_state` pins it on the host.
 - `src/overlay_policy.*`
   - what `overlayd` decides besides drawing, without the screen, speaker or
     touch device: `OverlayAlertEvents` turns the controlsd event counters into

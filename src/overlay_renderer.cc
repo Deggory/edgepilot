@@ -244,45 +244,17 @@ uint32_t tire_color(float pressure, bool bar)
     return pressure < (bar ? kTpmsLowBar : kTpmsLowPsi) ? kAmber : kText;
 }
 
-// ---- 알림: 우선순위는 engage 거부 > 해제 예고 > 조향 결함 > panda 결함 > 조향 쉼(85도) >
-// 조향 한계 > 서비스 대기 > 차선 변경 대기 > 출발 감지 ----
+// ---- 알림 ----
 
-struct Alert {
-    std::string title;
-    std::string detail;
-    uint32_t color = 0;
-    int arrow = 0;  // 제목 옆 방향 화살표: -1 왼쪽, 1 오른쪽
-
-    bool empty() const { return title.empty(); }
-};
-
-Alert select_alert(const OverlayHudState &hud, bool model_ok)
+uint32_t alert_color(HudAlertLevel level)
 {
-    const std::string links = format_text("MODEL %s   CAR %s   PANDA %s", model_ok ? "OK" : "--",
-                                          hud.vehicle_fresh ? "OK" : "--", hud.panda_connected ? "OK" : "--");
-    if (hud.engage_reject_label[0] != '\0') return {"UNABLE TO ENGAGE", hud.engage_reject_label, kAmber};
-    if (hud.soft_disabling) {
-        const char *label = engage_block_label(hud.active_block);
-        return {"TAKE CONTROL", label ? label : "Disengaging", kRed};
+    switch (level) {
+    case HudAlertLevel::proceed: return kGreen;
+    case HudAlertLevel::caution: return kAmber;
+    case HudAlertLevel::critical: return kRed;
+    case HudAlertLevel::notice: break;
     }
-    if (hud.steering_fault) return {"STEERING FAULT", links, kRed};
-    if (hud.panda_faults != 0) return {"PANDA FAULT", links, kRed};
-    if (hud.controller_active && hud.steer_paused)
-        return {"STEERING PAUSED",
-                hud.steer_paused_by_driver ? "Resumes when you let go below 15\xb0" : "Wheel past 85\xb0, resumes below it",
-                kAmber};
-    if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", kAmber};
-    if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, kAmber};
-    if (hud.controller_active && hud.lane_change == 1) {
-        const bool left = hud.lane_change_direction < 0;
-        return {"LANE CHANGE", left ? "Steer left to start once safe" : "Steer right to start once safe", kText,
-                left ? -1 : 1};
-    }
-    if (hud.departure_alert_type == DepartureAlertType::lead_departed)
-        return {"LEAD VEHICLE MOVING", "Check the road and proceed", kGreen};
-    if (hud.departure_alert_type == DepartureAlertType::green_light)
-        return {"GREEN LIGHT", "Check the road and proceed", kGreen};
-    return {};
+    return kText;
 }
 
 // ---- 공통 부품 ----
@@ -865,8 +837,8 @@ void draw_torque_bar(OverlayCanvas &canvas, const OverlayHudState &hud)
         canvas.fill_round_rect(cx - driver * half - 1.5f, y - 5.0f, 3.0f, kTorqueBarH + 10.0f, 1.5f, kDriverTorque);
 }
 
-// 아래 가운데 알림 카드. 아래 모서리 카드 사이에 들어간다.
-void draw_alert(OverlayCanvas &canvas, const Alert &alert)
+// 아래 가운데 알림 카드(hud_select_alert). 아래 모서리 카드 사이에 들어간다.
+void draw_alert(OverlayCanvas &canvas, const HudAlert &alert)
 {
     if (alert.empty()) return;
     const int max_w = canvas.width() - 2 * (kMargin + kCornerCardW + kGap);
@@ -876,7 +848,7 @@ void draw_alert(OverlayCanvas &canvas, const Alert &alert)
     const int y = canvas.height() - kMargin - kTorqueBarH - kGap - kAlertH;
     constexpr int kInset = 16;  // 제목 윗선·설명 기준선과 색 막대 끝
     canvas.fill_round_rect(x, y, w, kAlertH, kRadius + 4, kCardStrong);
-    canvas.fill_round_rect(x + 12, y + kInset, 4, kAlertH - 2 * kInset, 2.0f, alert.color);
+    canvas.fill_round_rect(x + 12, y + kInset, 4, kAlertH - 2 * kInset, 2.0f, alert_color(alert.level));
     const int title_w = canvas.text(center, cap_line(kHudTitleFont, y + kInset), alert.title, kHudTitleFont, kText,
                                     HudAlign::center);
     if (alert.arrow)
@@ -980,7 +952,7 @@ void OverlayRenderer::draw(const OverlayTarget &target, const ParsedModelOutput 
     draw_tpms(canvas, hud);
     draw_calibration(canvas, hud);
     draw_torque_bar(canvas, hud);
-    draw_alert(canvas, select_alert(hud, output.valid));
+    draw_alert(canvas, hud_select_alert(hud, output.valid));
 }
 
 bool hud_status_touch(int x, int y, int width)

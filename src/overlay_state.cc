@@ -15,6 +15,37 @@ const char *engage_block_label(const char *block)
     return reason == BlockReason::Count ? nullptr : block_reason_label(reason);
 }
 
+HudAlert hud_select_alert(const OverlayHudState &hud, bool model_ok)
+{
+    char links[96];
+    std::snprintf(links, sizeof(links), "MODEL %s   CAR %s   PANDA %s", model_ok ? "OK" : "--",
+                  hud.vehicle_fresh ? "OK" : "--", hud.panda_connected ? "OK" : "--");
+    if (hud.engage_reject_label[0] != '\0')
+        return {"UNABLE TO ENGAGE", hud.engage_reject_label, HudAlertLevel::caution};
+    if (hud.soft_disabling) {
+        const char *label = engage_block_label(hud.active_block);
+        return {"TAKE CONTROL", label ? label : "Disengaging", HudAlertLevel::critical};
+    }
+    if (hud.steering_fault) return {"STEERING FAULT", links, HudAlertLevel::critical};
+    if (hud.panda_faults != 0) return {"PANDA FAULT", links, HudAlertLevel::critical};
+    if (hud.controller_active && hud.steer_paused)
+        return {"STEERING PAUSED",
+                hud.steer_paused_by_driver ? "Resumes when you let go below 15\xb0" : "Wheel past 85\xb0, resumes below it",
+                HudAlertLevel::caution};
+    if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", HudAlertLevel::caution};
+    if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, HudAlertLevel::caution};
+    if (hud.controller_active && hud.lane_change == 1) {
+        const bool left = hud.lane_change_direction < 0;
+        return {"LANE CHANGE", left ? "Steer left to start once safe" : "Steer right to start once safe",
+                HudAlertLevel::notice, left ? -1 : 1};
+    }
+    if (hud.departure_alert_type == DepartureAlertType::lead_departed)
+        return {"LEAD VEHICLE MOVING", "Check the road and proceed", HudAlertLevel::proceed};
+    if (hud.departure_alert_type == DepartureAlertType::green_light)
+        return {"GREEN LIGHT", "Check the road and proceed", HudAlertLevel::proceed};
+    return {};
+}
+
 /* ---- 공유 상태 → HUD 상태 ---- */
 
 void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud)

@@ -9,6 +9,7 @@
 #include "projection.h"
 
 #include <limits>
+#include <string>
 
 /* engage 차단 사유 → HUD 라벨. HUD 상태줄과 engage 거부 토스트가 같은 표를
  * 쓰도록 여기 한 벌만 둔다. 모르는 사유면 nullptr을 돌려주고, 표시 방식은
@@ -132,6 +133,23 @@ void hud_apply_record_state(const RecordState &record, bool fresh, OverlayHudSta
 void hud_apply_learner_state(const LearnerState &learner, bool fresh, OverlayHudState *hud);
 void hud_apply_localization_state(const LocalizationState &localization, bool fresh,
                                   OverlayHudState *hud);
+
+/* 아래 가운데 알림 카드의 무게. 렌더러가 색으로 옮긴다(흰색, 초록, 주황, 빨강). */
+enum class HudAlertLevel { notice, proceed, caution, critical };
+
+struct HudAlert {
+    std::string title;
+    std::string detail;
+    HudAlertLevel level = HudAlertLevel::notice;
+    int arrow = 0;  // 제목 옆 방향 화살표: -1 왼쪽, 1 오른쪽
+
+    bool empty() const { return title.empty(); }
+};
+
+/* 이 HUD 상태에서 띄울 알림 카드 하나. 우선순위는 engage 거부 > 해제 예고 > 조향 결함 > panda 결함 >
+ * 조향 쉼(85도) > 조향 한계 > 서비스 대기 > 차선 변경 대기 > 출발 감지이고, 없으면 빈 카드다.
+ * model_ok는 결함 카드의 연결 줄(MODEL/CAR/PANDA)에 쓴다. */
+HudAlert hud_select_alert(const OverlayHudState &hud, bool model_ok);
 
 /* 모델이 본 가까운 차선 중앙: x=0에서 왼쪽·오른쪽 자기 차선선의 가운데(+y = 오른쪽). 두 선이
  * 다 확실하지 않으면 NaN. tools/model/lane_bias.py의 offset(x=0)과 같은 값이다. */

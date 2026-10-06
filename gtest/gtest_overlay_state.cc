@@ -1,13 +1,87 @@
-/* overlay_state: 공유 상태 스냅샷 → HUD 상태 매핑. 보드 없이, OpenCV 없이 돈다. */
+/* overlay_state: 공유 상태 스냅샷 → HUD 상태 매핑과 알림 카드 선택(우선순위). 보드 없이, OpenCV 없이
+ * 돈다. */
 #include "control_block.h"
 #include "control_params.h"
 #include "overlay_state.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace {
+
+TEST(OverlayState, AlertCardPriority) {
+  OverlayHudState hud;
+  std::snprintf(hud.engage_reject_label, sizeof(hud.engage_reject_label), "DOOR OPEN");
+  hud.soft_disabling = true;
+  std::snprintf(hud.active_block, sizeof(hud.active_block), "calibration_invalid");
+  hud.steering_fault = true;
+  hud.panda_faults = 1;
+  hud.controller_active = true;
+  hud.steer_paused = true;
+  hud.steer_saturated = true;
+  hud.services_healthy = false;
+  hud.lane_change = 1;
+  hud.lane_change_direction = -1;
+  hud.departure_alert_type = DepartureAlertType::lead_departed;
+
+  // 위에서부터 하나씩 끄면 다음 카드가 나온다
+  HudAlert alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "UNABLE TO ENGAGE");
+  EXPECT_EQ(alert.detail, "DOOR OPEN");
+  EXPECT_EQ(alert.level, HudAlertLevel::caution);
+  hud.engage_reject_label[0] = '\0';
+  alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "TAKE CONTROL");
+  EXPECT_EQ(alert.detail, "CALIB INVALID") << "해제 예고는 사유 라벨";
+  EXPECT_EQ(alert.level, HudAlertLevel::critical);
+  hud.soft_disabling = false;
+  alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "STEERING FAULT");
+  EXPECT_EQ(alert.detail, "MODEL OK   CAR --   PANDA --") << "결함 카드는 연결 상태";
+  EXPECT_EQ(alert.level, HudAlertLevel::critical);
+  hud.steering_fault = false;
+  EXPECT_EQ(hud_select_alert(hud, false).title, "PANDA FAULT");
+  hud.panda_faults = 0;
+  alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "STEERING PAUSED");
+  EXPECT_EQ(alert.detail, "Wheel past 85\xb0, resumes below it");
+  EXPECT_EQ(alert.level, HudAlertLevel::caution);
+  hud.steer_paused = false;
+  alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "TAKE CONTROL");
+  EXPECT_EQ(alert.detail, "Turn exceeds steering limit") << "조향 한계는 주황";
+  EXPECT_EQ(alert.level, HudAlertLevel::caution);
+  hud.steer_saturated = false;
+  EXPECT_EQ(hud_select_alert(hud, true).title, "WAITING FOR SERVICES");
+  hud.services_healthy = true;
+  alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "LANE CHANGE");
+  EXPECT_EQ(alert.arrow, -1);
+  EXPECT_EQ(alert.level, HudAlertLevel::notice);
+  hud.lane_change = 0;
+  alert = hud_select_alert(hud, true);
+  EXPECT_EQ(alert.title, "LEAD VEHICLE MOVING");
+  EXPECT_EQ(alert.level, HudAlertLevel::proceed);
+  hud.departure_alert_type = DepartureAlertType::green_light;
+  EXPECT_EQ(hud_select_alert(hud, true).title, "GREEN LIGHT");
+  hud.departure_alert_type = DepartureAlertType::none;
+  EXPECT_TRUE(hud_select_alert(hud, true).empty());
+
+  // 조건이 붙은 카드
+  OverlayHudState idle;
+  idle.services_healthy = true;
+  idle.steer_paused = true;
+  idle.lane_change = 1;
+  EXPECT_TRUE(hud_select_alert(idle, true).empty()) << "조향 쉼과 차선 변경 대기는 활성일 때만";
+  idle.soft_disabling = true;
+  EXPECT_EQ(hud_select_alert(idle, true).detail, "Disengaging") << "모르는 사유";
+  idle.soft_disabling = false;
+  idle.controller_active = true;
+  idle.steer_paused_by_driver = true;
+  EXPECT_EQ(hud_select_alert(idle, true).detail, "Resumes when you let go below 15\xb0");
+}
 
 TEST(OverlayState, ControlStateMapping) {
   ControlState c;
