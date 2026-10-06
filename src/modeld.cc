@@ -13,7 +13,6 @@
 
 #include <linux/videodev2.h>
 #include <signal.h>
-#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -75,38 +74,30 @@ private:
     uint32_t frames_ = 0;
 };
 
-/* 1초 창 통계. 두 루프(라이브·리플레이)가 같은 시계로 fps를 센다. */
+/* 1초 창 통계. 두 루프(라이브·리플레이)가 같은 시계로 fps를 센다. 벽시계가 아니라 monotonic_now_ns라
+ * NTP가 시각을 옮겨도 창 길이와 전체 fps가 흔들리지 않는다. */
 struct RateWindow
 {
-    timeval start{};
-    timeval last{};
+    uint64_t start_ns = monotonic_now_ns();
+    uint64_t last_ns = start_ns;
     unsigned last_processed = 0;
     unsigned last_errors = 0;
-
-    RateWindow()
-    {
-        gettimeofday(&start, nullptr);
-        last = start;
-    }
 
     // 1초가 지났으면 창을 닫고 true. window_us는 닫힌 창의 길이.
     bool close_if_due(uint64_t *window_us)
     {
-        timeval now{};
-        gettimeofday(&now, nullptr);
-        const uint64_t elapsed = timeval_us(now) - timeval_us(last);
-        if (elapsed < 1000000ULL) return false;
-        *window_us = elapsed;
-        last = now;
+        const uint64_t now_ns = monotonic_now_ns();
+        const uint64_t elapsed_us = (now_ns - last_ns) / 1000ULL;
+        if (elapsed_us < 1000000ULL) return false;
+        *window_us = elapsed_us;
+        last_ns = now_ns;
         return true;
     }
 
     double total_fps(unsigned processed) const
     {
-        timeval now{};
-        gettimeofday(&now, nullptr);
-        const uint64_t since_start = timeval_us(now) - timeval_us(start);
-        return since_start > 0 ? processed * 1000000.0 / since_start : 0.0;
+        const uint64_t since_start_us = (monotonic_now_ns() - start_ns) / 1000ULL;
+        return since_start_us > 0 ? processed * 1000000.0 / since_start_us : 0.0;
     }
 };
 

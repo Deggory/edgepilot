@@ -5,7 +5,6 @@
  * 건너가는 타임스탬프는 전부 이 시계로 찍는다. */
 
 #include <cstdint>
-#include <sys/time.h>
 #include <time.h>
 
 inline uint64_t monotonic_now_ns()
@@ -17,11 +16,6 @@ inline uint64_t monotonic_now_ns()
     clock_gettime(CLOCK_MONOTONIC, &ts);
 #endif
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
-}
-
-inline uint64_t timeval_us(const timeval &tv)
-{
-    return static_cast<uint64_t>(tv.tv_sec) * 1000000ULL + tv.tv_usec;
 }
 
 /* ns 타임스탬프 freshness 공통 판정. 0(미설정)과 미래 타임스탬프를 모두 stale로 본다. */
