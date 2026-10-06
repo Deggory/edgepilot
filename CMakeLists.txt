@@ -83,6 +83,7 @@ add_edgepilot_library(control_core
 target_link_libraries(control_core PUBLIC utils_json)
 
 add_edgepilot_library(planning
+  src/desire_helper.cc
   src/lateral_mpc.cc
   src/lateral_planner.cc
 )

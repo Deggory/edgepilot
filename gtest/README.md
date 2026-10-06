@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 163개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 168개와
 Python 1개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -34,6 +34,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_control_replay` | 26 | 횡제어기: engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피(85도 위 토크 상한과 steer 요청 끄기, 정차 대기·85도 위 결합, 손을 뗐을 때 80도 상한, 운전자가 넘겨받은 회전은 15도까지 해제), 회전 desire 중 깜빡이 방향으로 돌리는 운전자를 밀지 않음, 곡률 제한, Panda 게이트와 넘겨받기, LKAS HUD, 학습값 소비(끄면 비트 동일, `paramsd_invalid`, 롤 반영 곡률 한계, lagd 지연), CAN 픽스처 재생 |
 | `gtest_controls_tick` | 3 | controlsd 한 틱(`ControlsTick`)을 main처럼 10 ms마다: 신호 배치대로 채운 K7 CAN·20 Hz 모델·Panda 상태로 SET 결합과 LKAS11 송신(파워트레인·MDPS 버스), 문 열림 해제, Panda 거부 1초 유예 뒤 거절, AHB1 페달이 끄는 크루즈 추정(횡제어는 유지) |
 | `gtest_departure_alert` | 11 | 정차 중 앞차 출발과 신호 대기 알림(짧은 plan 1.5초 무장, 무장 전 열림이면 다시 재기, 정차 2.7초 만의 녹색, 가속 확률, 서 있는 가까운 앞차 뒤 경로 깜빡임 거르기, 깜빡이 대기 중 가속 확률 끄기, 앞차 끊김 허용) |
+| `gtest_desire_helper` | 5 | 차선 변경·회전 desire 상태 머신(`DesireHelper`): 깜빡이 쪽으로 핸들을 밀어야 시작, 차선선 0.5초 페이드 아웃·인, 사각지대 대기, 10초 시한, 도로 경계 쪽 차단과 경계가 사라질 때의 시작, 회전 desire 2.5초 펄스 |
 | `gtest_device_settings` | 3 | 웹 기기 설정(`display.json`) 읽기: 범위 클램프, 잘못된 값은 이전 값 유지, 파일이 바뀔 때만 다시 읽기 |
 | `gtest_k7_can` | 12 | K7 CAN 신호 해석(LCA11, WHL_SPD11, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 MDPS용 CLU11 속도 바꿔치기, CGW1 B-CAN 타임아웃을 안전한 값으로 읽기(깜빡이·비상등 꺼짐, 문 열림, 안전벨트 미착용), AHB1 페달 스트로크(3 mm 초과)와 TCS13 BrakeLight(AUTO HOLD)로 켜는 브레이크등, AHB1 페달이 끄는 고정형 크루즈 추정(TCS13 0이 덮어쓰지 않음, 밟은 채 RES 무시) |
 | `gtest_lateral_learners` | 18 | paramsd EKF(야코비안, Joseph 양정치, 수렴, 게이트, 출력 한계, 저장, 자이로 바이어스), torqued(TLS와 닫힌 해 대조, 버킷, 게이트, 필터·decay, 4 Hz/12 s 스케줄, 캐시), controlsd 연결 |

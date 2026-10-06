@@ -52,7 +52,7 @@ of this branch; the piezo alerts are now bell-like tones on the board speaker.
   and a web parameter editor pushes changes the controller picks up within
   100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite (163 tests) that needs neither the
+  macOS or Linux, with a googletest suite (168 tests) that needs neither the
   board nor its SDK.
 
 ## Architecture

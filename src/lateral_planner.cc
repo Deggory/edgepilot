@@ -1,9 +1,9 @@
 #include "lateral_planner.h"
 
 #include "control_params.h"
+#include "desire_helper.h"
 #include "ipc_messages.h"
 #include "lateral_mpc.h"
-#include "vehicle_can.h"
 
 #include <algorithm>
 #include <array>
@@ -241,12 +241,14 @@ struct LateralPlanner::Impl {
                      const DrivingParams &driving) {
     lane_planner.update_offsets(steering.path_offset_m);
     lane_path_weight = steering.lane_path_weight;
+    DesireHelperParams desire_params;
     // desire_helper의 torque_applied는 carstate.steeringPressed에서 나오므로
     // 컨트롤러와 같은 임계값을 써야 한다.
-    steering_pressed_threshold = steering.steering_pressed_threshold;
-    lane_change_min_speed_mps = driving.lane_change_min_speed_kph / 3.6;
+    desire_params.steering_pressed_threshold = steering.steering_pressed_threshold;
+    desire_params.lane_change_min_speed_mps = driving.lane_change_min_speed_kph / 3.6;
+    desire_params.turn_desire_enabled = driving.turn_desire;
+    desire_helper.update_params(desire_params);
     laneless_mode = driving.laneless_mode;
-    turn_desire_enabled = driving.turn_desire;
     const double center_to_front = steering.center_to_front_m();
     constexpr double civic_mass = 1326.0 + 136.0;
     constexpr double civic_wheelbase = 2.70;
@@ -267,14 +269,15 @@ struct LateralPlanner::Impl {
     if (!model.valid) return target;
 
     lane_planner.parse(model);
-    for (size_t i = 0; i < model_lane_probs.size(); ++i)
-      model_lane_probs[i] = model.lane_probabilities[i];
-    for (size_t i = 0; i < model_road_edge_stds.size(); ++i)
-      model_road_edge_stds[i] = model.road_edge_stds[i];
-    const double lane_change_prob = model.desire_state[3] + model.desire_state[4];
-    update_lane_change(vehicle, v_ego, active, lane_change_prob);
-    if (desire == 3 || desire == 4)
-      lane_planner.scale_near_probability(lane_change_lane_prob);
+    DesireModelInputs desire_inputs;
+    desire_inputs.lane_change_prob = model.desire_state[3] + model.desire_state[4];
+    for (size_t i = 0; i < desire_inputs.lane_probabilities.size(); ++i)
+      desire_inputs.lane_probabilities[i] = model.lane_probabilities[i];
+    for (size_t i = 0; i < desire_inputs.road_edge_stds.size(); ++i)
+      desire_inputs.road_edge_stds[i] = model.road_edge_stds[i];
+    desire_helper.update(vehicle, v_ego, active, desire_inputs);
+    if (desire_helper.changing_lanes())
+      lane_planner.scale_near_probability(desire_helper.lane_change_lane_prob());
     std::array<std::array<double, 3>, kTrajectorySize> path{};
     std::array<double, kTrajectorySize> path_t{};
     for (int i = 0; i < kTrajectorySize; ++i) {
@@ -287,8 +290,8 @@ struct LateralPlanner::Impl {
     const double lane_probability = lane_planner.mean_effective_probability();
     // 여기부터는 Lane 모드다(laneless 모드는 위에서 upstream_target으로 끝난다).
     bool use_model_path = false;
-    const bool lane_change_off = lane_change_state == 0;
-    if (turn_desire_active) {
+    const bool lane_change_off = desire_helper.lane_change_state() == LaneChangeState::Off;
+    if (desire_helper.turn_desire_active()) {
       // 회전 desire를 준 동안은 차선선 경로가 회전을 막지 않게 모델 경로를 따른다.
       use_model_path = true;
       laneless_buffer = true;
@@ -406,10 +409,7 @@ struct LateralPlanner::Impl {
     target.target_y_m = static_cast<float>(y_pts[1]);
     target.heading_rad = static_cast<float>(mpc.nodes()[0].psi);
     target.curvature = static_cast<float>(mpc.nodes()[0].curvature);
-    target.desire = desire;
-    target.turn_desire = turn_desire_direction;
-    target.lane_change_state = lane_change_state;
-    target.lane_change_direction = direction;
+    fill_desire(&target);
     for (int i = 0; i < kLateralControlN; ++i) {
       target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
       target.curvatures[i] = static_cast<float>(mpc.nodes()[i].curvature);
@@ -479,103 +479,16 @@ struct LateralPlanner::Impl {
     target.target_y_m = static_cast<float>(interp(model_t_idx_double(1), t.data(), y.data(), t.size()));
     target.heading_rad = target.psis[0];
     target.curvature = target.curvatures[0];
-    target.desire = desire;
-    target.turn_desire = turn_desire_direction;
-    target.lane_change_state = lane_change_state;
-    target.lane_change_direction = direction;
+    fill_desire(&target);
     return target;
   }
 
-  /* openpilot desire_helper(0.9.4 차선선 페이드 포함)와 같다. 꺼지는 조건은 조향 비활성과 10초
-   * 초과뿐이다. 예전에는 포크에서 온 두 가지가 더 있었다: 출력 0.8 이상이 0.5초 이어지면
-   * 차선 변경 취소(차선이 차를 붙잡아 운전자와 싸우는 바로 그 순간 취소됐다), 속도별로 느린
-   * 차선선 페이드(60 km/h에서 2.5초). 2026-09-27 실차에서 운전자가 핸들을 한참 잡아야 해서
-   * 둘 다 upstream으로 되돌렸다. */
-  void update_lane_change(const VehicleCanState &vehicle, float v_ego, bool active,
-                          double lane_change_prob) {
-    const bool one_blinker = vehicle.left_blinker != vehicle.right_blinker;
-    const bool below_speed = v_ego < lane_change_min_speed_mps;
-    int direction_now = direction;
-    if (vehicle.left_blinker) direction_now = -1;
-    if (vehicle.right_blinker) direction_now = 1;
-
-    const double left_edge_prob = std::clamp(1.0 - model_road_edge_stds[0], 0.0, 1.0);
-    const double right_edge_prob = std::clamp(1.0 - model_road_edge_stds[1], 0.0, 1.0);
-    const double left_nearside_prob = model_lane_probs[0];
-    const double right_nearside_prob = model_lane_probs[3];
-    const int road_edge = right_edge_prob > 0.35 && right_nearside_prob < 0.2 &&
-                                  left_nearside_prob >= right_nearside_prob
-        ? 1
-        : left_edge_prob > 0.35 && left_nearside_prob < 0.2 &&
-                                  right_nearside_prob >= left_nearside_prob
-            ? -1 : 0;
-    const int lane_direction = vehicle.left_blinker ? -1 : vehicle.right_blinker ? 1 : 2;
-    const bool road_edge_blocked = lane_change_state == 0 && road_edge == lane_direction;
-
-    if (road_edge_blocked) {
-      direction = 0;
-    } else if (!active || lane_change_timer > 10.0) {
-      lane_change_state = 0;
-      direction = 0;
-    } else {
-      const bool steering_pressed =
-          std::abs(vehicle.driver_torque) > steering_pressed_threshold;
-      const bool torque_applied = steering_pressed &&
-          ((vehicle.driver_torque > 0 && direction == -1) ||
-           (vehicle.driver_torque < 0 && direction == 1));
-      const bool blindspot_detected =
-          (vehicle.left_blindspot && direction == -1) ||
-          (vehicle.right_blindspot && direction == 1);
-      if (lane_change_state == 0 && one_blinker && !previous_one_blinker &&
-          !below_speed) {
-        lane_change_state = 1;
-        direction = direction_now;
-        lane_change_lane_prob = 1.0;
-      } else if (lane_change_state == 1) {
-        if (!one_blinker || below_speed) {
-          lane_change_state = 0;
-        } else if (!blindspot_detected && torque_applied) {
-          lane_change_state = 2;
-        }
-      } else if (lane_change_state == 2) {
-        // 0.5초에 걸쳐 차선선을 뺀다(openpilot "fade out over .5s").
-        lane_change_lane_prob = std::max(0.0, lane_change_lane_prob - 2.0 * kDtModel);
-        if (lane_change_prob < 0.02 && lane_change_lane_prob < 0.01)
-          lane_change_state = 3;
-      } else if (lane_change_state == 3) {
-        // 복구 0.5초 (openpilot 기본 1.0초). 변경 직후 새 차선 적응을 당긴다.
-        lane_change_lane_prob = std::min(1.0, lane_change_lane_prob + 2.0 * kDtModel);
-        if (lane_change_lane_prob > 0.99) {
-          lane_change_state = one_blinker ? 1 : 0;
-          if (!one_blinker) direction = 0;
-        }
-      }
-    }
-
-    lane_change_timer = lane_change_state < 2 ? 0.0 : lane_change_timer + kDtModel;
-    previous_one_blinker = road_edge_blocked ? false : one_blinker;
-    desire = lane_change_state >= 2 && direction == -1 ? 3
-        : lane_change_state >= 2 && direction == 1 ? 4 : 0;
-
-    /* 회전 desire(실험, DrivingParams::turn_desire): 차선 변경 속도 미만 + 깜빡이 하나 + 결합 중 +
-     * 차선 변경이 진행 중이 아님(상태 0). 빠를 때 켠 깜빡이도 그 속도 아래까지 켜져 있으면 회전으로
-     * 본다. 회전 차로로 차선을 바꾸거나 미리 깜빡이를 켜고 감속해 도는 순서가 흔하다(2026-10-03 실차:
-     * 회전 6번 중 3번이 30 km/h 위에서 켰다). 변경 대기(1)는 감속하면 0이 되고, 변경을 마친 뒤
-     * 깜빡이가 남으면 대기(1)로 돌아갔다가 감속하면 0이 된다. 진행 중인 변경(2, 3)이 먼저다.
-     * 차선 변경 뒤 깜빡이를 켠 채 정체로 감속해도 회전 의도가 들어간다는 뜻이라 운전자가 바로잡는다.
-     * 모델 desire 입력은 rising edge 펄스이고 5초(100틱) 뒤 빠지므로 2.5초마다 한 번 내렸다
-     * 다시 올린다(깜빡이를 끄면 modeld가 이력에서 지운다). 0.9.4·master DESIRES: 1 = turnLeft,
-     * 2 = turnRight. */
-    turn_desire_active = turn_desire_enabled && active && one_blinker && below_speed &&
-                         lane_change_state == 0;
-    turn_desire_direction = turn_desire_active ? (vehicle.left_blinker ? 1 : 2) : 0;
-    if (turn_desire_active) {
-      const bool on = turn_desire_ticks % kTurnRepulseTicks < kTurnRepulseTicks / 2;
-      desire = on ? turn_desire_direction : 0;
-      ++turn_desire_ticks;
-    } else {
-      turn_desire_ticks = 0;
-    }
+  // 이번 프레임의 desire와 차선 변경 단계(LateralTarget의 정수 필드로).
+  void fill_desire(LateralTarget *target) const {
+    target->desire = static_cast<int>(desire_helper.desire());
+    target->turn_desire = desire_helper.turn_desire_direction();
+    target->lane_change_state = static_cast<int>(desire_helper.lane_change_state());
+    target->lane_change_direction = desire_helper.direction();
   }
 
   LanePlanner lane_planner;
@@ -585,26 +498,12 @@ struct LateralPlanner::Impl {
   double factor1 = 0.0;
   double factor2 = 0.0;
   double lane_path_weight = 3.0;
-  int steering_pressed_threshold = 150;
-  double lane_change_min_speed_mps = 30.0 / 3.6;
   bool laneless_mode = false;
-  bool turn_desire_enabled = false;
-  bool turn_desire_active = false;
-  int turn_desire_direction = 0;  // 회전 desire 중 1 = turnLeft, 2 = turnRight(펄스와 무관)
-  int turn_desire_ticks = 0;
-  static constexpr int kTurnRepulseTicks = 50;  // 2.5 s at the 20 Hz model rate
+  DesireHelper desire_helper;
   bool laneless_buffer = false;
   /* 0 = 차선 융합 경로, 1 = 모델 플랜. 전환 판정을 그대로 따라가되 램프로 움직인다. */
   double plan_mix = 1.0;
   int invalid_count = 0;
-  int lane_change_state = 0;
-  int direction = 0;
-  int desire = 0;
-  bool previous_one_blinker = false;
-  double lane_change_lane_prob = 1.0;
-  double lane_change_timer = 0.0;
-  std::array<double, 4> model_lane_probs{};
-  std::array<double, 2> model_road_edge_stds{};
 };
 
 LateralPlanner::LateralPlanner(const SteeringParams &params,

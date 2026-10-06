@@ -90,9 +90,15 @@ only in the board build, against `deps/ax630` from
 ## Planning and control
 
 - `src/lateral_planner.*`
-  - applies openpilot lane probability/width logic, lane-change state, and the
-    lateral MPC in `src/lateral_mpc.*` to produce curvature targets. This is the
+  - applies openpilot lane probability/width logic and the lateral MPC in
+    `src/lateral_mpc.*` (Lane mode), or the plan yaw (Laneless mode and Lane
+    mode's model-path stretches), to produce curvature targets. This is the
     only producer of `LateralTarget`.
+- `src/desire_helper.*`
+  - the openpilot desire_helper port the planner runs each model frame: lane
+    change states (`LaneChangeState`), the blinker/torque/blind-spot/road-edge
+    gates, the lane-line fade and the experimental turn desire pulses, and the
+    `Desire` the model gets.
 - `src/lateral_mpc.*`
   - the lateral MPC itself: one Gauss-Newton SQP iteration per call over the
     openpilot 0.8.16 OCP, solved by a backward Riccati recursion. No external
