@@ -9,20 +9,10 @@
 
 namespace {
 
-constexpr int kButtonSetDecel = 2;
-constexpr int kButtonCancel = 4;
-constexpr int kGearDrive = 5;
 constexpr int kSteeringPressedMinCount = 5;
 constexpr double kPandaEngageGraceS = 1.0;
 // 운전자가 넘겨받은 큰 회전에서 조향을 다시 켜는 각도(carrotpilot lat_suspend_control의 resume_angle)
 constexpr float kDriverReleaseAngleDeg = 15.0f;
-
-float cluster_speed_kph(const VehicleCanState &vehicle_state) {
-  if (!std::isfinite(vehicle_state.cluster_speed_raw) || vehicle_state.cluster_speed_raw < 0.0f) {
-    return 0.0f;
-  }
-  return vehicle_state.cluster_speed_raw * (vehicle_state.speed_unit_mph ? 1.609344f : 1.0f);
-}
 
 float interp_lateral(float x, const float *values) {
   if (x <= 0.0f) return values[0];
@@ -89,7 +79,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
                                                    bool panda_controls_allowed) {
   const bool engage_requested =
       !config_.force_engaged && !engaged_ &&
-      vehicle_state.clu_button == 0 && last_button_ == kButtonSetDecel;
+      vehicle_state.clu_button == 0 && last_button_ == kCruiseButtonSet;
   update_button_state(vehicle_state.clu_button, now_s);
   const bool logical_engaged = config_.force_engaged || engaged_;
 
@@ -370,12 +360,12 @@ LateralControlResult LateralController::update(const LateralPath &path,
 // CLU 버튼 edge로 engage/disengage 상태를 갱신한다.
 void LateralController::update_button_state(int button, double now_s) {
   if (button == last_button_) return;
-  if (button == kButtonCancel) {
+  if (button == kCruiseButtonCancel) {
     panda_engage_pending_ = false;
     engaged_ = false;
     reset_control_state();
     last_disengage_s_ = now_s;
-  } else if (button == 0 && last_button_ == kButtonSetDecel) {
+  } else if (button == 0 && last_button_ == kCruiseButtonSet) {
     engaged_ = true;
   }
   last_button_ = button;

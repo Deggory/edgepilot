@@ -26,6 +26,19 @@ constexpr uint32_t kHyundaiClu11Address = 1265;   // 0x4f1
 constexpr uint32_t kHyundaiMdps12Address = 593;   // 0x251
 constexpr uint8_t kHyundaiMdps12TxBus = 2;
 
+// CLU11 CF_Clu_CruiseSwState 버튼 값
+constexpr int kCruiseButtonResume = 1;
+constexpr int kCruiseButtonSet = 2;
+constexpr int kCruiseButtonCancel = 4;
+// ELECT_GEAR 기어 값(P 0, D 5, N 6, R 7, S 8)
+constexpr int kGearPark = 0;
+constexpr int kGearDrive = 5;
+constexpr int kGearNeutral = 6;
+constexpr int kGearReverse = 7;
+constexpr int kGearSport = 8;
+// 클러스터가 mph 단위일 때의 환산
+constexpr float kMphToKph = 1.609344f;
+
 constexpr uint8_t kPowertrainBus = 0;
 constexpr uint8_t kMdpsBus = 1;
 constexpr uint8_t kCameraBus = 2;

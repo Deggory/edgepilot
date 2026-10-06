@@ -1,11 +1,12 @@
 #include "departure_alert.h"
 
+#include "can_frame.h"
+
 #include <algorithm>
 #include <cmath>
 
 namespace {
 
-constexpr int kDriveGear = 5;
 constexpr float kStoppedSpeedMps = 0.1f;
 constexpr float kMovingResetSpeedMps = 0.5f;
 constexpr double kMinimumStopTimeS = 1.0;
@@ -71,7 +72,7 @@ DepartureAlertOutput DepartureAlertDetector::update(
   }
 
   const bool reset =
-      !input.vehicle_valid || input.gear != kDriveGear || input.gas_pressed ||
+      !input.vehicle_valid || input.gear != kGearDrive || input.gas_pressed ||
       !std::isfinite(input.speed_mps) ||
       input.speed_mps > kMovingResetSpeedMps;
   if (reset) {

@@ -226,7 +226,7 @@ float mdps_speed_for_lkas(float cluster_speed_raw, bool lkas_active, bool is_mph
   const float safe_spoof_kph = std::isfinite(spoof_speed_kph)
       ? std::clamp(spoof_speed_kph, 30.0f, 100.0f)
       : 60.0f;
-  const float threshold = is_mph ? safe_spoof_kph / 1.609344f : safe_spoof_kph;
+  const float threshold = is_mph ? safe_spoof_kph / kMphToKph : safe_spoof_kph;
   if (!lkas_active || cluster_speed_raw > threshold) return cluster_speed_raw;
   return threshold;
 }

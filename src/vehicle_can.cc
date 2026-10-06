@@ -15,10 +15,6 @@ constexpr double kBlinkerHoldSeconds = 0.5;
 /* 이보다 깊으면 페달을 밟은 것이다. 2026-10-04 녹화 두 건: 제동 중 스트로크 중앙값 16 mm(하위 5%
  * 4 mm), 비제동 주행의 99%가 3 mm 이하. 이 기준이 AHB1 작동 상태(CF_Ahb_Act)와 98% 같다. */
 constexpr float kBrakePedalStrokeMm = 3.0f;
-constexpr int kCruiseButtonResume = 1;
-constexpr int kCruiseButtonSet = 2;
-constexpr int kCruiseButtonCancel = 4;
-constexpr float kMphToKph = 1.609344f;
 constexpr float kWheelSpeedScaleKph = 0.03125f;
 constexpr float kFixedCruiseStep = 2.0f;
 constexpr float kMinimumCruiseSpeedKph = 30.0f;
@@ -454,6 +450,13 @@ float cruise_set_speed_kph(const VehicleCanState &state) {
   return state.estimated_cruise_set_speed_valid
       ? state.estimated_cruise_set_speed_kph
       : 0.0f;
+}
+
+float cluster_speed_kph(const VehicleCanState &state) {
+  if (!std::isfinite(state.cluster_speed_raw) || state.cluster_speed_raw < 0.0f) {
+    return 0.0f;
+  }
+  return state.cluster_speed_raw * (state.speed_unit_mph ? kMphToKph : 1.0f);
 }
 
 float vehicle_speed_kph(const VehicleCanState &state, double now_s,

@@ -261,6 +261,10 @@ bool brake_lights_on(const VehicleCanState &state, double now_s,
 // SCC11 설정 속도를 사용하고, 없으면 고정형 크루즈 추정값을 반환한다.
 float cruise_set_speed_kph(const VehicleCanState &state);
 
-// 최신 휠속도 평균을 반환하고, 프레임이 없거나 오래되면 CLU 속도로 대체한다.
+// 클러스터 표시 속도(km/h). 휠 속도보다 높게 나온다(K7 실측 약 6.6%). 값이 없으면 0.
+float cluster_speed_kph(const VehicleCanState &state);
+
+/* 최신 휠속도 평균. 프레임이 없거나 오래되면 NaN이다(클러스터 속도로 대체하지 않는다: 도메인이 달라
+ * 최소 조향 속도 게이트가 뒤집힌다). */
 float vehicle_speed_kph(const VehicleCanState &state, double now_s,
                         double timeout_s = 0.5);

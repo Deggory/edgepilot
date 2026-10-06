@@ -528,7 +528,7 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
   events_.update(last_result_, vehicle_, panda_, panda_state_, held, model_, now_ns);
 
   const bool radar_lead_fresh = signal_time_fresh(vehicle_.scc11_time_s, now_s, 0.5);
-  const float ego_speed_kph = vehicle_speed_kph(vehicle_, now_s);
+  const float ego_speed_kph = last_result_.control_speed_kph;  // 컨트롤러가 이번 틱에 쓴 휠 속도
   const float ego_speed_mps = ego_speed_kph / 3.6f;
   const VisionLead lead = observe_vision_lead(model_, now_ns, ego_speed_mps);
   alert_input_ = make_alert_input(

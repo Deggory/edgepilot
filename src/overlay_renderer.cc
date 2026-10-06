@@ -1,6 +1,7 @@
 #include "overlay_renderer.h"
 
 #include "calibration_online.h"
+#include "can_frame.h"
 #include "lateral_lag.h"
 #include "overlay_canvas.h"
 
@@ -172,11 +173,11 @@ std::string mode_text(const OverlayHudState &hud)
 const char *gear_text(int gear)
 {
     switch (gear) {
-    case 0: return "P";
-    case 5: return "D";
-    case 6: return "N";
-    case 7: return "R";
-    case 8: return "S";
+    case kGearPark: return "P";
+    case kGearDrive: return "D";
+    case kGearNeutral: return "N";
+    case kGearReverse: return "R";
+    case kGearSport: return "S";
     default: return "-";
     }
 }
@@ -184,8 +185,8 @@ const char *gear_text(int gear)
 // 기어 카드의 색: 후진은 주황, 주차·중립은 흐리게.
 uint32_t gear_color(int gear)
 {
-    if (gear == 7) return kAmber;
-    return gear == 5 || gear == 8 ? kText : kTextSecondary;
+    if (gear == kGearReverse) return kAmber;
+    return gear == kGearDrive || gear == kGearSport ? kText : kTextSecondary;
 }
 
 bool speed_valid(float kph) { return std::isfinite(kph) && kph > 0.0f; }

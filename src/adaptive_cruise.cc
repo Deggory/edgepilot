@@ -1,5 +1,6 @@
 #include "adaptive_cruise.h"
 
+#include "can_frame.h"
 #include "utils_math.h"
 #include "utils_json.h"
 
@@ -32,9 +33,6 @@ constexpr float kDisplayScaleMin = 0.97f;
 constexpr float kDisplayScaleMax = 1.25f;
 constexpr float kDisplayScaleLearnMinKph = 30.0f;
 
-constexpr int kCruiseButtonResume = 1;
-constexpr int kCruiseButtonSet = 2;
-constexpr float kMphToKph = 1.609344f;
 constexpr float kDisplayStep = 2.0f;
 constexpr float kMinimumSpeedKph = 30.0f;
 constexpr float kMinimumSpeedMph = 20.0f;

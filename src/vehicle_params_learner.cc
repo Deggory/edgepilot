@@ -1,5 +1,7 @@
 #include "vehicle_params_learner.h"
 
+#include "can_frame.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -37,7 +39,6 @@ constexpr double kOffsetLoweredMax = 8.0;
 constexpr double kMinActiveSpeed = 1.0;
 constexpr double kLowActiveSpeed = 10.0;
 constexpr int kPersistEveryFrames = 1200;
-constexpr int kGearReverse = 7;  // ELECT_GEAR: P0 D5 N6 R7 S8
 
 /* ESP12 입력. 요레이트 std는 VehicleParamsInput 기본값, 롤은 횡가속 유도값이라 거의
  * 정상상태(|u·r| 작음)에서만 관측한다. */
