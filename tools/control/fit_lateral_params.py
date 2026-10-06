@@ -80,10 +80,12 @@ def parse_log_samples(paths, min_speed_kph, driver_max, sign, steer_max):
                         continue
                     # wheel=은 제어가 쓰는 휠 속도(신 로그), speed=는 계기판
                     # 속도(구 로그, 고속에서 ~5% 큼 -> lat_accel ~10% 과대).
+                    # 휠 속도가 끊긴 틱은 wheel=nan이라 숫자로 읽히지 않는다.
                     speed = _field(line, "wheel")
                     if speed is None:
                         speed = _field(line, "speed")
-                        cluster_fallback[0] = True
+                        if speed is not None:
+                            cluster_fallback[0] = True
                     if speed is None or speed < min_speed_kph:
                         skipped["slow"] += 1
                         continue
@@ -204,7 +206,10 @@ MIN_LAT_ACCEL_RANGE = 0.5   # 창 안에 이만큼의 횡가속 변화가 있어
 
 
 def read_control_states(paths):
-    """[t_s, active, cluster_speed_kph, desired_curv, actual_curv] per ControlState record."""
+    """[t_s, active, wheel_speed_kph, desired_curv, actual_curv] per ControlState record.
+
+    속도는 ego_speed_kph(컨트롤러가 그 틱에 쓴 네 바퀴 평균, openpilot vEgo와 같은 기준)다.
+    휠 속도가 끊긴 틱은 NaN이다. 계기판 속도(cluster_speed_kph)는 K7에서 ~6.6% 크다."""
     rows = []
     for path in paths:
         try:
@@ -215,7 +220,7 @@ def read_control_states(paths):
                     continue
                 state = rec.control_state()
                 rows.append((rec.timestamp_ns * 1e-9, int(state["active"]),
-                             float(state["cluster_speed_kph"]), float(state["desired_curvature"]),
+                             float(state["ego_speed_kph"]), float(state["desired_curvature"]),
                              float(state["actual_curvature"])))
         except ValueError as error:
             print(f"건너뜀: {error}", file=sys.stderr)
@@ -246,9 +251,9 @@ def _lags_in_segment(rows, win):
         return []
     desired = np.interp(grid, t, rows[:, 3])
     actual = np.interp(grid, t, rows[:, 4])
-    ok = (np.interp(grid, t, rows[:, 1]) > 0.5) & \
-         (np.interp(grid, t, rows[:, 2]) >= MIN_SPEED_LAG_KPH)
-    speed_mps = np.interp(grid, t, rows[:, 2]) / 3.6
+    speed_kph = np.interp(grid, t, rows[:, 2])  # 휠 속도가 끊긴 곳은 NaN: 속도 문턱을 넘지 못한다
+    ok = (np.interp(grid, t, rows[:, 1]) > 0.5) & (speed_kph >= MIN_SPEED_LAG_KPH)
+    speed_mps = speed_kph / 3.6
     max_shift = int(MAX_LAG_S / GRID_DT)
     min_shift = int(MIN_LAG_S / GRID_DT)
     lags = []
@@ -257,7 +262,8 @@ def _lags_in_segment(rows, win):
         if ok[sl].mean() < 0.9:
             continue
         la = desired[sl] * speed_mps[sl] ** 2
-        if la.max() - la.min() < MIN_LAT_ACCEL_RANGE:
+        la = la[np.isfinite(la)]
+        if la.size == 0 or la.max() - la.min() < MIN_LAT_ACCEL_RANGE:
             continue
         # lagd와 같이 원신호 NCC를 쓴다. 주기 신호의 피크 모호성은
         # corr 문턱(0.95)과 여러 창의 중앙값으로 걸러진다.

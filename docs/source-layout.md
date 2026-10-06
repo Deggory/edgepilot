@@ -330,7 +330,8 @@ released after that short hold if they persist.
     12x7 chessboard image.
 - `tools/control/`
   - `fit_lateral_params.py` (torque regression and actuator-lag estimate from
-    drives) and `export_can_fixture.py` (recorded CAN → `gtest_control_replay`
+    drives, both on the wheel speed as openpilot's torqued and lagd use
+    `vEgo`) and `export_can_fixture.py` (recorded CAN → `gtest_control_replay`
     fixture).
 - `tools/ui/hud_tools.py`
   - extracts `hud_snapshot` inputs from a route and composes its frames.
