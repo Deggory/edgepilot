@@ -2,7 +2,11 @@
  * 시나리오별 프레임을 K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
  * ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성
  * 장면을 쓴다. 호스트와 보드에서 같은 소스로 빌드한다.
- * 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX] */
+ * --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고(--flip-x/--flip-y는
+ * 보드의 disp_flip/disp_mirror 축 뒤집기), 파일도 그 버퍼 그대로 쓴다. 리팩토링 전후 그림이
+ * 바이트 단위로 같은지 비교할 때 쓴다.
+ * 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
+ *                    [--portrait [--flip-x] [--flip-y]] */
 #include "overlay_state.h"
 #include "ipc_messages.h"
 #include "overlay_renderer.h"
@@ -34,18 +38,21 @@ bool read_file(const std::string &path, void *dst, size_t size)
     return got == size;
 }
 
-/* K230ARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). */
+/* K230ARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). 크기는 버퍼(세로면 480x640)다. */
 bool write_frame_file(const std::string &path, const OverlayTarget &target)
 {
     FILE *file = std::fopen(path.c_str(), "wb");
     if (!file) return false;
+    const bool transpose = target.orientation.transpose;
+    const uint32_t buffer_w = transpose ? target.height : target.width;
+    const uint32_t buffer_h = transpose ? target.width : target.height;
     const char magic[8] = {'K', '2', '3', '0', 'A', 'R', 'G', 'B'};
-    const uint32_t dims[2] = {target.width, target.height};
+    const uint32_t dims[2] = {buffer_w, buffer_h};
     bool ok = std::fwrite(magic, 1, 8, file) == 8 && std::fwrite(dims, 4, 2, file) == 2;
-    for (uint32_t row = 0; ok && row < target.height; ++row) {
+    for (uint32_t row = 0; ok && row < buffer_h; ++row) {
         const uint8_t *src = static_cast<const uint8_t *>(target.map) +
                              static_cast<size_t>(row) * target.stride;
-        ok = std::fwrite(src, 4, target.width, file) == target.width;
+        ok = std::fwrite(src, 4, buffer_w, file) == buffer_w;
     }
     std::fclose(file);
     return ok;
@@ -84,7 +91,7 @@ ParsedModelOutput synthetic_output()
 
 struct Scenario {
     const char *name;
-    bool with_model;
+    const ParsedModelOutput *scene;  // nullptr = 모델 출력 없음
     OverlayHudState hud;
 };
 
@@ -106,6 +113,7 @@ int main(int argc, char **argv)
     std::string control_path;
     std::string out_prefix = "hud_snapshot";
     int iterations = 50;
+    HudOrientation orientation;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> const char * { return i + 1 < argc ? argv[++i] : ""; };
@@ -113,10 +121,13 @@ int main(int argc, char **argv)
         else if (arg == "--control") control_path = next();
         else if (arg == "--iterations") iterations = std::max(1, std::atoi(next()));
         else if (arg == "--out") out_prefix = next();
+        else if (arg == "--portrait") orientation.transpose = true;
+        else if (arg == "--flip-x") orientation.flip_x = true;
+        else if (arg == "--flip-y") orientation.flip_y = true;
         else {
             std::fprintf(stderr,
                          "usage: %s [--model model.bin] [--control control.bin] [--iterations N] "
-                         "[--out PREFIX]\n", argv[0]);
+                         "[--out PREFIX] [--portrait [--flip-x] [--flip-y]]\n", argv[0]);
             return 2;
         }
     }
@@ -290,38 +301,102 @@ int main(int argc, char **argv)
     std::snprintf(standby.active_block, sizeof(standby.active_block), "stopped");
     standby.cluster_speed_kph = 12.0f;
 
+    // 아래는 알림·카드 분기를 고루 그리려고 더한 장면이다(리팩토링 전후 그림 비교용).
+    OverlayHudState soft_disable = drive;  // 재보정으로 3초 뒤 해제 예고
+    soft_disable.soft_disabling = true;
+    std::snprintf(soft_disable.active_block, sizeof(soft_disable.active_block), "calibration_recalibrating");
+
+    OverlayHudState panda_fault = drive;
+    panda_fault.panda_faults = 0x4;
+
+    OverlayHudState services = drive;  // 서비스가 덜 떴을 때
+    services.services_healthy = false;
+
+    OverlayHudState laneless = drive;
+    laneless.laneless_mode = true;
+
+    OverlayHudState radar_lead = drive;  // 비전 앞차 없이 레이더 앞차만
+    radar_lead.radar_lead_valid = true;
+    radar_lead.radar_lead_distance_m = 24.0f;
+    radar_lead.radar_lead_relative_speed_mps = -1.5f;
+
+    OverlayHudState lead_departed = depart;
+    lead_departed.departure_alert_type = DepartureAlertType::lead_departed;
+
+    OverlayHudState changing = drive;  // 오른쪽으로 차선 변경 중
+    changing.right_blinker = true;
+    changing.turn_signal_step = 6;
+    changing.lane_change = 2;
+    changing.lane_change_direction = 1;
+
+    OverlayHudState tpms_bar = drive;  // bar 단위, 낮은·높은 타이어, 차량 TPMS 경고
+    tpms_bar.tpms_valid = true;
+    tpms_bar.tpms_unit = 2;
+    tpms_bar.tpms_pressure_fl = 2.4f;
+    tpms_bar.tpms_pressure_fr = 1.7f;
+    tpms_bar.tpms_pressure_rl = 2.5f;
+    tpms_bar.tpms_pressure_rr = 3.4f;
+    tpms_bar.tpms_warning = true;
+
+    OverlayHudState cal_invalid = drive;
+    cal_invalid.calibration_status = 2;
+
+    OverlayHudState engaged_blocked = drive;  // 결합은 유지한 채 경로가 없어 쉬는 중
+    engaged_blocked.controller_active = false;
+    std::snprintf(engaged_blocked.active_block, sizeof(engaged_blocked.active_block), "path_invalid");
+
+    OverlayHudState debug_stale = debug;  // 진단 카드에서 학습기 상태가 끊김
+    debug_stale.learner_fresh = false;
+    debug_stale.lag_blocks = -1;
+
+    ParsedModelOutput no_lead = output;
+    no_lead.leads = {};
+
     const std::vector<Scenario> scenarios = {
-        {"idle", false, idle},
-        {"standby", true, standby},
-        {"drive", true, drive},
-        {"busy", true, busy},
-        {"depart", true, depart},
-        {"fault", true, fault},
-        {"torque", true, torque},
-        {"saturated", true, saturated},
-        {"debug", true, debug},
-        {"learned", true, learned},
-        {"hazard", true, hazard},
-        {"network", true, network},
-        {"offline", true, offline},
-        {"warnings", true, warnings},
-        {"lane_change", true, lane_change},
-        {"turn", true, turn},
-        {"paused", true, paused},
+        {"idle", nullptr, idle},
+        {"standby", &output, standby},
+        {"drive", &output, drive},
+        {"busy", &output, busy},
+        {"depart", &output, depart},
+        {"fault", &output, fault},
+        {"torque", &output, torque},
+        {"saturated", &output, saturated},
+        {"debug", &output, debug},
+        {"learned", &output, learned},
+        {"hazard", &output, hazard},
+        {"network", &output, network},
+        {"offline", &output, offline},
+        {"warnings", &output, warnings},
+        {"lane_change", &output, lane_change},
+        {"turn", &output, turn},
+        {"paused", &output, paused},
+        {"soft_disable", &output, soft_disable},
+        {"panda_fault", &output, panda_fault},
+        {"services", &output, services},
+        {"laneless", &output, laneless},
+        {"radar_lead", &no_lead, radar_lead},
+        {"lead_departed", &output, lead_departed},
+        {"changing", &output, changing},
+        {"tpms_bar", &output, tpms_bar},
+        {"cal_invalid", &output, cal_invalid},
+        {"engaged_blocked", &output, engaged_blocked},
+        {"debug_stale", &output, debug_stale},
     };
 
     constexpr uint32_t width = 640;
     constexpr uint32_t height = 480;
     std::vector<uint32_t> storage(static_cast<size_t>(width) * height, 0);
-    const OverlayTarget target{storage.data(), width, height, width * 4};
+    const uint32_t stride = (orientation.transpose ? height : width) * 4;
+    const OverlayTarget target{storage.data(), width, height, stride, orientation};
 
     OverlayRenderer renderer;
-    std::printf("inputs: model=%s control=%s target=%ux%u\n",
+    std::printf("inputs: model=%s control=%s target=%ux%u%s\n",
                 have_model ? model_path.c_str() : "synthetic",
-                have_control ? control_path.c_str() : "synthetic", width, height);
+                have_control ? control_path.c_str() : "synthetic", width, height,
+                orientation.transpose ? " portrait" : "");
 
     for (const Scenario &scenario : scenarios) {
-        const ParsedModelOutput &scene = scenario.with_model ? output : ParsedModelOutput{};
+        const ParsedModelOutput &scene = scenario.scene ? *scenario.scene : ParsedModelOutput{};
         std::vector<double> draw_ms;
         for (int i = 0; i < iterations; ++i) {
             const uint64_t t0 = now_ns();

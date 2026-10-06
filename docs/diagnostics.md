@@ -9,15 +9,18 @@ their options, and how to build them are listed in
 
 ## HUD snapshots
 
-`hud_snapshot` renders the overlay renderer off-line for the idle / standby /
-drive / busy / depart / fault / torque / saturated / debug / learned / hazard /
-network / offline / warnings / lane_change / turn / paused scenarios at the HUD's
-640x480 landscape size (on the board the canvas maps it onto the portrait
-panel), writes each frame as a `K230ARGB`
-file and prints draw timings. The renderer needs no OpenCV, so the tool builds
-on the host as well as in the container build with
-`-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`; time it on the board, where the numbers
-matter (the host is 20–40x faster).
+`hud_snapshot` renders the overlay renderer off-line for 28 scenarios (driving,
+alerts, cards, warnings and the less common branches: soft disable, panda fault,
+radar-only lead, bar TPMS, engaged but blocked, ...) at the HUD's 640x480
+landscape size, writes each frame as a `K230ARGB` file and prints draw timings.
+`--portrait` draws the way `overlayd` does, transposed into the portrait panel's
+480x640 buffer (`--flip-x`/`--flip-y` add the board's axis flips), and writes
+that buffer. The renderer needs no OpenCV, so the tool builds on the host as
+well as in the container build with `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`; time it
+on the board, where the numbers matter (the host is 20–40x faster). Frames from
+two builds of the same compiler are byte-identical when the drawing did not
+change, which is the check used for HUD refactors (compare the host and the
+container build separately: GCC fuses multiply-adds that clang leaves apart).
 
 ```sh
 ./hud_snapshot --out /tmp/hud
