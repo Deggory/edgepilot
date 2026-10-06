@@ -85,20 +85,7 @@ LateralControlResult LateralController::update(const LateralPath &path,
 
   LateralControlResult result;
   result.engaged = logical_engaged;
-  // path 복귀 디바운스: 무효는 즉시 반영, 무효를 겪은 뒤의 복귀는 0.5s
-  // 연속 유효를 요구한다(경계 깜빡임 차단). 최초 유효는 바로 통과.
-  if (!path.usable_for_steering) {
-    path_valid_since_s_ = -1.0;
-    path_usable_debounced_ = false;
-    path_seen_invalid_ = true;
-  } else if (!path_usable_debounced_) {
-    if (path_valid_since_s_ < 0.0) path_valid_since_s_ = now_s;
-    if (!path_seen_invalid_ || now_s - path_valid_since_s_ >= 0.5)
-      path_usable_debounced_ = true;
-  }
-  LateralPath gated_path = path;
-  gated_path.usable_for_steering = path_usable_debounced_;
-  if (!path_usable_debounced_) gated_path.invalid_reason = "path_invalid";
+  const LateralPath gated_path = debounce_path(path, now_s);
   result.path_usable = gated_path.usable_for_steering;
   result.left_lane = path.left_valid;
   result.right_lane = path.right_valid;
@@ -112,76 +99,13 @@ LateralControlResult LateralController::update(const LateralPath &path,
       static_cast<double>(config_.driving_params.vehicle_state_timeout_ms) / 1000.0);
   const float speed_mps = result.control_speed_kph / 3.6f;
   const LiveLateralParams live = live_params();
-  /* plan 나이: 근거 프레임 캡처 시각부터 지금까지. lag 보상과 staleness
-   * gate가 함께 쓴다. 타임스탬프가 없으면(테스트, 초기값) 0으로 둔다. */
-  float plan_age_s = 0.0f;
-  if (target.valid && target.capture_timestamp_ns != 0) {
-    const uint64_t control_now_ns = clock_();
-    if (control_now_ns > target.capture_timestamp_ns) {
-      plan_age_s = static_cast<float>(
-          static_cast<double>(control_now_ns - target.capture_timestamp_ns) * 1e-9);
-    }
-  }
+  const float plan_age = plan_age_s(target);
   result.active_block = active_block_reason(gated_path, target, vehicle_state, now_s,
                                             result.seeds_ready, result.vehicle_fresh,
                                             panda_ready, panda_controls_allowed,
-                                            result.control_speed_kph, plan_age_s);
+                                            result.control_speed_kph, plan_age);
   const BlockKind kind = block_kind(result.active_block);
-  /* SoftDisable: engage 중이면 3초간 조향을 유지하며 경고하고, 그 뒤에는 Hard처럼 해제한다. */
-  bool soft_disable_expired = false;
-  if (logical_engaged && !engage_requested && kind == BlockKind::SoftDisable) {
-    if (soft_disable_start_s_ < 0.0) soft_disable_start_s_ = now_s;
-    soft_disable_expired = now_s - soft_disable_start_s_ >= kSoftDisableS;
-    result.soft_disabling = !soft_disable_expired;
-  } else {
-    soft_disable_start_s_ = -1.0;
-  }
-  if (logical_engaged && (kind == BlockKind::Hard || soft_disable_expired)) {
-    panda_engage_pending_ = false;
-    engaged_ = false;
-    reset_control_state();
-    last_disengage_s_ = now_s;
-    result.engaged = config_.force_engaged;
-  }
-
-  if (engage_requested) {
-    if (kind == BlockKind::Transient) {
-      panda_engage_pending_ = true;
-      panda_engage_pending_s_ = now_s;
-    } else {
-      panda_engage_pending_ = false;
-    }
-  }
-
-  if (engage_requested && (kind == BlockKind::Hard || kind == BlockKind::Reject ||
-                           kind == BlockKind::SoftDisable)) {
-    // 차량/컨트롤러의 정적 gate는 실제 engage 요청 실패로 처리한다.
-    engaged_ = false;
-    reset_control_state();
-    last_disengage_s_ = now_s;
-    result.engaged = config_.force_engaged;
-    result.engage_rejected = true;
-  }
-
-  if (panda_engage_pending_) {
-    const bool panda_waiting = kind == BlockKind::Transient;
-    const bool grace_elapsed = now_s - panda_engage_pending_s_ >= kPandaEngageGraceS;
-    if (kind == BlockKind::None || kind == BlockKind::Availability) {
-      // Panda 허가가 도착했고 나머지는 가용성 상태뿐이면 engage를 유지한다.
-      panda_engage_pending_ = false;
-    } else if (!panda_waiting || grace_elapsed) {
-      /* 정적 실패를 저장했다가 gate가 해소되면 조용히 engage하지 않는다. Panda에는
-       * 짧은 비동기 health handshake 유예만 허용하며, 완료되지 않으면 실제 차단
-       * 사유를 한 번 보고한다. */
-      panda_engage_pending_ = false;
-      engaged_ = false;
-      reset_control_state();
-      last_disengage_s_ = now_s;
-      result.engaged = config_.force_engaged;
-      result.engage_rejected = true;
-    }
-  }
-  result.active = kind == BlockKind::None || result.soft_disabling;
+  resolve_engagement(kind, logical_engaged, engage_requested, now_s, &result);
   /* 가용성 대기 중에는 토크만 0으로 하고 steer_req/MDPS 속도 스푸프는
    * 유지한다 — 매 정차마다 끊기면 MDPS/클러스터가 천이 경보를 낸다.
    * 결함/해제는 즉시 끊는다. plan 무효는 engage는 거부하되 steer_req는 잡아둔다. */
@@ -196,139 +120,33 @@ LateralControlResult LateralController::update(const LateralPath &path,
   result.large_angle_hold_by_driver = result.large_angle_hold && driver_took_wheel_;
   // 요청을 끈 동안은 활성이라도 조향을 쉰다(상류 latActive=false처럼)
   const bool steering = result.active && !result.large_angle_hold;
-  const SteeringParams &control_params = config_.steering_params;
   const bool yaw_rate_valid = signal_time_fresh(
                                   vehicle_state.esp12_time_s, now_s,
                                   static_cast<double>(config_.driving_params.vehicle_state_timeout_ms) /
                                       1000.0) &&
                               vehicle_state.yaw_rate_valid;
-  /* 편경사: 직선(|yaw*v| < 0.4)에서만 갱신, 커브는 홀드 — 커브에서는 차체 롤
-   * 중력 누설이 섞인다(2026-08-30 drive10: 커브 방향 반상관 ±0.2~0.5 + 탈출 꼬리).
-   * rc 2초. 실측 검증식 (2026-08-27, 직선 -0.117 재현): bank = lat + yaw_rate*v. */
-  constexpr float kBankAlpha = 0.01f / (2.0f + 0.01f);
-  if (yaw_rate_valid && vehicle_state.lat_accel_valid &&
-      std::isfinite(vehicle_state.lat_accel_mps2) && speed_mps > 8.0f &&
-      std::fabs(vehicle_state.yaw_rate_rad_s * speed_mps) < 0.4f) {
-    const float bank = clamp_float(
-        vehicle_state.lat_accel_mps2 + vehicle_state.yaw_rate_rad_s * speed_mps,
-        -2.0f, 2.0f);
-    if (!road_bank_init_) { road_bank_lat_accel_ = bank; road_bank_init_ = true; }
-    road_bank_lat_accel_ += kBankAlpha * (bank - road_bank_lat_accel_);
-    road_bank_stale_frames_ = 0;
-  } else if (++road_bank_stale_frames_ > 3000) {
-    // 30초 넘게 갱신이 없으면 낡은 편경사를 0으로 감쇠하고 재초기화를 허용
-    road_bank_lat_accel_ += kBankAlpha * (0.0f - road_bank_lat_accel_);
-    road_bank_init_ = false;
-  }
+  update_road_bank(vehicle_state, speed_mps, yaw_rate_valid);
 
-  /* 상류 controlsd: 활성이면 plan, 비활성이면 실제 곡률을 클립에 넣는다. 재활성 때 목표가
-   * 실제 곡률에서 한계 안으로 출발하고, 비활성 중의 잘못된 plan 값이 넘어오지 않는다. */
-  float requested_curvature = steering
-      ? lag_adjusted_curvature(target, speed_mps, plan_age_s, plan_delay_s())
-      : torque_controller_.estimate_actual_curvature(speed_mps, vehicle_state.steering_angle_deg,
-                                                     control_params, vehicle_state.yaw_rate_rad_s,
-                                                     yaw_rate_valid, live);
-  /* 운전자가 핸들을 잡지 않았을 때는 목표를 avoid_lkas_fault_hold_angle_deg(80도) 조향각이 내는
-   * 곡률 안으로 묶는다(같은 차량 모델, 학습 SR·강성·오프셋·롤). 컨트롤러가 스스로 85도를 넘겨
-   * 0.89초 뒤 토크가 빠지고 핸들이 풀렸다 다시 잡는 반복 대신, 그 각도에서 토크를 끊김 없이
-   * 유지한다. 운전자가 조향 중이면 묶지 않는다: 교차로에서 더 감는 운전자를 80도 쪽으로 밀지
-   * 않고, 85도 위에서는 시간 규칙이 그대로 적용된다. 횡가속 한계가 더 좁은 약 36 km/h 위에서는
-   * 걸리지 않는다. */
-  const float hold_angle_deg = control_params.avoid_lkas_fault_hold_angle_deg;
-  if (steering && !steering_pressed && control_params.avoid_lkas_fault_enabled &&
-      hold_angle_deg > 0.0f && std::isfinite(speed_mps) && std::isfinite(requested_curvature)) {
-    const float left = torque_controller_.curvature_at_angle(speed_mps, hold_angle_deg,
-                                                             control_params, live);
-    const float right = torque_controller_.curvature_at_angle(speed_mps, -hold_angle_deg,
-                                                              control_params, live);
-    requested_curvature = std::clamp(requested_curvature, std::min(left, right),
-                                     std::max(left, right));
-  }
   bool curvature_limited = false;
   result.desired_curvature =
-      clip_curvature(speed_mps, prev_desired_curvature_, requested_curvature,
+      clip_curvature(speed_mps, prev_desired_curvature_,
+                     requested_curvature(target, vehicle_state, speed_mps, plan_age, steering,
+                                         steering_pressed, yaw_rate_valid, live),
                      live.use_vehicle ? live.roll_rad : 0.0f, &curvature_limited);
   prev_desired_curvature_ = result.desired_curvature;
 
   if (steering) {
-    /* 85도 위에서도 컨트롤러 토크를 그대로 내되, 요청을 끄는 프레임(avoid_lkas_fault_max_frames,
-     * update_large_angle_hold)에 0에 닿도록 크기를 steer_delta_down × 남은 프레임으로 묶는다.
-     * 하강 레이트 한계로 내려와도 늦지 않는 만큼만 남기는 것이라, 최대 토크로 85도를 넘으면
-     * 약 0.35초는 그대로 두고 0.55초에 걸쳐 내린다(2026-10-03까지는 0.69초 선형 램프로 0).
-     * 요청은 토크가 0일 때 꺼지므로 어시스트가 빠지는 "탁"이 없다. 적분기는 85도 위에서 얼린다. */
-    const bool above_fault_angle =
-        control_params.avoid_lkas_fault_enabled &&
-        std::fabs(vehicle_state.steering_angle_deg) >=
-            control_params.avoid_lkas_fault_max_angle_deg;
-    int torque_cap = control_params.steer_max;
-    if (result.large_angle_hold) {
-      torque_cap = 0;
-    } else if (fault_angle_frames_ > 0) {
-      torque_cap = std::min(torque_cap, control_params.steer_delta_down *
-          std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
-    }
-    const int raw_torque = torque_controller_.update(
-        true, speed_mps, result.desired_curvature, vehicle_state.steering_angle_deg,
-        steering_pressed, steer_rate_limited_ || above_fault_angle, control_params, plan_delay_s(),
-        vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_lat_accel_, live);
-    result.desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
-    /* 회전 desire 중 운전자가 깜빡이 방향으로 돌리고 있으면(운전자 토크 > steer_driver_allowance)
-     * 그 반대 방향 토크는 내지 않는다. 걷는 속도에서 모델 계획이 회전을 놓치면 회전에 들어가는
-     * 운전자를 밀었다(2026-10-03 8:16·8:48). panda 운전자 클램프도 반대 토크를 줄이지만 운전자
-     * 토크가 242를 넘어야 0이 된다. 토크와 운전자 토크는 같은 부호계다(+ = 왼쪽). */
-    if (target.turn_desire != 0) {
-      const int toward = target.turn_desire == 1 ? 1 : -1;
-      if (vehicle_state.driver_torque * toward > control_params.steer_driver_allowance)
-        result.desired_torque = toward > 0 ? std::max(result.desired_torque, 0)
-                                           : std::min(result.desired_torque, 0);
-    }
-    result.actual_curvature = torque_controller_.actual_curvature();
-    result.actual_curvature_vm = torque_controller_.actual_curvature_vm();
-    result.actual_curvature_yaw = torque_controller_.actual_curvature_yaw();
-    result.curvature_error = result.desired_curvature - result.actual_curvature;
-    result.normalized_output = torque_controller_.normalized_output();
-    result.feedforward = torque_controller_.feedforward();
-    result.apply_torque = apply_hyundai_steer_torque_limits(
-        result.desired_torque, last_torque_, vehicle_state.driver_torque,
-        hyundai_limits(control_params));
-
-    /* openpilot LatControl._check_saturation + selfdrived steerSaturated. 출력이 한계에
-     * 붙었거나 곡률이 횡가속 한계에 잘렸는데, 안전 한계(토크 레이트)나 운전자 때문이
-     * 아닐 때 0.4초 누적되면 포화다. 커브에서 목표 횡가속이 실제의 1.2배를 넘고 1 m/s²
-     * 이상이며 최근 2초 안에 핸들을 잡지 않았으면 경고한다. */
-    constexpr float kDt = 0.01f;
-    const bool saturated_now = std::fabs(result.normalized_output) >= 1.0f - 1e-3f ||
-                               curvature_limited;
-    if (saturated_now && speed_mps > kSatCheckMinSpeedMps && !steer_rate_limited_ &&
-        !steering_pressed)
-      sat_time_ += kDt;
-    else
-      sat_time_ -= kDt;
-    sat_time_ = clamp_float(sat_time_, 0.0f, kSteerLimitTimerS);
-    const bool lac_saturated = sat_time_ > kSteerLimitTimerS - 1e-3f;
-    if (steering_pressed) last_steering_pressed_s_ = now_s;
-    const bool recent_steer_pressed = now_s - last_steering_pressed_s_ < 2.0;
-    const float clipped_speed = std::max(speed_mps, 0.3f);
-    const float desired_lat_accel = result.desired_curvature * clipped_speed * clipped_speed;
-    const float actual_lat_accel = result.actual_curvature * clipped_speed * clipped_speed;
-    const bool undershooting =
-        std::fabs(desired_lat_accel) / std::fabs(1e-3f + actual_lat_accel) > 1.2f;
-    const bool turning = std::fabs(desired_lat_accel) > 1.0f;
-    result.steer_saturated = !recent_steer_pressed && undershooting && turning && lac_saturated;
+    steer(target, vehicle_state, speed_mps, now_s, steering_pressed, yaw_rate_valid, curvature_limited, live,
+          &result);
   } else {
     sat_time_ = 0.0f;
     // 0을 넘기면 커브 중 engage 시 지연 버퍼가 0-setpoint로 P를 튀게 한다
     torque_controller_.update(false, speed_mps, result.desired_curvature,
                               vehicle_state.steering_angle_deg,
-                              false, steer_rate_limited_, control_params, plan_delay_s(),
+                              false, steer_rate_limited_, config_.steering_params, plan_delay_s(),
                               vehicle_state.yaw_rate_rad_s, yaw_rate_valid,
                               road_bank_lat_accel_, live);
-    result.actual_curvature = torque_controller_.actual_curvature();
-    result.actual_curvature_vm = torque_controller_.actual_curvature_vm();
-    result.actual_curvature_yaw = torque_controller_.actual_curvature_yaw();
-    result.curvature_error = result.desired_curvature - result.actual_curvature;
-    result.normalized_output = torque_controller_.normalized_output();
-    result.feedforward = torque_controller_.feedforward();
+    copy_torque_state(&result);
     result.desired_torque = 0;
     result.apply_torque = 0;
   }
@@ -357,14 +175,238 @@ LateralControlResult LateralController::update(const LateralPath &path,
   return result;
 }
 
+// path 복귀 디바운스: 무효는 즉시 반영, 무효를 겪은 뒤의 복귀는 0.5s
+// 연속 유효를 요구한다(경계 깜빡임 차단). 최초 유효는 바로 통과.
+LateralPath LateralController::debounce_path(const LateralPath &path, double now_s) {
+  if (!path.usable_for_steering) {
+    path_valid_since_s_ = -1.0;
+    path_usable_debounced_ = false;
+    path_seen_invalid_ = true;
+  } else if (!path_usable_debounced_) {
+    if (path_valid_since_s_ < 0.0) path_valid_since_s_ = now_s;
+    if (!path_seen_invalid_ || now_s - path_valid_since_s_ >= 0.5)
+      path_usable_debounced_ = true;
+  }
+  LateralPath gated_path = path;
+  gated_path.usable_for_steering = path_usable_debounced_;
+  if (!path_usable_debounced_) gated_path.invalid_reason = "path_invalid";
+  return gated_path;
+}
+
+/* plan 나이: 근거 프레임 캡처 시각부터 지금까지. lag 보상과 staleness
+ * gate가 함께 쓴다. 타임스탬프가 없으면(테스트, 초기값) 0으로 둔다. */
+float LateralController::plan_age_s(const LateralTarget &target) const {
+  float plan_age_s = 0.0f;
+  if (target.valid && target.capture_timestamp_ns != 0) {
+    const uint64_t control_now_ns = clock_();
+    if (control_now_ns > target.capture_timestamp_ns) {
+      plan_age_s = static_cast<float>(
+          static_cast<double>(control_now_ns - target.capture_timestamp_ns) * 1e-9);
+    }
+  }
+  return plan_age_s;
+}
+
+// 결합과 Panda 유예를 풀고 제어 상태를 처음으로 돌린다(해제·engage 거부·CANCEL 공통).
+void LateralController::disengage(double now_s) {
+  panda_engage_pending_ = false;
+  engaged_ = false;
+  reset_control_state();
+  last_disengage_s_ = now_s;
+}
+
+/* 이번 틱의 차단 사유(kind)로 해제·engage 거부·Panda 유예를 정하고, result의 engaged,
+ * soft_disabling, engage_rejected, active를 채운다. */
+void LateralController::resolve_engagement(BlockKind kind, bool logical_engaged, bool engage_requested,
+                                           double now_s, LateralControlResult *result) {
+  /* SoftDisable: engage 중이면 3초간 조향을 유지하며 경고하고, 그 뒤에는 Hard처럼 해제한다. */
+  bool soft_disable_expired = false;
+  if (logical_engaged && !engage_requested && kind == BlockKind::SoftDisable) {
+    if (soft_disable_start_s_ < 0.0) soft_disable_start_s_ = now_s;
+    soft_disable_expired = now_s - soft_disable_start_s_ >= kSoftDisableS;
+    result->soft_disabling = !soft_disable_expired;
+  } else {
+    soft_disable_start_s_ = -1.0;
+  }
+  if (logical_engaged && (kind == BlockKind::Hard || soft_disable_expired)) {
+    disengage(now_s);
+    result->engaged = config_.force_engaged;
+  }
+
+  if (engage_requested) {
+    if (kind == BlockKind::Transient) {
+      panda_engage_pending_ = true;
+      panda_engage_pending_s_ = now_s;
+    } else {
+      panda_engage_pending_ = false;
+    }
+  }
+
+  if (engage_requested && (kind == BlockKind::Hard || kind == BlockKind::Reject ||
+                           kind == BlockKind::SoftDisable)) {
+    // 차량/컨트롤러의 정적 gate는 실제 engage 요청 실패로 처리한다.
+    disengage(now_s);
+    result->engaged = config_.force_engaged;
+    result->engage_rejected = true;
+  }
+
+  if (panda_engage_pending_) {
+    const bool panda_waiting = kind == BlockKind::Transient;
+    const bool grace_elapsed = now_s - panda_engage_pending_s_ >= kPandaEngageGraceS;
+    if (kind == BlockKind::None || kind == BlockKind::Availability) {
+      // Panda 허가가 도착했고 나머지는 가용성 상태뿐이면 engage를 유지한다.
+      panda_engage_pending_ = false;
+    } else if (!panda_waiting || grace_elapsed) {
+      /* 정적 실패를 저장했다가 gate가 해소되면 조용히 engage하지 않는다. Panda에는
+       * 짧은 비동기 health handshake 유예만 허용하며, 완료되지 않으면 실제 차단
+       * 사유를 한 번 보고한다. */
+      disengage(now_s);
+      result->engaged = config_.force_engaged;
+      result->engage_rejected = true;
+    }
+  }
+  result->active = kind == BlockKind::None || result->soft_disabling;
+}
+
+/* 편경사: 직선(|yaw*v| < 0.4)에서만 갱신, 커브는 홀드 — 커브에서는 차체 롤
+ * 중력 누설이 섞인다(2026-08-30 drive10: 커브 방향 반상관 ±0.2~0.5 + 탈출 꼬리).
+ * rc 2초. 실측 검증식 (2026-08-27, 직선 -0.117 재현): bank = lat + yaw_rate*v. */
+void LateralController::update_road_bank(const VehicleCanState &vehicle_state, float speed_mps,
+                                         bool yaw_rate_valid) {
+  constexpr float kBankAlpha = 0.01f / (2.0f + 0.01f);
+  if (yaw_rate_valid && vehicle_state.lat_accel_valid &&
+      std::isfinite(vehicle_state.lat_accel_mps2) && speed_mps > 8.0f &&
+      std::fabs(vehicle_state.yaw_rate_rad_s * speed_mps) < 0.4f) {
+    const float bank = clamp_float(
+        vehicle_state.lat_accel_mps2 + vehicle_state.yaw_rate_rad_s * speed_mps,
+        -2.0f, 2.0f);
+    if (!road_bank_init_) { road_bank_lat_accel_ = bank; road_bank_init_ = true; }
+    road_bank_lat_accel_ += kBankAlpha * (bank - road_bank_lat_accel_);
+    road_bank_stale_frames_ = 0;
+  } else if (++road_bank_stale_frames_ > 3000) {
+    // 30초 넘게 갱신이 없으면 낡은 편경사를 0으로 감쇠하고 재초기화를 허용
+    road_bank_lat_accel_ += kBankAlpha * (0.0f - road_bank_lat_accel_);
+    road_bank_init_ = false;
+  }
+}
+
+/* 클립 전 목표 곡률. 상류 controlsd: 활성이면 plan, 비활성이면 실제 곡률을 클립에 넣는다. 재활성 때
+ * 목표가 실제 곡률에서 한계 안으로 출발하고, 비활성 중의 잘못된 plan 값이 넘어오지 않는다. */
+float LateralController::requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state,
+                                             float speed_mps, float plan_age_s, bool steering,
+                                             bool steering_pressed, bool yaw_rate_valid,
+                                             const LiveLateralParams &live) {
+  const SteeringParams &control_params = config_.steering_params;
+  float requested_curvature = steering
+      ? lag_adjusted_curvature(target, speed_mps, plan_age_s, plan_delay_s())
+      : torque_controller_.estimate_actual_curvature(speed_mps, vehicle_state.steering_angle_deg,
+                                                     control_params, vehicle_state.yaw_rate_rad_s,
+                                                     yaw_rate_valid, live);
+  /* 운전자가 핸들을 잡지 않았을 때는 목표를 avoid_lkas_fault_hold_angle_deg(80도) 조향각이 내는
+   * 곡률 안으로 묶는다(같은 차량 모델, 학습 SR·강성·오프셋·롤). 컨트롤러가 스스로 85도를 넘겨
+   * 0.89초 뒤 토크가 빠지고 핸들이 풀렸다 다시 잡는 반복 대신, 그 각도에서 토크를 끊김 없이
+   * 유지한다. 운전자가 조향 중이면 묶지 않는다: 교차로에서 더 감는 운전자를 80도 쪽으로 밀지
+   * 않고, 85도 위에서는 시간 규칙이 그대로 적용된다. 횡가속 한계가 더 좁은 약 36 km/h 위에서는
+   * 걸리지 않는다. */
+  const float hold_angle_deg = control_params.avoid_lkas_fault_hold_angle_deg;
+  if (steering && !steering_pressed && control_params.avoid_lkas_fault_enabled &&
+      hold_angle_deg > 0.0f && std::isfinite(speed_mps) && std::isfinite(requested_curvature)) {
+    const float left = torque_controller_.curvature_at_angle(speed_mps, hold_angle_deg,
+                                                             control_params, live);
+    const float right = torque_controller_.curvature_at_angle(speed_mps, -hold_angle_deg,
+                                                              control_params, live);
+    requested_curvature = std::clamp(requested_curvature, std::min(left, right),
+                                     std::max(left, right));
+  }
+  return requested_curvature;
+}
+
+// 토크 제어기의 진단값을 결과에 옮긴다.
+void LateralController::copy_torque_state(LateralControlResult *result) const {
+  result->actual_curvature = torque_controller_.actual_curvature();
+  result->actual_curvature_vm = torque_controller_.actual_curvature_vm();
+  result->actual_curvature_yaw = torque_controller_.actual_curvature_yaw();
+  result->curvature_error = result->desired_curvature - result->actual_curvature;
+  result->normalized_output = torque_controller_.normalized_output();
+  result->feedforward = torque_controller_.feedforward();
+}
+
+// 조향 중: 토크를 계산하고 85도 고장 회피·회전 desire·Panda 한계를 적용한 뒤 포화를 본다.
+void LateralController::steer(const LateralTarget &target, const VehicleCanState &vehicle_state,
+                              float speed_mps, double now_s, bool steering_pressed, bool yaw_rate_valid,
+                              bool curvature_limited, const LiveLateralParams &live,
+                              LateralControlResult *result) {
+  const SteeringParams &control_params = config_.steering_params;
+  /* 85도 위에서도 컨트롤러 토크를 그대로 내되, 요청을 끄는 프레임(avoid_lkas_fault_max_frames,
+   * update_large_angle_hold)에 0에 닿도록 크기를 steer_delta_down × 남은 프레임으로 묶는다.
+   * 하강 레이트 한계로 내려와도 늦지 않는 만큼만 남기는 것이라, 최대 토크로 85도를 넘으면
+   * 약 0.35초는 그대로 두고 0.55초에 걸쳐 내린다(2026-10-03까지는 0.69초 선형 램프로 0).
+   * 요청은 토크가 0일 때 꺼지므로 어시스트가 빠지는 "탁"이 없다. 적분기는 85도 위에서 얼린다. */
+  const bool above_fault_angle =
+      control_params.avoid_lkas_fault_enabled &&
+      std::fabs(vehicle_state.steering_angle_deg) >=
+          control_params.avoid_lkas_fault_max_angle_deg;
+  int torque_cap = control_params.steer_max;
+  if (result->large_angle_hold) {
+    torque_cap = 0;
+  } else if (fault_angle_frames_ > 0) {
+    torque_cap = std::min(torque_cap, control_params.steer_delta_down *
+        std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
+  }
+  const int raw_torque = torque_controller_.update(
+      true, speed_mps, result->desired_curvature, vehicle_state.steering_angle_deg,
+      steering_pressed, steer_rate_limited_ || above_fault_angle, control_params, plan_delay_s(),
+      vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_lat_accel_, live);
+  result->desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
+  /* 회전 desire 중 운전자가 깜빡이 방향으로 돌리고 있으면(운전자 토크 > steer_driver_allowance)
+   * 그 반대 방향 토크는 내지 않는다. 걷는 속도에서 모델 계획이 회전을 놓치면 회전에 들어가는
+   * 운전자를 밀었다(2026-10-03 8:16·8:48). panda 운전자 클램프도 반대 토크를 줄이지만 운전자
+   * 토크가 242를 넘어야 0이 된다. 토크와 운전자 토크는 같은 부호계다(+ = 왼쪽). */
+  if (target.turn_desire != 0) {
+    const int toward = target.turn_desire == 1 ? 1 : -1;
+    if (vehicle_state.driver_torque * toward > control_params.steer_driver_allowance)
+      result->desired_torque = toward > 0 ? std::max(result->desired_torque, 0)
+                                          : std::min(result->desired_torque, 0);
+  }
+  copy_torque_state(result);
+  result->apply_torque = apply_hyundai_steer_torque_limits(
+      result->desired_torque, last_torque_, vehicle_state.driver_torque,
+      hyundai_limits(control_params));
+  result->steer_saturated = update_saturation(*result, speed_mps, now_s, steering_pressed, curvature_limited);
+}
+
+/* openpilot LatControl._check_saturation + selfdrived steerSaturated. 출력이 한계에
+ * 붙었거나 곡률이 횡가속 한계에 잘렸는데, 안전 한계(토크 레이트)나 운전자 때문이
+ * 아닐 때 0.4초 누적되면 포화다. 커브에서 목표 횡가속이 실제의 1.2배를 넘고 1 m/s²
+ * 이상이며 최근 2초 안에 핸들을 잡지 않았으면 경고한다. */
+bool LateralController::update_saturation(const LateralControlResult &result, float speed_mps, double now_s,
+                                          bool steering_pressed, bool curvature_limited) {
+  constexpr float kDt = 0.01f;
+  const bool saturated_now = std::fabs(result.normalized_output) >= 1.0f - 1e-3f ||
+                             curvature_limited;
+  if (saturated_now && speed_mps > kSatCheckMinSpeedMps && !steer_rate_limited_ &&
+      !steering_pressed)
+    sat_time_ += kDt;
+  else
+    sat_time_ -= kDt;
+  sat_time_ = clamp_float(sat_time_, 0.0f, kSteerLimitTimerS);
+  const bool lac_saturated = sat_time_ > kSteerLimitTimerS - 1e-3f;
+  if (steering_pressed) last_steering_pressed_s_ = now_s;
+  const bool recent_steer_pressed = now_s - last_steering_pressed_s_ < 2.0;
+  const float clipped_speed = std::max(speed_mps, 0.3f);
+  const float desired_lat_accel = result.desired_curvature * clipped_speed * clipped_speed;
+  const float actual_lat_accel = result.actual_curvature * clipped_speed * clipped_speed;
+  const bool undershooting =
+      std::fabs(desired_lat_accel) / std::fabs(1e-3f + actual_lat_accel) > 1.2f;
+  const bool turning = std::fabs(desired_lat_accel) > 1.0f;
+  return !recent_steer_pressed && undershooting && turning && lac_saturated;
+}
+
 // CLU 버튼 edge로 engage/disengage 상태를 갱신한다.
 void LateralController::update_button_state(int button, double now_s) {
   if (button == last_button_) return;
   if (button == kCruiseButtonCancel) {
-    panda_engage_pending_ = false;
-    engaged_ = false;
-    reset_control_state();
-    last_disengage_s_ = now_s;
+    disengage(now_s);
   } else if (button == 0 && last_button_ == kCruiseButtonSet) {
     engaged_ = true;
   }

@@ -136,6 +136,22 @@ public:
 private:
   // CLU 버튼 edge로 engage/disengage 상태를 갱신한다.
   void update_button_state(int button, double now_s);
+  // update의 단계들(순서대로 부른다). 설명은 정의에 있다.
+  LateralPath debounce_path(const LateralPath &path, double now_s);
+  float plan_age_s(const LateralTarget &target) const;
+  void disengage(double now_s);
+  void resolve_engagement(BlockKind kind, bool logical_engaged, bool engage_requested, double now_s,
+                          LateralControlResult *result);
+  void update_road_bank(const VehicleCanState &vehicle_state, float speed_mps, bool yaw_rate_valid);
+  float requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
+                            float plan_age_s, bool steering, bool steering_pressed, bool yaw_rate_valid,
+                            const LiveLateralParams &live);
+  void steer(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps, double now_s,
+             bool steering_pressed, bool yaw_rate_valid, bool curvature_limited, const LiveLateralParams &live,
+             LateralControlResult *result);
+  bool update_saturation(const LateralControlResult &result, float speed_mps, double now_s,
+                         bool steering_pressed, bool curvature_limited);
+  void copy_torque_state(LateralControlResult *result) const;
 
   // active를 막는 현재 gate reason을 계산한다.
   BlockReason active_block_reason(const LateralPath &path,
