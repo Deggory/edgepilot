@@ -6,6 +6,7 @@
  * (use_live_delay)에 쓴다. 입력이 없으면(IMU 없음 등) 발행하지 않고 기다리고, 그동안 controlsd는
  * ESP12 값으로 돌아간다. lagd 추정은 params/live_delay.json에 60초마다와 종료 때 저장하고,
  * 시작 때 초기값(steering.json steer_actuator_delay)이 같으면 이어서 쓴다. */
+#include "background_writer.h"
 #include "ipc_channels.h"
 #include "ipc_messages.h"
 #include "localization_pipeline.h"
@@ -62,18 +63,26 @@ int main()
     uint64_t next_persist_ns = monotonic_now_ns() + kPersistIntervalNs;
     uint64_t next_log_ns = monotonic_now_ns() + kLogIntervalNs;
     unsigned long long batches = 0, published = 0;
-    std::string last_saved = lag_cache;
+    BackgroundWriter writer("locationd: write");
+    std::string last_saved = lag_cache;  // writer에 마지막으로 넘긴 내용
+    uint64_t write_failures = 0;
     LocalizationState last{};
     LocationInputCounters last_counters;
     const auto d = [](uint64_t now_count, uint64_t before) {
         return static_cast<unsigned long long>(now_count - before);
     };
 
+    /* 조향 지연 캐시는 바뀌었을 때만 writer 스레드에 넘긴다(SD가 바빠도 IMU 루프가 막히지 않는다).
+     * 쓰기가 실패했으면 다음 번에 같은 내용이라도 다시 넘긴다. */
     auto persist = [&]() {
+        if (writer.failures() != write_failures) {
+            write_failures = writer.failures();
+            last_saved.clear();
+        }
         const std::string json = pipeline.lag().cache_json();
         if (json == last_saved) return;
-        if (write_file_atomic(lag_path, json)) last_saved = json;
-        else std::fprintf(stderr, "locationd: cannot write %s\n", lag_path.c_str());
+        writer.write(lag_path, json);
+        last_saved = json;
     };
 
     while (!g_stop) {

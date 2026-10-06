@@ -278,6 +278,8 @@ released after that short hold if they persist.
 - `src/imud.cc`, `src/locationd.cc`
   - the board IMU reader (LSM6DSOW over `i2c-dev`) and the process that runs
     `localization_pipeline` on its samples and publishes `LocalizationState`.
+    It hands the lag cache to `BackgroundWriter`, so an SD stall never holds up
+    the IMU loop.
 - `src/replayd.cc`, `src/replay_route.*`
   - rehearsal: plays a recorded route in place of `camerad` and `pandad`
     ([Rehearsal](rehearsal.md)). `ReplayRoute` reads the route (frame
@@ -362,7 +364,10 @@ released after that short hold if they persist.
   - minimal JSON value readers, the clamped `parse_json_optional_*` helpers, and
     the `Json*Field` tables that `control_params` and `adaptive_cruise` fill
     their structs from: one `{key, min, max, member}` row per parameter.
-- `src/utils_file.h`
+- `src/utils_file.h`, `src/background_writer.h`
   - `file_stamp` (the stat fingerprint the processes poll parameter files
     with), `read_text_file`, and `write_file_atomic` (temporary file + rename,
-    so a reader never sees a half-written file).
+    so a reader never sees a half-written file). `BackgroundWriter` is the
+    thread controlsd (learner files) and locationd (lag cache) hand those
+    writes to: the newest content per path wins, failures are counted, and
+    the queue drains on shutdown.

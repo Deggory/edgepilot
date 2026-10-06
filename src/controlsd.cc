@@ -1,5 +1,6 @@
 /* controlsd: K7 횡제어 프로세스(100 Hz). 로직은 ControlsTick(controls_tick.h)에 있고, 이 파일은
  * 공유 메모리 입출력, 파라미터 파일 감시, 학습 상태 파일 쓰기, 1초 통계만 맡는다. */
+#include "background_writer.h"
 #include "controls_tick.h"
 #include "ipc_channels.h"
 #include "utils_file.h"
@@ -9,13 +10,9 @@
 #include <signal.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
-#include <condition_variable>
 #include <cstdio>
 #include <cstring>
-#include <map>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -56,65 +53,6 @@ CanBatch make_send_batch(const std::vector<CanFrame> &frames) {
     std::copy_n(src.data.begin(), src.length, dst->data);
   });
 }
-
-/* 학습 상태 파일 쓰기. 제어 루프는 내용만 넘기고, 이 스레드가 임시 파일에 쓴 뒤 rename한다.
- * 같은 경로는 최신 내용만 남기고, 멈출 때 남은 쓰기를 마친다. */
-class LearnerStore {
-public:
-  LearnerStore() : thread_([this] { run(); }) {}
-  ~LearnerStore() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      stop_ = true;
-    }
-    condition_.notify_one();
-    thread_.join();
-  }
-  void write(const std::string &path, const std::string &content) { submit(path, true, content); }
-  void remove(const std::string &path) { submit(path, false, std::string()); }
-
-private:
-  struct Job {
-    bool write = false;
-    std::string content;
-  };
-  void submit(const std::string &path, bool write, const std::string &content) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      pending_[path] = Job{write, content};
-    }
-    condition_.notify_one();
-  }
-  void run() {
-    while (true) {
-      std::map<std::string, Job> jobs;
-      bool stop = false;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        condition_.wait(lock, [this] { return stop_ || !pending_.empty(); });
-        jobs.swap(pending_);
-        stop = stop_;
-      }
-      for (const auto &[path, job] : jobs) {
-        if (!job.write) {
-          std::remove(path.c_str());
-          continue;
-        }
-        if (!write_file_atomic(path, job.content)) {
-          std::fprintf(stderr, "controlsd: learner write %s failed: %s\n", path.c_str(),
-                       std::strerror(errno));
-        }
-      }
-      if (stop) return;
-    }
-  }
-
-  std::mutex mutex_;
-  std::condition_variable condition_;
-  std::map<std::string, Job> pending_;
-  bool stop_ = false;
-  std::thread thread_;
-};
 
 /* 1초 창의 루프 통계. 창이 끝나면 한 줄로 찍고 비운다. */
 struct TickStats {
@@ -227,7 +165,7 @@ int main() {
                  control_params_summary(params).c_str());
     /* paramsd·torqued. 사전값은 시작 때 파라미터로 고정한다. 복원이 거부된 저장은 상류처럼
      * 지운다(torqued는 깨진 캐시만, 튜닝이 바뀐 캐시는 둔다). */
-    LearnerStore learner_store;
+    BackgroundWriter learner_store("controlsd: learner write");
     const std::string vehicle_learn_path = param_path("live_parameters.json");
     const std::string torque_learn_path = param_path("live_torque_parameters.bin");
     const std::string vehicle_learn_json = read_text_file(vehicle_learn_path);
