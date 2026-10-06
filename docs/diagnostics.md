@@ -198,6 +198,22 @@ R=<route>; ./build-host/bin/replay_planner --exact --vehicle --lane \
   --steering $R/params/steering.json --driving $R/params/driving.json out.csv $R/events/*.bin
 ```
 
+## Control tick replay
+
+`replay_controls` runs a recording through `ControlsTick`, the logic of one
+controlsd tick, at 10 ms ticks: the recorded CAN, `ModelState`, `PandaState` and
+`Localization` records go in, the planner is computed in place and the clock is
+the tick time, so identical code gives a bit-identical `--dump` and digest. It
+also reports how often engaged/active/desire agree with the recorded
+`ControlState`. A route engaged before recording started needs
+`--force-engaged`.
+
+```sh
+R=<route>; ./build-host/bin/replay_controls --steering $R/params/steering.json \
+  --driving $R/params/driving.json --cruise $R/params/adaptive_cruise.json \
+  --dump out.txt $R/events/*.bin
+```
+
 ## Related documents
 
 - [Departure alerts](departure-alerts.md)

@@ -21,3 +21,7 @@ target_link_libraries(alert_sound_preview PRIVATE alert_tones)
 
 add_host_tool(replay_localization replay_localization.cc)
 target_link_libraries(replay_localization PRIVATE localization control_core)
+
+# controlsd 한 틱의 로직(ControlsTick)을 녹화로 다시 돌린다. 리팩토링 전후 다이제스트 비교용.
+add_host_tool(replay_controls replay_controls.cc)
+target_link_libraries(replay_controls PRIVATE controls)
