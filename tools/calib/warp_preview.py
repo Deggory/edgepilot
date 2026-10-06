@@ -10,6 +10,7 @@ calibration (rpy) absorbs.
 
 usage: warp_preview.py <frame_nv21.bin> <out.png> [roll pitch yaw (deg)]
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -31,9 +32,17 @@ def yuv6_to_y(yuv6):
 
 
 def main():
-    src, out = sys.argv[1], sys.argv[2]
-    rpy = np.radians([float(v) for v in sys.argv[3:6]]) if len(sys.argv) >= 6 else np.zeros(3)
-    d = np.fromfile(src, np.uint8)
+    parser = argparse.ArgumentParser(description="Preview what the model sees from a MaixCAM2 frame.")
+    parser.add_argument("frame", help="1280x720 NV21 capture")
+    parser.add_argument("out", help="PNG to write")
+    parser.add_argument("rpy", nargs="*", type=float, metavar="DEG",
+                        help="calibration roll pitch yaw in degrees (default 0 0 0)")
+    args = parser.parse_args()
+    if len(args.rpy) not in (0, 3):
+        parser.error("give roll, pitch and yaw together")
+    out = args.out
+    rpy = np.radians(args.rpy) if args.rpy else np.zeros(3)
+    d = np.fromfile(args.frame, np.uint8)
     y = d[:W * H].reshape(H, W)
     vu = d[W * H:].reshape(H // 2, W // 2, 2)
     u, v = vu[..., 1], vu[..., 0]                       # NV21: V first
