@@ -20,35 +20,6 @@ constexpr float kFixedCruiseStep = 2.0f;
 constexpr float kMinimumCruiseSpeedKph = 30.0f;
 constexpr float kMinimumCruiseSpeedMph = 20.0f;
 
-// openpilot K7 parser와 같은 bus에서 온 frame만 차량 상태에 반영한다.
-bool expected_openpilot_bus(uint32_t address, uint8_t bus) {
-  switch (address) {
-    case kHyundaiLkas11Address:
-      return bus == kCameraBus;
-    case kHyundaiClu11Address:
-    case kHyundaiEsp12Address:
-    case kHyundaiWhlSpd11Address:
-    case kHyundaiScc11Address:
-    case kHyundaiScc12Address:
-    case kHyundaiTcs13Address:
-    case kHyundaiTcs15Address:
-    case kHyundaiEEms11Address:
-    case kHyundaiElectGearAddress:
-    case kHyundaiCgw1Address:
-    case kHyundaiCgw2Address:
-    case kHyundaiLca11Address:
-    case kHyundaiTpms11Address:
-    case kHyundaiAhb1Address:
-      return bus == kPowertrainBus;
-    case kHyundaiMdps12Address:
-      return bus == kMdpsBus;
-    case kHyundaiSas11Address:
-      return bus == kPowertrainBus || bus == kMdpsBus;
-    default:
-      return true;
-  }
-}
-
 // signed raw 값을 지정 bit 수로 sign extension한다.
 int32_t sign_extend(uint32_t raw, int bits) {
   const uint32_t sign_bit = 1U << (bits - 1);
@@ -289,124 +260,203 @@ Tpms11Values decode_tpms11(const std::array<uint8_t, 8> &data) {
   return values;
 }
 
+namespace {
+
+// 문 하나라도 열려 있으면 열림(CGW1 앞문, CGW2 뒷문을 합친다).
+void update_door_open(VehicleCanState *state) {
+  state->door_open = state->driver_door_open || state->passenger_door_open ||
+                     state->rear_left_door_open || state->rear_right_door_open;
+}
+
+void apply_lkas11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  state->lkas11_seed = data;
+  state->has_lkas11_seed = true;
+  state->lkas11_time_s = now_s;
+}
+
+void apply_clu11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  state->clu11_seed = {{data[0], data[1], data[2], data[3]}};
+  state->has_clu11_seed = true;
+  const HyundaiClu11Values clu = decode_clu11(state->clu11_seed);
+  update_fixed_cruise_estimate(state, clu);
+  state->cluster_speed_raw = clu.speed + clu.speed_decimal;
+  state->speed_unit_mph = clu.speed_unit_mph;
+  state->clu11_time_s = now_s;
+}
+
+void apply_sas11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  state->steering_angle_deg = decode_sas11(data).steering_angle_deg;
+  state->sas11_time_s = now_s;
+}
+
+void apply_esp12(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Esp12Values esp = decode_esp12(data);
+  state->yaw_rate_rad_s = esp.yaw_rate_rad_s;
+  state->yaw_rate_valid = esp.yaw_rate_valid;
+  state->lat_accel_mps2 = esp.lat_accel_mps2;
+  state->lat_accel_valid = esp.lat_accel_valid;
+  state->long_accel_mps2 = esp.long_accel_mps2;
+  state->esp12_time_s = now_s;
+}
+
+void apply_whl_spd11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const WhlSpd11Values wheel = decode_whl_spd11(data);
+  state->wheel_speed_fl_kph = wheel.speed_fl_kph;
+  state->wheel_speed_fr_kph = wheel.speed_fr_kph;
+  state->wheel_speed_rl_kph = wheel.speed_rl_kph;
+  state->wheel_speed_rr_kph = wheel.speed_rr_kph;
+  state->whl_spd11_time_s = now_s;
+}
+
+/* MDPS12: 운전자 토크와 고장. ToiUnavail은 openpilot처럼 kMdpsToiUnavailableFaultFrames 프레임 넘게
+ * 이어져야 고장(steering_fault)이다. */
+void apply_mdps12(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  state->mdps12_seed = data;
+  state->has_mdps12_seed = true;
+  const Mdps12Values mdps = decode_mdps12(data);
+  state->driver_torque = mdps.driver_torque;
+  state->mdps_error_count = mdps.toi_unavailable ? state->mdps_error_count + 1 : 0;
+  state->mdps_hard_fault = mdps.toi_fault || mdps.fail_state || mdps.sensor_error;
+  state->steering_fault = state->mdps_error_count > kMdpsToiUnavailableFaultFrames;
+  state->mdps12_time_s = now_s;
+}
+
+void apply_scc11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Scc11Values scc = decode_scc11(data);
+  state->cruise_main = scc.main_mode;
+  state->cruise_set_speed_raw = scc.set_speed_raw;
+  state->radar_lead_valid = scc.object_valid;
+  state->radar_lead_distance_m = scc.object_distance_m;
+  state->radar_lead_relative_speed_mps = scc.object_relative_speed_mps;
+  state->scc11_time_s = now_s;
+}
+
+void apply_scc12(VehicleCanState *state, const std::array<uint8_t, 8> &data, double) {
+  state->acc_mode = static_cast<int>(get_signal_le(data.data(), 13, 2));
+  state->has_scc_cruise_state = true;
+  state->cruise_active = state->acc_mode != 0;
+}
+
+void apply_tcs13(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Tcs13Values tcs = decode_tcs13(data);
+  state->brake_light = tcs.brake_light;
+  state->brake_error = tcs.brake_error;
+  state->park_brake = tcs.park_brake;
+  state->driver_override = tcs.driver_override;
+  state->tcs13_driver_braking = tcs.brake_pressed;
+  update_brake_pressed(state);
+  state->tcs13_time_s = now_s;
+}
+
+void apply_tcs15(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Tcs15Values tcs = decode_tcs15(data);
+  state->esp_disabled = tcs.esp_disabled;
+  state->brake_hold = tcs.brake_hold;
+  state->tcs15_time_s = now_s;
+}
+
+void apply_ahb1(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  state->brake_pedal_stroke_mm = decode_ahb1(data).pedal_stroke_mm;
+  state->ahb1_time_s = now_s;
+  update_brake_pressed(state);
+}
+
+void apply_e_ems11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const EEms11Values ems = decode_e_ems11(data);
+  state->gas = ems.gas;
+  state->gas_pressed = ems.gas_pressed;
+  state->e_ems11_time_s = now_s;
+}
+
+void apply_elect_gear(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  state->gear = decode_elect_gear(data).gear;
+  state->elect_gear_time_s = now_s;
+}
+
+/* CGW1: 앞문, 안전벨트, 깜빡이, 비상등. 깜빡이는 점멸 사이에도 켜진 것으로 보도록
+ * kBlinkerHoldSeconds 동안 유지한다. */
+void apply_cgw1(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Cgw1Values cgw = decode_cgw1(data);
+  state->driver_door_open = cgw.driver_door_open;
+  state->passenger_door_open = cgw.passenger_door_open;
+  update_door_open(state);
+  state->seatbelt_unlatched = cgw.seatbelt_unlatched;
+  if (cgw.left_blinker) state->left_blinker_until_s = now_s + kBlinkerHoldSeconds;
+  if (cgw.right_blinker) state->right_blinker_until_s = now_s + kBlinkerHoldSeconds;
+  state->left_blinker = now_s < state->left_blinker_until_s;
+  state->right_blinker = now_s < state->right_blinker_until_s;
+  state->hazard = cgw.hazard;
+  state->cgw1_time_s = now_s;
+}
+
+void apply_cgw2(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Cgw2Values cgw = decode_cgw2(data);
+  state->rear_left_door_open = cgw.rear_left_door_open;
+  state->rear_right_door_open = cgw.rear_right_door_open;
+  update_door_open(state);
+  state->cgw2_time_s = now_s;
+}
+
+void apply_lca11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double) {
+  const Lca11Values lca = decode_lca11(data);
+  state->left_blindspot = lca.left_blindspot;
+  state->right_blindspot = lca.right_blindspot;
+}
+
+void apply_tpms11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
+  const Tpms11Values tpms = decode_tpms11(data);
+  state->tpms_unit = tpms.unit;
+  state->tpms_pressure_fl = tpms.pressure_fl;
+  state->tpms_pressure_fr = tpms.pressure_fr;
+  state->tpms_pressure_rl = tpms.pressure_rl;
+  state->tpms_pressure_rr = tpms.pressure_rr;
+  state->tpms_warning = tpms.warning;
+  state->tpms11_time_s = now_s;
+}
+
+constexpr uint8_t bus_bit(uint8_t bus) { return static_cast<uint8_t>(1U << bus); }
+
+/* 수신 메시지 표: 주소, 받는 버스(openpilot K7 파서와 같다), 최소 길이, 반영 함수. 표에 없는 주소는
+ * 무시한다. */
+struct CanMessage {
+  uint32_t address;
+  uint8_t buses;
+  uint8_t min_length;
+  void (*apply)(VehicleCanState *, const std::array<uint8_t, 8> &, double);
+};
+
+constexpr CanMessage kCanMessages[] = {
+    {kHyundaiLkas11Address, bus_bit(kCameraBus), 8, apply_lkas11},
+    {kHyundaiClu11Address, bus_bit(kPowertrainBus), 4, apply_clu11},
+    {kHyundaiSas11Address, static_cast<uint8_t>(bus_bit(kPowertrainBus) | bus_bit(kMdpsBus)), 5, apply_sas11},
+    {kHyundaiEsp12Address, bus_bit(kPowertrainBus), 8, apply_esp12},
+    {kHyundaiWhlSpd11Address, bus_bit(kPowertrainBus), 8, apply_whl_spd11},
+    {kHyundaiMdps12Address, bus_bit(kMdpsBus), 8, apply_mdps12},
+    {kHyundaiScc11Address, bus_bit(kPowertrainBus), 8, apply_scc11},
+    {kHyundaiScc12Address, bus_bit(kPowertrainBus), 8, apply_scc12},
+    {kHyundaiTcs13Address, bus_bit(kPowertrainBus), 8, apply_tcs13},
+    {kHyundaiTcs15Address, bus_bit(kPowertrainBus), 4, apply_tcs15},
+    {kHyundaiAhb1Address, bus_bit(kPowertrainBus), 8, apply_ahb1},
+    {kHyundaiEEms11Address, bus_bit(kPowertrainBus), 8, apply_e_ems11},
+    {kHyundaiElectGearAddress, bus_bit(kPowertrainBus), 8, apply_elect_gear},
+    {kHyundaiCgw1Address, bus_bit(kPowertrainBus), 8, apply_cgw1},
+    {kHyundaiCgw2Address, bus_bit(kPowertrainBus), 8, apply_cgw2},
+    {kHyundaiLca11Address, bus_bit(kPowertrainBus), 8, apply_lca11},
+    {kHyundaiTpms11Address, bus_bit(kPowertrainBus), 6, apply_tpms11},
+};
+
+}  // namespace
+
 void update_vehicle_can_state(VehicleCanState *state, uint32_t address,
                               const std::array<uint8_t, 8> &data,
                               uint8_t length, uint8_t bus,
                               double now_s) {
   if (!state) return;
-  if (!expected_openpilot_bus(address, bus)) return;
-
-  if (address == kHyundaiLkas11Address && length >= 8) {
-    state->lkas11_seed = data;
-    state->has_lkas11_seed = true;
-    state->lkas11_time_s = now_s;
-  } else if (address == kHyundaiClu11Address && length >= 4) {
-    state->clu11_seed = {{data[0], data[1], data[2], data[3]}};
-    state->has_clu11_seed = true;
-    const HyundaiClu11Values clu = decode_clu11(state->clu11_seed);
-    update_fixed_cruise_estimate(state, clu);
-    state->cluster_speed_raw = clu.speed + clu.speed_decimal;
-    state->speed_unit_mph = clu.speed_unit_mph;
-    state->clu11_time_s = now_s;
-  } else if (address == kHyundaiSas11Address && length >= 5) {
-    const Sas11Values sas = decode_sas11(data);
-    state->steering_angle_deg = sas.steering_angle_deg;
-    state->sas11_time_s = now_s;
-  } else if (address == kHyundaiEsp12Address && length >= 8) {
-    const Esp12Values esp = decode_esp12(data);
-    state->yaw_rate_rad_s = esp.yaw_rate_rad_s;
-    state->yaw_rate_valid = esp.yaw_rate_valid;
-    state->lat_accel_mps2 = esp.lat_accel_mps2;
-    state->lat_accel_valid = esp.lat_accel_valid;
-    state->long_accel_mps2 = esp.long_accel_mps2;
-    state->esp12_time_s = now_s;
-  } else if (address == kHyundaiWhlSpd11Address && length >= 8) {
-    const WhlSpd11Values wheel = decode_whl_spd11(data);
-    state->wheel_speed_fl_kph = wheel.speed_fl_kph;
-    state->wheel_speed_fr_kph = wheel.speed_fr_kph;
-    state->wheel_speed_rl_kph = wheel.speed_rl_kph;
-    state->wheel_speed_rr_kph = wheel.speed_rr_kph;
-    state->whl_spd11_time_s = now_s;
-  } else if (address == kHyundaiMdps12Address && length >= 8) {
-    state->mdps12_seed = data;
-    state->has_mdps12_seed = true;
-    const Mdps12Values mdps = decode_mdps12(data);
-    state->driver_torque = mdps.driver_torque;
-    state->mdps_error_count = mdps.toi_unavailable ? state->mdps_error_count + 1 : 0;
-    state->mdps_hard_fault = mdps.toi_fault || mdps.fail_state || mdps.sensor_error;
-    state->steering_fault = state->mdps_error_count > kMdpsToiUnavailableFaultFrames;
-    state->mdps12_time_s = now_s;
-  } else if (address == kHyundaiScc11Address && length >= 8) {
-    const Scc11Values scc = decode_scc11(data);
-    state->cruise_main = scc.main_mode;
-    state->cruise_set_speed_raw = scc.set_speed_raw;
-    state->radar_lead_valid = scc.object_valid;
-    state->radar_lead_distance_m = scc.object_distance_m;
-    state->radar_lead_relative_speed_mps = scc.object_relative_speed_mps;
-    state->scc11_time_s = now_s;
-  } else if (address == kHyundaiScc12Address && length >= 8) {
-    state->acc_mode = static_cast<int>(get_signal_le(data.data(), 13, 2));
-    state->has_scc_cruise_state = true;
-    state->cruise_active = state->acc_mode != 0;
-  } else if (address == kHyundaiTcs13Address && length >= 8) {
-    const Tcs13Values tcs = decode_tcs13(data);
-    state->brake_light = tcs.brake_light;
-    state->brake_error = tcs.brake_error;
-    state->park_brake = tcs.park_brake;
-    state->driver_override = tcs.driver_override;
-    state->tcs13_driver_braking = tcs.brake_pressed;
-    update_brake_pressed(state);
-    state->tcs13_time_s = now_s;
-  } else if (address == kHyundaiTcs15Address && length >= 4) {
-    const Tcs15Values tcs = decode_tcs15(data);
-    state->esp_disabled = tcs.esp_disabled;
-    state->brake_hold = tcs.brake_hold;
-    state->tcs15_time_s = now_s;
-  } else if (address == kHyundaiAhb1Address && length >= 8) {
-    state->brake_pedal_stroke_mm = decode_ahb1(data).pedal_stroke_mm;
-    state->ahb1_time_s = now_s;
-    update_brake_pressed(state);
-  } else if (address == kHyundaiEEms11Address && length >= 8) {
-    const EEms11Values ems = decode_e_ems11(data);
-    state->gas = ems.gas;
-    state->gas_pressed = ems.gas_pressed;
-    state->e_ems11_time_s = now_s;
-  } else if (address == kHyundaiElectGearAddress && length >= 8) {
-    state->gear = decode_elect_gear(data).gear;
-    state->elect_gear_time_s = now_s;
-  } else if (address == kHyundaiCgw1Address && length >= 8) {
-    const Cgw1Values cgw = decode_cgw1(data);
-    state->driver_door_open = cgw.driver_door_open;
-    state->passenger_door_open = cgw.passenger_door_open;
-    state->door_open = state->driver_door_open || state->passenger_door_open ||
-                       state->rear_left_door_open || state->rear_right_door_open;
-    state->seatbelt_unlatched = cgw.seatbelt_unlatched;
-    if (cgw.left_blinker) state->left_blinker_until_s = now_s + kBlinkerHoldSeconds;
-    if (cgw.right_blinker) state->right_blinker_until_s = now_s + kBlinkerHoldSeconds;
-    state->left_blinker = now_s < state->left_blinker_until_s;
-    state->right_blinker = now_s < state->right_blinker_until_s;
-    state->hazard = cgw.hazard;
-    state->cgw1_time_s = now_s;
-  } else if (address == kHyundaiCgw2Address && length >= 8) {
-    const Cgw2Values cgw = decode_cgw2(data);
-    state->rear_left_door_open = cgw.rear_left_door_open;
-    state->rear_right_door_open = cgw.rear_right_door_open;
-    state->door_open = state->driver_door_open || state->passenger_door_open ||
-                       state->rear_left_door_open || state->rear_right_door_open;
-    state->cgw2_time_s = now_s;
-  } else if (address == kHyundaiLca11Address && length >= 8) {
-    const Lca11Values lca = decode_lca11(data);
-    state->left_blindspot = lca.left_blindspot;
-    state->right_blindspot = lca.right_blindspot;
-  } else if (address == kHyundaiTpms11Address && length >= 6) {
-    const Tpms11Values tpms = decode_tpms11(data);
-    state->tpms_unit = tpms.unit;
-    state->tpms_pressure_fl = tpms.pressure_fl;
-    state->tpms_pressure_fr = tpms.pressure_fr;
-    state->tpms_pressure_rl = tpms.pressure_rl;
-    state->tpms_pressure_rr = tpms.pressure_rr;
-    state->tpms_warning = tpms.warning;
-    state->tpms11_time_s = now_s;
+  for (const CanMessage &message : kCanMessages) {
+    if (message.address != address) continue;
+    if (bus < 8 && (message.buses & bus_bit(bus)) != 0 && length >= message.min_length)
+      message.apply(state, data, now_s);
+    return;
   }
 }
 
