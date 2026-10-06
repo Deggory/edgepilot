@@ -67,13 +67,11 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  LateralControllerConfig config;
-  config.force_engaged = force_engaged;
-  AdaptiveCruiseConfig cruise;
+  ControlParams params;
   std::string error;
-  if ((!steering_path.empty() && !load_steering_params_json(steering_path, &config.steering_params, &error)) ||
-      (!driving_path.empty() && !load_driving_params_json(driving_path, &config.driving_params, &error)) ||
-      (!cruise_path.empty() && !load_adaptive_cruise_params_json(cruise_path, &cruise, &error))) {
+  if ((!steering_path.empty() && !load_steering_params_json(steering_path, &params.steering, &error)) ||
+      (!driving_path.empty() && !load_driving_params_json(driving_path, &params.driving, &error)) ||
+      (!cruise_path.empty() && !load_adaptive_cruise_params_json(cruise_path, &params.cruise, &error))) {
     std::fprintf(stderr, "params: %s\n", error.c_str());
     return 1;
   }
@@ -100,8 +98,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  SyncPlanner planner(config.steering_params, config.driving_params);
-  ControlsTick tick(config, cruise, planner, vehicle_json, std::string(), 1);
+  SyncPlanner planner(params.steering, params.driving);
+  ControlsTick tick(params, force_engaged, planner, vehicle_json, std::string(), 1);
   uint64_t tick_ns = records.front().timestamp_ns;
   tick.controller().set_clock([&tick_ns] { return tick_ns; });
   const uint64_t start_ns = tick_ns;

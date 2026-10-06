@@ -98,15 +98,15 @@ PandaState panda_state(uint64_t now_ns, bool controls_allowed) {
 /* controlsd main의 순서대로 틱을 돈다(Laneless: 차선 없이 plan으로 경로를 만든다). */
 class Drive {
 public:
-  Drive() : planner_(config().steering_params, config().driving_params),
-            tick_(config(), AdaptiveCruiseConfig(), planner_, std::string(), std::string(), 1) {
+  Drive() : planner_(params().steering, params().driving),
+            tick_(params(), false, planner_, std::string(), std::string(), 1) {
     tick_.controller().set_clock([this] { return now_ns_; });
   }
 
-  static LateralControllerConfig config() {
-    LateralControllerConfig config;
-    config.driving_params.laneless_mode = true;
-    return config;
+  static ControlParams params() {
+    ControlParams params;
+    params.driving.laneless_mode = true;
+    return params;
   }
 
   // seconds 동안 틱을 돌리고 마지막 ControlState를 돌려준다.

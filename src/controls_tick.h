@@ -30,33 +30,43 @@
 #include <string>
 #include <thread>
 
-/* steering/driving/adaptive_cruise JSON 셋을 한꺼번에 읽는다. 하나라도 거부되면 아무것도 바꾸지
- * 않고 false와 사유를 돌려준다. */
-bool load_runtime_params(const std::string &steering_path, const std::string &driving_path,
-                         const std::string &adaptive_cruise_path, LateralControllerConfig *config,
-                         AdaptiveCruiseConfig *adaptive_cruise_config, std::string *error);
+/* controlsd의 런타임 파라미터 세 파일(steering/driving/adaptive_cruise.json). 한꺼번에 읽고 한꺼번에
+ * 바꾼다. */
+struct ControlParams {
+  SteeringParams steering;
+  DrivingParams driving;
+  AdaptiveCruiseConfig cruise;
+};
+
+struct ControlParamPaths {
+  std::string steering;
+  std::string driving;
+  std::string cruise;
+};
+
+// 셋을 다 읽어야 true. 하나라도 거부되면 params는 그대로이고 error에 사유를 쓴다.
+bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error);
+// 시작·재적용 로그의 꼬리: MDPS 속도 바꿔치기와 비전 크루즈 설정.
+std::string control_params_summary(const ControlParams &params);
 
 /* 세 파일을 stat으로 감시하고, 바뀌었거나 SIGHUP이 오면 셋을 다시 읽는다. 하나라도 거부되면 셋 다
  * 이전 값을 유지한다. */
-class RuntimeParams {
+class ControlParamsWatcher {
 public:
-  RuntimeParams(std::string steering_path, std::string driving_path, std::string adaptive_cruise_path,
-                std::chrono::steady_clock::time_point now);
+  ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now);
 
-  // 적용됐으면 true. 호출자가 컨트롤러/플래너에 새 값을 넘긴다.
-  bool poll(std::chrono::steady_clock::time_point now, bool reload_requested, LateralControllerConfig *config,
-            AdaptiveCruiseConfig *adaptive_cruise_config);
+  // 새로 적용할 값. 바뀐 게 없거나 거부됐으면(로그를 남긴다) 비어 있다.
+  std::optional<ControlParams> poll(std::chrono::steady_clock::time_point now, bool reload_requested,
+                                    const ControlParams &current);
   unsigned generation() const { return generation_; }
 
 private:
   void stamp();
 
-  std::string steering_path_;
-  std::string driving_path_;
-  std::string adaptive_cruise_path_;
+  ControlParamPaths paths_;
   FileStamp steering_stamp_;
   FileStamp driving_stamp_;
-  FileStamp adaptive_cruise_stamp_;
+  FileStamp cruise_stamp_;
   std::chrono::steady_clock::time_point next_check_;
   unsigned generation_ = 1;
 };
@@ -156,14 +166,14 @@ struct LearnerOutputs {
 
 class ControlsTick {
 public:
-  /* vehicle_learn_json·torque_learn_cache는 학습 저장 파일 내용(없으면 빈 문자열), seed는 학습기
-   * 난수 시드. 플래너는 호출자가 가진다(보드는 작업 스레드). */
-  ControlsTick(const LateralControllerConfig &config, const AdaptiveCruiseConfig &adaptive_cruise_config,
-               PlannerPort &planner, const std::string &vehicle_learn_json, const std::string &torque_learn_cache,
-               uint64_t seed);
+  /* force_engaged는 EDGEPILOT_FORCE_ENGAGED(버튼 없이 결합), vehicle_learn_json·torque_learn_cache는
+   * 학습 저장 파일 내용(없으면 빈 문자열), seed는 학습기 난수 시드. 플래너는 호출자가 가진다(보드는
+   * 작업 스레드). */
+  ControlsTick(const ControlParams &params, bool force_engaged, PlannerPort &planner,
+               const std::string &vehicle_learn_json, const std::string &torque_learn_cache, uint64_t seed);
 
   // 다시 읽은 파라미터를 컨트롤러·플래너·크루즈에 넘긴다.
-  void apply_params(const LateralControllerConfig &config, const AdaptiveCruiseConfig &adaptive_cruise_config);
+  void apply_params(const ControlParams &params);
   // 수신 CAN 묶음. 100 ms보다 오래된 묶음은 버리고 false다.
   bool on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s);
   // 새 모델 상태. 플래너에 이번 틱 차량 상태와 직전 틱 결과를 함께 넘긴다.
@@ -191,7 +201,7 @@ public:
 
 private:
   LateralControllerConfig config_;
-  AdaptiveCruiseConfig adaptive_cruise_config_;
+  ControlParams params_;
   PlannerPort &planner_;
   LateralController controller_;
   LateralLearners learners_;

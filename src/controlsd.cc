@@ -216,29 +216,15 @@ int main() {
     }
     sendcan_pub.reset();
 
-    LateralControllerConfig config;
-    config.force_engaged = env_flag("EDGEPILOT_FORCE_ENGAGED", false);
-    AdaptiveCruiseConfig adaptive_cruise_config;
-    const std::string steering_path = param_path("steering.json");
-    const std::string driving_path = param_path("driving.json");
-    const std::string adaptive_cruise_path = param_path("adaptive_cruise.json");
+    const bool force_engaged = env_flag("EDGEPILOT_FORCE_ENGAGED", false);
+    const ControlParamPaths param_paths{param_path("steering.json"), param_path("driving.json"),
+                                        param_path("adaptive_cruise.json")};
+    ControlParams params;
     std::string error;
-    if (!load_runtime_params(steering_path, driving_path, adaptive_cruise_path,
-                             &config, &adaptive_cruise_config, &error)) {
-      throw std::runtime_error(error);
-    }
-    std::fprintf(stderr,
-                 "controlsd: params steering=%s driving=%s adaptive=%s "
-                 "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs "
-                 "decel=%.1fkph/s\n",
-                 steering_path.c_str(), driving_path.c_str(),
-                 adaptive_cruise_path.c_str(),
-                 config.driving_params.mdps_speed_spoof_kph,
-                 adaptive_cruise_config.enabled
-                     ? 1U : 0U,
-                 adaptive_cruise_config.standstill_gap_m,
-                 adaptive_cruise_config.following_time_s,
-                 adaptive_cruise_config.deceleration_rate_kph_per_s);
+    if (!load_control_params(param_paths, &params, &error)) throw std::runtime_error(error);
+    std::fprintf(stderr, "controlsd: params steering=%s driving=%s adaptive=%s %s\n",
+                 param_paths.steering.c_str(), param_paths.driving.c_str(), param_paths.cruise.c_str(),
+                 control_params_summary(params).c_str());
     /* paramsd·torqued. 사전값은 시작 때 파라미터로 고정한다. 복원이 거부된 저장은 상류처럼
      * 지운다(torqued는 깨진 캐시만, 튜닝이 바뀐 캐시는 둔다). */
     LearnerStore learner_store;
@@ -246,10 +232,9 @@ int main() {
     const std::string torque_learn_path = param_path("live_torque_parameters.bin");
     const std::string vehicle_learn_json = read_text_file(vehicle_learn_path);
     const std::string torque_learn_cache = read_text_file(torque_learn_path);
-    LateralPlannerWorker lateral_planner(config.steering_params,
-                                         config.driving_params);
-    ControlsTick tick(config, adaptive_cruise_config, lateral_planner, vehicle_learn_json,
-                      torque_learn_cache, static_cast<uint64_t>(monotonic_now_ns()));
+    LateralPlannerWorker lateral_planner(params.steering, params.driving);
+    ControlsTick tick(params, force_engaged, lateral_planner, vehicle_learn_json, torque_learn_cache,
+                      static_cast<uint64_t>(monotonic_now_ns()));
     const LateralLearners &learners = tick.learners();
     if (learners.vehicle_restore_rejected()) learner_store.remove(vehicle_learn_path);
     if (learners.torque_restore_status() == TorqueRestore::Corrupt)
@@ -263,8 +248,8 @@ int main() {
                  : learners.torque_restore_status() == TorqueRestore::Corrupt       ? "corrupt"
                  : learners.torque_restore_status() == TorqueRestore::SourceChanged ? "source_changed"
                                                                                     : "fresh",
-                 config.steering_params.use_live_vehicle_params ? 1U : 0U,
-                 config.steering_params.use_live_torque_params ? 1U : 0U);
+                 params.steering.use_live_vehicle_params ? 1U : 0U,
+                 params.steering.use_live_torque_params ? 1U : 0U);
     TickStats stats;
     uint64_t model_seq = 0;
     uint64_t panda_state_seq = 0;
@@ -273,7 +258,7 @@ int main() {
     const auto start = Clock::now();
     auto next_tick = start;
     auto log_start = start;
-    RuntimeParams runtime_params(steering_path, driving_path, adaptive_cruise_path, start);
+    ControlParamsWatcher param_watcher(param_paths, start);
 
     while (!g_stop) {
       next_tick += std::chrono::milliseconds(10);
@@ -283,9 +268,9 @@ int main() {
 
       const bool reload_requested = g_reload_params != 0;
       if (reload_requested) g_reload_params = 0;
-      if (runtime_params.poll(work_start, reload_requested, &config,
-                              &adaptive_cruise_config)) {
-        tick.apply_params(config, adaptive_cruise_config);
+      if (const auto reloaded = param_watcher.poll(work_start, reload_requested, params)) {
+        params = *reloaded;
+        tick.apply_params(params);
       }
 
       CanBatch can_batch;
@@ -361,7 +346,7 @@ int main() {
         stats.log(std::chrono::duration<double>(work_end - log_start).count(),
                   static_cast<unsigned long long>(sendcan_pub.depth()),
                   static_cast<unsigned long long>(can_sub.depth()),
-                  runtime_params.generation(), tick);
+                  param_watcher.generation(), tick);
         log_start = work_end;
       }
 

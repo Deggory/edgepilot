@@ -189,90 +189,67 @@ ControlState make_control_state(const LateralControllerConfig &config,
 
 }  // namespace
 
-bool load_runtime_params(const std::string &steering_path,
-                         const std::string &driving_path,
-                         const std::string &adaptive_cruise_path,
-                         LateralControllerConfig *config,
-                         AdaptiveCruiseConfig *adaptive_cruise_config,
-                         std::string *error) {
-  SteeringParams steering = config->steering_params;
-  DrivingParams driving = config->driving_params;
-  AdaptiveCruiseConfig adaptive_cruise = *adaptive_cruise_config;
+bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error) {
+  ControlParams candidate = *params;
   std::string load_error;
-  if (!load_steering_params_json(steering_path, &steering, &load_error)) {
-    if (error) *error = "steering " + steering_path + ": " + load_error;
+  if (!load_steering_params_json(paths.steering, &candidate.steering, &load_error)) {
+    if (error) *error = "steering " + paths.steering + ": " + load_error;
     return false;
   }
-  if (!load_driving_params_json(driving_path, &driving, &load_error)) {
-    if (error) *error = "driving " + driving_path + ": " + load_error;
+  if (!load_driving_params_json(paths.driving, &candidate.driving, &load_error)) {
+    if (error) *error = "driving " + paths.driving + ": " + load_error;
     return false;
   }
-  if (!load_adaptive_cruise_params_json(
-          adaptive_cruise_path, &adaptive_cruise, &load_error)) {
-    if (error) {
-      *error = "adaptive cruise " + adaptive_cruise_path + ": " + load_error;
-    }
+  if (!load_adaptive_cruise_params_json(paths.cruise, &candidate.cruise, &load_error)) {
+    if (error) *error = "adaptive cruise " + paths.cruise + ": " + load_error;
     return false;
   }
-  config->steering_params = steering;
-  config->driving_params = driving;
-  *adaptive_cruise_config = adaptive_cruise;
+  *params = candidate;
   return true;
 }
 
-RuntimeParams::RuntimeParams(std::string steering_path, std::string driving_path,
-                             std::string adaptive_cruise_path,
-                             std::chrono::steady_clock::time_point now)
-    : steering_path_(std::move(steering_path)),
-      driving_path_(std::move(driving_path)),
-      adaptive_cruise_path_(std::move(adaptive_cruise_path)),
-      next_check_(now + std::chrono::milliseconds(kParamPollIntervalMs)) {
+std::string control_params_summary(const ControlParams &params) {
+  char text[160];
+  std::snprintf(text, sizeof(text), "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs decel=%.1fkph/s",
+                params.driving.mdps_speed_spoof_kph, params.cruise.enabled ? 1U : 0U,
+                params.cruise.standstill_gap_m, params.cruise.following_time_s,
+                params.cruise.deceleration_rate_kph_per_s);
+  return text;
+}
+
+ControlParamsWatcher::ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now)
+    : paths_(std::move(paths)), next_check_(now + std::chrono::milliseconds(kParamPollIntervalMs)) {
   stamp();
 }
 
-bool RuntimeParams::poll(std::chrono::steady_clock::time_point now, bool reload_requested,
-                         LateralControllerConfig *config,
-                         AdaptiveCruiseConfig *adaptive_cruise_config) {
-  if (!reload_requested && now < next_check_) return false;
+std::optional<ControlParams> ControlParamsWatcher::poll(std::chrono::steady_clock::time_point now,
+                                                        bool reload_requested, const ControlParams &current) {
+  if (!reload_requested && now < next_check_) return std::nullopt;
   next_check_ = now + std::chrono::milliseconds(kParamPollIntervalMs);
-  const FileStamp steering = file_stamp(steering_path_);
-  const FileStamp driving = file_stamp(driving_path_);
-  const FileStamp adaptive = file_stamp(adaptive_cruise_path_);
-  const bool changed = steering != steering_stamp_ || driving != driving_stamp_ ||
-                       adaptive != adaptive_cruise_stamp_;
-  if (!reload_requested && !changed) return false;
+  const FileStamp steering = file_stamp(paths_.steering);
+  const FileStamp driving = file_stamp(paths_.driving);
+  const FileStamp cruise = file_stamp(paths_.cruise);
+  const bool changed = steering != steering_stamp_ || driving != driving_stamp_ || cruise != cruise_stamp_;
+  if (!reload_requested && !changed) return std::nullopt;
   steering_stamp_ = steering;
   driving_stamp_ = driving;
-  adaptive_cruise_stamp_ = adaptive;
-  LateralControllerConfig candidate = *config;
-  AdaptiveCruiseConfig adaptive_candidate = *adaptive_cruise_config;
+  cruise_stamp_ = cruise;
+  ControlParams candidate = current;
   std::string error;
-  if (!load_runtime_params(steering_path_, driving_path_, adaptive_cruise_path_,
-                           &candidate, &adaptive_candidate, &error)) {
-    std::fprintf(stderr, "controlsd: params reload rejected: %s\n",
-                 error.c_str());
-    return false;
+  if (!load_control_params(paths_, &candidate, &error)) {
+    std::fprintf(stderr, "controlsd: params reload rejected: %s\n", error.c_str());
+    return std::nullopt;
   }
-  config->steering_params = candidate.steering_params;
-  config->driving_params = candidate.driving_params;
-  *adaptive_cruise_config = adaptive_candidate;
   ++generation_;
-  std::fprintf(stderr,
-               "controlsd: params reloaded generation=%u "
-               "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs "
-               "decel=%.1fkph/s\n",
-               generation_, config->driving_params.mdps_speed_spoof_kph,
-               adaptive_cruise_config->enabled ? 1U : 0U,
-               adaptive_cruise_config->standstill_gap_m,
-               adaptive_cruise_config->following_time_s,
-               adaptive_cruise_config->deceleration_rate_kph_per_s);
-  return true;
+  std::fprintf(stderr, "controlsd: params reloaded generation=%u %s\n", generation_,
+               control_params_summary(candidate).c_str());
+  return candidate;
 }
 
-void RuntimeParams::stamp() {
-  steering_stamp_ = file_stamp(steering_path_);
-  driving_stamp_ = file_stamp(driving_path_);
-  adaptive_cruise_stamp_ = file_stamp(adaptive_cruise_path_);
+void ControlParamsWatcher::stamp() {
+  steering_stamp_ = file_stamp(paths_.steering);
+  driving_stamp_ = file_stamp(paths_.driving);
+  cruise_stamp_ = file_stamp(paths_.cruise);
 }
 
 LateralPlannerWorker::LateralPlannerWorker(const SteeringParams &params,
@@ -467,25 +444,35 @@ LearnerState make_learner_state(const LateralLearners &learners,
   return state;
 }
 
-ControlsTick::ControlsTick(const LateralControllerConfig &config,
-                           const AdaptiveCruiseConfig &adaptive_cruise_config, PlannerPort &planner,
+namespace {
+
+LateralControllerConfig controller_config(const ControlParams &params, bool force_engaged) {
+  LateralControllerConfig config;
+  config.force_engaged = force_engaged;
+  config.steering_params = params.steering;
+  config.driving_params = params.driving;
+  return config;
+}
+
+}  // namespace
+
+ControlsTick::ControlsTick(const ControlParams &params, bool force_engaged, PlannerPort &planner,
                            const std::string &vehicle_learn_json, const std::string &torque_learn_cache,
                            uint64_t seed)
-    : config_(config),
-      adaptive_cruise_config_(adaptive_cruise_config),
+    : config_(controller_config(params, force_engaged)),
+      params_(params),
       planner_(planner),
-      controller_(config),
-      learners_(config.steering_params, vehicle_learn_json, torque_learn_cache, seed),
-      adaptive_cruise_controller_(adaptive_cruise_config) {}
+      controller_(config_),
+      learners_(params.steering, vehicle_learn_json, torque_learn_cache, seed),
+      adaptive_cruise_controller_(params.cruise) {}
 
-void ControlsTick::apply_params(const LateralControllerConfig &config,
-                                const AdaptiveCruiseConfig &adaptive_cruise_config) {
-  config_.steering_params = config.steering_params;
-  config_.driving_params = config.driving_params;
-  adaptive_cruise_config_ = adaptive_cruise_config;
+void ControlsTick::apply_params(const ControlParams &params) {
+  params_ = params;
+  config_.steering_params = params.steering;
+  config_.driving_params = params.driving;
   controller_.update_params(config_.steering_params, config_.driving_params);
   planner_.update_params(config_.steering_params, config_.driving_params);
-  adaptive_cruise_controller_.update_config(adaptive_cruise_config_);
+  adaptive_cruise_controller_.update_config(params_.cruise);
 }
 
 bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s) {
@@ -547,7 +534,7 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
   alert_input_ = make_alert_input(
       now_s, vehicle_, last_result_, model_, model_updated_, lead, ego_speed_mps);
   adaptive_cruise_ = adaptive_cruise_controller_.update(make_adaptive_input(
-      now_s, adaptive_cruise_config_.enabled, vehicle_, last_result_, panda_, model_,
+      now_s, params_.cruise.enabled, vehicle_, last_result_, panda_, model_,
       model_updated_, lead, ego_speed_kph));
 
   if (adaptive_cruise_.command_button != 0) {
