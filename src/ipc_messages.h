@@ -1,9 +1,9 @@
 #ifndef IPC_MESSAGES_H
 #define IPC_MESSAGES_H
 
-/* 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 토픽 이름, 매직/버전,
- * 채널 헤더, 상태 스냅샷, 그리고 ParsedModelOutput <-> ModelState 변환.
- * 채널 구현은 ipc_channels.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다. */
+/* 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 채널 매직·버전과 이름, 크기 상한, 채널
+ * 헤더, 상태 스냅샷. 채널 구현은 ipc_channels.h에, ModelState를 채우고 되돌리는 변환은
+ * model_state_fill.h와 overlay_state.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다. */
 
 #include "app_config.h"
 #include "model_output.h"
@@ -16,17 +16,16 @@
 #include <cstdint>
 #include <vector>
 
+// ---- 채널 매직·버전 ----
 constexpr uint32_t kIpcMagic = 0x4b323349;
 constexpr uint32_t kIpcVersion = 1;
 constexpr uint32_t kFrameRingMagic = 0x4b465249;
 constexpr uint32_t kFrameRingVersion = 5;
 constexpr uint32_t kCanQueueMagic = 0x4b435151;
 constexpr uint32_t kCanQueueVersion = 1;
-constexpr unsigned kFrameSlots = 8;
-constexpr unsigned kMaxProcesses = 12;
-constexpr unsigned kAiWidth = kDefaultAiWidth;
-constexpr unsigned kAiHeight = kDefaultAiHeight;
-constexpr unsigned kAiFrameBytes = kAiWidth * kAiHeight * 3 / 2;
+
+// ---- 채널 이름 ----
+constexpr char kRoadAiFrameRing[] = "/edgepilot_road_ai";
 constexpr char kRoadAiFrameTopic[] = "/edgepilot_road_ai_frame";
 constexpr char kRecordFrameTopic[] = "/edgepilot_record_frame";
 constexpr char kModelStateTopic[] = "/edgepilot_model_state";
@@ -37,25 +36,17 @@ constexpr char kCanLogTopic[] = "/edgepilot_can_log";
 constexpr char kSendCanLogTopic[] = "/edgepilot_sendcan_log";
 constexpr char kPandaStateTopic[] = "/edgepilot_panda_state";
 constexpr char kControlStateTopic[] = "/edgepilot_control_state";
-
 constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
 constexpr char kImuTopic[] = "/edgepilot_imu";
 constexpr char kLocalizationStateTopic[] = "/edgepilot_localization";
 constexpr char kRecordStateTopic[] = "/edgepilot_record_state";
 
-constexpr uint32_t kHudFlagLaneless = 1U << 0;
-constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
-constexpr uint32_t kHudFlagSoftDisabling = 1U << 2;   // 3초 뒤 해제 예고(active_block이 사유)
-constexpr uint32_t kHudFlagSteerSaturated = 1U << 3;  // 커브가 조향 한계를 넘음
-constexpr uint32_t kHudFlagLaneChangePending = 1U << 4;  // 차선 변경 대기: 운전자가 그쪽으로 핸들을 밀어야 시작
-constexpr uint32_t kHudFlagLaneChanging = 1U << 5;       // 차선 변경 중(시작·마무리)
-constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;    // 차선 변경 방향(없으면 왼쪽)
-constexpr uint32_t kHudFlagSteerPaused = 1U << 7;        // 85도 위에서 조향 요청을 끄고 쉰다
-constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받아 15도 아래에서 손을 떼야 다시 조향
-constexpr uint32_t kHudFlagTurnLeft = 1U << 9;           // 회전 desire(교차로 좌회전)
-constexpr uint32_t kHudFlagTurnRight = 1U << 10;         // 회전 desire(교차로 우회전)
-constexpr uint32_t kHudFlagBrakeLights = 1U << 11;       // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
-constexpr char kRoadAiFrameRing[] = "/edgepilot_road_ai";
+// ---- 크기 ----
+constexpr unsigned kFrameSlots = 8;
+constexpr unsigned kMaxProcesses = 12;
+constexpr unsigned kAiWidth = kDefaultAiWidth;
+constexpr unsigned kAiHeight = kDefaultAiHeight;
+constexpr unsigned kAiFrameBytes = kAiWidth * kAiHeight * 3 / 2;
 constexpr unsigned kCanBatchMaxFrames = 256;
 constexpr unsigned kCanQueueSlots = 64;
 
@@ -289,6 +280,20 @@ struct PandaState {
     uint32_t voltage = 0;
     uint32_t current = 0;
 };
+
+// ---- ControlState::hud_flags 비트 ----
+constexpr uint32_t kHudFlagLaneless = 1U << 0;
+constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
+constexpr uint32_t kHudFlagSoftDisabling = 1U << 2;   // 3초 뒤 해제 예고(active_block이 사유)
+constexpr uint32_t kHudFlagSteerSaturated = 1U << 3;  // 커브가 조향 한계를 넘음
+constexpr uint32_t kHudFlagLaneChangePending = 1U << 4;  // 차선 변경 대기: 운전자가 그쪽으로 핸들을 밀어야 시작
+constexpr uint32_t kHudFlagLaneChanging = 1U << 5;       // 차선 변경 중(시작·마무리)
+constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;    // 차선 변경 방향(없으면 왼쪽)
+constexpr uint32_t kHudFlagSteerPaused = 1U << 7;        // 85도 위에서 조향 요청을 끄고 쉰다
+constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받아 15도 아래에서 손을 떼야 다시 조향
+constexpr uint32_t kHudFlagTurnLeft = 1U << 9;           // 회전 desire(교차로 좌회전)
+constexpr uint32_t kHudFlagTurnRight = 1U << 10;         // 회전 desire(교차로 우회전)
+constexpr uint32_t kHudFlagBrakeLights = 1U << 11;       // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
 
 struct ControlState {
     uint64_t timestamp_ns = 0;
