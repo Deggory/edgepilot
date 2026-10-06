@@ -184,17 +184,6 @@ CanFrame create_cruise_button_frame(const HyundaiClu11Values &clu_seed, int butt
   return create_clu11_frame(clu_seed, command, kPowertrainBus);
 }
 
-HyundaiSteeringLimits hyundai_limits(const SteeringParams &params) {
-  HyundaiSteeringLimits out;
-  out.steer_max = params.steer_max;
-  out.steer_delta_up = params.steer_delta_up;
-  out.steer_delta_down = params.steer_delta_down;
-  out.steer_driver_allowance = params.steer_driver_allowance;
-  out.steer_driver_multiplier = params.steer_driver_multiplier;
-  out.steer_driver_factor = params.steer_driver_factor;
-  return out;
-}
-
 int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque,
                                       const HyundaiSteeringLimits &limits) {
   const int driver_max_torque = limits.steer_max +

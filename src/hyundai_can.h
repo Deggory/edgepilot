@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "can_frame.h"
-#include "control_params.h"
 
 struct HyundaiSteeringLimits {
   int steer_max = 384;
@@ -15,9 +14,6 @@ struct HyundaiSteeringLimits {
   int steer_driver_multiplier = 2;
   int steer_driver_factor = 1;
 };
-
-// SteeringParams의 토크 제한을 CAN 계층 표현으로 옮긴다.
-HyundaiSteeringLimits hyundai_limits(const SteeringParams &params);
 
 int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque,
                                       const HyundaiSteeringLimits &limits = HyundaiSteeringLimits{});

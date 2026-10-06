@@ -27,6 +27,18 @@ float interp_lateral(float x, const float *values) {
   return values[kLateralControlN - 1];
 }
 
+// SteeringParams의 토크 제한을 CAN 계층 표현으로 옮긴다.
+HyundaiSteeringLimits hyundai_limits(const SteeringParams &params) {
+  HyundaiSteeringLimits out;
+  out.steer_max = params.steer_max;
+  out.steer_delta_up = params.steer_delta_up;
+  out.steer_delta_down = params.steer_delta_down;
+  out.steer_driver_allowance = params.steer_driver_allowance;
+  out.steer_driver_multiplier = params.steer_driver_multiplier;
+  out.steer_driver_factor = params.steer_driver_factor;
+  return out;
+}
+
 }  // namespace
 
 LateralController::LateralController(LateralControllerConfig config)
