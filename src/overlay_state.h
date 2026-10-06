@@ -6,6 +6,7 @@
 
 #include "departure_alert.h"
 #include "ipc_messages.h"
+#include "projection.h"
 
 #include <limits>
 
@@ -115,6 +116,11 @@ struct OverlayHudState {
 
 /* 공유 상태 스냅샷 → HUD 표시 상태. fresh가 아니면 값을 0/false로 두어 HUD가 "--"를
  * 그린다. overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
+/* 받은 ModelState를 렌더러가 그리는 모델 출력과 투영으로 되돌린다(overlayd·hud_snapshot). lead는
+ * t=0 하나뿐이고 road_transform은 ModelState에 없다. */
+ParsedModelOutput parsed_from_model_state(const ModelState &state);
+ProjectionState projection_from_model_state(const ModelState &state);
+
 void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud);
 void hud_apply_control_state(const ControlState &control, bool fresh, OverlayHudState *hud);
 void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud);

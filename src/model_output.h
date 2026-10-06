@@ -29,20 +29,27 @@ constexpr int kModelOutputFloats = 2576;
 constexpr int kModelFeatureLen = 512;
 
 namespace model_output_layout {
-constexpr int kMetaOffset = 0;              // 55
-constexpr int kDesirePredOffset = 55;       // 32
-constexpr int kPoseOffset = 87;             // 12: trans 3, rot 3, log std 6
+constexpr int kMetaOffset = 0;
+constexpr int kMetaSize = 55;
+constexpr int kDesirePredOffset = 55;
+constexpr int kDesirePredSize = 32;
+constexpr int kPoseOffset = 87;             // trans 3, rot 3, log std 6
+constexpr int kPoseSize = 12;
 constexpr int kWideFromDeviceEulerOffset = 99;
-constexpr int kRoadTransformOffset = 105;
+constexpr int kWideFromDeviceEulerSize = 6;
+constexpr int kRoadTransformOffset = 105;   // trans 3, rot 3, log std 6
+constexpr int kRoadTransformSize = 12;
 constexpr int kLaneOffset = 117;            // 평균 4x33x2, 이어서 log std
 constexpr int kLaneLineSize = 4 * kTrajectorySize * 2;
 constexpr int kLaneProbOffset = 645;        // 차선당 로짓 2개, 두 번째가 존재 확률
+constexpr int kLaneProbSize = 8;
 constexpr int kRoadEdgeOffset = 653;
 constexpr int kRoadEdgeMeanSize = 2 * kTrajectorySize * 2;
 constexpr int kLeadOffset = 917;            // 평균 3x6x4, 이어서 log std
 constexpr int kLeadElementSize = 4;
 constexpr int kLeadMeanSize = kLeadMhpSelection * kLeadTrajLen * kLeadElementSize;
 constexpr int kLeadProbOffset = 1061;
+constexpr int kLeadProbSize = kLeadMhpSelection;
 constexpr int kFeatureOffset = 1064;
 constexpr int kPlanOffset = 1576;           // 평균 33x15, 이어서 log std
 constexpr int kPlanWidth = 15;
@@ -55,14 +62,21 @@ constexpr int kDesireStateOffset = 2566;
 constexpr int kMetaGasPressIndex = 31;
 constexpr int kMetaBrakePressIndex = 32;
 constexpr int kMetaPressStride = 4;
-static_assert(kLaneProbOffset == kLaneOffset + kLaneLineSize * 2 &&
-                  kRoadEdgeOffset == kLaneProbOffset + 8 &&
+// 출력 끝의 두 칸은 쓰지 않는다(output_slices 밖).
+constexpr int kOutputPadding = 2;
+static_assert(kDesirePredOffset == kMetaOffset + kMetaSize &&
+                  kPoseOffset == kDesirePredOffset + kDesirePredSize &&
+                  kWideFromDeviceEulerOffset == kPoseOffset + kPoseSize &&
+                  kRoadTransformOffset == kWideFromDeviceEulerOffset + kWideFromDeviceEulerSize &&
+                  kLaneOffset == kRoadTransformOffset + kRoadTransformSize &&
+                  kLaneProbOffset == kLaneOffset + kLaneLineSize * 2 &&
+                  kRoadEdgeOffset == kLaneProbOffset + kLaneProbSize &&
                   kLeadOffset == kRoadEdgeOffset + kRoadEdgeMeanSize * 2 &&
                   kLeadProbOffset == kLeadOffset + kLeadMeanSize * 2 &&
-                  kFeatureOffset == kLeadProbOffset + kLeadMhpSelection &&
+                  kFeatureOffset == kLeadProbOffset + kLeadProbSize &&
                   kPlanOffset == kFeatureOffset + kModelFeatureLen &&
                   kDesireStateOffset == kPlanOffset + kTrajectorySize * kPlanWidth * 2 &&
-                  kModelOutputFloats == kDesireStateOffset + kDesireLen + 2,
+                  kModelOutputFloats == kDesireStateOffset + kDesireLen + kOutputPadding,
               "openpilot master supercombo output layout");
 }  // namespace model_output_layout
 

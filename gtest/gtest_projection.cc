@@ -2,6 +2,7 @@
  * 같은 비율 위치에 놓여야 한다. 폭을 하드코딩하면 오버레이가 영상과 어긋난다. */
 #include "app_config.h"
 #include "ipc_messages.h"
+#include "overlay_state.h"
 #include "projection.h"
 
 #include <cmath>

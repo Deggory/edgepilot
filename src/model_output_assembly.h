@@ -36,17 +36,19 @@ constexpr int kPlanWidth = model_output_layout::kPlanWidth;  // 15
 constexpr int kPlanMotionWidth = 9;
 constexpr int kPlanOrientWidth = kPlanWidth - kPlanMotionWidth;
 
+namespace layout = model_output_layout;
 constexpr Part kParts[] = {
-    {"out_meta", Piece::Contiguous, 0, 55},
-    {"out_desire_pred", Piece::Contiguous, 55, 32},
-    {"out_pose", Piece::Contiguous, 87, 12},
-    {"out_wide_from_device", Piece::Contiguous, 99, 6},
-    {"out_road_transform", Piece::Contiguous, 105, 12},
-    {"out_lanes", Piece::Contiguous, 117, 528},
-    {"out_lane_prob", Piece::Contiguous, 645, 8},
-    {"out_road_edges", Piece::Contiguous, 653, 264},
-    {"out_lead", Piece::Contiguous, 917, 144},
-    {"out_lead_prob", Piece::Contiguous, 1061, 3},
+    {"out_meta", Piece::Contiguous, layout::kMetaOffset, layout::kMetaSize},
+    {"out_desire_pred", Piece::Contiguous, layout::kDesirePredOffset, layout::kDesirePredSize},
+    {"out_pose", Piece::Contiguous, layout::kPoseOffset, layout::kPoseSize},
+    {"out_wide_from_device", Piece::Contiguous, layout::kWideFromDeviceEulerOffset,
+     layout::kWideFromDeviceEulerSize},
+    {"out_road_transform", Piece::Contiguous, layout::kRoadTransformOffset, layout::kRoadTransformSize},
+    {"out_lanes", Piece::Contiguous, layout::kLaneOffset, layout::kLaneLineSize * 2},
+    {"out_lane_prob", Piece::Contiguous, layout::kLaneProbOffset, layout::kLaneProbSize},
+    {"out_road_edges", Piece::Contiguous, layout::kRoadEdgeOffset, layout::kRoadEdgeMeanSize * 2},
+    {"out_lead", Piece::Contiguous, layout::kLeadOffset, layout::kLeadMeanSize * 2},
+    {"out_lead_prob", Piece::Contiguous, layout::kLeadProbOffset, layout::kLeadProbSize},
     {"out_hidden", Piece::Contiguous, model_output_layout::kFeatureOffset, kModelFeatureLen},
     {"out_plan_motion", Piece::PlanMotion, model_output_layout::kPlanOffset, kPlanKnots * kPlanMotionWidth},
     {"out_plan_orient", Piece::PlanOrient, model_output_layout::kPlanOffset, kPlanKnots * kPlanOrientWidth},
@@ -55,6 +57,9 @@ constexpr Part kParts[] = {
     {"out_desire_state", Piece::Contiguous, model_output_layout::kDesireStateOffset, kDesireLen},
 };
 constexpr int kPartCount = static_cast<int>(sizeof(kParts) / sizeof(kParts[0]));
+static_assert(layout::kLaneLineSize * 2 == 528 && layout::kRoadEdgeMeanSize * 2 == 264 &&
+                  layout::kLeadMeanSize * 2 == 144,
+              "split output sizes of the released graph");
 
 // 한 출력을 raw(kModelOutputFloats)의 제자리에 쓴다. 나머지 두 칸(패딩)은 호출자가 0으로 둔다.
 inline void place(const Part &part, const float *src, float *raw)

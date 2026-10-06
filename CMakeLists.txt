@@ -56,7 +56,6 @@ endfunction()
 add_edgepilot_library(common
   src/app_config.cc
   src/ipc_channels.cc
-  src/ipc_messages.cc
   src/model_output.cc
   src/projection.cc
 )
@@ -97,6 +96,7 @@ add_edgepilot_library(perception
   src/calibration_service.cc
   src/model_input_transform.cc
   src/calibration_online.cc
+  src/model_state_fill.cc
 )
 target_link_libraries(perception PUBLIC common utils_json)
 

@@ -155,18 +155,18 @@ released after that short hold if they persist.
 
 ## Processes and IPC
 
-- `src/ipc_messages.*`
+- `src/ipc_messages.h`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the state snapshots (`ModelState`, `ControlState`, `PandaState`, …) with
-    their `static_assert`s, and the
-    `ModelState` → `ParsedModelOutput`/`ProjectionState` unpacking. Recording
-    v8 stores `ModelState`, `ControlState`, and `PandaState` as-is, so their
-    offsets are pinned here and tied to `kRecordingVersion`. Code that only
-    reads or fills a message includes this and nothing else.
-- `src/model_state_fill.h`
+    their `static_assert`s. Recording v8 stores `ModelState`, `ControlState`,
+    and `PandaState` as-is, so their offsets are pinned here and tied to
+    `kRecordingVersion`. Code that only reads or fills a message includes this
+    and nothing else.
+- `src/model_state_fill.*`
   - `fill_model_state`, which modeld calls to pack a frame's outputs into
-    `ModelState`. It needs the online calibrator's snapshot, so it is kept out
-    of `ipc_messages.h` and message consumers do not pull in the calibrator.
+    `ModelState`, and `compute_lane_t` (the openpilot plan→lane time mapping).
+    It needs the online calibrator's snapshot, so it lives in the `perception`
+    library and message consumers do not pull in the calibrator.
 - `src/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
     and the camera frame ring, all on one `ShmRegion` (open, size, map, close).
@@ -203,7 +203,8 @@ released after that short hold if they persist.
 - `src/overlay_state.*`
   - `OverlayHudState`, the IPC state (`ControlState`, `ModelState`, …) →
     `OverlayHudState` mapping shared by
-    `overlayd` and `hud_snapshot`, the engage-block label table, and
+    `overlayd` and `hud_snapshot`, the `ModelState` →
+    `ParsedModelOutput`/`ProjectionState` unpacking, the engage-block label table, and
     `OverlayAlertEvents`, which turns the controlsd event counters into the one
     toast/log alert a frame may raise (baseline on first sight, rebaseline on a
     controlsd restart, reject > engage > disengage > departure).

@@ -191,3 +191,72 @@ OverlayAlertEvents::Decision OverlayAlertEvents::update(const ControlState &cont
     }
     return decision;
 }
+
+ParsedModelOutput parsed_from_model_state(const ModelState &state)
+{
+    ParsedModelOutput parsed;
+    parsed.valid = state.valid != 0;
+    parsed.plan.valid = parsed.valid;
+    parsed.plan.best_index = state.best_plan;
+    parsed.plan.probability = state.plan_probability;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        parsed.plan.points[i] = {state.plan[i].x, state.plan[i].y, state.plan[i].z};
+        parsed.plan.yaw[i] = state.plan_yaw[i];
+        parsed.plan.yaw_rate[i] = state.plan_yaw_rate[i];
+        for (int lane = 0; lane < 4; ++lane) {
+            parsed.lanes[lane].valid = parsed.valid;
+            parsed.lanes[lane].probability = state.lane_probabilities[lane];
+            parsed.lanes[lane].std = state.lane_stds[lane];
+            parsed.lanes[lane].points[i] = {
+                state.lanes[lane][i].x,
+                state.lanes[lane][i].y,
+                state.lanes[lane][i].z,
+            };
+        }
+        for (int edge = 0; edge < 2; ++edge) {
+            parsed.road_edges[edge].valid = parsed.valid;
+            parsed.road_edges[edge].std = state.road_edge_stds[edge];
+            parsed.road_edges[edge].points[i] = {
+                state.road_edges[edge][i].x,
+                state.road_edges[edge][i].y,
+                state.road_edges[edge][i].z,
+            };
+        }
+    }
+    for (int i = 0; i < kDesireLen; ++i)
+        parsed.meta.desire_state[i] = state.desire_state[i];
+    for (int i = 0; i < kMetaPressHorizons; ++i) {
+        parsed.meta.gas_press[i] = state.gas_press_probs[i];
+        parsed.meta.brake_press[i] = state.brake_press_probs[i];
+    }
+
+    if (state.lead.valid) {
+        parsed.leads.valid = true;
+        parsed.leads.global_probabilities[0] = state.lead.probability;
+        parsed.leads.predictions[0].points[0] = {
+            state.lead.x,
+            state.lead.y,
+            state.lead.velocity,
+            state.lead.acceleration,
+        };
+    }
+
+    parsed.has_pose = state.pose.valid != 0;
+    if (parsed.has_pose) {
+        for (int i = 0; i < 3; ++i) {
+            parsed.pose.trans[i] = state.pose.trans[i];
+            parsed.pose.rot[i] = state.pose.rot[i];
+            parsed.pose.trans_std[i] = state.pose.trans_std[i];
+            parsed.pose.rot_std[i] = state.pose.rot_std[i];
+        }
+    }
+    return parsed;
+}
+
+ProjectionState projection_from_model_state(const ModelState &state)
+{
+    ProjectionState projection =
+        make_projection_state(state.calibration.roll, state.calibration.pitch, state.calibration.yaw);
+    projection.lateral_offset_m = state.camera_offset_m;
+    return projection;
+}

@@ -7,7 +7,6 @@
 
 #include "app_config.h"
 #include "model_output.h"
-#include "projection.h"
 #include "recording_format.h"
 #include "utils_time.h"
 
@@ -533,9 +532,5 @@ static_assert(sizeof(PandaState) == 96,
 static_assert(kRecordingVersion == 8 && sizeof(ModelState) == 3576 &&
                   sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
               "recording v8 pins these payloads; bump kRecordingVersion together");
-
-/* overlayd와 hud_snapshot이 소비 직후에 쓴다(채우는 쪽은 model_state_fill.h). */
-ParsedModelOutput parsed_from_model_state(const ModelState &state);
-ProjectionState projection_from_model_state(const ModelState &state);
 
 #endif
