@@ -1,12 +1,14 @@
 /* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(K230LOG1), 세그먼트
  * 프레임 인덱스(K230IDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
- * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h와, 상태 채널을 이벤트 로그로
- * 옮기는 StateRecorder도 같이 본다. 보드·인코더 없이 합성 레코드로 검사한다. */
+ * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h, 상태 채널을 이벤트 로그로
+ * 옮기는 StateRecorder, 그 route를 다시 읽는 replayd의 ReplayRoute도 같이 본다. 보드·인코더 없이
+ * 합성 레코드로 검사한다. */
 #include "event_log_reader.h"
 #include "recorded_can.h"
 #include "recorded_model_state.h"
 #include "recording_format.h"
 #include "recording_writer.h"
+#include "replay_route.h"
 #include "state_recorder.h"
 
 #include <gtest/gtest.h>
@@ -319,6 +321,88 @@ TEST(StateRecorder, WritesEachNewSnapshotOnce) {
     ASSERT_EQ(payload.size(), record.payload);
   }
   ASSERT_FALSE(reader.next(&header, &payload)) << "같은 스냅샷을 두 번 쓰지 않는다";
+
+  std::system(("rm -rf '" + root + "'").c_str());
+}
+
+TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
+  char root_template[] = "/tmp/gtest_replay_route_XXXXXX";
+  const std::string root = mkdtemp(root_template);
+  setenv("EDGEPILOT_RECORD_STAGING", (root + "/staging").c_str(), 1);
+  const uint64_t t0 = 5'000'000'000ULL, kMinute = 60'000'000'000ULL;
+  const uint8_t config[] = {'C', 'F', 'G', 0x01};
+  struct Written { uint64_t ts; bool key; uint8_t fill; size_t size; };
+  const Written written[] = {{t0, true, 0xA0, 40},
+                             {t0 + 50'000'000ULL, false, 0xA1, 24},
+                             {t0 + 100'000'000ULL, true, 0xA2, 32},  // 세그먼트 가운데 키프레임
+                             {t0 + kMinute, true, 0xA3, 48},         // 60초 뒤 키프레임: 다음 세그먼트
+                             {t0 + kMinute + 50'000'000ULL, false, 0xA4, 16}};
+  {
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000, VideoCodec::H264);
+    writer.set_enabled(true, t0);
+    writer.set_codec_config(config, sizeof(config));
+    for (size_t i = 0; i < std::size(written); ++i) {
+      RoadAiFrame frame;
+      frame.frame_id = i;
+      frame.timestamp_ns = written[i].ts;
+      const std::vector<uint8_t> packet(written[i].size, written[i].fill);
+      writer.write_encoded_frame(frame, packet.data(), packet.size(), written[i].key);
+    }
+    const std::vector<uint8_t> panda(sizeof(PandaState), 0x5A), control(sizeof(ControlState), 1);
+    writer.write_can(RecordType::CanRx, synthetic_batch(t0 + 30'000'000ULL, 2, 0));
+    writer.write_state(RecordType::PandaState, t0 + 20'000'000ULL, panda.data(), panda.size());  // 앞선 시각을 나중에
+    writer.write_state(RecordType::ControlState, t0 + 25'000'000ULL, control.data(), control.size());
+    writer.write_can(RecordType::CanTx, synthetic_batch(t0 + 26'000'000ULL, 1, 0));
+    writer.write_state(RecordType::PandaState, t0 + kMinute + 10'000'000ULL, panda.data(), panda.size());  // 다음 청크
+    writer.set_enabled(false, t0 + 2 * kMinute);
+    writer.close();
+  }
+  const std::vector<std::string> routes = list_dir(root + "/recordings");
+  ASSERT_EQ(routes.size(), 1);
+  ReplayRoute route(root + "/recordings/" + routes[0]);
+
+  // 세그먼트 둘, 프레임 다섯, H.264
+  ASSERT_EQ(route.segments.size(), 2);
+  ASSERT_EQ(route.frames.size(), std::size(written));
+  ASSERT_TRUE(route.h264);
+  ASSERT_EQ(route.width, 1280);
+  ASSERT_EQ(route.height, 720);
+  for (size_t i = 0; i < std::size(written); ++i) {
+    // 인덱스의 시각·키프레임·세그먼트
+    ASSERT_EQ(route.frames[i].capture_ns, written[i].ts);
+    ASSERT_EQ(route.frames[i].keyframe, written[i].key);
+    ASSERT_EQ(route.frames[i].segment, i < 3 ? 0u : 1u);
+    ASSERT_EQ(route.frames[i].segment_first, i == 0 || i == 3);
+  }
+  ASSERT_EQ(route.segments[1].header_bytes, sizeof(config)) << "세그먼트마다 앞에 코덱 설정";
+
+  const auto packet = [&](size_t i) { return std::vector<uint8_t>(written[i].size, written[i].fill); };
+  const auto with_config = [&](size_t i) {
+    std::vector<uint8_t> bytes(config, config + sizeof(config));
+    const std::vector<uint8_t> tail = packet(i);
+    bytes.insert(bytes.end(), tail.begin(), tail.end());
+    return bytes;
+  };
+  std::vector<uint8_t> out;
+  ASSERT_TRUE(route.read_frame(route.frames[0], &out));
+  ASSERT_EQ(out, with_config(0)) << "세그먼트 첫 키프레임은 파일 처음부터";
+  ASSERT_TRUE(route.read_frame(route.frames[1], &out));
+  ASSERT_EQ(out, packet(1)) << "키프레임이 아니면 패킷만";
+  ASSERT_TRUE(route.read_frame(route.frames[2], &out));
+  ASSERT_EQ(out, with_config(2)) << "가운데 키프레임에도 코덱 설정을 붙인다";
+  ASSERT_TRUE(route.read_frame(route.frames[3], &out));
+  ASSERT_EQ(out, with_config(3));
+  ASSERT_TRUE(route.read_frame(route.frames[4], &out));
+  ASSERT_EQ(out, packet(4));
+
+  // 이벤트는 CanRx와 PandaState만, 청크를 넘어 시각 순
+  ASSERT_EQ(route.events.size(), 3);
+  EXPECT_EQ(route.events[0].type, RecordType::PandaState);
+  EXPECT_EQ(route.events[0].timestamp_ns, t0 + 20'000'000ULL);
+  EXPECT_EQ(route.events[1].type, RecordType::CanRx);
+  EXPECT_EQ(route.events[1].timestamp_ns, t0 + 30'000'000ULL);
+  EXPECT_EQ(decode_recorded_can(route.events[1].payload.data(), route.events[1].payload.size(), 0).count, 2);
+  EXPECT_EQ(route.events[2].timestamp_ns, t0 + kMinute + 10'000'000ULL);
 
   std::system(("rm -rf '" + root + "'").c_str());
 }

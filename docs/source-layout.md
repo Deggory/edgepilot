@@ -278,9 +278,12 @@ released after that short hold if they persist.
 - `src/imud.cc`, `src/locationd.cc`
   - the board IMU reader (LSM6DSOW over `i2c-dev`) and the process that runs
     `localization_pipeline` on its samples and publishes `LocalizationState`.
-- `src/replayd.cc`
+- `src/replayd.cc`, `src/replay_route.*`
   - rehearsal: plays a recorded route in place of `camerad` and `pandad`
-    ([Rehearsal](rehearsal.md)).
+    ([Rehearsal](rehearsal.md)). `ReplayRoute` reads the route (frame
+    indexes, the frames with their parameter sets, and the CAN/Panda events
+    in time order) without the decoder, so `gtest_recording_writer` reads back
+    a route the writer made.
 - `src/camcal.cc`
   - still capture through the runtime's camera path for the intrinsics
     measurement ([Camera calibration](camcal.md)).

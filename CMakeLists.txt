@@ -106,8 +106,9 @@ add_edgepilot_library(panda_codec src/panda_can_codec.cc)
 add_edgepilot_library(localization src/location_estimator.cc src/lateral_lag.cc src/localization_pipeline.cc)
 target_link_libraries(localization PUBLIC utils_json common)
 
-# 기록 라이터는 POSIX만 써서 호스트 검사가 디스크 포맷을 본다. 인코더(VENC)는 recordd에만.
-add_edgepilot_library(recording_writer src/recording_writer.cc src/state_recorder.cc)
+# 기록 라이터와 리허설 route 리더는 POSIX만 써서 호스트 검사가 디스크 포맷을 본다. 인코더(VENC)는
+# recordd에만, 디코더(VDEC)는 replayd에만.
+add_edgepilot_library(recording_writer src/recording_writer.cc src/replay_route.cc src/state_recorder.cc)
 target_link_libraries(recording_writer PUBLIC common)
 
 # 오버레이 상태 매핑·알림 정책과 렌더러(자체 캔버스·구운 글꼴)는 외부 라이브러리 없이
@@ -258,7 +259,7 @@ if(EDGEPILOT_BUILD_RUNTIME)
   target_link_libraries(maixcam2_vdec PUBLIC "${AX_LIB_DIR}/libax_vdec.so" "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
 
   add_executable(replayd src/replayd.cc)
-  configure_board_target(replayd common maixcam2_vdec maixcam2_gdc)
+  configure_board_target(replayd common recording_writer maixcam2_vdec maixcam2_gdc)
 
   add_executable(recordd src/recordd.cc)
   configure_board_target(recordd common recording_writer utils_json maixcam2_venc)
