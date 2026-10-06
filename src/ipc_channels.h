@@ -58,12 +58,15 @@ template <typename T>
 class Subscription {
 public:
     bool open(const char *topic, bool create = true) { return channel_.open(topic, sizeof(T), create); }
-    // 새 스냅샷이면 latest()에 두고 true.
-    bool poll()
+    /* 아직 열리지 않았으면 생산자가 만든 채널에 붙어 본다(생산자가 늦게 뜨거나 없어도 되는 구독).
+     * 열려 있으면 true. */
+    bool attach(const char *topic) { return channel_.valid() || channel_.open(topic, sizeof(T), false); }
+    // 새 스냅샷이면 latest()에 두고 true. timeout_ms까지 1 ms 간격으로 기다릴 수 있다.
+    bool poll(int timeout_ms = 0)
     {
         T candidate;
         uint64_t seq = seq_;
-        if (!channel_.read(&candidate, sizeof(candidate), &seq) || seq == seq_) return false;
+        if (!channel_.read_new(&seq, &candidate, sizeof(candidate), timeout_ms)) return false;
         latest_ = candidate;
         seq_ = seq;
         return true;

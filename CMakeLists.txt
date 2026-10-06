@@ -107,7 +107,7 @@ add_edgepilot_library(localization src/location_estimator.cc src/lateral_lag.cc 
 target_link_libraries(localization PUBLIC utils_json common)
 
 # 기록 라이터는 POSIX만 써서 호스트 검사가 디스크 포맷을 본다. 인코더(VENC)는 recordd에만.
-add_edgepilot_library(recording_writer src/recording_writer.cc)
+add_edgepilot_library(recording_writer src/recording_writer.cc src/state_recorder.cc)
 target_link_libraries(recording_writer PUBLIC common)
 
 # 오버레이 상태 매핑·알림 정책과 렌더러(자체 캔버스·구운 글꼴)는 외부 라이브러리 없이

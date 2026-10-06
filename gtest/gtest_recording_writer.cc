@@ -1,15 +1,17 @@
 /* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(K230LOG1), 세그먼트
  * 프레임 인덱스(K230IDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
- * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h도 같이 본다. 보드·인코더 없이
- * 합성 레코드로 검사한다. */
+ * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h와, 상태 채널을 이벤트 로그로
+ * 옮기는 StateRecorder도 같이 본다. 보드·인코더 없이 합성 레코드로 검사한다. */
 #include "event_log_reader.h"
 #include "recorded_can.h"
 #include "recorded_model_state.h"
 #include "recording_format.h"
 #include "recording_writer.h"
+#include "state_recorder.h"
 
 #include <gtest/gtest.h>
 #include <dirent.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -233,6 +235,90 @@ TEST(RecordingWriter, RouteOnDisk) {
   // params 스냅샷은 json 파일만 복사한다
   ASSERT_EQ(snapshot.size(), 1);
   ASSERT_EQ(snapshot[0], "steering.json");
+
+  std::system(("rm -rf '" + root + "'").c_str());
+}
+
+TEST(StateRecorder, WritesEachNewSnapshotOnce) {
+  char root_template[] = "/tmp/gtest_state_recorder_XXXXXX";
+  const std::string root = mkdtemp(root_template);
+  setenv("EDGEPILOT_RECORD_STAGING", (root + "/staging").c_str(), 1);
+  // macOS는 shm 이름을 31자까지 받는다: 가장 긴 토픽(24자) 뒤에 7자까지
+  const std::string suffix = "_" + std::to_string(getpid() % 100000);
+  const std::string topics[] = {kModelStateTopic + suffix, kControlStateTopic + suffix,
+                                kPandaStateTopic + suffix, kLearnerStateTopic + suffix,
+                                kImuTopic + suffix, kLocalizationStateTopic + suffix};
+  // ASSERT가 중간에 빠져나가도 공유 메모리를 지운다.
+  struct Unlink {
+    const std::string (&names)[6];
+    ~Unlink() {
+      for (const std::string &name : names) shm_unlink(name.c_str());
+    }
+  } cleanup{topics};
+
+  const uint64_t t0 = 5'000'000'000ULL;
+  ModelState model;
+  ControlState control;
+  PandaState panda;
+  LearnerState learner;
+  ImuBatch imu;
+  LocalizationState localization;
+  {
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000, VideoCodec::H264);
+    writer.set_enabled(true, t0);
+    StateRecorder recorder(suffix);
+    recorder.record(writer);  // 생산자가 아직 없다
+
+    LatestChannel pubs[6];
+    const size_t sizes[] = {sizeof(model), sizeof(control), sizeof(panda), sizeof(learner), sizeof(imu),
+                            sizeof(localization)};
+    for (int i = 0; i < 6; ++i) ASSERT_TRUE(pubs[i].open(topics[i].c_str(), sizes[i], true)) << topics[i];
+    model.model_timestamp_ns = t0 + 1;
+    control.timestamp_ns = t0 + 2;
+    panda.timestamp_ns = t0 + 3;
+    learner.timestamp_ns = t0 + 4;
+    imu.timestamp_ns = t0 + 5;
+    imu.count = 2;
+    localization.timestamp_ns = t0 + 6;
+    const void *payloads[] = {&model, &control, &panda, &learner, &imu, &localization};
+    for (int i = 0; i < 6; ++i) pubs[i].publish(payloads[i], sizes[i]);
+    recorder.record(writer);
+    recorder.record(writer);  // 새 스냅샷이 없으면 쓰지 않는다
+
+    control.timestamp_ns = t0 + 7;
+    pubs[1].publish(&control, sizeof(control));
+    imu.timestamp_ns = t0 + 8;
+    imu.count = 0;  // 빈 IMU 묶음은 남기지 않는다
+    pubs[4].publish(&imu, sizeof(imu));
+    recorder.record(writer);
+    writer.set_enabled(false, t0 + 9);
+    writer.close();
+  }
+
+  const std::vector<std::string> routes = list_dir(root + "/recordings");
+  ASSERT_EQ(routes.size(), 1);
+  EventLogReader reader(root + "/recordings/" + routes[0] + "/events/000.bin");
+  ASSERT_TRUE(reader.ok());
+  struct Expected { RecordType type; uint64_t ts; size_t payload; };
+  const Expected expected[] = {
+      {RecordType::ModelState, t0 + 1, sizeof(ModelState)},
+      {RecordType::ControlState, t0 + 2, sizeof(ControlState)},
+      {RecordType::PandaState, t0 + 3, sizeof(PandaState)},
+      {RecordType::LearnerState, t0 + 4, sizeof(LearnerState)},
+      {RecordType::Imu, t0 + 5, offsetof(ImuBatch, samples) + 2 * sizeof(ImuSample)},
+      {RecordType::Localization, t0 + 6, sizeof(LocalizationState)},
+      {RecordType::ControlState, t0 + 7, sizeof(ControlState)},
+  };
+  EventRecordHeader header{};
+  std::vector<char> payload;
+  for (const Expected &record : expected) {
+    ASSERT_TRUE(reader.next(&header, &payload));
+    // 채널 순서대로 새 스냅샷 하나씩, IMU는 채운 샘플까지
+    ASSERT_EQ(header.type, static_cast<uint16_t>(record.type));
+    ASSERT_EQ(header.timestamp_ns, record.ts);
+    ASSERT_EQ(payload.size(), record.payload);
+  }
+  ASSERT_FALSE(reader.next(&header, &payload)) << "같은 스냅샷을 두 번 쓰지 않는다";
 
   std::system(("rm -rf '" + root + "'").c_str());
 }

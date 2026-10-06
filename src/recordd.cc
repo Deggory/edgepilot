@@ -4,6 +4,7 @@
 #include "ipc_channels.h"
 #include "maix_venc.h"
 #include "recording_writer.h"
+#include "state_recorder.h"
 #include "utils_file.h"
 
 #include <signal.h>
@@ -62,11 +63,6 @@ unsigned read_recording_bitrate(const std::string &path, unsigned fallback) {
   return static_cast<unsigned>(bitrate);
 }
 
-void open_optional_channel(LatestChannel &channel, bool *opened,
-                           const char *name, size_t size) {
-  if (!*opened) *opened = channel.open(name, size, false);
-}
-
 }  // namespace
 
 int main() {
@@ -122,24 +118,7 @@ int main() {
         encoder.drain(on_config, on_packet, 10);
     };
 
-    LatestChannel model_sub;
-    LatestChannel control_sub;
-    LatestChannel panda_sub;
-    LatestChannel learner_sub;
-    LatestChannel imu_sub;
-    LatestChannel localization_sub;
-    bool model_open = false;
-    bool control_open = false;
-    bool panda_open = false;
-    bool learner_open = false;
-    bool imu_open = false;
-    bool localization_open = false;
-    uint64_t model_seq = 0;
-    uint64_t control_seq = 0;
-    uint64_t panda_seq = 0;
-    uint64_t learner_seq = 0;
-    uint64_t imu_seq = 0;
-    uint64_t localization_seq = 0;
+    StateRecorder states;
     uint64_t frame_seq = 0;
     FileStamp config_stamp;
     uint64_t next_config_poll_ns = 0;
@@ -218,56 +197,7 @@ int main() {
       while (can_log_sub.pop(&batch)) writer.write_can(RecordType::CanRx, batch);
       while (sendcan_log_sub.pop(&batch)) writer.write_can(RecordType::CanTx, batch);
 
-      if (writer.requested_enabled()) {
-        open_optional_channel(model_sub, &model_open, kModelStateTopic,
-                              sizeof(ModelState));
-        open_optional_channel(control_sub, &control_open, kControlStateTopic,
-                              sizeof(ControlState));
-        open_optional_channel(panda_sub, &panda_open, kPandaStateTopic,
-                              sizeof(PandaState));
-        open_optional_channel(learner_sub, &learner_open, kLearnerStateTopic,
-                              sizeof(LearnerState));
-        open_optional_channel(imu_sub, &imu_open, kImuTopic, sizeof(ImuBatch));
-        open_optional_channel(localization_sub, &localization_open, kLocalizationStateTopic,
-                              sizeof(LocalizationState));
-        ModelState model_state;
-        if (model_open && model_sub.read_new(&model_seq, &model_state,
-                                             sizeof(model_state), 0)) {
-          writer.write_state(RecordType::ModelState, model_state.model_timestamp_ns,
-                             &model_state, sizeof(model_state));
-        }
-        ControlState control_state;
-        if (control_open && control_sub.read_new(&control_seq, &control_state,
-                                                 sizeof(control_state), 0)) {
-          writer.write_state(RecordType::ControlState, control_state.timestamp_ns,
-                             &control_state, sizeof(control_state));
-        }
-        PandaState panda_state;
-        if (panda_open && panda_sub.read_new(&panda_seq, &panda_state,
-                                             sizeof(panda_state), 0)) {
-          writer.write_state(RecordType::PandaState, panda_state.timestamp_ns,
-                             &panda_state, sizeof(panda_state));
-        }
-        LearnerState learner_state;
-        if (learner_open && learner_sub.read_new(&learner_seq, &learner_state,
-                                                 sizeof(learner_state), 0)) {
-          writer.write_state(RecordType::LearnerState, learner_state.timestamp_ns,
-                             &learner_state, sizeof(learner_state));
-        }
-        // IMU 묶음은 채운 샘플까지만 남긴다(100 ms마다 약 10개, 초당 약 4 KB).
-        ImuBatch imu_batch;
-        if (imu_open && imu_sub.read_new(&imu_seq, &imu_batch, sizeof(imu_batch), 0) &&
-            imu_batch.count > 0 && imu_batch.count <= kImuBatchMaxSamples) {
-          writer.write_state(RecordType::Imu, imu_batch.timestamp_ns, &imu_batch,
-                             offsetof(ImuBatch, samples) + imu_batch.count * sizeof(ImuSample));
-        }
-        LocalizationState localization;
-        if (localization_open && localization_sub.read_new(&localization_seq, &localization,
-                                                           sizeof(localization), 0)) {
-          writer.write_state(RecordType::Localization, localization.timestamp_ns, &localization,
-                             sizeof(localization));
-        }
-      }
+      if (writer.requested_enabled()) states.record(writer);
 
       if (now_ns >= next_log_ns) {
         next_log_ns = now_ns + 1000000000ULL;

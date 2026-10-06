@@ -244,10 +244,13 @@ released after that short hold if they persist.
     Only a `wlan` link with an address and an associated SSID counts as
     connected; another link (the USB virtual Ethernet, which always has an
     address) is kept apart for the network card.
-- `src/recording_writer.*`, `src/recording_format.h`
+- `src/recording_writer.*`, `src/state_recorder.*`, `src/recording_format.h`
   - the event-log writer and on-disk contract that `recordd` writes. It is the
     K230 recorder's format, so the host tools read MaixCAM2 and K230 drives.
-    `gtest_recording_writer` pins the layout; `recording_format.h`
+    `StateRecorder` copies each new state snapshot (model, control, Panda,
+    learner, IMU, locationd) into the log, attaching to a channel once its
+    producer has created it. `gtest_recording_writer` pins the layout and the
+    state recording; `recording_format.h`
     (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
     is mirrored by `tools/model/recording_reader.py`.
 - `src/event_log_reader.h`
@@ -271,7 +274,7 @@ released after that short hold if they persist.
     on a background thread, and logs the one-second stats line.
 - `src/recordd.cc`
   - the drive recorder: encodes the frames `modeld` used and writes the CAN
-    and state channels through `recording_writer`.
+    and state channels through `recording_writer` and `StateRecorder`.
 - `src/imud.cc`, `src/locationd.cc`
   - the board IMU reader (LSM6DSOW over `i2c-dev`) and the process that runs
     `localization_pipeline` on its samples and publishes `LocalizationState`.

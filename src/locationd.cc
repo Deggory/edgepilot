@@ -27,11 +27,6 @@ volatile sig_atomic_t g_stop = 0;
 constexpr uint64_t kPersistIntervalNs = 60'000'000'000ULL;
 constexpr uint64_t kLogIntervalNs = 10'000'000'000ULL;
 
-void open_optional(LatestChannel &channel, bool *opened, const char *name, size_t size)
-{
-    if (!*opened) *opened = channel.open(name, size, false);
-}
-
 }  // namespace
 
 int main()
@@ -61,9 +56,9 @@ int main()
         std::fprintf(stderr, "locationd: cannot open %s\n", kLocalizationStateTopic);
         return 1;
     }
-    LatestChannel imu_sub, model_sub, control_sub;
-    bool imu_open = false, model_open = false, control_open = false;
-    uint64_t imu_seq = 0, model_seq = 0, control_seq = 0;
+    Subscription<ImuBatch> imu_sub;
+    Subscription<ModelState> model_sub;
+    Subscription<ControlState> control_sub;
     uint64_t next_persist_ns = monotonic_now_ns() + kPersistIntervalNs;
     uint64_t next_log_ns = monotonic_now_ns() + kLogIntervalNs;
     unsigned long long batches = 0, published = 0;
@@ -82,24 +77,20 @@ int main()
     };
 
     while (!g_stop) {
-        open_optional(imu_sub, &imu_open, kImuTopic, sizeof(ImuBatch));
-        open_optional(model_sub, &model_open, kModelStateTopic, sizeof(ModelState));
-        open_optional(control_sub, &control_open, kControlStateTopic, sizeof(ControlState));
+        const bool imu_open = imu_sub.attach(kImuTopic);
+        model_sub.attach(kModelStateTopic);
+        control_sub.attach(kControlStateTopic);
         if (!imu_open) {
             usleep(200000);
             continue;
         }
         // 제어 상태는 100 Hz라 5 ms마다 본다(몇 개 놓쳐도 lagd는 0.1초 안의 값과 짝짓는다).
-        ControlState control;
-        if (control_open && control_sub.read_new(&control_seq, &control, sizeof(control), 0))
-            pipeline.on_control(control);
-        ModelState model;
-        if (model_open && model_sub.read_new(&model_seq, &model, sizeof(model), 0)) pipeline.on_model(model);
-        ImuBatch batch;
-        if (!imu_sub.read_new(&imu_seq, &batch, sizeof(batch), 5)) continue;
+        if (control_sub.poll()) pipeline.on_control(control_sub.latest());
+        if (model_sub.poll()) pipeline.on_model(model_sub.latest());
+        if (!imu_sub.poll(5)) continue;
         ++batches;
         LocalizationState out{};
-        if (pipeline.on_imu(batch, static_cast<double>(monotonic_now_ns()) * 1e-9, &out)) {
+        if (pipeline.on_imu(imu_sub.latest(), static_cast<double>(monotonic_now_ns()) * 1e-9, &out)) {
             if (pub.publish(&out, sizeof(out))) ++published;
             last = out;
         }
