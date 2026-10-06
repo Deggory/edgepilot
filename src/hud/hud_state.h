@@ -1,5 +1,5 @@
-#ifndef OVERLAY_STATE_H
-#define OVERLAY_STATE_H
+#ifndef HUD_STATE_H
+#define HUD_STATE_H
 
 /* 공유 상태 스냅샷(K230*State) → HUD 표시 상태. 그리기와 무관해 OpenCV 없이
  * 컴파일되며, overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
@@ -20,7 +20,7 @@ const char *engage_block_label(const char *block);
  * overlayd가 시각 기준으로 계산하므로(TurnSignalClock) 재그리기 빈도에 영향받지 않는다. */
 constexpr int kTurnSignalSteps = 25;
 
-struct OverlayHudState {
+struct HudState {
     bool panda_connected = false;
     bool panda_healthy = false;
     bool controller_enabled = false;
@@ -126,18 +126,18 @@ ProjectionState projection_from_model_state(const ModelState &state);
 
 /* 공유 상태 스냅샷 → HUD 표시 상태. fresh가 아니면 값을 0/false로 두어 HUD가 "--"를
  * 그린다. overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
-void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud);
-void hud_apply_control_state(const ControlState &control, bool fresh, OverlayHudState *hud);
-void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud);
-void hud_apply_record_state(const RecordState &record, bool fresh, OverlayHudState *hud);
-void hud_apply_learner_state(const LearnerState &learner, bool fresh, OverlayHudState *hud);
+void hud_apply_panda_state(const PandaState &panda, bool fresh, HudState *hud);
+void hud_apply_control_state(const ControlState &control, bool fresh, HudState *hud);
+void hud_apply_model_state(const ModelState &model, bool fresh, HudState *hud);
+void hud_apply_record_state(const RecordState &record, bool fresh, HudState *hud);
+void hud_apply_learner_state(const LearnerState &learner, bool fresh, HudState *hud);
 void hud_apply_localization_state(const LocalizationState &localization, bool fresh,
-                                  OverlayHudState *hud);
+                                  HudState *hud);
 
 /* 아래 가운데 알림 카드의 무게. 렌더러가 색으로 옮긴다(흰색, 초록, 주황, 빨강). */
 enum class HudAlertLevel { notice, proceed, caution, critical };
 
-struct HudAlert {
+struct HudAlertCard {
     std::string title;
     std::string detail;
     HudAlertLevel level = HudAlertLevel::notice;
@@ -149,13 +149,13 @@ struct HudAlert {
 /* 이 HUD 상태에서 띄울 알림 카드 하나. 우선순위는 engage 거부 > 해제 예고 > 조향 결함 > panda 결함 >
  * 조향 쉼(85도) > 조향 한계 > 서비스 대기 > 차선 변경 대기 > 출발 감지이고, 없으면 빈 카드다.
  * model_ok는 결함 카드의 연결 줄(MODEL/CAR/PANDA)에 쓴다. */
-HudAlert hud_select_alert(const OverlayHudState &hud, bool model_ok);
+HudAlertCard hud_select_alert(const HudState &hud, bool model_ok);
 
 /* 모델이 본 가까운 차선 중앙: x=0에서 왼쪽·오른쪽 자기 차선선의 가운데(+y = 오른쪽). 두 선이
  * 다 확실하지 않으면 NaN. tools/model/lane_bias.py의 offset(x=0)과 같은 값이다. */
 float lane_center_offset_m(const ParsedModelOutput &output);
 /* model_ok: 유효하고 신선한 모델 출력이 있는지. services_healthy의 조건 중 하나. */
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
-                             OverlayHudState *hud);
+                             HudState *hud);
 
 #endif

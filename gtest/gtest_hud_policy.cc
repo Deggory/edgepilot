@@ -1,7 +1,7 @@
-/* overlay_policy: overlayd가 그리기 밖에서 정하는 것. 제어 이벤트 카운터 → 알림(첫 스냅샷은 기준값,
+/* hud_policy: overlayd가 그리기 밖에서 정하는 것. 제어 이벤트 카운터 → 알림(첫 스냅샷은 기준값,
  * 우선순위, 한 프레임 하나, controlsd 재시작), 프레임마다 알림음 하나(해제 예고는 미루고 불가용 천이는
  * 넘긴다, engage 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활. */
-#include "hud/overlay_policy.h"
+#include "hud/hud_policy.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -22,72 +22,72 @@ ControlState control_with_events(uint32_t engage, uint32_t disengage, uint32_t r
   return c;
 }
 
-TEST(OverlayAlertEvents, FirstSnapshotIsABaseline) {
-  OverlayAlertEvents events;
+TEST(HudAlertEvents, FirstSnapshotIsABaseline) {
+  HudAlertEvents events;
   const auto first = events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
-  ASSERT_EQ(first.alert, OverlayAlert::none) << "첫 스냅샷은 기준값만 잡는다";
+  ASSERT_EQ(first.alert, HudAlert::none) << "첫 스냅샷은 기준값만 잡는다";
   const auto same = events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
-  ASSERT_EQ(same.alert, OverlayAlert::none) << "그대로인 카운터는 이벤트가 아니다";
+  ASSERT_EQ(same.alert, HudAlert::none) << "그대로인 카운터는 이벤트가 아니다";
   const auto engaged = events.update(control_with_events(6, 3, 2, 1), DepartureAlertType::none);
   // 새 engage id는 그 id로 engage 알림음을 낸다
-  ASSERT_EQ(engaged.alert, OverlayAlert::engage);
+  ASSERT_EQ(engaged.alert, HudAlert::engage);
   ASSERT_EQ(engaged.event_id, 6);
 }
 
-TEST(OverlayAlertEvents, PriorityAndOneAlertPerFrame) {
-  OverlayAlertEvents events;
+TEST(HudAlertEvents, PriorityAndOneAlertPerFrame) {
+  HudAlertEvents events;
   events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
   const ControlState burst = control_with_events(6, 4, 3, 2);
   const auto first = events.update(burst, DepartureAlertType::lead_departed);
   // 같은 프레임에서는 engage 거부가 가장 먼저다
-  ASSERT_EQ(first.alert, OverlayAlert::unable);
+  ASSERT_EQ(first.alert, HudAlert::unable);
   ASSERT_EQ(first.event_id, 3);
   const auto second = events.update(burst, DepartureAlertType::lead_departed);
   // 다음 프레임에 engage 알림음
-  ASSERT_EQ(second.alert, OverlayAlert::engage);
+  ASSERT_EQ(second.alert, HudAlert::engage);
   ASSERT_EQ(second.event_id, 6);
   const auto third = events.update(burst, DepartureAlertType::lead_departed);
   // 그다음 disengage 알림음
-  ASSERT_EQ(third.alert, OverlayAlert::disengage);
+  ASSERT_EQ(third.alert, HudAlert::disengage);
   ASSERT_EQ(third.event_id, 4);
   const auto fourth = events.update(burst, DepartureAlertType::lead_departed);
   // 그다음 출발 알림음
-  ASSERT_EQ(fourth.alert, OverlayAlert::signal_changed);
+  ASSERT_EQ(fourth.alert, HudAlert::signal_changed);
   ASSERT_EQ(fourth.event_id, 2);
-  ASSERT_EQ(events.update(burst, DepartureAlertType::lead_departed).alert, OverlayAlert::none)
+  ASSERT_EQ(events.update(burst, DepartureAlertType::lead_departed).alert, HudAlert::none)
       << "이벤트는 모두 한 번씩만 소비된다";
 }
 
-TEST(OverlayAlertEvents, DepartureWaitsForADisplayedType) {
-  OverlayAlertEvents events;
+TEST(HudAlertEvents, DepartureWaitsForADisplayedType) {
+  HudAlertEvents events;
   events.update(control_with_events(0, 0, 0, 0), DepartureAlertType::none);
   const ControlState departed = control_with_events(0, 0, 0, 7);
-  ASSERT_EQ(events.update(departed, DepartureAlertType::none).alert, OverlayAlert::none)
+  ASSERT_EQ(events.update(departed, DepartureAlertType::none).alert, HudAlert::none)
       << "표시할 알림 종류가 없으면 출발 id를 소비하지 않는다";
   const auto later = events.update(departed, DepartureAlertType::green_light);
   // 알림 종류가 표시되면 같은 id로 울린다
-  ASSERT_EQ(later.alert, OverlayAlert::signal_changed);
+  ASSERT_EQ(later.alert, HudAlert::signal_changed);
   ASSERT_EQ(later.event_id, 7);
 }
 
-TEST(OverlayAlertEvents, ControlsdRestartRebaselines) {
-  OverlayAlertEvents events;
+TEST(HudAlertEvents, ControlsdRestartRebaselines) {
+  HudAlertEvents events;
   events.update(control_with_events(40, 39, 12, 9), DepartureAlertType::none);
   const auto restarted = events.update(control_with_events(1, 0, 0, 0), DepartureAlertType::none);
-  ASSERT_EQ(restarted.alert, OverlayAlert::none)
+  ASSERT_EQ(restarted.alert, HudAlert::none)
       << "카운터가 줄면 controlsd 재시작이다. 기준을 다시 잡고 울리지 않는다";
   const auto next = events.update(control_with_events(2, 0, 0, 0), DepartureAlertType::none);
   // 재시작 뒤 이벤트는 새 기준으로 잡는다
-  ASSERT_EQ(next.alert, OverlayAlert::engage);
+  ASSERT_EQ(next.alert, HudAlert::engage);
   ASSERT_EQ(next.event_id, 2);
 }
 
 // 신선한 제어·panda 스냅샷 한 쌍으로 정책을 돌리는 틀.
 struct PolicyFrame {
-  OverlayAlertPolicy policy;
+  HudAlertPolicy policy;
   ControlState control = control_with_events(0, 0, 0, 0);
   PandaState panda;
-  OverlayHudState hud;
+  HudState hud;
   bool control_fresh = true;
   bool panda_fresh = true;
 
@@ -95,20 +95,20 @@ struct PolicyFrame {
     panda.timestamp_ns = 1;
     hud.panda_connected = hud.panda_healthy = true;
   }
-  OverlaySoundDecision step(uint64_t now_ns) {
+  HudSoundDecision step(uint64_t now_ns) {
     return policy.update(control, control_fresh, panda, panda_fresh, now_ns, &hud);
   }
 };
 
-TEST(OverlayAlertPolicy, RejectShowsItsReasonForThreeSeconds) {
+TEST(HudAlertPolicy, RejectShowsItsReasonForThreeSeconds) {
   PolicyFrame f;
-  ASSERT_EQ(f.step(0).sound, OverlaySound::none) << "첫 프레임은 기준값";
+  ASSERT_EQ(f.step(0).sound, HudSound::none) << "첫 프레임은 기준값";
   f.control.engage_reject_event_id = 4;
   std::snprintf(f.control.engage_reject_block, sizeof(f.control.engage_reject_block), "door_open");
-  const OverlaySoundDecision rejected = f.step(1000 * kMs);
-  ASSERT_EQ(rejected.sound, OverlaySound::unable);
+  const HudSoundDecision rejected = f.step(1000 * kMs);
+  ASSERT_EQ(rejected.sound, HudSound::unable);
   ASSERT_EQ(rejected.event_id, 4u);
-  ASSERT_EQ(overlay_sound_id(rejected.sound), AlertSoundId::unable);
+  ASSERT_EQ(hud_sound_id(rejected.sound), AlertSoundId::unable);
   ASSERT_STREQ(f.hud.engage_reject_label, "DOOR OPEN") << "토스트는 사유 라벨";
   f.step(3999 * kMs);
   ASSERT_STREQ(f.hud.engage_reject_label, "DOOR OPEN");
@@ -121,68 +121,68 @@ TEST(OverlayAlertPolicy, RejectShowsItsReasonForThreeSeconds) {
   ASSERT_STREQ(f.hud.engage_reject_label, "NOT READY") << "사유가 없으면 NOT READY";
 }
 
-TEST(OverlayAlertPolicy, TakeControlWaitsForAFrameWithoutAnEvent) {
+TEST(HudAlertPolicy, TakeControlWaitsForAFrameWithoutAnEvent) {
   PolicyFrame f;
   f.step(0);
   f.control.disengage_event_id = 1;
   f.hud.soft_disabling = true;
-  ASSERT_EQ(f.step(10 * kMs).sound, OverlaySound::disengage) << "제어 이벤트가 먼저";
-  const OverlaySoundDecision next = f.step(20 * kMs);
-  ASSERT_EQ(next.sound, OverlaySound::take_control) << "해제 예고는 다음 프레임에 울린다";
-  ASSERT_EQ(overlay_sound_id(next.sound), AlertSoundId::unable);
-  ASSERT_EQ(f.step(30 * kMs).sound, OverlaySound::none) << "켜지는 순간 한 번";
+  ASSERT_EQ(f.step(10 * kMs).sound, HudSound::disengage) << "제어 이벤트가 먼저";
+  const HudSoundDecision next = f.step(20 * kMs);
+  ASSERT_EQ(next.sound, HudSound::take_control) << "해제 예고는 다음 프레임에 울린다";
+  ASSERT_EQ(hud_sound_id(next.sound), AlertSoundId::unable);
+  ASSERT_EQ(f.step(30 * kMs).sound, HudSound::none) << "켜지는 순간 한 번";
   f.hud.soft_disabling = false;
   f.hud.steer_saturated = true;
-  ASSERT_EQ(f.step(40 * kMs).sound, OverlaySound::take_control) << "조향 한계도 같은 소리";
+  ASSERT_EQ(f.step(40 * kMs).sound, HudSound::take_control) << "조향 한계도 같은 소리";
 }
 
-TEST(OverlayAlertPolicy, UnavailableSoundsOnTheTransitionOnly) {
+TEST(HudAlertPolicy, UnavailableSoundsOnTheTransitionOnly) {
   PolicyFrame f;
   f.control_fresh = false;
-  ASSERT_EQ(f.step(0).sound, OverlaySound::none) << "첫 프레임의 불가용은 기준값";
+  ASSERT_EQ(f.step(0).sound, HudSound::none) << "첫 프레임의 불가용은 기준값";
   f.control_fresh = true;
-  ASSERT_EQ(f.step(10 * kMs).sound, OverlaySound::none);
+  ASSERT_EQ(f.step(10 * kMs).sound, HudSound::none);
   f.control.steering_fault = 1;
-  ASSERT_EQ(f.step(20 * kMs).sound, OverlaySound::unavailable);
-  ASSERT_EQ(f.step(30 * kMs).sound, OverlaySound::none) << "불가용이 이어지면 다시 울리지 않는다";
+  ASSERT_EQ(f.step(20 * kMs).sound, HudSound::unavailable);
+  ASSERT_EQ(f.step(30 * kMs).sound, HudSound::none) << "불가용이 이어지면 다시 울리지 않는다";
   f.control.steering_fault = 0;
-  ASSERT_EQ(f.step(40 * kMs).sound, OverlaySound::none) << "가용으로 돌아올 때는 조용하다";
+  ASSERT_EQ(f.step(40 * kMs).sound, HudSound::none) << "가용으로 돌아올 때는 조용하다";
   f.panda.faults = 2;
-  ASSERT_EQ(f.step(50 * kMs).sound, OverlaySound::unavailable) << "panda 결함도 불가용";
+  ASSERT_EQ(f.step(50 * kMs).sound, HudSound::unavailable) << "panda 결함도 불가용";
   f.panda.faults = 0;
   f.step(60 * kMs);
   f.hud.panda_connected = false;
-  ASSERT_EQ(f.step(70 * kMs).sound, OverlaySound::unavailable) << "panda 끊김도 불가용";
+  ASSERT_EQ(f.step(70 * kMs).sound, HudSound::unavailable) << "panda 끊김도 불가용";
 
   PolicyFrame never;
   never.panda.timestamp_ns = 0;
   never.hud.panda_connected = false;
   never.step(0);
-  ASSERT_EQ(never.step(10 * kMs).sound, OverlaySound::none) << "panda 스냅샷을 본 적 없으면 panda는 따지지 않는다";
+  ASSERT_EQ(never.step(10 * kMs).sound, HudSound::none) << "panda 스냅샷을 본 적 없으면 panda는 따지지 않는다";
 }
 
-TEST(OverlayAlertPolicy, UnavailableIsSkippedInAFrameThatAlreadySounded) {
+TEST(HudAlertPolicy, UnavailableIsSkippedInAFrameThatAlreadySounded) {
   PolicyFrame f;
   f.step(0);
   f.control.disengage_event_id = 1;
   f.control.steering_fault = 1;
-  ASSERT_EQ(f.step(10 * kMs).sound, OverlaySound::disengage);
-  ASSERT_EQ(f.step(20 * kMs).sound, OverlaySound::none)
+  ASSERT_EQ(f.step(10 * kMs).sound, HudSound::disengage);
+  ASSERT_EQ(f.step(20 * kMs).sound, HudSound::none)
       << "같은 프레임에 다른 알림이 울렸으면 불가용 천이는 미루지 않고 넘긴다";
 }
 
-TEST(OverlaySound, NamesAndSounds) {
-  ASSERT_STREQ(overlay_sound_name(OverlaySound::signal_changed), "signal_changed");
-  ASSERT_STREQ(overlay_sound_name(OverlaySound::take_control), "take_control");
-  ASSERT_STREQ(overlay_sound_name(OverlaySound::none), "none");
-  ASSERT_EQ(overlay_sound_id(OverlaySound::engage), AlertSoundId::engage);
-  ASSERT_EQ(overlay_sound_id(OverlaySound::unavailable), AlertSoundId::unavailable);
-  ASSERT_EQ(overlay_sound_id(OverlaySound::none), AlertSoundId::count);
+TEST(HudSound, NamesAndSounds) {
+  ASSERT_STREQ(hud_sound_name(HudSound::signal_changed), "signal_changed");
+  ASSERT_STREQ(hud_sound_name(HudSound::take_control), "take_control");
+  ASSERT_STREQ(hud_sound_name(HudSound::none), "none");
+  ASSERT_EQ(hud_sound_id(HudSound::engage), AlertSoundId::engage);
+  ASSERT_EQ(hud_sound_id(HudSound::unavailable), AlertSoundId::unavailable);
+  ASSERT_EQ(hud_sound_id(HudSound::none), AlertSoundId::count);
 }
 
 TEST(TurnSignalClock, StepsFromTheBlinkerChange) {
   TurnSignalClock clock;
-  OverlayHudState hud;
+  HudState hud;
   ASSERT_FALSE(clock.update(1000 * kMs, &hud));
   hud.left_blinker = true;
   ASSERT_FALSE(clock.update(1000 * kMs, &hud)) << "켠 순간은 단계 0";
@@ -207,7 +207,7 @@ TEST(TurnSignalClock, StepsFromTheBlinkerChange) {
 TEST(HudTouch, CardsToggleAndTheNetworkCardTimesOut) {
   constexpr int kW = 640, kH = 480;
   HudTouch touch;
-  OverlayHudState hud;
+  HudState hud;
   ASSERT_STREQ(touch.tap(600, 20, kW, kH, 0, &hud), "network card") << "오른쪽 위 상태 알약";
   ASSERT_TRUE(hud.network_card);
   touch.expire(9999 * kMs, &hud);

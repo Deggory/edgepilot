@@ -1,4 +1,4 @@
-#include "hud/overlay_draw.h"
+#include "hud/hud_draw.h"
 
 #include <array>
 #include <optional>
@@ -6,7 +6,7 @@
 /* HUD의 도로 장면: 모델이 본 도로 경계·차선선·경로를 거리에 따라 흐려지는 띠로, vision 앞차를
  * 위험도 색의 갈매기표로, 차 위치를 자기 차선 안 눈금으로 그린다. 모델 좌표를 투영해 화면에 놓는다. */
 
-namespace overlay_draw {
+namespace hud_draw {
 namespace {
 
 constexpr float kMinDrawDistance = 10.0f;
@@ -35,7 +35,7 @@ float lead_risk(const LeadInfo &lead)
 }
 
 /* 모델 좌표는 180° 뒤집힌 화면 기준이라 투영한 뒤 뒤집는다. */
-std::optional<HudPoint> project(const OverlayCanvas &canvas, const ProjectionState &projection,
+std::optional<HudPoint> project(const HudCanvas &canvas, const ProjectionState &projection,
                                 float x, float y, float z)
 {
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return std::nullopt;
@@ -47,7 +47,7 @@ std::optional<HudPoint> project(const OverlayCanvas &canvas, const ProjectionSta
 
 /* 궤적 양쪽을 투영한 띠를 가까운 쪽 알파에서 먼 쪽으로 흐리게 칠한다. 접히거나(감기는 방향이
  * 바뀜) 뒤로 가는 구간에서 멈춘다. */
-void draw_ribbon(OverlayCanvas &canvas, const std::array<ModelPoint, kTrajectorySize> &points,
+void draw_ribbon(HudCanvas &canvas, const std::array<ModelPoint, kTrajectorySize> &points,
                  float half_width, float z_offset, float max_distance, uint32_t color,
                  const ProjectionState &projection)
 {
@@ -94,7 +94,7 @@ void draw_ribbon(OverlayCanvas &canvas, const std::array<ModelPoint, kTrajectory
     canvas.fill_polygon_faded(polygon, 2 * n, color, near_y, far_y, kFarAlpha);
 }
 
-uint32_t path_color(const OverlayHudState &hud)
+uint32_t path_color(const HudState &hud)
 {
     if (!hud.controller_engaged) return hud_argb(120, 255, 255, 255);
     if (!steering_now(hud)) return hud_fade(kGray, 0.65f);
@@ -103,7 +103,7 @@ uint32_t path_color(const OverlayHudState &hud)
     return hud_fade(mix(hud.laneless_mode ? kBlue : kGreen, kAmber, strain), 0.75f);
 }
 
-void draw_lead_marker(OverlayCanvas &canvas, const LeadInfo &lead, const ProjectionState &projection)
+void draw_lead_marker(HudCanvas &canvas, const LeadInfo &lead, const ProjectionState &projection)
 {
     const auto at = project(canvas, projection, lead.point.x, lead.point.y, kModelHeight);
     if (!at) return;
@@ -128,7 +128,7 @@ void draw_lead_marker(OverlayCanvas &canvas, const LeadInfo &lead, const Project
 
 }  // namespace
 
-LeadInfo lead_info(const OverlayHudState &hud, const ParsedModelOutput &output)
+LeadInfo lead_info(const HudState &hud, const ParsedModelOutput &output)
 {
     LeadInfo info;
     info.vision = output.valid && output.leads.primary(kLeadTimeIndex, kLeadProbabilityThreshold,
@@ -152,8 +152,8 @@ std::string lead_text(const LeadInfo &lead)
     return format_text("%.0f m", lead.distance_m);
 }
 
-void draw_scene(OverlayCanvas &canvas, const ParsedModelOutput &output,
-                const ProjectionState &projection, const OverlayHudState &hud, const LeadInfo &lead)
+void draw_scene(HudCanvas &canvas, const ParsedModelOutput &output,
+                const ProjectionState &projection, const HudState &hud, const LeadInfo &lead)
 {
     if (!output.valid) return;
     const float max_distance = output.plan.valid
@@ -184,7 +184,7 @@ void draw_scene(OverlayCanvas &canvas, const ParsedModelOutput &output,
  * 그리고, 그 거리의 축척대로 차선 중앙 눈금(선 위)과 차(선 아래, 위를 향한 삼각형, 조향 색)를
  * 버니어처럼 위아래로 놓는다. 차는 모델이 본 차선 중앙 오프셋(x=0, 0.5초 평활)만큼 중앙에서 비켜
  * 있고 아래에 cm를 쓴다. 두 선이 다 확실할 때만. */
-void draw_lane_position(OverlayCanvas &canvas, const ParsedModelOutput &output,
+void draw_lane_position(HudCanvas &canvas, const ParsedModelOutput &output,
                         const ProjectionState &projection, float lane_center_offset_m, uint32_t car_color)
 {
     if (!output.valid || !std::isfinite(lane_center_offset_m)) return;
@@ -214,4 +214,4 @@ void draw_lane_position(OverlayCanvas &canvas, const ParsedModelOutput &output,
                 kHudCaptionFont, kText, HudAlign::center, true);
 }
 
-}  // namespace overlay_draw
+}  // namespace hud_draw

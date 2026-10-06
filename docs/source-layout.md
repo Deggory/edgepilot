@@ -145,7 +145,7 @@ only in the board build, against `deps/ax630` from
     and kind (reject / hard disengage / transient Panda handshake /
     availability). The controller decides in `BlockReason`, `ControlState`
     carries the wire name so recordings and the Python readers stay text, and
-    `overlay_state` labels it from the same rows. `gtest_overlay_state` proves
+    `hud_state` labels it from the same rows. `gtest_hud_state` proves
     every reason has a label.
 
 ### Control safety holds
@@ -184,8 +184,8 @@ released after that short hold if they persist.
 - `src/camera/camerad.cc`, `src/model/modeld.cc`, `src/hud/overlayd.cc`
   - openpilot-style process split: capture into the ring, model, and the
     two-layer LCD HUD.
-- `src/hud/overlay_renderer.*`, `src/hud/overlay_scene.cc`, `src/hud/overlay_cards.cc`,
-  `src/hud/overlay_draw.h`, `src/hud/overlay_canvas.*`, `src/hud/overlay_font.*`
+- `src/hud/hud_renderer.*`, `src/hud/hud_scene.cc`, `src/hud/hud_cards.cc`,
+  `src/hud/hud_draw.h`, `src/hud/hud_canvas.*`, `src/hud/hud_font.*`
   - draw the 640x480 HUD into a straight-alpha BGRA buffer (landscape
     coordinates; `HudOrientation` maps them onto the portrait panel buffer):
     state border, speed with yellow turn-signal/hazard chevrons, set speed
@@ -200,38 +200,38 @@ released after that short hold if they persist.
     recording/Wi-Fi status pill (and the network card a tap opens), and chips
     that appear only when something needs attention (panda, storage). The
     numbers no other card shows sit in a card behind the `hud_debug` device
-    setting. `overlay_renderer` lays out the frame and the top and bottom-edge
-    widgets, `overlay_scene` draws the road scene (ribbons, lead chevron, lane
-    position), `overlay_cards` the cards, and `overlay_draw.h` holds what they
-    share (design tokens, text placement, state colours). `overlay_canvas`
+    setting. `hud_renderer` lays out the frame and the top and bottom-edge
+    widgets, `hud_scene` draws the road scene (ribbons, lead chevron, lane
+    position), `hud_cards` the cards, and `hud_draw.h` holds what they
+    share (design tokens, text placement, state colours). `hud_canvas`
     fills polygons with 4-subrow anti-aliasing that touches only covered spans,
     fills the straight rows of integer rounded rectangles directly, blends
     without divisions, and records the 64 px tiles each row touched so the
-    next use of the same buffer clears only those; `overlay_font` holds the
+    next use of the same buffer clears only those; `hud_font` holds the
     glyphs that `tools/ui/make_hud_font.py` bakes from Pillow's Aileron (CC0).
-    No OpenCV, so `gtest_overlay_canvas` and `hud_snapshot` run on the host.
+    No OpenCV, so `gtest_hud_canvas` and `hud_snapshot` run on the host.
     The renderer keeps only coverage scratch and the per-buffer tiles; the
-    turn-signal phase and the card toggles come from `overlay_policy`.
-- `src/hud/overlay_state.*`
-  - `OverlayHudState`, the IPC state (`ControlState`, `ModelState`, …) →
-    `OverlayHudState` mapping shared by
+    turn-signal phase and the card toggles come from `hud_policy`.
+- `src/hud/hud_state.*`
+  - `HudState`, the IPC state (`ControlState`, `ModelState`, …) →
+    `HudState` mapping shared by
     `overlayd` and `hud_snapshot`, the `ModelState` →
     `ParsedModelOutput`/`ProjectionState` unpacking, the engage-block label
     table, and `hud_select_alert`, the one alert card a HUD state shows (its
     priority, text and severity; the renderer only colours it).
-    `gtest_overlay_state` pins it on the host.
-- `src/hud/overlay_policy.*`
+    `gtest_hud_state` pins it on the host.
+- `src/hud/hud_policy.*`
   - what `overlayd` decides besides drawing, without the screen, speaker or
-    touch device: `OverlayAlertEvents` turns the controlsd event counters into
+    touch device: `HudAlertEvents` turns the controlsd event counters into
     one alert a frame (baseline on first sight, rebaseline on a controlsd
-    restart, reject > engage > disengage > departure), `OverlayAlertPolicy`
+    restart, reject > engage > disengage > departure), `HudAlertPolicy`
     picks the one sound a frame plays (a take-control edge waits for a quiet
     frame, an available → unavailable transition is skipped in a frame that
     already sounded) and holds the engage-reject toast for 3 s,
     `TurnSignalClock` steps the blinker animation from the time the blinkers
     changed, `HudTouch` opens and closes the network and debug cards, and
     `smooth_lane_center_offset` filters the lane-position readout.
-    `gtest_overlay_policy` pins it on the host.
+    `gtest_hud_policy` pins it on the host.
 - `src/hud/alert_tones.*`, `src/hud/alert_sound.*`
   - the alert sounds: `alert_tones` synthesises them (overlapping bell-like
     notes with soft attacks and decaying overtones; portable, so
@@ -240,7 +240,7 @@ released after that short hold if they persist.
     `aplay` on the board speaker.
 - `src/hud/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling (the Wi-Fi SSID through the
-    `SIOCGIWESSID` ioctl) into `OverlayHudState`, called at 1 Hz by `overlayd`.
+    `SIOCGIWESSID` ioctl) into `HudState`, called at 1 Hz by `overlayd`.
     Only a `wlan` link with an address and an associated SSID counts as
     connected; another link (the USB virtual Ethernet, which always has an
     address) is kept apart for the network card.

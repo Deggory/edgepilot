@@ -2,8 +2,8 @@
  * 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
  * 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
  * 아래 모서리 카드, 상태 알약 터치 영역도 본다. */
-#include "hud/overlay_canvas.h"
-#include "hud/overlay_renderer.h"
+#include "hud/hud_canvas.h"
+#include "hud/hud_renderer.h"
 
 #include <gtest/gtest.h>
 
@@ -21,7 +21,7 @@ struct Surface {
     std::vector<uint16_t> damage;
 
     Surface(int w, int h) : width(w), height(h), pixels(static_cast<size_t>(w) * h, 0) {}
-    OverlayCanvas canvas() { return OverlayCanvas(pixels.data(), width, height, width * 4, coverage, damage); }
+    HudCanvas canvas() { return HudCanvas(pixels.data(), width, height, width * 4, coverage, damage); }
     uint32_t at(int x, int y) const { return pixels[static_cast<size_t>(y) * width + x]; }
     double ink() const  // 알파 합 / 255 = 덮인 넓이(px²)
     {
@@ -33,7 +33,7 @@ struct Surface {
 
 int channel(uint32_t color, int shift) { return static_cast<int>((color >> shift) & 0xff); }
 
-TEST(OverlayCanvas, BlendMatchesStraightAlphaOver) {
+TEST(HudCanvas, BlendMatchesStraightAlphaOver) {
     const uint32_t dsts[] = {0, hud_argb(255, 10, 200, 30), hud_argb(120, 250, 40, 90), hud_argb(30, 0, 0, 255)};
     const uint32_t srcs[] = {hud_argb(255, 255, 255, 255), hud_argb(150, 12, 14, 18), hud_argb(40, 255, 176, 32)};
     for (uint32_t dst : dsts) {
@@ -53,9 +53,9 @@ TEST(OverlayCanvas, BlendMatchesStraightAlphaOver) {
     }
 }
 
-TEST(OverlayCanvas, PolygonCoverageMatchesArea) {
+TEST(HudCanvas, PolygonCoverageMatchesArea) {
     Surface s(200, 200);
-    OverlayCanvas canvas = s.canvas();
+    HudCanvas canvas = s.canvas();
     const HudPoint triangle[] = {{20.3f, 30.7f}, {170.6f, 60.2f}, {60.1f, 180.9f}};
     canvas.fill_polygon(triangle, 3, hud_argb(255, 255, 255, 255));
     const double area = std::fabs((triangle[1].x - triangle[0].x) * (triangle[2].y - triangle[0].y) -
@@ -70,7 +70,7 @@ TEST(OverlayCanvas, PolygonCoverageMatchesArea) {
     EXPECT_NEAR(thin.ink(), 1.5 * 180.0, 1.5 * 180.0 * 0.01);
 }
 
-TEST(OverlayCanvas, FadedPolygonFadesTowardFar) {
+TEST(HudCanvas, FadedPolygonFadesTowardFar) {
     Surface s(40, 120);
     const HudPoint rect[] = {{0, 10}, {40, 10}, {40, 110}, {0, 110}};
     s.canvas().fill_polygon_faded(rect, 4, hud_argb(200, 48, 209, 88), 110.0f, 10.0f, 0.1f);
@@ -80,7 +80,7 @@ TEST(OverlayCanvas, FadedPolygonFadesTowardFar) {
     EXPECT_GT(s.at(20, 60) >> 24, s.at(20, 30) >> 24);
 }
 
-TEST(OverlayCanvas, RoundRectStraightRowsMatchPolygon) {
+TEST(HudCanvas, RoundRectStraightRowsMatchPolygon) {
     // 정수 좌표 둥근 사각형은 곧은 행을 fill_rect로 칠한다. 이음매 없이 넓이가 맞아야 한다.
     Surface s(200, 120);
     s.canvas().fill_round_rect(20, 10, 150, 90, 10, hud_argb(255, 255, 255, 255));
@@ -94,9 +94,9 @@ TEST(OverlayCanvas, RoundRectStraightRowsMatchPolygon) {
     EXPECT_EQ(s.at(95, 90) >> 24, 255) << "곧은 행과 아래 모서리 띠 사이";
 }
 
-TEST(OverlayCanvas, ClearOnlyDamagedTiles) {
+TEST(HudCanvas, ClearOnlyDamagedTiles) {
     Surface s(640, 60);
-    OverlayCanvas canvas = s.canvas();
+    HudCanvas canvas = s.canvas();
     canvas.clear(false);
     canvas.fill_rect(10, 5, 20, 10, hud_argb(255, 255, 0, 0));      // 칸 0
     canvas.text(600, 30, "OK", kHudBodyFont, hud_argb(255, 255, 255, 255));  // 칸 9
@@ -109,7 +109,7 @@ TEST(OverlayCanvas, ClearOnlyDamagedTiles) {
     EXPECT_EQ(s.at(300, 50), hud_argb(255, 1, 2, 3));
 }
 
-TEST(OverlayCanvas, TextWidthAndInk) {
+TEST(HudCanvas, TextWidthAndInk) {
     Surface s(200, 40);
     const int width = s.canvas().text(10, 5, "LANE 64", kHudBodyFont, hud_argb(255, 255, 255, 255));
     EXPECT_EQ(width, kHudBodyFont.width("LANE 64"));
@@ -117,11 +117,11 @@ TEST(OverlayCanvas, TextWidthAndInk) {
     for (int x = 0; x < 9; ++x) EXPECT_EQ(s.at(x, 20) >> 24, 0) << "시작점 왼쪽은 비어 있다";
 }
 
-TEST(OverlayRenderer, StateBorderAndAlert) {
+TEST(HudRenderer, StateBorderAndAlert) {
     Surface s(640, 480);
-    const OverlayTarget target{s.pixels.data(), 640, 480, 640 * 4};
-    OverlayRenderer renderer;
-    OverlayHudState hud;
+    const HudTarget target{s.pixels.data(), 640, 480, 640 * 4};
+    HudRenderer renderer;
+    HudState hud;
     hud.services_healthy = true;
     renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), hud);
     EXPECT_EQ(s.at(1, 240) >> 24, 0) << "결합 전에는 테두리가 없다";
@@ -136,9 +136,9 @@ TEST(OverlayRenderer, StateBorderAndAlert) {
     EXPECT_GT(s.at(320, 425) >> 24, 150) << "아래 가운데 알림 카드";
 }
 
-TEST(OverlayRenderer, ReusedBufferMatchesFreshBuffer) {
+TEST(HudRenderer, ReusedBufferMatchesFreshBuffer) {
     // 같은 버퍼에 다른 장면을 이어 그려도(그린 칸만 지움) 새 버퍼에 그린 것과 같다
-    OverlayHudState first;
+    HudState first;
     first.controller_enabled = first.controller_engaged = first.controller_active = true;
     first.services_healthy = true;
     first.debug_overlay = true;
@@ -146,7 +146,7 @@ TEST(OverlayRenderer, ReusedBufferMatchesFreshBuffer) {
     first.network_connected = true;
     first.brake_hold = true;
     first.cluster_speed_kph = 88.0f;
-    OverlayHudState second;
+    HudState second;
     second.services_healthy = true;
     second.cluster_speed_kph = 5.0f;
 
@@ -163,9 +163,9 @@ TEST(OverlayRenderer, ReusedBufferMatchesFreshBuffer) {
     }
 
     Surface reused(640, 480), fresh(640, 480);
-    const OverlayTarget reused_target{reused.pixels.data(), 640, 480, 640 * 4};
-    const OverlayTarget fresh_target{fresh.pixels.data(), 640, 480, 640 * 4};
-    OverlayRenderer renderer, other;
+    const HudTarget reused_target{reused.pixels.data(), 640, 480, 640 * 4};
+    const HudTarget fresh_target{fresh.pixels.data(), 640, 480, 640 * 4};
+    HudRenderer renderer, other;
     renderer.draw(reused_target, road, make_projection_state(0, 0, 0), first);
     int road_ink = 0;
     for (int y = 300; y < 380; ++y)
@@ -178,14 +178,14 @@ TEST(OverlayRenderer, ReusedBufferMatchesFreshBuffer) {
 
 // 세로 패널 버퍼(480x640)에 화면 좌표로 그린 HUD가 가로 버퍼 그림을 transpose한 것과 같다.
 // 글자·사각형은 화소까지 같고, 다각형은 부표본 행 방향이 바뀌어 가장자리만 조금 다르다.
-TEST(OverlayRenderer, PortraitBufferMatchesTransposedLandscape) {
+TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
     ParsedModelOutput road;
     road.valid = road.plan.valid = true;
     for (int i = 0; i < kTrajectorySize; ++i) {
         const float x = model_x_idx(i), curve = 0.0006f * x * x;
         road.plan.points[i] = {x, curve, 0.0f};
     }
-    OverlayHudState hud;
+    HudState hud;
     hud.services_healthy = hud.network_connected = hud.recording = true;
     hud.controller_enabled = hud.controller_engaged = hud.controller_active = true;
     hud.cluster_speed_kph = 64.0f;
@@ -194,7 +194,7 @@ TEST(OverlayRenderer, PortraitBufferMatchesTransposedLandscape) {
     const ProjectionState projection = make_projection_state(0, 0, 0);
 
     Surface landscape(640, 480), portrait(480, 640), flipped(480, 640);
-    OverlayRenderer a, b, c;
+    HudRenderer a, b, c;
     a.draw({landscape.pixels.data(), 640, 480, 640 * 4}, road, projection, hud);
     b.draw({portrait.pixels.data(), 640, 480, 480 * 4, {true, false, false}}, road, projection, hud);
     c.draw({flipped.pixels.data(), 640, 480, 480 * 4, {true, true, true}}, road, projection, hud);
@@ -221,18 +221,18 @@ TEST(OverlayRenderer, PortraitBufferMatchesTransposedLandscape) {
     Surface text_l(200, 60), text_p(60, 200);
     text_l.canvas().text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
     text_l.canvas().fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
-    OverlayCanvas tp(text_p.pixels.data(), 200, 60, 60 * 4, text_p.coverage, text_p.damage, {true, false, false});
+    HudCanvas tp(text_p.pixels.data(), 200, 60, 60 * 4, text_p.coverage, text_p.damage, {true, false, false});
     tp.text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
     tp.fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
     for (int y = 0; y < 60; ++y)
         for (int x = 0; x < 200; ++x) ASSERT_EQ(text_p.at(y, x), text_l.at(x, y)) << x << "," << y;
 }
 
-TEST(OverlayRenderer, CornerCardsAndStatusTouch) {
+TEST(HudRenderer, CornerCardsAndStatusTouch) {
     Surface s(640, 480);
-    const OverlayTarget target{s.pixels.data(), 640, 480, 640 * 4};
-    OverlayRenderer renderer;
-    renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), OverlayHudState{});
+    const HudTarget target{s.pixels.data(), 640, 480, 640 * 4};
+    HudRenderer renderer;
+    renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), HudState{});
     // TPMS(왼쪽 아래), 카메라 보정(오른쪽 아래), 그 위 보드 상태·학습값 카드는 값이 없어도 늘 있다
     EXPECT_EQ(s.at(40, 462) >> 24, 150);
     EXPECT_EQ(s.at(600, 462) >> 24, 150);
@@ -241,14 +241,14 @@ TEST(OverlayRenderer, CornerCardsAndStatusTouch) {
     EXPECT_EQ(s.at(320, 300) >> 24, 0) << "가운데는 비어 있다";
     EXPECT_EQ(s.at(320, 120) >> 24, 0) << "오토 홀드가 아니면 속도 아래는 비어 있다";
 
-    OverlayHudState hold;
+    HudState hold;
     hold.brake_hold = true;
     renderer.draw(target, ParsedModelOutput{}, make_projection_state(0, 0, 0), hold);
     EXPECT_EQ(s.at(320 - 90, 120) >> 24, 205) << "오토 홀드 배지는 속도 아래 가운데";
 
     // 세 자리 속도의 왼쪽 깜빡이: 노란 화살표 셋이 다 켜져도 왼쪽 위 기어 카드(오른쪽 끝 168)에 닿지
     // 않는다. 비전 크루즈 SET은 칩이 아니라 설정 속도 카드 안에 있다.
-    OverlayHudState signal;
+    HudState signal;
     signal.cluster_speed_kph = 120.0f;
     signal.left_blinker = true;
     signal.turn_signal_step = 10;

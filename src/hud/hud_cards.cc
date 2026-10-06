@@ -1,4 +1,4 @@
-#include "hud/overlay_draw.h"
+#include "hud/hud_draw.h"
 
 #include "model/calibration_online.h"
 #include "localization/lateral_lag.h"
@@ -8,7 +8,7 @@
 /* HUD의 카드: 아래 두 모서리의 TPMS와 카메라 보정, 그 위 보드 상태와 학습값(늘 있다), 상태 알약을
  * 눌러 여는 네트워크 카드, 웹 기기 설정의 HUD 진단 카드. */
 
-namespace overlay_draw {
+namespace hud_draw {
 namespace {
 
 constexpr float kWarmTempC = 70.0f;
@@ -28,7 +28,7 @@ uint32_t tire_color(float pressure, bool bar)
 }
 
 /* 오른쪽 열 카드(TPMS, 카메라 보정, 학습값)의 틀: 머리글 왼쪽에 이름, 오른쪽에 단위나 상태. */
-void corner_card(OverlayCanvas &canvas, int x, int y, int h, const char *title, const std::string &status,
+void corner_card(HudCanvas &canvas, int x, int y, int h, const char *title, const std::string &status,
                  uint32_t status_color)
 {
     canvas.fill_round_rect(x, y, kCornerCardW, h, kRadius, kCard);
@@ -54,7 +54,7 @@ static_assert(rows_card_h(3) == kCornerCardH, "CAL rows fill the corner card");
 
 // 아래가 bottom인 카드에 줄을 아래부터 맞춰 쓴다.
 template <size_t N>
-void card_rows(OverlayCanvas &canvas, int x, int bottom, const CardRow (&rows)[N])
+void card_rows(HudCanvas &canvas, int x, int bottom, const CardRow (&rows)[N])
 {
     for (size_t i = 0; i < N; ++i) {
         const int baseline = bottom - kCardPad - static_cast<int>(N - 1 - i) * kRowH;
@@ -70,7 +70,7 @@ void card_rows(OverlayCanvas &canvas, int x, int bottom, const CardRow (&rows)[N
 /* 상태 알약을 눌러 연 네트워크 카드: 머리글에 신호 세기, 아래에 와이파이 이름, 주소,
  * 인터페이스(끊겼으면 "Not connected"). 와이파이 밖의 링크(USB 가상 이더넷)가 있으면 맨 아래에
  * 작게. 다음 줄 y를 돌려준다. */
-int draw_network_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
+int draw_network_card(HudCanvas &canvas, int y, const HudState &hud)
 {
     const char *title = "WI-FI";
     const bool online = hud.network_connected, known_dbm = online && hud.wifi_signal_dbm != 0;
@@ -113,7 +113,7 @@ int draw_network_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
 
 /* 왼쪽 아래 TPMS: 위에서 본 차의 바퀴 넷과 그 옆 공기압. 낮으면 주황, 높으면 빨강이고, 차가
  * TPMS 경고를 내면 머리글도 빨강. 값이 없으면 "--". */
-void draw_tpms(OverlayCanvas &canvas, const OverlayHudState &hud)
+void draw_tpms(HudCanvas &canvas, const HudState &hud)
 {
     const int x = kMargin, y = canvas.height() - kMargin - kCornerCardH;
     const bool bar = hud.tpms_unit == 2;
@@ -142,7 +142,7 @@ void draw_tpms(OverlayCanvas &canvas, const OverlayHudState &hud)
 
 /* 오른쪽 아래 카메라 보정: 머리글에 상태(보정 중이면 진행률, 다시 보정 중이면 이름이 RECAL),
  * 아래에 roll·pitch·yaw. */
-void draw_calibration(OverlayCanvas &canvas, const OverlayHudState &hud)
+void draw_calibration(HudCanvas &canvas, const HudState &hud)
 {
     const int x = canvas.width() - kMargin - kCornerCardW, y = canvas.height() - kMargin - kCornerCardH;
     const int percent = std::clamp(hud.calibration_valid_blocks * 100 / OnlineCalibrator::kInputsNeeded, 0, 100);
@@ -173,7 +173,7 @@ void draw_calibration(OverlayCanvas &canvas, const OverlayHudState &hud)
 /* 카메라 보정 위: 주행에 쓰는 학습값(조향비, 조향각 영점, 횡가속 토크 계수, 조향 지연). 제어가
  * 지금 그 값을 쓰면 흰색, 아직 쓰지 않으면(제어는 파라미터를 쓴다) 흐리게. 지연은 쓰는 동안
  * 경로에 넣는 값, 아니면 lagd가 추정 중인 값. */
-void draw_learned(OverlayCanvas &canvas, const OverlayHudState &hud)
+void draw_learned(HudCanvas &canvas, const HudState &hud)
 {
     constexpr int kH = rows_card_h(4);
     const int x = canvas.width() - kMargin - kCornerCardW;
@@ -194,7 +194,7 @@ void draw_learned(OverlayCanvas &canvas, const OverlayHudState &hud)
 
 /* TPMS 위: 보드 상태(CPU 온도, CPU 사용률, 메모리, 저장 공간). 오른쪽 학습 카드와 짝이다. 온도는
  * 70°C부터 주황·80°C부터 빨강, 나머지는 90%부터(저장 공간은 녹화를 멈췄으면 바로) 주황. */
-void draw_system(OverlayCanvas &canvas, const OverlayHudState &hud)
+void draw_system(HudCanvas &canvas, const HudState &hud)
 {
     constexpr int kH = rows_card_h(4);
     const int x = kMargin, y = canvas.height() - kMargin - kCornerCardH - kGap - kH;
@@ -216,7 +216,7 @@ void draw_system(OverlayCanvas &canvas, const OverlayHudState &hud)
  * (paramsd 강성과 평균 영점, torqued 원시 추정과 진행률, lagd 블록). 보드 상태·기어·크루즈·연결·
  * 제어가 쓰는 학습값·보정·TPMS·네트워크는 각자 카드나 칩에 있다. 아직 유효하지 않은 학습기 줄은
  * 주황. */
-void draw_debug_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
+void draw_debug_card(HudCanvas &canvas, int y, const HudState &hud)
 {
     struct Line {
         std::string text;
@@ -251,4 +251,4 @@ void draw_debug_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
                     kHudCaptionFont, lines[i].color);
 }
 
-}  // namespace overlay_draw
+}  // namespace hud_draw

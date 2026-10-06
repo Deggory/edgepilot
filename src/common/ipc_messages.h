@@ -3,7 +3,7 @@
 
 /* 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 채널 매직·버전과 이름, 크기 상한, 채널
  * 헤더, 상태 스냅샷. 채널 구현은 ipc_channels.h에, ModelState를 채우고 되돌리는 변환은
- * model_state_fill.h와 overlay_state.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다. */
+ * model_state_fill.h와 hud_state.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다. */
 
 #include "common/app_config.h"
 #include "common/model_output.h"
@@ -528,7 +528,7 @@ EDGEPILOT_CONTROL_STATE_AT(engage_reject_block, 200);
 EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
 #undef EDGEPILOT_CONTROL_STATE_AT
 static_assert(sizeof(ControlState) == 240,
-              "ControlState layout is shared by controlsd, overlay and the recording");
+              "ControlState layout is shared by controlsd, overlayd and the recording");
 /* recordd가 RecordType::PandaState로 그대로 저장한다. */
 static_assert(sizeof(PandaState) == 96,
               "PandaState is recorded as-is: bump kRecordingVersion");

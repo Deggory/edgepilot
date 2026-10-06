@@ -1,7 +1,7 @@
-#ifndef OVERLAY_FONT_H
-#define OVERLAY_FONT_H
+#ifndef HUD_FONT_H
+#define HUD_FONT_H
 
-/* HUD 글꼴. tools/ui/make_hud_font.py가 구운 글리프(overlay_font_data.inc, Aileron Regular CC0)를
+/* HUD 글꼴. tools/ui/make_hud_font.py가 구운 글리프(hud_font_data.inc, Aileron Regular CC0)를
  * 컴파일 시점에 8비트 커버리지로 펼쳐 둔다. 실행 중 글꼴 래스터화는 없다. */
 
 #include <cstdint>

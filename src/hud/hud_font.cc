@@ -1,4 +1,4 @@
-#include "hud/overlay_font.h"
+#include "hud/hud_font.h"
 
 #include <array>
 #include <cstddef>
@@ -6,7 +6,7 @@
 
 namespace {
 
-#include "hud/overlay_font_data.inc"
+#include "hud/hud_font_data.inc"
 
 // 4비트씩 두 화소를 묶은 커버리지를 8비트로 편다(컴파일 시점).
 template <size_t N>

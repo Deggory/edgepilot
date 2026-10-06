@@ -1,8 +1,8 @@
-/* overlay_state: 공유 상태 스냅샷 → HUD 상태 매핑과 알림 카드 선택(우선순위). 보드 없이, OpenCV 없이
+/* hud_state: 공유 상태 스냅샷 → HUD 상태 매핑과 알림 카드 선택(우선순위). 보드 없이, OpenCV 없이
  * 돈다. */
 #include "controls/control_block.h"
 #include "controls/control_params.h"
-#include "hud/overlay_state.h"
+#include "hud/hud_state.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -11,8 +11,8 @@
 
 namespace {
 
-TEST(OverlayState, AlertCardPriority) {
-  OverlayHudState hud;
+TEST(HudState, AlertCardPriority) {
+  HudState hud;
   std::snprintf(hud.engage_reject_label, sizeof(hud.engage_reject_label), "DOOR OPEN");
   hud.soft_disabling = true;
   std::snprintf(hud.active_block, sizeof(hud.active_block), "calibration_invalid");
@@ -27,7 +27,7 @@ TEST(OverlayState, AlertCardPriority) {
   hud.departure_alert_type = DepartureAlertType::lead_departed;
 
   // 위에서부터 하나씩 끄면 다음 카드가 나온다
-  HudAlert alert = hud_select_alert(hud, true);
+  HudAlertCard alert = hud_select_alert(hud, true);
   EXPECT_EQ(alert.title, "UNABLE TO ENGAGE");
   EXPECT_EQ(alert.detail, "DOOR OPEN");
   EXPECT_EQ(alert.level, HudAlertLevel::caution);
@@ -70,7 +70,7 @@ TEST(OverlayState, AlertCardPriority) {
   EXPECT_TRUE(hud_select_alert(hud, true).empty());
 
   // 조건이 붙은 카드
-  OverlayHudState idle;
+  HudState idle;
   idle.services_healthy = true;
   idle.steer_paused = true;
   idle.lane_change = 1;
@@ -83,7 +83,7 @@ TEST(OverlayState, AlertCardPriority) {
   EXPECT_EQ(hud_select_alert(idle, true).detail, "Resumes when you let go below 15\xb0");
 }
 
-TEST(OverlayState, ControlStateMapping) {
+TEST(HudState, ControlStateMapping) {
   ControlState c;
   c.enabled = 1;
   c.engaged = 1;
@@ -93,7 +93,7 @@ TEST(OverlayState, ControlStateMapping) {
   c.apply_torque = -120;
   std::snprintf(c.active_block, sizeof(c.active_block), "%s", "not_engaged");
 
-  OverlayHudState hud;
+  HudState hud;
   hud_apply_control_state(c, true, &hud);
   // 신선한 제어 스냅샷은 필드 그대로 옮긴다
   ASSERT_TRUE(hud.controller_enabled);
@@ -126,11 +126,11 @@ TEST(OverlayState, ControlStateMapping) {
   }
 }
 
-TEST(OverlayState, ManeuverFlagsMapping) {
+TEST(HudState, ManeuverFlagsMapping) {
   ControlState c;
   c.hud_flags = kHudFlagLaneChangePending | kHudFlagLaneChangeRight | kHudFlagTurnLeft;
   c.driver_torque = -96;
-  OverlayHudState hud;
+  HudState hud;
   hud_apply_control_state(c, true, &hud);
   // 차선 변경 대기(오른쪽)와 좌회전 desire, 운전자 토크 눈금
   ASSERT_EQ(hud.lane_change, 1);
@@ -153,14 +153,14 @@ TEST(OverlayState, ManeuverFlagsMapping) {
   ASSERT_EQ(hud.driver_torque_fraction, 0.0f);
 }
 
-TEST(OverlayState, LearnerAndLaneMapping) {
+TEST(HudState, LearnerAndLaneMapping) {
   LearnerState learner;
   learner.flags = kLearnerSteerRatioValid | kLearnerStiffnessValid | kLearnerOffsetAverageValid;
   learner.steer_ratio = 15.43f;
   learner.lat_accel_factor_raw = 3.45f;
   learner.cal_perc = 74;
   learner.plan_delay_s = 0.42f;
-  OverlayHudState hud;
+  HudState hud;
   hud_apply_learner_state(learner, true, &hud);
   // paramsd 세 값이 다 유효해야 유효, torqued는 따로
   ASSERT_TRUE(hud.learner_fresh);
@@ -205,10 +205,10 @@ TEST(OverlayState, LearnerAndLaneMapping) {
   ASSERT_TRUE(std::isnan(lane_center_offset_m(output))) << "한쪽 선이 불확실하면 모른다";
 }
 
-TEST(OverlayState, RecordStateMapping) {
+TEST(HudState, RecordStateMapping) {
   RecordState r;
   r.active = 1;
-  OverlayHudState hud;
+  HudState hud;
   hud_apply_record_state(r, true, &hud);
   // route를 쓰는 중이면 REC
   ASSERT_TRUE(hud.recording);

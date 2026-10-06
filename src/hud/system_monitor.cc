@@ -39,7 +39,7 @@ void read_ssid(const char *interface_name, char *ssid, size_t size)
 
 }  // namespace
 
-void SystemMonitor::sample(OverlayHudState *hud)
+void SystemMonitor::sample(HudState *hud)
 {
     if (!hud) return;
     sample_cpu(&hud->cpu_percent);
@@ -122,7 +122,7 @@ void SystemMonitor::sample_temperature(float *temperature_c)
 /* 와이파이(wlanN)와 그 밖의 링크(usb0 같은 USB 가상 이더넷)를 따로 본다. HUD의 연결 표시는
  * 와이파이만이고, 주소가 있으면서 SSID가 잡혀야(AP에 붙어야) 연결로 친다. USB 링크는 늘 주소가
  * 있어 예전에는 와이파이가 끊겨도 연결로 보였다(2026-10-04 실차). */
-void SystemMonitor::sample_network(OverlayHudState *hud)
+void SystemMonitor::sample_network(HudState *hud)
 {
     hud->network_connected = false;
     hud->wifi_signal_dbm = 0;

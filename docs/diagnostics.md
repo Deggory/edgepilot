@@ -9,7 +9,7 @@ their options, and how to build them are listed in
 
 ## HUD snapshots
 
-`hud_snapshot` renders the overlay renderer off-line for 28 scenarios (driving,
+`hud_snapshot` renders the HUD renderer off-line for 28 scenarios (driving,
 alerts, cards, warnings and the less common branches: soft disable, panda fault,
 radar-only lead, bar TPMS, engaged but blocked, ...) at the HUD's 640x480
 landscape size, writes each frame as a `K230ARGB` file and prints draw timings.

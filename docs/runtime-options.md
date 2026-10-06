@@ -36,13 +36,13 @@ true.
     `1583.3981,1583.7622,954.9441,545.1774`.
 - `EDGEPILOT_CALIB_ROLL_DEG`, `EDGEPILOT_CALIB_PITCH_DEG`,
   `EDGEPILOT_CALIB_YAW_DEG`
-  - manual calibration in degrees for both the overlay projection and the model
+  - manual calibration in degrees for both the HUD projection and the model
     input warp. If any value is set, it wins and online calibration is applied to
     neither. Otherwise the saved calibration is restored and pose-based online
     calibration feeds the next frame's input warp, matching openpilot's
     `cameraOdometry -> liveCalibration -> modeld` loop.
 - `EDGEPILOT_CALIB_AUTO=0`
-  - disables pose-based online overlay calibration and keeps the restored or
+  - disables pose-based online calibration and keeps the restored or
     manually supplied projection.
 - `EDGEPILOT_LOG_CALIB=1`
   - prints the online calibrator status, accepted/rejected sample counts, valid
@@ -222,7 +222,7 @@ python3 /root/edgepilot/param_server.py --host 0.0.0.0 --port 8080
 
 The BEV tab shows what the model sees from above: lane lines, road edges, the
 planned path and the lead, round the ego car, with the HUD's colours and limits
-(`overlay_renderer.cc`). The browser does all the work. The board copies the
+(`hud_renderer.cc`). The browser does all the work. The board copies the
 `ModelState` and `ControlState` payloads, unparsed, into one streamed response
 (`/api/bev/stream`, a frame per new model frame, 3.8 kB at up to 20 Hz). It
 sleeps until the next model frame is due, so a viewer costs about 3% of one

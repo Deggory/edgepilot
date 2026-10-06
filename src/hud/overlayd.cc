@@ -2,11 +2,11 @@
 #include "common/app_config.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
-#include "hud/overlay_policy.h"
-#include "hud/overlay_state.h"
+#include "hud/hud_policy.h"
+#include "hud/hud_state.h"
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
-#include "hud/overlay_renderer.h"
+#include "hud/hud_renderer.h"
 #include "common/device_settings.h"
 #include "common/projection.h"
 #include "hud/system_monitor.h"
@@ -68,9 +68,9 @@ struct StageStats {
     }
 };
 
-class OverlayDisplay {
+class HudDisplay {
 public:
-    explicit OverlayDisplay(const AppConfig &config)
+    explicit HudDisplay(const AppConfig &config)
         : profile_(config.profile)
     {
         // 차선 투영도 모델 워프와 같은 카메라 파라미터를 쓴다(EDGEPILOT_CAMERA_INTRINSICS).
@@ -181,12 +181,12 @@ private:
             ++errors_;
             return;
         }
-        const OverlayTarget target{buffer.pixels, static_cast<uint32_t>(kOutW), static_cast<uint32_t>(kOutH),
+        const HudTarget target{buffer.pixels, static_cast<uint32_t>(kOutW), static_cast<uint32_t>(kOutH),
                                    static_cast<uint32_t>(buffer.stride),
                                    HudOrientation{true, buffer.flip_x, buffer.flip_y}};
-        overlay_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
+        renderer_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
                       have_model_state_ ? latest_projection_ : default_projection_, hud_);
-        if (!display_.end_overlay(overlay_.last_damage().data(), overlay_.last_tile_shift())) ++errors_;
+        if (!display_.end_overlay(renderer_.last_damage().data(), renderer_.last_tile_shift())) ++errors_;
         if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
         ++overlay_frames_;
     }
@@ -278,7 +278,7 @@ private:
                 fresh(localization_state_.latest().timestamp_ns, now)};
     }
 
-    /* 최신 스냅샷을 HUD 상태로 옮기고, 이 프레임의 알림음을 낸다(OverlayAlertPolicy). */
+    /* 최신 스냅샷을 HUD 상태로 옮기고, 이 프레임의 알림음을 낸다(HudAlertPolicy). */
     void refresh_hud_state()
     {
         const uint64_t now = monotonic_now_ns();
@@ -310,30 +310,30 @@ private:
     }
 
     /* 정책이 고른 알림음을 내고 로그에 남긴다. 거부는 차단 사유, 해제 예고는 그 플래그와 사유를 함께. */
-    void play_alert(const OverlaySoundDecision &decision)
+    void play_alert(const HudSoundDecision &decision)
     {
-        if (decision.sound == OverlaySound::none) return;
-        sound_.play(overlay_sound_id(decision.sound));
+        if (decision.sound == HudSound::none) return;
+        sound_.play(hud_sound_id(decision.sound));
         switch (decision.sound) {
-        case OverlaySound::unable:
+        case HudSound::unable:
             std::fprintf(stderr, "overlayd: alert=unable event=%u block=%s\n", decision.event_id,
                          control_state_.latest().engage_reject_block);
             break;
-        case OverlaySound::take_control:
+        case HudSound::take_control:
             std::fprintf(stderr, "overlayd: alert=take_control soft_disable=%d steer_saturated=%d block=%s\n",
                          hud_.soft_disabling ? 1 : 0, hud_.steer_saturated ? 1 : 0, hud_.active_block);
             break;
-        case OverlaySound::unavailable:
+        case HudSound::unavailable:
             std::fprintf(stderr, "overlayd: alert=unavailable\n");
             break;
         default:
-            std::fprintf(stderr, "overlayd: alert=%s event=%u\n", overlay_sound_name(decision.sound),
+            std::fprintf(stderr, "overlayd: alert=%s event=%u\n", hud_sound_name(decision.sound),
                          decision.event_id);
             break;
         }
     }
 
-    OverlayRenderer overlay_;
+    HudRenderer renderer_;
     AlertSound sound_;
     DeviceSettingsFile device_settings_file_;
     DeviceSettings device_settings_;
@@ -370,10 +370,10 @@ private:
     StageStats overlay_stats_;
     StageStats present_stats_;
     SystemMonitor system_monitor_;
-    OverlayAlertPolicy alert_policy_;
+    HudAlertPolicy alert_policy_;
     TurnSignalClock turn_signal_clock_;
     HudTouch hud_touch_;
-    OverlayHudState hud_;
+    HudState hud_;
 };
 
 } // namespace
@@ -385,7 +385,7 @@ int main()
 
     try {
         AppConfig config = AppConfig::from_env_defaults();
-        OverlayDisplay app(config);
+        HudDisplay app(config);
         return app.run();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "overlayd error: %s\n", e.what());

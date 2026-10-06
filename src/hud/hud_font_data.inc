@@ -1,5 +1,5 @@
 /* tools/ui/make_hud_font.py가 Pillow 기본 글꼴(Aileron Regular, CC0)로 만든 파일이다.
- * 고치지 말고 스크립트를 다시 돌린다. overlay_font.cc만 include한다. */
+ * 고치지 말고 스크립트를 다시 돌린다. hud_font.cc만 include한다. */
 
 // Speed: 76 px, 획 2, ' '..'9', 14092바이트
 constexpr HudGlyph kSpeedGlyphs[] = {

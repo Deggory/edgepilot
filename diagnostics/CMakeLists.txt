@@ -13,7 +13,7 @@ target_link_libraries(replay_planner PRIVATE planning)
 
 # HUD 스냅샷·타이밍 도구. 호스트와 보드에서 같은 렌더러로 그린다.
 add_host_tool(hud_snapshot hud_snapshot.cc)
-target_link_libraries(hud_snapshot PRIVATE overlay)
+target_link_libraries(hud_snapshot PRIVATE hud)
 
 # 알림음 미리 듣기(WAV). overlayd와 같은 합성 코드.
 add_host_tool(alert_sound_preview alert_sound_preview.cc)

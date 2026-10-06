@@ -25,7 +25,7 @@ enum class BlockKind : uint8_t {
   SoftDisable,
 };
 
-// ControlStale은 컨트롤러가 내지 않는다. 스냅샷이 오래됐을 때 overlay가 대신 쓴다.
+// ControlStale은 컨트롤러가 내지 않는다. 스냅샷이 오래됐을 때 overlayd가 대신 쓴다.
 #define EDGEPILOT_BLOCK_REASONS(X)                                                        \
   X(None,               "",                     "",                BlockKind::None)         \
   X(NotEngaged,         "not_engaged",          "STANDBY",         BlockKind::Reject)       \

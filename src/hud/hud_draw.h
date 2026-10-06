@@ -1,13 +1,13 @@
-#ifndef OVERLAY_DRAW_H
-#define OVERLAY_DRAW_H
+#ifndef HUD_DRAW_H
+#define HUD_DRAW_H
 
 /* HUD 렌더러 내부 공용: 디자인 토큰(색·간격·카드 크기), 글자 줄 배치와 색 섞기, 상태 → 색, 앞차
- * 정보, 그리고 렌더러가 나눈 영역의 그리기 함수(overlay_scene.cc의 도로 장면, overlay_cards.cc의
- * 카드). overlay_renderer.cc·overlay_scene.cc·overlay_cards.cc만 쓴다. */
+ * 정보, 그리고 렌더러가 나눈 영역의 그리기 함수(hud_scene.cc의 도로 장면, hud_cards.cc의
+ * 카드). hud_renderer.cc·hud_scene.cc·hud_cards.cc만 쓴다. */
 
 #include "common/model_output.h"
-#include "hud/overlay_canvas.h"
-#include "hud/overlay_state.h"
+#include "hud/hud_canvas.h"
+#include "hud/hud_state.h"
 #include "common/projection.h"
 
 #include <algorithm>
@@ -16,7 +16,7 @@
 #include <cstdio>
 #include <string>
 
-namespace overlay_draw {
+namespace hud_draw {
 
 // ---- 디자인 토큰 ----
 
@@ -109,10 +109,10 @@ inline int centered_line_top(const HudFont &font, int box_y, int box_h)
 // ---- 상태 → 색 ----
 
 // 지금 조향하는가: 활성이고 85도 위에서 쉬는 중이 아니다.
-inline bool steering_now(const OverlayHudState &hud) { return hud.controller_active && !hud.steer_paused; }
+inline bool steering_now(const HudState &hud) { return hud.controller_active && !hud.steer_paused; }
 
 // 화면 테두리와 모드 점의 색. 결합 전이면 0(테두리 없음). 결합했지만 조향을 쉬면 회색.
-inline uint32_t state_color(const OverlayHudState &hud)
+inline uint32_t state_color(const HudState &hud)
 {
     if (hud.steering_fault || hud.panda_faults != 0 || hud.soft_disabling) return kRed;
     if (!hud.services_healthy) return kAmber;
@@ -120,7 +120,7 @@ inline uint32_t state_color(const OverlayHudState &hud)
     return hud.controller_engaged ? kGray : 0;
 }
 
-// ---- 앞차(overlay_scene.cc) ----
+// ---- 앞차(hud_scene.cc) ----
 
 struct LeadInfo {
     bool vision = false;
@@ -131,26 +131,26 @@ struct LeadInfo {
     float relative_speed_kph = 0.0f;
 };
 
-LeadInfo lead_info(const OverlayHudState &hud, const ParsedModelOutput &output);
+LeadInfo lead_info(const HudState &hud, const ParsedModelOutput &output);
 // 앞차 거리(다가오면 상대속도도) 글자
 std::string lead_text(const LeadInfo &lead);
 
-// ---- 도로 장면(overlay_scene.cc) ----
+// ---- 도로 장면(hud_scene.cc) ----
 
-void draw_scene(OverlayCanvas &canvas, const ParsedModelOutput &output,
-                const ProjectionState &projection, const OverlayHudState &hud, const LeadInfo &lead);
-void draw_lane_position(OverlayCanvas &canvas, const ParsedModelOutput &output,
+void draw_scene(HudCanvas &canvas, const ParsedModelOutput &output,
+                const ProjectionState &projection, const HudState &hud, const LeadInfo &lead);
+void draw_lane_position(HudCanvas &canvas, const ParsedModelOutput &output,
                         const ProjectionState &projection, float lane_center_offset_m, uint32_t car_color);
 
-// ---- 카드(overlay_cards.cc) ----
+// ---- 카드(hud_cards.cc) ----
 
-int draw_network_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud);
-void draw_tpms(OverlayCanvas &canvas, const OverlayHudState &hud);
-void draw_calibration(OverlayCanvas &canvas, const OverlayHudState &hud);
-void draw_learned(OverlayCanvas &canvas, const OverlayHudState &hud);
-void draw_system(OverlayCanvas &canvas, const OverlayHudState &hud);
-void draw_debug_card(OverlayCanvas &canvas, int y, const OverlayHudState &hud);
+int draw_network_card(HudCanvas &canvas, int y, const HudState &hud);
+void draw_tpms(HudCanvas &canvas, const HudState &hud);
+void draw_calibration(HudCanvas &canvas, const HudState &hud);
+void draw_learned(HudCanvas &canvas, const HudState &hud);
+void draw_system(HudCanvas &canvas, const HudState &hud);
+void draw_debug_card(HudCanvas &canvas, int y, const HudState &hud);
 
-}  // namespace overlay_draw
+}  // namespace hud_draw
 
 #endif

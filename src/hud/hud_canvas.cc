@@ -1,4 +1,4 @@
-#include "hud/overlay_canvas.h"
+#include "hud/hud_canvas.h"
 
 #include <algorithm>
 #include <array>
@@ -96,7 +96,7 @@ struct RowCoverage {
 
 }  // namespace
 
-OverlayCanvas::OverlayCanvas(void *pixels, int width, int height, int stride_bytes,
+HudCanvas::HudCanvas(void *pixels, int width, int height, int stride_bytes,
                              std::vector<uint16_t> &coverage, std::vector<uint16_t> &damage,
                              HudOrientation orientation)
     : base_(static_cast<uint8_t *>(pixels)), width_(width), height_(height),
@@ -108,12 +108,12 @@ OverlayCanvas::OverlayCanvas(void *pixels, int width, int height, int stride_byt
     while ((buffer_w_ - 1) >> tile_shift_ >= 16) ++tile_shift_;  // 칸이 16개 안에 들게
 }
 
-uint32_t *OverlayCanvas::row(int y) const
+uint32_t *HudCanvas::row(int y) const
 {
     return reinterpret_cast<uint32_t *>(base_ + static_cast<size_t>(y) * stride_);
 }
 
-HudPoint OverlayCanvas::to_buffer(HudPoint p) const
+HudPoint HudCanvas::to_buffer(HudPoint p) const
 {
     HudPoint b = orientation_.transpose ? HudPoint{p.y, p.x} : p;
     if (orientation_.flip_x) b.x = static_cast<float>(buffer_w_) - b.x;
@@ -121,7 +121,7 @@ HudPoint OverlayCanvas::to_buffer(HudPoint p) const
     return b;
 }
 
-void OverlayCanvas::mark(int y, int x0, int x1)
+void HudCanvas::mark(int y, int x0, int x1)
 {
     const uint32_t first = static_cast<uint32_t>(x0) >> tile_shift_;
     const uint32_t last = static_cast<uint32_t>(x1 - 1) >> tile_shift_;
@@ -129,7 +129,7 @@ void OverlayCanvas::mark(int y, int x0, int x1)
 }
 
 /* 이어진 칸은 memset 한 번으로 지운다. */
-void OverlayCanvas::clear(bool only_damaged)
+void HudCanvas::clear(bool only_damaged)
 {
     for (int y = 0; y < buffer_h_; ++y) {
         uint32_t tiles = only_damaged ? damage_[y] : 0xffffu;
@@ -144,7 +144,7 @@ void OverlayCanvas::clear(bool only_damaged)
     }
 }
 
-void OverlayCanvas::fill_rect(int x, int y, int w, int h, uint32_t color)
+void HudCanvas::fill_rect(int x, int y, int w, int h, uint32_t color)
 {
     const HudPoint a = to_buffer({static_cast<float>(x), static_cast<float>(y)});
     const HudPoint b = to_buffer({static_cast<float>(x + w), static_cast<float>(y + h)});
@@ -152,7 +152,7 @@ void OverlayCanvas::fill_rect(int x, int y, int w, int h, uint32_t color)
                      static_cast<int>(std::max(a.x, b.x)), static_cast<int>(std::max(a.y, b.y)), color);
 }
 
-void OverlayCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color)
+void HudCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color)
 {
     x0 = std::max(0, x0), x1 = std::min(buffer_w_, x1);
     y0 = std::max(0, y0), y1 = std::min(buffer_h_, y1);
@@ -168,7 +168,7 @@ void OverlayCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t co
 /* 모서리 넷을 시계 방향(오른쪽 위부터)으로 이은 다각형. 곧은 행을 따로 칠할 때는 위 모서리
  * 둘(왼쪽 위, 오른쪽 위)과 아래 모서리 둘(오른쪽 아래, 왼쪽 아래)을 따로 칠한다. 둘을 잇는
  * 변은 수평이라 커버리지에 끼지 않는다. */
-void OverlayCanvas::fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color)
+void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color)
 {
     radius = std::clamp(radius, 0.0f, std::min(w, h) / 2);
     const HudPoint centers[] = {{x + w - radius, y + radius}, {x + w - radius, y + h - radius},
@@ -201,12 +201,12 @@ void OverlayCanvas::fill_round_rect(float x, float y, float w, float h, float ra
     corners({1, 2});
 }
 
-void OverlayCanvas::fill_polygon(const HudPoint *points, int count, uint32_t color)
+void HudCanvas::fill_polygon(const HudPoint *points, int count, uint32_t color)
 {
     fill_rows(points, count, color, 0.0f, 0.0f, 1.0f);
 }
 
-void OverlayCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y,
+void HudCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y,
                                        float far_y, float far_alpha)
 {
     fill_rows(points, count, color, near_y, far_y, far_alpha);
@@ -217,7 +217,7 @@ void OverlayCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32
  * 넷 다 덮는 안쪽은 바로 합성하고 양쪽 가장자리 띠만 커버리지로 쌓는다. 아니면 구간 전부를
  * 쌓는다. 흐림은 화면 높이(near_y → far_y)를 따른다: 가로 버퍼에서는 행마다, 세로 패널 버퍼
  * 에서는 화면 높이가 버퍼 열이라 열마다 알파를 미리 센다. near_y == far_y면 줄이지 않는다. */
-void OverlayCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t color, float near_y,
+void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t color, float near_y,
                               float far_y, float far_alpha)
 {
     if (count < 3 || count > kMaxEdges) return;
@@ -331,7 +331,7 @@ void OverlayCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t
     }
 }
 
-int OverlayCanvas::text(int x, int y, std::string_view text, const HudFont &font, uint32_t color,
+int HudCanvas::text(int x, int y, std::string_view text, const HudFont &font, uint32_t color,
                         HudAlign align, bool shadow)
 {
     const int width = font.width(text);
@@ -344,7 +344,7 @@ int OverlayCanvas::text(int x, int y, std::string_view text, const HudFont &font
 
 /* 글리프 화소를 버퍼로 옮겨 합성한다. 가로 버퍼에서는 글리프 줄이, 세로 패널 버퍼에서는 글리프
  * 열이 버퍼 행 하나가 되도록 돌아 버퍼 쪽 쓰기가 이어진다. */
-void OverlayCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color)
+void HudCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color)
 {
     const uint32_t rgb = color & 0x00ffffffu, a = color >> 24;
     const bool transpose = orientation_.transpose;

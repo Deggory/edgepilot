@@ -2,7 +2,7 @@
  * 같은 비율 위치에 놓여야 한다. 폭을 하드코딩하면 오버레이가 영상과 어긋난다. */
 #include "common/app_config.h"
 #include "common/ipc_messages.h"
-#include "hud/overlay_state.h"
+#include "hud/hud_state.h"
 #include "common/projection.h"
 
 #include <cmath>
@@ -65,7 +65,7 @@ TEST(Projection, CameraOffsetDrawsModelPointsAtRealPosition) {
     EXPECT_EQ(drawn.y, real.y) << fwd;
   }
   // 오른쪽 점은 화면 오른쪽에 찍힌다(모델 y는 오른쪽 양수). 투영 좌표는 180° 돌아간
-  // 버퍼라 표시할 때 뒤집는다(overlay_renderer project_display_point).
+  // 버퍼라 표시할 때 뒤집는다(hud_renderer project_display_point).
   auto shown_x = [&](float y) { return 640 - 1 - project(plain, 15.0f, y, 1.2f, 640, 480).x; };
   EXPECT_GT(shown_x(1.8f), 320);
   EXPECT_LT(shown_x(-1.8f), 320);

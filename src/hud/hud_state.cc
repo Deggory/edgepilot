@@ -1,4 +1,4 @@
-#include "hud/overlay_state.h"
+#include "hud/hud_state.h"
 
 #include "controls/control_block.h"
 #include "controls/control_params.h"
@@ -15,7 +15,7 @@ const char *engage_block_label(const char *block)
     return reason == BlockReason::Count ? nullptr : block_reason_label(reason);
 }
 
-HudAlert hud_select_alert(const OverlayHudState &hud, bool model_ok)
+HudAlertCard hud_select_alert(const HudState &hud, bool model_ok)
 {
     char links[96];
     std::snprintf(links, sizeof(links), "MODEL %s   CAR %s   PANDA %s", model_ok ? "OK" : "--",
@@ -48,14 +48,14 @@ HudAlert hud_select_alert(const OverlayHudState &hud, bool model_ok)
 
 /* ---- 공유 상태 → HUD 상태 ---- */
 
-void hud_apply_panda_state(const PandaState &panda, bool fresh, OverlayHudState *hud)
+void hud_apply_panda_state(const PandaState &panda, bool fresh, HudState *hud)
 {
     hud->panda_connected = fresh && panda.connected != 0;
     hud->panda_healthy = fresh && panda.comms_healthy != 0;
     hud->panda_faults = fresh ? panda.faults : 0;
 }
 
-void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState *hud)
+void hud_apply_control_state(const ControlState &c, bool fresh, HudState *hud)
 {
     hud->controller_enabled = fresh && c.enabled != 0;
     hud->controller_engaged = fresh && c.engaged != 0;
@@ -112,7 +112,7 @@ void hud_apply_control_state(const ControlState &c, bool fresh, OverlayHudState 
                   fresh ? c.active_block : "control_stale");
 }
 
-void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState *hud)
+void hud_apply_model_state(const ModelState &model, bool fresh, HudState *hud)
 {
     const CalibrationState &calibration = model.calibration;
     hud->calibration_available = fresh;
@@ -123,13 +123,13 @@ void hud_apply_model_state(const ModelState &model, bool fresh, OverlayHudState 
     hud->calibration_yaw_deg = rad_to_deg(calibration.yaw);
 }
 
-void hud_apply_record_state(const RecordState &record, bool fresh, OverlayHudState *hud)
+void hud_apply_record_state(const RecordState &record, bool fresh, HudState *hud)
 {
     hud->recording = fresh && record.active != 0;
     hud->storage_full = fresh && record.storage_blocked != 0;
 }
 
-void hud_apply_learner_state(const LearnerState &learner, bool fresh, OverlayHudState *hud)
+void hud_apply_learner_state(const LearnerState &learner, bool fresh, HudState *hud)
 {
     constexpr uint32_t kParamsValid = kLearnerSteerRatioValid | kLearnerStiffnessValid | kLearnerOffsetAverageValid;
     hud->learner_fresh = fresh;
@@ -150,7 +150,7 @@ void hud_apply_learner_state(const LearnerState &learner, bool fresh, OverlayHud
     hud->torque_factor_filtered = learner.lat_accel_factor;
 }
 
-void hud_apply_localization_state(const LocalizationState &localization, bool fresh, OverlayHudState *hud)
+void hud_apply_localization_state(const LocalizationState &localization, bool fresh, HudState *hud)
 {
     hud->lag_blocks = fresh ? localization.lag_valid_blocks : -1;
     hud->lag_estimate_s = localization.lag_estimate_s;
@@ -167,7 +167,7 @@ float lane_center_offset_m(const ParsedModelOutput &output)
 }
 
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok,
-                             OverlayHudState *hud)
+                             HudState *hud)
 {
     const unsigned total = fresh
         ? std::min<unsigned>(manager.process_count, kMaxProcesses) : 0;

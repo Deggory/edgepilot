@@ -1,7 +1,7 @@
-#include "hud/overlay_renderer.h"
+#include "hud/hud_renderer.h"
 
 #include "car/can_frame.h"
-#include "hud/overlay_draw.h"
+#include "hud/hud_draw.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,11 +14,11 @@
  * 학습값을 좌우 짝으로 늘 두고, 오른쪽 위 상태 알약은 녹화와 와이파이를 보이며 누르면 네트워크
  * 카드를 연다. panda·저장 공간은 문제가 있을 때 칩으로도 띄우고(온도는 보드 상태 카드가 색으로),
  * 다른 카드에 없는 수치 진단은 웹 기기 설정의 HUD 진단을 켜면 왼쪽 카드에 모은다. 색·간격·글꼴
- * 크기는 overlay_draw.h의 토큰 한 곳에서 정한다. 도로 장면은 overlay_scene.cc, 카드는
- * overlay_cards.cc가 그린다. 크기는 2.4" 패널(333 ppi)을 차 안에서 읽을 만큼(2026-10-04
+ * 크기는 hud_draw.h의 토큰 한 곳에서 정한다. 도로 장면은 hud_scene.cc, 카드는
+ * hud_cards.cc가 그린다. 크기는 2.4" 패널(333 ppi)을 차 안에서 읽을 만큼(2026-10-04
  * 실차에서 한 번 키움). */
 
-namespace overlay_draw {
+namespace hud_draw {
 namespace {
 
 constexpr int kTurnLitSteps = 15;
@@ -27,7 +27,7 @@ constexpr float kTurnChevronAlpha[] = {0.35f, 0.65f, 1.0f};
 
 // ---- 상태 → 문구 ----
 
-std::string mode_text(const OverlayHudState &hud)
+std::string mode_text(const HudState &hud)
 {
     if (hud.controller_active)
         return hud.laneless_mode ? "LANELESS" : "LANE";
@@ -79,7 +79,7 @@ uint32_t alert_color(HudAlertLevel level)
 enum class ChipMark { dot, left, right };
 
 // 방향 화살표: 가운데 (cx, cy), 폭 w, 높이 h인 삼각형. direction은 -1(왼쪽) 또는 1.
-void draw_arrow(OverlayCanvas &canvas, float cx, float cy, float w, float h, int direction, uint32_t color)
+void draw_arrow(HudCanvas &canvas, float cx, float cy, float w, float h, int direction, uint32_t color)
 {
     const float tip = cx + direction * w / 2.0f, back = cx - direction * w / 2.0f;
     const HudPoint points[] = {{tip, cy}, {back, cy - h / 2.0f}, {back, cy + h / 2.0f}};
@@ -88,7 +88,7 @@ void draw_arrow(OverlayCanvas &canvas, float cx, float cy, float w, float h, int
 
 /* 신호 대기: 한국식 가로 신호등(빨강·노랑·초록 중 빨강만 켜짐), 글 없이 아이콘만. 오른쪽 끝
  * right, 위 y, 높이 h. */
-void draw_traffic_light(OverlayCanvas &canvas, int right, int y, int h)
+void draw_traffic_light(HudCanvas &canvas, int right, int y, int h)
 {
     const int lamp = h - 4, w = 3 * lamp + 8, x = right - w;
     canvas.fill_round_rect(x, y, w, h, h / 2.0f, kSignalHousing);
@@ -98,7 +98,7 @@ void draw_traffic_light(OverlayCanvas &canvas, int right, int y, int h)
 }
 
 // 둥근 칩: 앞 표시와 글. x는 align 기준점. 그린 폭을 돌려준다.
-int chip(OverlayCanvas &canvas, int x, int y, const std::string &text, uint32_t color,
+int chip(HudCanvas &canvas, int x, int y, const std::string &text, uint32_t color,
          HudAlign align = HudAlign::left, ChipMark mark = ChipMark::dot)
 {
     constexpr int kArrowW = 10;
@@ -118,7 +118,7 @@ int chip(OverlayCanvas &canvas, int x, int y, const std::string &text, uint32_t 
 
 // ---- 위쪽과 아래 가장자리 ----
 
-void draw_border(OverlayCanvas &canvas, uint32_t color)
+void draw_border(HudCanvas &canvas, uint32_t color)
 {
     if (!color) return;
     const int w = canvas.width(), h = canvas.height();
@@ -132,7 +132,7 @@ void draw_border(OverlayCanvas &canvas, uint32_t color)
 int speed_unit_line() { return kMargin + kHudSpeedFont.glyph('0')->h + 4; }
 
 // 가운데 현재 속도와 그 양옆 깜빡이 화살표. 화살표 기준으로 쓸 숫자 폭을 돌려준다.
-int draw_speed(OverlayCanvas &canvas, const OverlayHudState &hud)
+int draw_speed(HudCanvas &canvas, const HudState &hud)
 {
     const std::string speed = format_text("%.0f", std::max(0.0f, hud.cluster_speed_kph));
     const int center = canvas.width() / 2;
@@ -144,7 +144,7 @@ int draw_speed(OverlayCanvas &canvas, const OverlayHudState &hud)
 
 /* 오토 홀드: 현재 속도 바로 아래 가운데의 큰 배지. 차 계기판처럼 초록 글씨로, 정차해 브레이크를
  * 잡고 있는 동안 멀리서도 보이게. */
-void draw_brake_hold(OverlayCanvas &canvas, const OverlayHudState &hud)
+void draw_brake_hold(HudCanvas &canvas, const HudState &hud)
 {
     if (!hud.brake_hold) return;
     constexpr int kH = 40, kPadX = 20;
@@ -158,7 +158,7 @@ void draw_brake_hold(OverlayCanvas &canvas, const OverlayHudState &hud)
 
 /* 현재 속도 양옆의 깜빡이 화살표(노랑, 비상등이면 양쪽). 세 개가 차례로 켜진다. 숫자에서 18 px
  * 띄우되, 세 자리 속도에서도 왼쪽 위 카드에 닿지 않게 안쪽으로 당긴다(오른쪽은 대칭). */
-void draw_turn_signals(OverlayCanvas &canvas, const OverlayHudState &hud, int speed_width)
+void draw_turn_signals(HudCanvas &canvas, const HudState &hud, int speed_width)
 {
     if (!hud.left_blinker && !hud.right_blinker) return;
     const int step = std::clamp(hud.turn_signal_step, 0, kTurnSignalSteps - 1);
@@ -189,7 +189,7 @@ void draw_turn_signals(OverlayCanvas &canvas, const OverlayHudState &hud, int sp
 
 /* 왼쪽 위 값 카드 하나: 위에 작은 이름, 그 아래 큰 값. sub가 있으면 큰 값을 이름 바로 아래로
  * 올리고 카드 아래쪽에 sub를 작게 쓴다. */
-void top_card(OverlayCanvas &canvas, int x, int w, const char *title, const std::string &value, uint32_t color,
+void top_card(HudCanvas &canvas, int x, int w, const char *title, const std::string &value, uint32_t color,
               const std::string &sub = {}, uint32_t sub_color = kTextSecondary)
 {
     const int y = kMargin, header_bottom = y + kCardPad + cap_glyph(kHudCaptionFont).h;
@@ -208,7 +208,7 @@ void top_card(OverlayCanvas &canvas, int x, int w, const char *title, const std:
 
 /* 왼쪽 위: 설정 속도 카드와 기어 카드, 그 아래 조향 모드 칩. 비전 크루즈가 설정보다 낮게 잡고
  * 있으면 그 속도를 설정 속도 카드 아래쪽에 SET으로. 다음 칩이 올 y를 돌려준다. */
-int draw_cruise(OverlayCanvas &canvas, const OverlayHudState &hud)
+int draw_cruise(HudCanvas &canvas, const HudState &hud)
 {
     const int x = kMargin, y = kMargin;
     const bool max_valid = speed_valid(hud.cruise_max_speed_kph);
@@ -230,7 +230,7 @@ constexpr float kWifiRadius = 20.5f;  // 와이파이 부채의 바깥 반지름
 
 /* 와이파이 부채: 아래 꼭짓점의 점과 그 위 호 셋(45°~135°). 세기만큼 점부터 켜고 나머지 호는
  * 흐리게, 가장 약하면 점만 주황. 무선이 아니면(dbm 0) 다 켠다. (cx, apex)는 꼭짓점. */
-void draw_wifi_icon(OverlayCanvas &canvas, float cx, float apex, int dbm)
+void draw_wifi_icon(HudCanvas &canvas, float cx, float apex, int dbm)
 {
     constexpr int kSegments = 8;
     constexpr float kBands[3][2] = {{7.0f, 9.5f}, {12.5f, 15.0f}, {18.0f, kWifiRadius}};
@@ -251,7 +251,7 @@ void draw_wifi_icon(OverlayCanvas &canvas, float cx, float apex, int dbm)
 
 /* 오른쪽 위 상태 알약: 녹화 중이면 빨간 점과 REC, 그리고 와이파이 부채(끊기면 OFFLINE).
  * 누르면 네트워크 카드가 열린다(hud_status_touch). 다음 줄 y를 돌려준다. */
-int draw_status_pill(OverlayCanvas &canvas, const OverlayHudState &hud)
+int draw_status_pill(HudCanvas &canvas, const HudState &hud)
 {
     constexpr int kWifiW = 30, kItemGap = 12;  // kWifiW ≈ 2·kWifiRadius·sin45°
     const int y = kMargin;
@@ -276,7 +276,7 @@ int draw_status_pill(OverlayCanvas &canvas, const OverlayHudState &hud)
 
 /* 오른쪽 위: 상태 알약, 열려 있으면 네트워크 카드, 그 아래 문제 칩(panda, 저장 공간, 레이더 앞차)과
  * 신호 대기 신호등. CPU 온도는 보드 상태 카드가 색으로 알린다. */
-void draw_status(OverlayCanvas &canvas, const OverlayHudState &hud, const LeadInfo &lead)
+void draw_status(HudCanvas &canvas, const HudState &hud, const LeadInfo &lead)
 {
     const int right = canvas.width() - kMargin;
     int y = draw_status_pill(canvas, hud);
@@ -293,7 +293,7 @@ void draw_status(OverlayCanvas &canvas, const OverlayHudState &hud, const LeadIn
 
 /* 아래 가장자리 토크 바: 보낸 토크를 가운데에서 회전 쪽으로 채우고, 운전자 토크를 같은 눈금에
  * 하늘색 세로 눈금으로 얹는다. 시스템과 운전자가 서로 미는지 바로 보인다. + = 왼쪽. */
-void draw_torque_bar(OverlayCanvas &canvas, const OverlayHudState &hud)
+void draw_torque_bar(HudCanvas &canvas, const HudState &hud)
 {
     if (!hud.controller_engaged) return;
     constexpr float kDriverTickMin = 0.05f;  // 이보다 작은 운전자 토크(손을 얹은 정도)는 그리지 않는다
@@ -315,7 +315,7 @@ void draw_torque_bar(OverlayCanvas &canvas, const OverlayHudState &hud)
 }
 
 // 아래 가운데 알림 카드(hud_select_alert). 아래 모서리 카드 사이에 들어간다.
-void draw_alert(OverlayCanvas &canvas, const HudAlert &alert)
+void draw_alert(HudCanvas &canvas, const HudAlertCard &alert)
 {
     if (alert.empty()) return;
     const int max_w = canvas.width() - 2 * (kMargin + kCornerCardW + kGap);
@@ -336,7 +336,7 @@ void draw_alert(OverlayCanvas &canvas, const HudAlert &alert)
 }
 
 // 왼쪽 열: 조향 중에 하고 있는 조작(차선 변경, 교차로 회전). 다음 칩이 올 y를 돌려준다.
-int draw_maneuver(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
+int draw_maneuver(HudCanvas &canvas, int y, const HudState &hud)
 {
     if (!steering_now(hud)) return y;
     const char *text = nullptr;
@@ -354,12 +354,12 @@ int draw_maneuver(OverlayCanvas &canvas, int y, const OverlayHudState &hud)
 }
 
 }  // namespace
-}  // namespace overlay_draw
+}  // namespace hud_draw
 
-void OverlayRenderer::draw(const OverlayTarget &target, const ParsedModelOutput &output,
-                           const ProjectionState &projection, const OverlayHudState &hud)
+void HudRenderer::draw(const HudTarget &target, const ParsedModelOutput &output,
+                           const ProjectionState &projection, const HudState &hud)
 {
-    using namespace overlay_draw;
+    using namespace hud_draw;
     const uint32_t buffer_h = target.orientation.transpose ? target.width : target.height;
     BufferDamage *damage = nullptr;
     for (BufferDamage &known : damage_)
@@ -370,7 +370,7 @@ void OverlayRenderer::draw(const OverlayTarget &target, const ParsedModelOutput 
         damage = &damage_[next_slot_++ % damage_.size()];
         *damage = BufferDamage{target.map, target.width, std::vector<uint16_t>(buffer_h, 0)};
     }
-    OverlayCanvas canvas(target.map, static_cast<int>(target.width), static_cast<int>(target.height),
+    HudCanvas canvas(target.map, static_cast<int>(target.width), static_cast<int>(target.height),
                          static_cast<int>(target.stride), coverage_, damage->rows, target.orientation);
     canvas.clear(known);
     last_damage_ = &damage->rows;
@@ -397,12 +397,12 @@ void OverlayRenderer::draw(const OverlayTarget &target, const ParsedModelOutput 
 
 bool hud_status_touch(int x, int y, int width)
 {
-    using namespace overlay_draw;
+    using namespace hud_draw;
     return x >= width - kStatusTouchW && y < kStatusTouchH;
 }
 
 bool hud_left_column_touch(int x, int y, int height)
 {
-    using namespace overlay_draw;
+    using namespace hud_draw;
     return x < kLeftColumnTouchW && y < height - kMargin - kCornerCardH;
 }

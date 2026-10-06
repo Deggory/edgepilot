@@ -1,8 +1,8 @@
-#ifndef OVERLAY_RENDERER_H
-#define OVERLAY_RENDERER_H
+#ifndef HUD_RENDERER_H
+#define HUD_RENDERER_H
 
-#include "hud/overlay_canvas.h"
-#include "hud/overlay_state.h"
+#include "hud/hud_canvas.h"
+#include "hud/hud_state.h"
 #include "common/model_output.h"
 #include "common/projection.h"
 
@@ -12,7 +12,7 @@
 
 /* HUD를 그릴 BGRA8888(스트레이트 알파) 버퍼. width·height는 화면(가로 640x480) 크기, stride는
  * 버퍼 행 바이트. 보드에서는 세로 패널 방향의 그림판이라 orientation이 transpose다. */
-struct OverlayTarget {
+struct HudTarget {
     void *map = nullptr;
     uint32_t width = 0;
     uint32_t height = 0;
@@ -23,10 +23,10 @@ struct OverlayTarget {
 /* HUD 한 프레임을 그린다. 매번 전부 다시 그리며, 들고 있는 것은 행 커버리지 작업 공간과
  * 버퍼마다 지난번 그린 칸뿐이다. VO 풀은 같은 블록 몇 개를 돌려 쓰므로, 아는 버퍼를 다시
  * 받으면 그 칸만 지우고 처음 보는 버퍼는 전부 지운다(버퍼에는 이 렌더러만 쓴다고 본다). */
-class OverlayRenderer {
+class HudRenderer {
 public:
-    void draw(const OverlayTarget &target, const ParsedModelOutput &output,
-              const ProjectionState &projection, const OverlayHudState &hud = OverlayHudState{});
+    void draw(const HudTarget &target, const ParsedModelOutput &output,
+              const ProjectionState &projection, const HudState &hud = HudState{});
     /* 마지막 draw가 그린 칸: 버퍼 행마다 (1 << last_tile_shift()) 폭 칸의 비트. 화면 쪽이 바뀐
      * 칸만 옮길 때 지난번 것과 합쳐 쓴다. */
     const std::vector<uint16_t> &last_damage() const { return *last_damage_; }

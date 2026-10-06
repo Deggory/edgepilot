@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake the HUD fonts into src/hud/overlay_font_data.inc.
+"""Bake the HUD fonts into src/hud/hud_font_data.inc.
 
   make_hud_font.py [out.inc]
 
@@ -7,7 +7,7 @@ The glyphs come from Pillow's default scalable font, Aileron Regular (Sora
 Sagano, dotcolon.net, released as CC0), so nothing outside Pillow is needed and
 the result may be committed. Heavier weights are drawn with a stroke. Coverage
 is stored as 4-bit nibbles, two pixels per byte, glyph after glyph; the C++
-side (overlay_font.cc) expands it to 8 bits at compile time.
+side (hud_font.cc) expands it to 8 bits at compile time.
 """
 
 import sys
@@ -70,9 +70,9 @@ def hex_rows(data: bytes, per_row: int = 24) -> str:
 
 def main() -> None:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-        Path(__file__).resolve().parents[2] / "src" / "hud" / "overlay_font_data.inc"
+        Path(__file__).resolve().parents[2] / "src" / "hud" / "hud_font_data.inc"
     parts = ["/* tools/ui/make_hud_font.py가 Pillow 기본 글꼴(Aileron Regular, CC0)로 만든 파일이다.\n"
-             " * 고치지 말고 스크립트를 다시 돌린다. overlay_font.cc만 include한다. */\n"]
+             " * 고치지 말고 스크립트를 다시 돌린다. hud_font.cc만 include한다. */\n"]
     for spec in SPECS:
         first, last, ascent, descent, glyphs, packed = render(spec)
         rows = ",\n".join(f"    {{{o}, {w}, {h}, {l}, {t}, {a}}}" for o, w, h, l, t, a in glyphs)

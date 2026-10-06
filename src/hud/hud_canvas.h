@@ -1,5 +1,5 @@
-#ifndef OVERLAY_CANVAS_H
-#define OVERLAY_CANVAS_H
+#ifndef HUD_CANVAS_H
+#define HUD_CANVAS_H
 
 /* HUD를 그리는 바탕. 스트레이트 알파 BGRA 버퍼 위에 커버리지로 over 합성한다. 다각형은 행마다
  * 4개 부표본 행이 지나는 구간만 쌓아 칠하므로(안티앨리어싱) 일이 덮인 넓이에 비례하고, 합성은
@@ -7,7 +7,7 @@
  * 다시 받으면 그 칸만 지운다. 그리는 쪽은 늘 가로 화면 좌표를 쓰고, 버퍼가 세로 패널 방향이면
  * 캔버스가 좌표를 옮긴다(HudOrientation). OpenCV가 필요 없다. */
 
-#include "hud/overlay_font.h"
+#include "hud/hud_font.h"
 
 #include <cstdint>
 #include <string_view>
@@ -41,12 +41,12 @@ struct HudOrientation {
     bool flip_y = false;  // 버퍼 행을 거꾸로
 };
 
-class OverlayCanvas {
+class HudCanvas {
 public:
     /* width·height는 화면(가로) 크기, stride는 버퍼 행 바이트. coverage는 버퍼 한 행 너비 이상의
      * 작업 공간(그릴 때마다 비워 둔다). damage는 이 버퍼의 행마다 그린 가로 칸(폭/16 이상, 최소
      * 64 px)의 비트로, 버퍼와 함께 이어 쓴다. */
-    OverlayCanvas(void *pixels, int width, int height, int stride_bytes, std::vector<uint16_t> &coverage,
+    HudCanvas(void *pixels, int width, int height, int stride_bytes, std::vector<uint16_t> &coverage,
                   std::vector<uint16_t> &damage, HudOrientation orientation = {});
 
     int width() const { return width_; }

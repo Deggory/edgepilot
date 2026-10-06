@@ -7,9 +7,9 @@
  * 바이트 단위로 같은지 비교할 때 쓴다.
  * 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
  *                    [--portrait [--flip-x] [--flip-y]] */
-#include "hud/overlay_state.h"
+#include "hud/hud_state.h"
 #include "common/ipc_messages.h"
-#include "hud/overlay_renderer.h"
+#include "hud/hud_renderer.h"
 
 #include <algorithm>
 #include <chrono>
@@ -39,7 +39,7 @@ bool read_file(const std::string &path, void *dst, size_t size)
 }
 
 /* K230ARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). 크기는 버퍼(세로면 480x640)다. */
-bool write_frame_file(const std::string &path, const OverlayTarget &target)
+bool write_frame_file(const std::string &path, const HudTarget &target)
 {
     FILE *file = std::fopen(path.c_str(), "wb");
     if (!file) return false;
@@ -92,7 +92,7 @@ ParsedModelOutput synthetic_output()
 struct Scenario {
     const char *name;
     const ParsedModelOutput *scene;  // nullptr = 모델 출력 없음
-    OverlayHudState hud;
+    HudState hud;
 };
 
 void print_stats(const char *label, std::vector<double> values)
@@ -143,7 +143,7 @@ int main(int argc, char **argv)
     ProjectionState projection = have_model ? projection_from_model_state(model_state)
                                             : make_projection_state(0.0f, 0.0f, 0.0f);
 
-    OverlayHudState idle;
+    HudState idle;
     idle.services_healthy = true;
     idle.network_connected = true;
     idle.cpu_percent = 43.0f;
@@ -159,7 +159,7 @@ int main(int argc, char **argv)
     std::snprintf(idle.network_ipv4, sizeof(idle.network_ipv4), "192.168.219.111");
     std::snprintf(idle.network_ssid, sizeof(idle.network_ssid), "edgepilot-car");
 
-    OverlayHudState drive = idle;
+    HudState drive = idle;
     drive.panda_connected = true;
     drive.panda_healthy = true;
     drive.vehicle_fresh = true;
@@ -209,7 +209,7 @@ int main(int argc, char **argv)
         drive.tpms_pressure_rl = drive.tpms_pressure_rr = 35.0f;
     }
 
-    OverlayHudState busy = drive;
+    HudState busy = drive;
     busy.left_blinker = true;
     busy.turn_signal_step = 10;
     busy.brake_hold = true;
@@ -217,40 +217,40 @@ int main(int argc, char **argv)
     std::snprintf(busy.engage_reject_label, sizeof(busy.engage_reject_label), "%s",
                   engage_block_label("seatbelt_unlatched"));
 
-    OverlayHudState depart = drive;
+    HudState depart = drive;
     depart.departure_alert_type = DepartureAlertType::green_light;
     depart.cluster_speed_kph = 0.0f;
     depart.brake_hold = true;
 
-    OverlayHudState fault = drive;
+    HudState fault = drive;
     fault.steering_fault = true;
 
-    OverlayHudState torque = drive;  // 오른쪽 조향 45%
+    HudState torque = drive;  // 오른쪽 조향 45%
     torque.apply_torque = torque.desired_torque = -173;
     torque.steer_torque_fraction = -0.45f;
 
-    OverlayHudState saturated = drive;  // 왼쪽 조향 95% + 조향 한계 경고
+    HudState saturated = drive;  // 왼쪽 조향 95% + 조향 한계 경고
     saturated.apply_torque = saturated.desired_torque = 365;
     saturated.steer_torque_fraction = 0.95f;
     saturated.steer_saturated = true;
 
-    OverlayHudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면(torqued·lagd는 아직 학습 중)
+    HudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면(torqued·lagd는 아직 학습 중)
     debug.debug_overlay = true;
 
-    OverlayHudState learned = drive;  // 학습값을 다 쓰는 중, 후진
+    HudState learned = drive;  // 학습값을 다 쓰는 중, 후진
     learned.torque_learned = learned.delay_learned = true;
     learned.lag_blocks = 5;
     learned.lateral_delay_s = 0.22f;
     learned.gear = 7;
     learned.cluster_speed_kph = 4.0f;
 
-    OverlayHudState lane_change = drive;  // 왼쪽 깜빡이: 핸들을 밀기를 기다림
+    HudState lane_change = drive;  // 왼쪽 깜빡이: 핸들을 밀기를 기다림
     lane_change.left_blinker = true;
     lane_change.turn_signal_step = 8;
     lane_change.lane_change = 1;
     lane_change.lane_change_direction = -1;
 
-    OverlayHudState turn = drive;  // 교차로 우회전 desire, 운전자가 반대로 잡는 중
+    HudState turn = drive;  // 교차로 우회전 desire, 운전자가 반대로 잡는 중
     turn.right_blinker = true;
     turn.turn_signal_step = 12;
     turn.turn_direction = 1;
@@ -258,31 +258,31 @@ int main(int argc, char **argv)
     turn.steer_torque_fraction = -0.42f;
     turn.driver_torque_fraction = 0.35f;
 
-    OverlayHudState paused = drive;  // 85도 위에서 운전자가 넘겨받은 회전
+    HudState paused = drive;  // 85도 위에서 운전자가 넘겨받은 회전
     paused.steer_paused = true;
     paused.steer_paused_by_driver = true;
     paused.cluster_speed_kph = 9.0f;
     paused.driver_torque_fraction = -0.6f;
 
-    OverlayHudState hazard = drive;  // 비상등, 세 자리 속도, 비전 크루즈가 설정보다 낮게
+    HudState hazard = drive;  // 비상등, 세 자리 속도, 비전 크루즈가 설정보다 낮게
     hazard.left_blinker = hazard.right_blinker = true;
     hazard.turn_signal_step = 10;
     hazard.cluster_speed_kph = 105.0f;
     hazard.cruise_max_speed_kph = 110.0f;
     hazard.cruise_command_speed_kph = 90.0f;
 
-    OverlayHudState network = drive;  // 상태 알약을 눌러 연 네트워크 카드, 뜨거운 보드
+    HudState network = drive;  // 상태 알약을 눌러 연 네트워크 카드, 뜨거운 보드
     network.network_card = true;
     network.cpu_temp_c = 74.0f;
 
-    OverlayHudState offline = drive;  // 와이파이가 끊기고 USB 링크만 있을 때의 네트워크 카드
+    HudState offline = drive;  // 와이파이가 끊기고 USB 링크만 있을 때의 네트워크 카드
     offline.network_card = true;
     offline.network_connected = false;
     offline.wifi_signal_dbm = 0;
     offline.network_ssid[0] = '\0';
     offline.network_ipv4[0] = '\0';
 
-    OverlayHudState warnings = drive;  // 재보정, 낮은·높은 타이어, 저장 공간 부족, 오프라인
+    HudState warnings = drive;  // 재보정, 낮은·높은 타이어, 저장 공간 부족, 오프라인
     warnings.calibration_status = 3;
     warnings.calibration_valid_blocks = 2;
     warnings.tpms_valid = true;
@@ -295,41 +295,41 @@ int main(int argc, char **argv)
     warnings.storage_full = true;
     warnings.network_connected = false;
 
-    OverlayHudState standby = drive;
+    HudState standby = drive;
     standby.controller_engaged = standby.controller_active = false;
     standby.cruise_active = false;
     std::snprintf(standby.active_block, sizeof(standby.active_block), "stopped");
     standby.cluster_speed_kph = 12.0f;
 
     // 아래는 알림·카드 분기를 고루 그리려고 더한 장면이다(리팩토링 전후 그림 비교용).
-    OverlayHudState soft_disable = drive;  // 재보정으로 3초 뒤 해제 예고
+    HudState soft_disable = drive;  // 재보정으로 3초 뒤 해제 예고
     soft_disable.soft_disabling = true;
     std::snprintf(soft_disable.active_block, sizeof(soft_disable.active_block), "calibration_recalibrating");
 
-    OverlayHudState panda_fault = drive;
+    HudState panda_fault = drive;
     panda_fault.panda_faults = 0x4;
 
-    OverlayHudState services = drive;  // 서비스가 덜 떴을 때
+    HudState services = drive;  // 서비스가 덜 떴을 때
     services.services_healthy = false;
 
-    OverlayHudState laneless = drive;
+    HudState laneless = drive;
     laneless.laneless_mode = true;
 
-    OverlayHudState radar_lead = drive;  // 비전 앞차 없이 레이더 앞차만
+    HudState radar_lead = drive;  // 비전 앞차 없이 레이더 앞차만
     radar_lead.radar_lead_valid = true;
     radar_lead.radar_lead_distance_m = 24.0f;
     radar_lead.radar_lead_relative_speed_mps = -1.5f;
 
-    OverlayHudState lead_departed = depart;
+    HudState lead_departed = depart;
     lead_departed.departure_alert_type = DepartureAlertType::lead_departed;
 
-    OverlayHudState changing = drive;  // 오른쪽으로 차선 변경 중
+    HudState changing = drive;  // 오른쪽으로 차선 변경 중
     changing.right_blinker = true;
     changing.turn_signal_step = 6;
     changing.lane_change = 2;
     changing.lane_change_direction = 1;
 
-    OverlayHudState tpms_bar = drive;  // bar 단위, 낮은·높은 타이어, 차량 TPMS 경고
+    HudState tpms_bar = drive;  // bar 단위, 낮은·높은 타이어, 차량 TPMS 경고
     tpms_bar.tpms_valid = true;
     tpms_bar.tpms_unit = 2;
     tpms_bar.tpms_pressure_fl = 2.4f;
@@ -338,14 +338,14 @@ int main(int argc, char **argv)
     tpms_bar.tpms_pressure_rr = 3.4f;
     tpms_bar.tpms_warning = true;
 
-    OverlayHudState cal_invalid = drive;
+    HudState cal_invalid = drive;
     cal_invalid.calibration_status = 2;
 
-    OverlayHudState engaged_blocked = drive;  // 결합은 유지한 채 경로가 없어 쉬는 중
+    HudState engaged_blocked = drive;  // 결합은 유지한 채 경로가 없어 쉬는 중
     engaged_blocked.controller_active = false;
     std::snprintf(engaged_blocked.active_block, sizeof(engaged_blocked.active_block), "path_invalid");
 
-    OverlayHudState debug_stale = debug;  // 진단 카드에서 학습기 상태가 끊김
+    HudState debug_stale = debug;  // 진단 카드에서 학습기 상태가 끊김
     debug_stale.learner_fresh = false;
     debug_stale.lag_blocks = -1;
 
@@ -387,9 +387,9 @@ int main(int argc, char **argv)
     constexpr uint32_t height = 480;
     std::vector<uint32_t> storage(static_cast<size_t>(width) * height, 0);
     const uint32_t stride = (orientation.transpose ? height : width) * 4;
-    const OverlayTarget target{storage.data(), width, height, stride, orientation};
+    const HudTarget target{storage.data(), width, height, stride, orientation};
 
-    OverlayRenderer renderer;
+    HudRenderer renderer;
     std::printf("inputs: model=%s control=%s target=%ux%u%s\n",
                 have_model ? model_path.c_str() : "synthetic",
                 have_control ? control_path.c_str() : "synthetic", width, height,

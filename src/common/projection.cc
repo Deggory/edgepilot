@@ -85,7 +85,7 @@ bool project_point_subpixel(const ProjectionState &projection, float x_forward, 
 
     // 화면(가로, MaixCAM2 640x480)은 카메라 영상 가운데의 kPreviewAspect 영역(1080p 기준 폭
     // kPreviewCropWidth1080)을 담는다(overlayd가 IVPS로 같은 영역을 자른다). 세로 패널로 돌리는 것은
-    // OverlayCanvas가 한다.
+    // HudCanvas가 한다.
     const float screen_w = static_cast<float>(width);
     const float screen_h = static_cast<float>(height);
     const float sx = screen_w / kPreviewCropWidth1080;

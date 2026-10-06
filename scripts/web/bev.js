@@ -4,7 +4,7 @@
 //
 // Ported from sv_recorder_bev (static/bev.js): its renderer, ground, footprints, corridor and car
 // (bev_car.js, now the lead's); the scene is ours, in vehicle coordinates: metres, x forward from the
-// front bumper, y left, z up. The ego car is our own black K7 (bev_k7.js). It draws as the HUD does (overlay_renderer.cc draw_scene): the same reach, lane alpha,
+// front bumper, y left, z up. The ego car is our own black K7 (bev_k7.js). It draws as the HUD does (hud_scene.cc draw_scene): the same reach, lane alpha,
 // road edge confidence, path colours, lead threshold and risk colour; lines also in laneless mode.
 // Beyond the HUD: the path is tinted amber to red where the model plans to slow down, with the
 // slowest speed (or STOP) where it is; arcs of the curvature controlsd asks for and the one it gets;
@@ -28,8 +28,8 @@ const EGO = [K7.length, K7.width, K7.height];
 const LEAD = [4.5, 1.8, 1.5];            // the model gives the lead no size: a typical car
 const LANE_WIDTH = 0.15;                 // a lane line as a band as wide as its paint
 const CURB = {width: 0.2, height: 0.12};
-const PATH_WIDTH = 1.8;                  // overlay_renderer.cc kPathHalfWidth, both sides
-// overlay_renderer.cc: lines below this probability and edges below this confidence are not drawn
+const PATH_WIDTH = 1.8;                  // hud_scene.cc kPathHalfWidth, both sides
+// hud_scene.cc: lines below this probability and edges below this confidence are not drawn
 const LANE_MIN_PROBABILITY = 0.05, EDGE_MIN_CONFIDENCE = 0.05;
 // lead_risk(): full at this gap or this closing speed
 const RISK = {distance: 40, closing: 10};
@@ -55,7 +55,7 @@ const THEME = {
   halo: "#8a949b", model: "#bfc5cd", lane: "#ffffff", egoLane: "#ffffff",
   modelTint: 0.3,                 // how much of the lead's risk colour its paint takes
 };
-// overlay_renderer.cc colours, so the BEV reads like the HUD
+// hud_draw.h colours, so the BEV reads like the HUD
 const HUD = {white: "#ffffff", green: "#30d158", blue: "#409cff", gray: "#969ca5", amber: "#ffb020", red: "#ff453a",
              cyan: "#5ac8fa"};
 
@@ -883,7 +883,7 @@ function planSummary(path, now) {
   return null;
 }
 
-// overlay_renderer.cc state_color(): the colour of steering, null when not engaged.
+// hud_draw.h state_color(): the colour of steering, null when not engaged.
 function stateColor(state) {
   if (state.steering) return state.laneless ? HUD.blue : HUD.green;
   return state.engaged ? HUD.gray : null;
