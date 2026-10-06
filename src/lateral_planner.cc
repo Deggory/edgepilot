@@ -229,6 +229,49 @@ private:
   double path_offset_m_ = 0.0;
 };
 
+// MPC 노드 시각의 기준 횡위치와 heading.
+struct MpcReferences {
+  std::array<double, kLatMpcNodes> y{};
+  std::array<double, kLatMpcNodes> heading{};
+};
+
+/* 경로(차선 융합 뒤)에서 MPC 노드 시각의 목표를 차속 x 시간 거리로 보간한다. knot을 직접
+ * 인덱싱하면 모델 knot의 프레임 간 노이즈가 그대로 들어가 des가 2~3배 떨리고 토크 슬루 리미터가
+ * 요구 토크의 절반을 잘라낸다(0.8.x 재생 실측). */
+MpcReferences mpc_references(const std::array<std::array<double, 3>, kTrajectorySize> &path,
+                             const std::array<double, kTrajectorySize> &path_t, float v_ego) {
+  std::array<double, kTrajectorySize> distance{};
+  std::array<double, kTrajectorySize> path_y{};
+  std::array<double, kTrajectorySize> path_heading{};
+  const bool plan_collapsed = path[kTrajectorySize - 1][0] < kMinPlanReachM;
+  for (int i = 0; i < kTrajectorySize; ++i) {
+    distance[i] = std::sqrt(path[i][0] * path[i][0] + path[i][1] * path[i][1] +
+                            path[i][2] * path[i][2]);
+    path_y[i] = path[i][1];
+    // 최종 경로와 heading을 같은 좌표계에서 계산한다. 차선 융합이나
+    // 경로 오프셋 뒤에 모델 원본 heading을 재사용하면 좌우 곡률 부호가
+    // 서로 달라져 한쪽 커브에서 경로를 안쪽으로 자를 수 있다.
+    path_heading[i] = path_heading_at(path, i);
+    /* 정지 부근에서는 plan 전체가 몇 m로 붕괴해 기하학적 heading이 dy를
+     * ±90도로 부풀리고, 양자화된 모델은 먼 knot이 0.5 m 이상 뒤로도 뛴다
+     * (±180도 → 출발 시 좌측 급조향). 차가 못 움직인 구간이라 목표
+     * heading은 현재 방위(0)가 맞다. 주행 중에도 역방향 step은 물리적으로
+     * 불가능한 기하이므로 0으로 둔다. */
+    const int prev = std::max(0, i - 1), next = std::min(kTrajectorySize - 1, i + 1);
+    if (plan_collapsed || path[next][0] <= path[prev][0])
+      path_heading[i] = 0.0;
+  }
+  make_monotonic(distance.data(), distance.size());
+
+  MpcReferences references;
+  for (int i = 0; i < kLatMpcNodes; ++i) {
+    const double query = std::max(0.0f, v_ego) * path_t[i];
+    references.y[i] = interp(query, distance.data(), path_y.data(), distance.size());
+    references.heading[i] = interp(query, distance.data(), path_heading.data(), distance.size());
+  }
+  return references;
+}
+
 }  // namespace
 
 struct LateralPlanner::Impl {
@@ -269,15 +312,7 @@ struct LateralPlanner::Impl {
     if (!model.valid) return target;
 
     lane_planner.parse(model);
-    DesireModelInputs desire_inputs;
-    desire_inputs.lane_change_prob = model.desire_state[3] + model.desire_state[4];
-    for (size_t i = 0; i < desire_inputs.lane_probabilities.size(); ++i)
-      desire_inputs.lane_probabilities[i] = model.lane_probabilities[i];
-    for (size_t i = 0; i < desire_inputs.road_edge_stds.size(); ++i)
-      desire_inputs.road_edge_stds[i] = model.road_edge_stds[i];
-    desire_helper.update(vehicle, v_ego, active, desire_inputs);
-    if (desire_helper.changing_lanes())
-      lane_planner.scale_near_probability(desire_helper.lane_change_lane_prob());
+    update_desire(model, vehicle, v_ego, active);
     std::array<std::array<double, 3>, kTrajectorySize> path{};
     std::array<double, kTrajectorySize> path_t{};
     for (int i = 0; i < kTrajectorySize; ++i) {
@@ -287,8 +322,74 @@ struct LateralPlanner::Impl {
 
     lane_planner.update_probabilities(v_ego);
     if (laneless_mode) return upstream_target(model, v_ego, measured_curvature);
-    const double lane_probability = lane_planner.mean_effective_probability();
     // 여기부터는 Lane 모드다(laneless 모드는 위에서 upstream_target으로 끝난다).
+    const bool use_model_path = update_path_source();
+    const MpcReferences references =
+        mpc_references(lane_planner.lane_path(path_t, path), path_t, v_ego);
+    solve_lane_mpc(references, v_ego, measured_curvature, path_t);
+
+    // 모델 경로 쪽 목표. 섞는 동안 MPC는 실제로 낸 곡률에서 다음 해를 시작해 되돌아올 때 튀지 않는다.
+    const double model_weight = plan_mix;
+    LateralTarget model_target;
+    if (model_weight > 0.0) {
+      model_target = plan_yaw_target(model, v_ego);
+      std::array<double, kLateralControlN> times{}, model_curvatures{};
+      for (int i = 0; i < kLateralControlN; ++i) {
+        times[i] = model_t_idx_double(i);
+        model_curvatures[i] = model_target.curvatures[i];
+      }
+      initial_curvature = (1.0 - model_weight) * initial_curvature +
+          model_weight * interp(kDtModel, times.data(), model_curvatures.data(), times.size());
+    }
+
+    target.valid = true;
+    target.capture_timestamp_ns = model.capture_timestamp_ns;
+    target.mpc_solution_valid = model_weight >= 1.0 || invalid_count < 2;
+    target.laneless_mode = use_model_path;
+    fill_lane_observations(&target);
+    target.lane_d_prob =
+        static_cast<float>(use_model_path ? 0.0 : lane_planner.d_prob());
+    target.target_y_m = static_cast<float>(references.y[1]);
+    target.heading_rad = static_cast<float>(mpc.nodes()[0].psi);
+    target.curvature = static_cast<float>(mpc.nodes()[0].curvature);
+    fill_desire(&target);
+    for (int i = 0; i < kLateralControlN; ++i) {
+      target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
+      target.curvatures[i] = static_cast<float>(mpc.nodes()[i].curvature);
+    }
+    if (model_weight > 0.0) {
+      // lag_adjusted_curvature는 psi와 곡률에 선형이라 입력을 섞으면 목표 곡률이 그대로 섞인다.
+      const auto mix = [model_weight](float lane_value, float model_value) {
+        return static_cast<float>((1.0 - model_weight) * lane_value + model_weight * model_value);
+      };
+      for (int i = 0; i < kLateralControlN; ++i) {
+        target.psis[i] = mix(target.psis[i], model_target.psis[i]);
+        target.curvatures[i] = mix(target.curvatures[i], model_target.curvatures[i]);
+      }
+      target.heading_rad = mix(target.heading_rad, model_target.heading_rad);
+      target.curvature = mix(target.curvature, model_target.curvature);
+      target.target_y_m = mix(target.target_y_m, model_target.target_y_m);
+    }
+    return target;
+  }
+
+  // 모델 프레임의 차선 변경 확률·차선·경계로 desire를 갱신하고, 변경 중이면 가까운 차선선을 뺀다.
+  void update_desire(const ModelState &model, const VehicleCanState &vehicle, float v_ego, bool active) {
+    DesireModelInputs desire_inputs;
+    desire_inputs.lane_change_prob = model.desire_state[3] + model.desire_state[4];
+    for (size_t i = 0; i < desire_inputs.lane_probabilities.size(); ++i)
+      desire_inputs.lane_probabilities[i] = model.lane_probabilities[i];
+    for (size_t i = 0; i < desire_inputs.road_edge_stds.size(); ++i)
+      desire_inputs.road_edge_stds[i] = model.road_edge_stds[i];
+    desire_helper.update(vehicle, v_ego, active, desire_inputs);
+    if (desire_helper.changing_lanes())
+      lane_planner.scale_near_probability(desire_helper.lane_change_lane_prob());
+  }
+
+  /* Lane 모드에서 이번 프레임에 모델 경로를 따를지(차선이 안 보일 때, 회전 desire 중) 정하고, 출력
+   * 인계 비율 plan_mix를 그쪽으로 옮긴다. */
+  bool update_path_source() {
+    const double lane_probability = lane_planner.mean_effective_probability();
     bool use_model_path = false;
     const bool lane_change_off = desire_helper.lane_change_state() == LaneChangeState::Off;
     if (desire_helper.turn_desire_active()) {
@@ -318,42 +419,13 @@ struct LateralPlanner::Impl {
     const double mix_step = (mix_target > plan_mix ? kPlanMixOutRatePerS
                                                    : kPlanMixInRatePerS) * kDtModel;
     plan_mix = std::clamp(mix_target, plan_mix - mix_step, plan_mix + mix_step);
-    path = lane_planner.lane_path(path_t, path);
+    return use_model_path;
+  }
 
-    std::array<double, kTrajectorySize> distance{};
-    std::array<double, kTrajectorySize> path_y{};
-    std::array<double, kTrajectorySize> path_heading{};
-    const bool plan_collapsed = path[kTrajectorySize - 1][0] < kMinPlanReachM;
-    for (int i = 0; i < kTrajectorySize; ++i) {
-      distance[i] = std::sqrt(path[i][0] * path[i][0] + path[i][1] * path[i][1] +
-                              path[i][2] * path[i][2]);
-      path_y[i] = path[i][1];
-      // 최종 경로와 heading을 같은 좌표계에서 계산한다. 차선 융합이나
-      // 경로 오프셋 뒤에 모델 원본 heading을 재사용하면 좌우 곡률 부호가
-      // 서로 달라져 한쪽 커브에서 경로를 안쪽으로 자를 수 있다.
-      path_heading[i] = path_heading_at(path, i);
-      /* 정지 부근에서는 plan 전체가 몇 m로 붕괴해 기하학적 heading이 dy를
-       * ±90도로 부풀리고, 양자화된 모델은 먼 knot이 0.5 m 이상 뒤로도 뛴다
-       * (±180도 → 출발 시 좌측 급조향). 차가 못 움직인 구간이라 목표
-       * heading은 현재 방위(0)가 맞다. 주행 중에도 역방향 step은 물리적으로
-       * 불가능한 기하이므로 0으로 둔다. */
-      const int prev = std::max(0, i - 1), next = std::min(kTrajectorySize - 1, i + 1);
-      if (plan_collapsed || path[next][0] <= path[prev][0])
-        path_heading[i] = 0.0;
-    }
-    make_monotonic(distance.data(), distance.size());
-
-    /* MPC 노드 시각의 목표를 차속 x 시간 거리로 보간한다. knot을 직접
-     * 인덱싱하면 모델 knot의 프레임 간 노이즈가 그대로 들어가 des가 2~3배
-     * 떨리고 토크 슬루 리미터가 요구 토크의 절반을 잘라낸다(0.8.x 재생 실측). */
-    std::array<double, kLatMpcNodes> y_pts{};
-    std::array<double, kLatMpcNodes> heading_pts{};
-    for (int i = 0; i < kLatMpcNodes; ++i) {
-      const double query = std::max(0.0f, v_ego) * path_t[i];
-      y_pts[i] = interp(query, distance.data(), path_y.data(), distance.size());
-      heading_pts[i] = interp(query, distance.data(), path_heading.data(), distance.size());
-    }
-
+  /* 차선 MPC를 references로 풀고 다음 사이클의 초기 곡률과 연속 실패 수(invalid_count)를 갱신한다.
+   * 풀이가 실패하면 MPC를 비우고 실제 곡률에서 다시 시작한다. */
+  void solve_lane_mpc(const MpcReferences &references, float v_ego, float measured_curvature,
+                      const std::array<double, kTrajectorySize> &path_t) {
     const double lateral_factor = std::max(0.0, factor1 - factor2 * v_ego * v_ego);
     /* lane 모드도 laneless와 같은 스케줄. heading은 차선 경로에서 나오므로
      * 고속에서 heading 고정 1.0이면 횡 offset에 대한 DC 강성이 0이 되어
@@ -365,8 +437,8 @@ struct LateralPlanner::Impl {
     LateralMpcWeights weights;
     weights.path = lane_path_weight;
     weights.heading = heading_weight;
-    mpc.run(initial_curvature, std::max(0.0f, v_ego), lateral_factor, y_pts,
-            heading_pts, weights);
+    mpc.run(initial_curvature, std::max(0.0f, v_ego), lateral_factor, references.y,
+            references.heading, weights);
     const bool solver_failed = mpc.status() != 0;
     if (solver_failed) {
       mpc.reset();
@@ -378,56 +450,17 @@ struct LateralPlanner::Impl {
           interp(kDtModel, path_t.data(), curvatures.data(), curvatures.size());
     }
     invalid_count = (mpc.cost() > 20000.0 || solver_failed) ? invalid_count + 1 : 0;
+  }
 
-    // 모델 경로 쪽 목표. 섞는 동안 MPC는 실제로 낸 곡률에서 다음 해를 시작해 되돌아올 때 튀지 않는다.
-    const double model_weight = plan_mix;
-    LateralTarget model_target;
-    if (model_weight > 0.0) {
-      model_target = plan_yaw_target(model, v_ego);
-      std::array<double, kLateralControlN> times{}, model_curvatures{};
-      for (int i = 0; i < kLateralControlN; ++i) {
-        times[i] = model_t_idx_double(i);
-        model_curvatures[i] = model_target.curvatures[i];
-      }
-      initial_curvature = (1.0 - model_weight) * initial_curvature +
-          model_weight * interp(kDtModel, times.data(), model_curvatures.data(), times.size());
-    }
-
-    target.valid = true;
-    target.capture_timestamp_ns = model.capture_timestamp_ns;
-    target.mpc_solution_valid = model_weight >= 1.0 || invalid_count < 2;
-    target.laneless_mode = use_model_path;
-    target.lane_left_y_m = static_cast<float>(lane_planner.near_left_y());
-    target.lane_right_y_m = static_cast<float>(lane_planner.near_right_y());
-    target.lane_width_m = static_cast<float>(lane_planner.lane_width());
-    target.lane_left_prob = static_cast<float>(lane_planner.left_prob());
-    target.lane_right_prob = static_cast<float>(lane_planner.right_prob());
-    target.lane_left_std = static_cast<float>(lane_planner.left_std());
-    target.lane_right_std = static_cast<float>(lane_planner.right_std());
-    target.lane_d_prob =
-        static_cast<float>(use_model_path ? 0.0 : lane_planner.d_prob());
-    target.target_y_m = static_cast<float>(y_pts[1]);
-    target.heading_rad = static_cast<float>(mpc.nodes()[0].psi);
-    target.curvature = static_cast<float>(mpc.nodes()[0].curvature);
-    fill_desire(&target);
-    for (int i = 0; i < kLateralControlN; ++i) {
-      target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
-      target.curvatures[i] = static_cast<float>(mpc.nodes()[i].curvature);
-    }
-    if (model_weight > 0.0) {
-      // lag_adjusted_curvature는 psi와 곡률에 선형이라 입력을 섞으면 목표 곡률이 그대로 섞인다.
-      const auto mix = [model_weight](float lane_value, float model_value) {
-        return static_cast<float>((1.0 - model_weight) * lane_value + model_weight * model_value);
-      };
-      for (int i = 0; i < kLateralControlN; ++i) {
-        target.psis[i] = mix(target.psis[i], model_target.psis[i]);
-        target.curvatures[i] = mix(target.curvatures[i], model_target.curvatures[i]);
-      }
-      target.heading_rad = mix(target.heading_rad, model_target.heading_rad);
-      target.curvature = mix(target.curvature, model_target.curvature);
-      target.target_y_m = mix(target.target_y_m, model_target.target_y_m);
-    }
-    return target;
+  // 차선 관측값(로그·HUD용): 가까운 좌우 차선, 폭, 모델 원 확률과 std.
+  void fill_lane_observations(LateralTarget *target) const {
+    target->lane_left_y_m = static_cast<float>(lane_planner.near_left_y());
+    target->lane_right_y_m = static_cast<float>(lane_planner.near_right_y());
+    target->lane_width_m = static_cast<float>(lane_planner.lane_width());
+    target->lane_left_prob = static_cast<float>(lane_planner.left_prob());
+    target->lane_right_prob = static_cast<float>(lane_planner.right_prob());
+    target->lane_left_std = static_cast<float>(lane_planner.left_std());
+    target->lane_right_std = static_cast<float>(lane_planner.right_std());
   }
 
   /* laneless 모드 = openpilot 메인의 get_curvature_from_plan. 차선·MPC·경로 오프셋 없이
@@ -468,13 +501,7 @@ struct LateralPlanner::Impl {
     target.capture_timestamp_ns = model.capture_timestamp_ns;
     target.mpc_solution_valid = true;  // MPC를 쓰지 않는다
     target.laneless_mode = true;
-    target.lane_left_y_m = static_cast<float>(lane_planner.near_left_y());
-    target.lane_right_y_m = static_cast<float>(lane_planner.near_right_y());
-    target.lane_width_m = static_cast<float>(lane_planner.lane_width());
-    target.lane_left_prob = static_cast<float>(lane_planner.left_prob());
-    target.lane_right_prob = static_cast<float>(lane_planner.right_prob());
-    target.lane_left_std = static_cast<float>(lane_planner.left_std());
-    target.lane_right_std = static_cast<float>(lane_planner.right_std());
+    fill_lane_observations(&target);
     target.lane_d_prob = 0.0f;
     target.target_y_m = static_cast<float>(interp(model_t_idx_double(1), t.data(), y.data(), t.size()));
     target.heading_rad = target.psis[0];
