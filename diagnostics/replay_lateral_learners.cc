@@ -21,6 +21,7 @@
 #include "lateral_learners.h"
 #include "localizer_inputs.h"
 #include "lateral_torque.h"
+#include "recorded_vehicle_can.h"
 #include "recording_format.h"
 #include "utils_file.h"
 #include "vehicle_can.h"
@@ -153,22 +154,7 @@ int main(int argc, char **argv) {
       const double now_s = std::max(record_s, latest_can_s);
       if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
         latest_can_s = std::max(latest_can_s, record_s);
-        RecordedCanBatchHeader batch{};
-        if (rh.payload_size < sizeof(batch)) continue;
-        std::memcpy(&batch, buf.data(), sizeof(batch));
-        size_t offset = sizeof(batch);
-        for (uint32_t i = 0; i < batch.count; ++i) {
-          if (offset + sizeof(RecordedCanFrame) > rh.payload_size) break;
-          RecordedCanFrame frame{};
-          std::memcpy(&frame, buf.data() + offset, sizeof(frame));
-          offset += sizeof(frame);
-          if (frame.data_len > 8) continue;
-          std::array<uint8_t, 8> data{};
-          std::memcpy(data.data(), frame.data, frame.data_len);
-          update_vehicle_can_state(&vehicle, frame.address, data,
-                                   static_cast<uint8_t>(frame.data_len),
-                                   static_cast<uint8_t>(frame.src), now_s);
-        }
+        apply_recorded_can(buf.data(), rh.payload_size, now_s, &vehicle);
         continue;
       }
       if (rh.type == static_cast<uint16_t>(RecordType::Localization)) {

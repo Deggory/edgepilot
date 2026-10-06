@@ -14,6 +14,7 @@
 #include "ipc_messages.h"
 #include "maix_cmm.h"
 #include "maix_vdec.h"
+#include "recorded_can.h"
 #include "recording_format.h"
 #include "utils_process.h"
 #include "utils_time.h"
@@ -162,33 +163,6 @@ public:
     std::vector<Event> events;
 };
 
-CanBatch can_batch_from_record(const std::vector<uint8_t> &payload, uint64_t now_ns)
-{
-    CanBatch batch;
-    if (payload.size() < sizeof(RecordedCanBatchHeader)) return batch;
-    RecordedCanBatchHeader header;
-    std::memcpy(&header, payload.data(), sizeof(header));
-    const uint32_t count = std::min<uint32_t>(
-        {header.count, kCanBatchMaxFrames,
-         static_cast<uint32_t>((payload.size() - sizeof(header)) / sizeof(RecordedCanFrame))});
-    batch.timestamp_ns = now_ns;
-    batch.valid = 1;
-    batch.count = count;
-    batch.dropped = header.dropped;
-    for (uint32_t i = 0; i < count; ++i) {
-        RecordedCanFrame f;
-        std::memcpy(&f, payload.data() + sizeof(header) + i * sizeof(f), sizeof(f));
-        IpcCanFrame &out = batch.frames[i];
-        out.address = f.address;
-        out.src = f.src;
-        out.bus_time = f.bus_time;
-        out.data_len = f.data_len;
-        out.flags = f.flags;
-        std::memcpy(out.data, f.data, sizeof(out.data));
-    }
-    return batch;
-}
-
 } // namespace
 
 int main(int argc, char *argv[])
@@ -291,7 +265,7 @@ int main(int argc, char *argv[])
                    now >= due(route.events[next_event].timestamp_ns)) {
                 const Event &e = route.events[next_event++];
                 if (e.type == RecordType::CanRx) {
-                    const CanBatch batch = can_batch_from_record(e.payload, now);
+                    const CanBatch batch = decode_recorded_can(e.payload.data(), e.payload.size(), now);
                     can_pub.push(batch);
                     can_log_pub.push(batch);
                     ++can_batches;

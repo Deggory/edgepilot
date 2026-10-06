@@ -5,6 +5,7 @@
 #include "utils_time.h"
 #include "ipc_messages.h"
 #include "recorded_model_state.h"
+#include "recorded_vehicle_can.h"
 #include "recording_format.h"
 #include "control_params.h"
 #include "event_log_reader.h"
@@ -91,22 +92,7 @@ int main(int argc, char **argv) {
       if (route_start_s < 0.0) route_start_s = now_s;
 
       if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
-        RecordedCanBatchHeader batch{};
-        if (rh.payload_size < sizeof(batch)) continue;
-        std::memcpy(&batch, buf.data(), sizeof(batch));
-        size_t offset = sizeof(batch);
-        for (uint32_t i = 0; i < batch.count; ++i) {
-          if (offset + sizeof(RecordedCanFrame) > rh.payload_size) break;
-          RecordedCanFrame frame{};
-          std::memcpy(&frame, buf.data() + offset, sizeof(frame));
-          offset += sizeof(frame);
-          if (frame.data_len > 8) continue;
-          std::array<uint8_t, 8> data{};
-          std::memcpy(data.data(), frame.data, frame.data_len);
-          update_vehicle_can_state(&vehicle, frame.address, data,
-                                   static_cast<uint8_t>(frame.data_len),
-                                   static_cast<uint8_t>(frame.src), now_s);
-        }
+        apply_recorded_can(buf.data(), rh.payload_size, now_s, &vehicle);
         continue;
       }
 

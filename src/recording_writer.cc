@@ -1,5 +1,7 @@
 #include "recording_writer.h"
 
+#include "recorded_can.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -494,31 +496,16 @@ bool RecordingWriter::write_event_header(RecordType type, uint64_t timestamp_ns,
   return std::fwrite(&header, sizeof(header), 1, event_file_) == 1;
 }
 
-/* 배치를 큐에 넣기 전에 디스크 형식(RecordedCanBatchHeader + 프레임)으로
- * 직렬화한다. 이후 경로는 상태 스냅샷과 같다. */
+/* 배치를 큐에 넣기 전에 디스크 형식(recorded_can.h)으로 직렬화한다. 이후 경로는
+ * 상태 스냅샷과 같다. */
 void RecordingWriter::write_can(RecordType type, const CanBatch &batch) {
   if (!requested_enabled_.load() ||
       (type != RecordType::CanRx && type != RecordType::CanTx)) return;
-  const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
   PendingWrite write;
   write.kind = PendingWrite::Kind::Can;
   write.record_type = type;
   write.timestamp_ns = batch.timestamp_ns;
-  write.data.resize(sizeof(RecordedCanBatchHeader) + count * sizeof(RecordedCanFrame));
-  const RecordedCanBatchHeader batch_header{count, batch.dropped};
-  std::memcpy(write.data.data(), &batch_header, sizeof(batch_header));
-  uint8_t *out = write.data.data() + sizeof(batch_header);
-  for (uint32_t index = 0; index < count; ++index, out += sizeof(RecordedCanFrame)) {
-    const IpcCanFrame &source = batch.frames[index];
-    RecordedCanFrame recorded;
-    recorded.address = source.address;
-    recorded.src = source.src;
-    recorded.bus_time = source.bus_time;
-    recorded.data_len = source.data_len;
-    recorded.flags = source.flags;
-    std::memcpy(recorded.data, source.data, sizeof(recorded.data));
-    std::memcpy(out, &recorded, sizeof(recorded));
-  }
+  write.data = encode_recorded_can(batch);
   enqueue(std::move(write));
 }
 

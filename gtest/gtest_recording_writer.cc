@@ -1,7 +1,9 @@
 /* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(K230LOG1), 세그먼트
  * 프레임 인덱스(K230IDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
- * 최종 경로 이동. 보드·인코더 없이 합성 레코드로 검사한다. */
+ * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h도 같이 본다. 보드·인코더 없이
+ * 합성 레코드로 검사한다. */
 #include "event_log_reader.h"
+#include "recorded_can.h"
 #include "recorded_model_state.h"
 #include "recording_format.h"
 #include "recording_writer.h"
@@ -179,6 +181,18 @@ TEST(RecordingWriter, RouteOnDisk) {
       ASSERT_EQ(header.type, record.type);
       ASSERT_EQ(header.timestamp_ns, record.ts);
       ASSERT_EQ(payload.size(), record.payload);
+      if (record.type == 1) {
+        // replayd처럼 되돌리면 써 넣은 묶음이 그대로 나온다
+        const CanBatch written = synthetic_batch(t0 + 10'000'000ULL, 3, 2);
+        const CanBatch decoded = decode_recorded_can(payload.data(), payload.size(), 7);
+        ASSERT_EQ(decoded.count, 3);
+        ASSERT_EQ(decoded.dropped, 2);
+        for (uint32_t i = 0; i < decoded.count; ++i) {
+          ASSERT_EQ(decoded.frames[i].address, written.frames[i].address);
+          ASSERT_EQ(decoded.frames[i].flags, written.frames[i].flags);
+          ASSERT_EQ(std::memcmp(decoded.frames[i].data, written.frames[i].data, 8), 0);
+        }
+      }
     }
     ASSERT_FALSE(reader.next(&header, &payload));
     ASSERT_FALSE(reader.truncated()) << "온전한 파일 끝은 끊김이 아니다";
@@ -221,6 +235,50 @@ TEST(RecordingWriter, RouteOnDisk) {
   ASSERT_EQ(snapshot[0], "steering.json");
 
   std::system(("rm -rf '" + root + "'").c_str());
+}
+
+/* 기록한 CAN 페이로드(recorded_can.h): 64바이트 CAN-FD 데이터까지 그대로 되돌리고, 페이로드 밖으로
+ * 나간 프레임은 읽지 않으며, 쓸 때와 replayd로 되돌릴 때 기록 형식의 최대 프레임 수로 자른다. */
+TEST(RecordedCan, RoundTripAndTruncation) {
+  CanBatch batch = synthetic_batch(1, 3, 5);
+  batch.frames[2].data_len = 64;
+  for (int b = 0; b < 64; ++b) batch.frames[2].data[b] = static_cast<uint8_t>(0xC0 ^ b);
+  const std::vector<uint8_t> payload = encode_recorded_can(batch);
+  ASSERT_EQ(payload.size(), sizeof(RecordedCanBatchHeader) + 3 * sizeof(RecordedCanFrame));
+
+  const CanBatch decoded = decode_recorded_can(payload.data(), payload.size(), 42);
+  ASSERT_EQ(decoded.valid, 1);
+  ASSERT_EQ(decoded.timestamp_ns, 42);
+  ASSERT_EQ(decoded.count, 3);
+  ASSERT_EQ(decoded.dropped, 5);
+  for (uint32_t i = 0; i < 3; ++i) {
+    const IpcCanFrame &in = batch.frames[i];
+    const IpcCanFrame &out = decoded.frames[i];
+    ASSERT_EQ(out.address, in.address);
+    ASSERT_EQ(out.src, in.src);
+    ASSERT_EQ(out.bus_time, in.bus_time);
+    ASSERT_EQ(out.data_len, in.data_len);
+    ASSERT_EQ(out.flags, in.flags);
+    ASSERT_EQ(std::memcmp(out.data, in.data, sizeof(in.data)), 0) << "프레임 " << i;
+  }
+
+  const auto ignore = [](const RecordedCanFrame &) {};
+  ASSERT_EQ(for_each_recorded_can_frame(payload.data(), payload.size() - 1, ignore), 2)
+      << "마지막 프레임 중간에서 끊기면 온전한 프레임만 읽는다";
+  ASSERT_EQ(decode_recorded_can(payload.data(), payload.size() - 1, 0).count, 2);
+  ASSERT_EQ(for_each_recorded_can_frame(payload.data(), sizeof(RecordedCanBatchHeader) - 1, ignore), 0);
+  ASSERT_EQ(decode_recorded_can(payload.data(), sizeof(RecordedCanBatchHeader) - 1, 0).valid, 0)
+      << "머리보다 짧으면 빈 묶음";
+
+  ASSERT_EQ(encode_recorded_can(synthetic_batch(1, 300, 0)).size(),
+            sizeof(RecordedCanBatchHeader) + kCanBatchMaxFrames * sizeof(RecordedCanFrame))
+      << "쓸 때 기록 형식의 최대 프레임 수로 자른다";
+  std::vector<uint8_t> oversized(sizeof(RecordedCanBatchHeader) + 300 * sizeof(RecordedCanFrame));
+  const RecordedCanBatchHeader header{300, 0};
+  std::memcpy(oversized.data(), &header, sizeof(header));
+  ASSERT_EQ(for_each_recorded_can_frame(oversized.data(), oversized.size(), ignore), 300);
+  ASSERT_EQ(decode_recorded_can(oversized.data(), oversized.size(), 0).count, kCanBatchMaxFrames)
+      << "CanBatch로 되돌릴 때도 최대치로 자른다";
 }
 
 /* 끊긴 이벤트 로그: tmpfs가 차서 0으로 채워진 꼬리, 모자란 페이로드·레코드 머리, 1 MiB를 넘는

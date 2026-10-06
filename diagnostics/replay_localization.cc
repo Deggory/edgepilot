@@ -9,11 +9,11 @@
 #include "ipc_messages.h"
 #include "localization_pipeline.h"
 #include "recorded_model_state.h"
+#include "recorded_vehicle_can.h"
 #include "recording_format.h"
 #include "vehicle_can.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -64,20 +64,7 @@ int main(int argc, char **argv)
             const double record_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
             const auto type = static_cast<RecordType>(rh.type);
             if (type == RecordType::CanRx) {
-                RecordedCanBatchHeader batch{};
-                if (rh.payload_size < sizeof(batch)) continue;
-                std::memcpy(&batch, buf.data(), sizeof(batch));
-                size_t offset = sizeof(batch);
-                for (uint32_t i = 0; i < batch.count && offset + sizeof(RecordedCanFrame) <= rh.payload_size; ++i) {
-                    RecordedCanFrame frame{};
-                    std::memcpy(&frame, buf.data() + offset, sizeof(frame));
-                    offset += sizeof(frame);
-                    if (frame.data_len > 8) continue;
-                    std::array<uint8_t, 8> data{};
-                    std::memcpy(data.data(), frame.data, frame.data_len);
-                    update_vehicle_can_state(&vehicle, frame.address, data, static_cast<uint8_t>(frame.data_len),
-                                             static_cast<uint8_t>(frame.src), record_s);
-                }
+                apply_recorded_can(buf.data(), rh.payload_size, record_s, &vehicle);
             } else if (type == RecordType::ModelState) {
                 ModelState ms{};
                 if (decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) pipeline.on_model(ms);
