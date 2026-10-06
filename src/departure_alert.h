@@ -41,27 +41,48 @@ public:
   DepartureAlertOutput update(const DepartureAlertInput &input);
 
 private:
+  /* 가까운 앞차(15 m 안)가 이번 정차에서 서 있는지: 본 최소 거리와, 그 뒤 거리·상대속도가 함께 넘어
+   * 멀어졌는지. 서 있는 동안은 녹색 알림에 plan이 1.5초 넘게 열려 있기를 요구한다. 정차가 끝나야 지운다. */
+  struct CloseLeadGuard {
+    double seen_s = -1.0;          // 가까운 앞차가 마지막으로 보인 시각
+    float min_distance_m = 0.0f;   // 이번 정차에서 본 최소 거리
+    bool moved = false;            // 그 앞차가 최소 거리에서 멀어졌다
+    void observe(const DepartureAlertInput &input);
+    bool holding(double now_s) const;
+  };
+
+  /* vision 앞차 출발: 정차 1초 뒤부터 1초 보이면 무장하고, 거리 +0.5 m와 상대속도 0.5 m/s 초과가
+   * 0.3초 이어지면 출발이다. 0.5초보다 짧은 끊김은 넘긴다. */
+  struct LeadDepartureTracker {
+    double last_seen_s = -1.0;     // 마지막으로 보인 시각(짧은 끊김을 넘긴다)
+    double seen_since_s = -1.0;
+    double candidate_since_s = -1.0;
+    float baseline_distance_m = 0.0f;
+    bool armed = false;
+    // 출발이 확인됐으면 true.
+    bool update(const DepartureAlertInput &input, bool lead_present, bool stopped_long_enough);
+  };
+
+  /* 신호 대기: 짧은 plan이 1.5초 이어지면 무장하고, plan이 0.3초 열리거나 2초 가속 확률이 두 프레임
+   * 넘으면 녹색이다. 모델 프레임에서만 부른다. */
+  struct GreenLightTracker {
+    double short_plan_since_s = -1.0;  // 이번 정차에서 plan이 짧게 이어지기 시작한 시각
+    int gas_press_frames = 0;          // 무장 뒤 가속 확률이 기준을 넘은 연속 모델 프레임
+    double candidate_since_s = -1.0;   // 무장 뒤 plan이 열려 있기 시작한 시각
+    bool armed = false;
+    // 녹색이 확인됐으면 true.
+    bool update(const DepartureAlertInput &input);
+    bool open_for(double now_s, double duration_s) const;
+  };
+
   void reset_cycle();
-  void reset_lead();
-  void reset_green_light();
   void trigger(DepartureAlertType type, double now_s);
 
-  bool consumed_ = false;
+  bool consumed_ = false;  // 이번 정차에서 이미 알렸다
   double stopped_since_s_ = -1.0;
-
-  double lead_seen_since_s_ = -1.0;
-  double lead_depart_candidate_since_s_ = -1.0;
-  float lead_baseline_distance_m_ = 0.0f;
-  bool lead_armed_ = false;
-  double lead_last_seen_s_ = -1.0;     // vision 앞차가 마지막으로 보인 시각(짧은 끊김을 넘긴다)
-  double close_lead_seen_s_ = -1.0;    // 가까운 앞차가 마지막으로 보인 시각
-  float stop_lead_min_m_ = 0.0f;       // 이번 정차에서 본 가까운 앞차의 최소 거리
-  bool close_lead_moved_ = false;      // 그 앞차가 최소 거리에서 멀어졌다
-
-  double short_plan_since_s_ = -1.0;  // 이번 정차에서 plan이 짧게 이어지기 시작한 시각
-  int gas_press_frames_ = 0;           // 무장 뒤 가속 확률이 기준을 넘은 연속 모델 프레임
-  double green_light_candidate_since_s_ = -1.0;
-  bool green_light_armed_ = false;
+  CloseLeadGuard close_lead_;
+  LeadDepartureTracker lead_;
+  GreenLightTracker green_light_;
 
   DepartureAlertType active_type_ = DepartureAlertType::none;
   double active_until_s_ = -1.0;
