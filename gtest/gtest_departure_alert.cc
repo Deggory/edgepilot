@@ -344,4 +344,80 @@ TEST(DepartureAlert, LeadDropoutKeepsArming) {
   ASSERT_TRUE(output.lead_armed) << "짧은 끊김을 넘겨 무장한다";
 }
 
+/* controlsd 주기: 100 Hz 틱에 모델은 5틱마다. 무장(짧은 plan 1.5초)과 녹색 확인(열림 0.3초)은 모델
+ * 프레임에서만 판단해, 알림은 열린 plan을 처음 본 모델 프레임 0.3초 뒤의 모델 프레임에 뜬다. */
+TEST(DepartureAlert, GreenLightAtControlRateWithModelFrames) {
+  DepartureAlertDetector detector;
+  int alert_tick = -1;
+  for (int tick = 0; tick < 600 && alert_tick < 0; ++tick) {
+    DepartureAlertInput input = stopped_input(tick * 0.01);
+    input.model_updated = tick % 5 == 0;
+    input.model_valid = true;
+    input.plan_distance_m = tick < 250 ? 2.0f : 30.0f;
+    if (detector.update(input).type == DepartureAlertType::green_light) alert_tick = tick;
+  }
+  ASSERT_GE(alert_tick, 280) << "열린 plan을 0.3초 본 뒤에";
+  ASSERT_LE(alert_tick, 285);
+  ASSERT_EQ(alert_tick % 5, 0) << "모델 프레임에서 뜬다";
+}
+
+/* 가까운 앞차 거부는 모델 프레임과 무관하게 매 틱 판단해, plan이 1.5초 넘게 열린 순간 모델 프레임
+ * 사이에서도 알린다(모델을 7틱마다 줘 1.5초 지점이 모델 프레임이 아니게 한다). */
+TEST(DepartureAlert, CloseLeadVetoDecidesBetweenModelFrames) {
+  DepartureAlertDetector detector;
+  int open_seen_tick = -1, alert_tick = -1;
+  for (int tick = 0; tick < 1000 && alert_tick < 0; ++tick) {
+    DepartureAlertInput input = stopped_input(tick * 0.01);
+    const bool model_frame = tick % 7 == 0;
+    input.lead_updated = model_frame;
+    input.lead_valid = true;  // controlsd는 신선한 모델의 앞차를 매 틱 유효로 넘긴다
+    input.lead_distance_m = 4.0f;
+    input.model_updated = model_frame;
+    input.model_valid = true;
+    input.plan_distance_m = tick < 250 ? 2.0f : 30.0f;
+    if (model_frame && tick >= 250 && open_seen_tick < 0) open_seen_tick = tick;
+    if (detector.update(input).type == DepartureAlertType::green_light) alert_tick = tick;
+  }
+  ASSERT_GE(open_seen_tick, 250);
+  ASSERT_GE(alert_tick, open_seen_tick + 149);
+  ASSERT_LE(alert_tick, open_seen_tick + 151) << "열린 plan을 처음 본 지 1.5초에";
+  ASSERT_NE(alert_tick % 7, 0) << "모델 프레임 사이의 틱에서 뜬다";
+}
+
+/* 서행(0.1~0.5 m/s)은 이번 정차를 끝내지 않아 한 번 알린 정차에서는 다시 알리지 않는다. 가속 페달이나
+ * 0.5 m/s 넘는 출발이 정차를 끝내고, 다음 정차에서 다시 알린다(이벤트 id 2). */
+TEST(DepartureAlert, CreepingKeepsTheStopUntilTheDriverDrivesOff) {
+  DepartureAlertDetector detector;
+  DepartureAlertOutput output;
+  double t = 0.0;
+  auto stop_and_open = [&](float speed, bool gas = false) {
+    for (int i = 0; i < 40; ++i, t += 0.05) {
+      DepartureAlertInput input = stopped_input(t);
+      input.speed_mps = speed;
+      input.gas_pressed = gas;
+      input.model_updated = true;
+      input.model_valid = true;
+      input.plan_distance_m = 2.0f;
+      output = detector.update(input);
+    }
+    for (int i = 0; i < 10; ++i, t += 0.05) {
+      DepartureAlertInput input = stopped_input(t);
+      input.speed_mps = speed;
+      input.gas_pressed = gas;
+      input.model_updated = true;
+      input.model_valid = true;
+      input.plan_distance_m = 30.0f;
+      output = detector.update(input);
+    }
+  };
+  stop_and_open(0.0f);
+  ASSERT_EQ(output.event_id, 1u);
+  stop_and_open(0.3f);  // 서행
+  stop_and_open(0.0f);
+  ASSERT_EQ(output.event_id, 1u) << "서행 뒤 같은 정차에서는 다시 알리지 않는다";
+  stop_and_open(0.0f, true);  // 가속 페달: 정차를 끝낸다
+  stop_and_open(0.0f);
+  ASSERT_EQ(output.event_id, 2u) << "다음 정차에서는 다시 알린다";
+}
+
 }  // namespace
