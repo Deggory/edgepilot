@@ -309,6 +309,7 @@ private:
         std::fprintf(stderr, "\noverlayd: test sound %s\n", alert_sound_name(id));
     }
 
+    /* 정책이 고른 알림음을 내고 로그에 남긴다. 거부는 차단 사유, 해제 예고는 그 플래그와 사유를 함께. */
     void play_alert(const OverlaySoundDecision &decision)
     {
         if (decision.sound == OverlaySound::none) return;
