@@ -17,7 +17,7 @@ const TRAJECTORY = 33;
 // openpilot T_IDXS: when the car is at each plan point, s
 const T_IDXS = Array.from({length: TRAJECTORY}, (_, i) => 10 * (i / (TRAJECTORY - 1)) ** 2);
 const RADAR_TO_CAMERA = 1.52;           // controlsd.cc, overlay_renderer.cc kRadarToCameraDistanceM
-const LEAD_PROBABILITY = 0.5;           // kLeadProbabilityThreshold
+const LEAD_PROBABILITY = 0.5;           // model_output.h kLeadProbabilityThreshold (check_param_server.py)
 const LANE_SURE = 0.5;                  // both ego lines at least this sure for the lane width
 const LANE_WIDTH_INDEX = 6;             // overlay_renderer.cc kLaneRulerIndex: 6.75 m from the camera
 // overlay_renderer.cc draw_scene: lines and the path reach as far as the plan does, 10 to 100 m

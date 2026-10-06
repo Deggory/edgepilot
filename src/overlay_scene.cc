@@ -21,7 +21,6 @@ constexpr float kFarAlpha = 0.12f;  // 띠의 먼 끝 알파 비
 constexpr int kLaneRulerIndex = 6;  // 차선 안 위치 눈금을 놓는 궤적 점(6.75 m, 보닛 바로 위)
 
 constexpr float kRadarToCameraDistanceM = 1.52f;
-constexpr float kLeadProbabilityThreshold = 0.5f;
 constexpr int kLeadTimeIndex = 0;
 constexpr float kLeadRiskDistanceM = 40.0f;
 constexpr float kLeadRiskClosingMps = 10.0f;

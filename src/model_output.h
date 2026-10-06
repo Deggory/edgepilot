@@ -147,6 +147,11 @@ struct ParsedLeadPrediction {
     std::array<ParsedLeadPoint, kLeadTrajLen> points{};
 };
 
+/* 모델 앞차를 앞차로 보는 최소 존재 확률. openpilot radard처럼 한 값으로 고정해 비전 크루즈, 출발 알림,
+ * HUD와 웹 BEV(scripts/web/bev_data.js LEAD_PROBABILITY, check_param_server.py가 대조)가 같은 앞차를
+ * 본다. */
+constexpr float kLeadProbabilityThreshold = 0.5f;
+
 /* 시간 오프셋(0/2/4 s)마다 궤적 하나와 존재 확률 하나. */
 struct ParsedLeads {
     bool valid = false;

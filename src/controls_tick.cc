@@ -14,7 +14,6 @@
 namespace {
 
 constexpr uint64_t kAlertModelTimeoutNs = 500000000ULL;
-constexpr float kLeadProbabilityThreshold = 0.5f;
 constexpr float kRadarToCameraDistanceM = 1.52f;
 constexpr uint64_t kMaxCanRxAgeNs = 100000000ULL;
 constexpr int kParamPollIntervalMs = 100;

@@ -1,6 +1,7 @@
 /* AdaptiveCruiseController: 비전 앞차에 맞춰 SET/RES 버튼을 흉내 내는 크루즈(이 차에는 SCC가
  * 없다). 차량 모형이 버튼 펄스를 실제 설정 속도 변화로 바꿔 돌려준다. */
 #include "adaptive_cruise.h"
+#include "model_output.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -322,9 +323,31 @@ TEST(AdaptiveCruise, SessionResetAndMinimumSpeed) {
   ASSERT_EQ(output.command_button, 0);
 }
 
+TEST(AdaptiveCruise, LeadBelowTheFixedProbabilityIsIgnored) {
+  AdaptiveCruiseController controller;
+  Vehicle vehicle;
+  activate(&controller, &vehicle);
+
+  AdaptiveCruiseInput input = base_input(1.0);
+  input.vision_lead_updated = true;
+  input.vision_lead_valid = true;
+  input.vision_lead_probability = kLeadProbabilityThreshold - 0.05f;
+  input.vision_lead_distance_m = 8.0f;
+  input.vision_lead_relative_speed_mps = -6.0f;
+  AdaptiveCruiseOutput output = tick(&controller, input, &vehicle);
+  // openpilot radard처럼 고정한 확률(0.5) 밑의 앞차는 무시한다
+  ASSERT_FALSE(output.lead_valid);
+  ASSERT_EQ(output.command_button, 0);
+
+  input.vision_lead_probability = kLeadProbabilityThreshold + 0.05f;
+  input.now_s = 1.01;
+  output = tick(&controller, input, &vehicle);
+  ASSERT_TRUE(output.lead_valid);
+}
+
 TEST(AdaptiveCruise, RuntimeConfigUpdate) {
   AdaptiveCruiseConfig config;
-  config.lead_probability_threshold = 0.8f;
+  config.command_interval_s = 5.0f;
   AdaptiveCruiseController controller(config);
   Vehicle vehicle;
   activate(&controller, &vehicle);
@@ -332,22 +355,19 @@ TEST(AdaptiveCruise, RuntimeConfigUpdate) {
   AdaptiveCruiseInput input = base_input(1.0);
   input.vision_lead_updated = true;
   input.vision_lead_valid = true;
-  input.vision_lead_probability = 0.7f;
   input.vision_lead_distance_m = 8.0f;
   input.vision_lead_relative_speed_mps = -6.0f;
   AdaptiveCruiseOutput output = tick(&controller, input, &vehicle);
-  // 설정한 확률보다 낮은 앞차는 무시한다
-  ASSERT_FALSE(output.lead_valid);
+  // 가까운 앞차지만 세션 시작 뒤 명령 간격(5초)이 아직 지나지 않았다
+  ASSERT_TRUE(output.lead_valid);
   ASSERT_EQ(output.command_button, 0);
 
-  config.lead_probability_threshold = 0.6f;
   config.command_interval_s = 0.5f;
   config.button_pulse_frames = 1;
   controller.update_config(config);
   input.now_s = 1.01;
   output = tick(&controller, input, &vehicle);
   // 런타임 설정 변경은 컨트롤러를 다시 만들지 않아도 적용된다
-  ASSERT_TRUE(output.lead_valid);
   ASSERT_EQ(output.command_button, 2);
 
   input.vision_lead_updated = false;

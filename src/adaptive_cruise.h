@@ -4,7 +4,6 @@
 
 struct AdaptiveCruiseConfig {
   bool enabled = true;
-  float lead_probability_threshold = 0.5f;
   float standstill_gap_m = 5.0f;
   float following_time_s = 1.8f;
   float gap_correction_gain = 0.25f;

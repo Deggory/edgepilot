@@ -1,6 +1,7 @@
 #include "adaptive_cruise.h"
 
 #include "can_frame.h"
+#include "model_output.h"
 #include "utils_math.h"
 #include "utils_json.h"
 
@@ -49,11 +50,10 @@ bool valid_set_speed(float speed_kph) {
   return std::isfinite(speed_kph) && speed_kph > 0.0f && speed_kph < 300.0f;
 }
 
-bool valid_vision_lead(const AdaptiveCruiseInput &input,
-                       const AdaptiveCruiseConfig &config) {
+bool valid_vision_lead(const AdaptiveCruiseInput &input) {
   return input.vision_lead_valid &&
          std::isfinite(input.vision_lead_probability) &&
-         input.vision_lead_probability >= config.lead_probability_threshold &&
+         input.vision_lead_probability >= kLeadProbabilityThreshold &&
          std::isfinite(input.vision_lead_distance_m) &&
          std::isfinite(input.vision_lead_relative_speed_mps) &&
          input.vision_lead_distance_m >= 1.0f &&
@@ -72,7 +72,6 @@ constexpr JsonIntField<AdaptiveCruiseConfig> kAdaptiveInts[] = {
     {"button_pulse_frames", 1, 10, &AdaptiveCruiseConfig::button_pulse_frames},
 };
 constexpr JsonFloatField<AdaptiveCruiseConfig> kAdaptiveFloats[] = {
-    {"lead_probability_threshold", 0.2f, 0.99f, &AdaptiveCruiseConfig::lead_probability_threshold},
     {"standstill_gap_m", 2.0f, 20.0f, &AdaptiveCruiseConfig::standstill_gap_m},
     {"following_time_s", 0.8f, 4.0f, &AdaptiveCruiseConfig::following_time_s},
     {"gap_correction_gain", 0.05f, 1.0f, &AdaptiveCruiseConfig::gap_correction_gain},
@@ -142,7 +141,7 @@ void AdaptiveCruiseController::DisplayScale::update(
 
 void AdaptiveCruiseController::LeadFilter::update(
     const AdaptiveCruiseInput &input, const AdaptiveCruiseConfig &config) {
-  if (!input.vision_lead_updated || !valid_vision_lead(input, config)) return;
+  if (!input.vision_lead_updated || !valid_vision_lead(input)) return;
 
   const bool reacquired = last_valid_s < 0.0 ||
                           input.now_s - last_valid_s > config.lead_hold_s;

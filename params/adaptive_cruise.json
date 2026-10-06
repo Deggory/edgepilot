@@ -1,6 +1,5 @@
 {
   "enabled": true,
-  "lead_probability_threshold": 0.5,
   "standstill_gap_m": 5.0,
   "following_time_s": 1.8,
   "gap_correction_gain": 0.25,
