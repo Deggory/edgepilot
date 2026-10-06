@@ -686,45 +686,10 @@ class ParamStore:
                 temporary.unlink()
 
 
-# ---------------------------------------------------------------- 학습 상태(paramsd·torqued)
+# ---------------------------------------------------------------- 공유 메모리 채널 읽기
 
-LEARNER_STATE_PATH = os.environ.get("EDGEPILOT_LEARNER_STATE_PATH", "/dev/shm/edgepilot_learner_state")
 IPC_MAGIC = 0x4B323349
 IPC_HEADER = struct.Struct("<IIIIQQII")  # IpcHeader; seq가 홀수면 쓰는 중
-# LearnerState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ offsetof와 대조한다.
-LEARNER_FIELDS = (
-    ("timestamp_ns", "Q"), ("flags", "I"),
-    ("steer_ratio", "f"), ("stiffness_factor", "f"), ("roll_rad", "f"),
-    ("angle_offset_average_deg", "f"), ("angle_offset_deg", "f"),
-    ("steer_ratio_std", "f"), ("stiffness_factor_std", "f"),
-    ("angle_offset_average_std", "f"), ("angle_offset_fast_std", "f"), ("yaw_bias_rad_s", "f"),
-    ("lat_accel_factor_raw", "f"), ("lat_accel_offset_raw", "f"), ("friction_raw", "f"),
-    ("lat_accel_factor", "f"), ("lat_accel_offset", "f"), ("friction", "f"),
-    ("decay", "f"), ("max_resets", "f"), ("total_bucket_points", "i"), ("cal_perc", "i"),
-    ("road_bank_lat_accel", "f"),
-    ("prior_steer_ratio", "f"), ("prior_lat_accel_factor", "f"), ("prior_friction", "f"),
-    ("bucket_points", "8h"), ("plan_delay_s", "f"),
-)
-LEARNER_STATE = struct.Struct("<" + "".join(fmt for _, fmt in LEARNER_FIELDS))
-LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
-    "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
-    "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
-    "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored", "use_delay",
-    "localizer_inputs",
-)
-LEARNER_HISTORY_S = 600
-GRAVITY = 9.81
-
-
-def decode_learner_state(payload: bytes) -> Dict[str, Any]:
-    values = list(LEARNER_STATE.unpack(payload[:LEARNER_STATE.size]))
-    state: Dict[str, Any] = {}
-    for name, fmt in LEARNER_FIELDS:
-        count = int(fmt[:-1]) if len(fmt) > 1 else 1
-        state[name] = values[:count] if count > 1 else values[0]
-        del values[:count]
-    state["flags"] = {name: bool(state["flags"] >> bit & 1) for bit, name in enumerate(LEARNER_FLAGS)}
-    return state
 
 
 def boottime_ns() -> int:
@@ -771,6 +736,56 @@ class IpcReader:
         except (OSError, ValueError, struct.error):
             self._map = None
             return None
+
+
+def unpack_fields(layout: struct.Struct, fields: tuple, payload: bytes) -> Dict[str, Any]:
+    """(이름, struct 형식) 순서의 배치로 payload를 dict로 푼다. 배열 형식("8h", "3f")은 list가 된다."""
+    values = list(layout.unpack(payload[:layout.size]))
+    state: Dict[str, Any] = {}
+    for name, fmt in fields:
+        count = int(fmt[:-1]) if len(fmt) > 1 else 1
+        state[name] = values[:count] if count > 1 else values[0]
+        del values[:count]
+    return state
+
+
+def flag_names(value: int, names: tuple) -> Dict[str, bool]:
+    """비트 순서대로 이름 붙인 플래그."""
+    return {name: bool(value >> bit & 1) for bit, name in enumerate(names)}
+
+
+# ---------------------------------------------------------------- 학습 상태(paramsd·torqued)
+
+LEARNER_STATE_PATH = os.environ.get("EDGEPILOT_LEARNER_STATE_PATH", "/dev/shm/edgepilot_learner_state")
+# LearnerState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ offsetof와 대조한다.
+LEARNER_FIELDS = (
+    ("timestamp_ns", "Q"), ("flags", "I"),
+    ("steer_ratio", "f"), ("stiffness_factor", "f"), ("roll_rad", "f"),
+    ("angle_offset_average_deg", "f"), ("angle_offset_deg", "f"),
+    ("steer_ratio_std", "f"), ("stiffness_factor_std", "f"),
+    ("angle_offset_average_std", "f"), ("angle_offset_fast_std", "f"), ("yaw_bias_rad_s", "f"),
+    ("lat_accel_factor_raw", "f"), ("lat_accel_offset_raw", "f"), ("friction_raw", "f"),
+    ("lat_accel_factor", "f"), ("lat_accel_offset", "f"), ("friction", "f"),
+    ("decay", "f"), ("max_resets", "f"), ("total_bucket_points", "i"), ("cal_perc", "i"),
+    ("road_bank_lat_accel", "f"),
+    ("prior_steer_ratio", "f"), ("prior_lat_accel_factor", "f"), ("prior_friction", "f"),
+    ("bucket_points", "8h"), ("plan_delay_s", "f"),
+)
+LEARNER_STATE = struct.Struct("<" + "".join(fmt for _, fmt in LEARNER_FIELDS))
+LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
+    "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
+    "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
+    "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored", "use_delay",
+    "localizer_inputs",
+)
+LEARNER_HISTORY_S = 600
+GRAVITY = 9.81
+
+
+def decode_learner_state(payload: bytes) -> Dict[str, Any]:
+    state = unpack_fields(LEARNER_STATE, LEARNER_FIELDS, payload)
+    state["flags"] = flag_names(state["flags"], LEARNER_FLAGS)
+    return state
 
 
 class LearnerStateReader(IpcReader):
@@ -888,15 +903,9 @@ LOCALIZATION_INPUT_FLAGS = ("accel_invalid", "gyro_invalid", "camera_invalid", "
 
 
 def decode_localization_state(payload: bytes) -> Dict[str, Any]:
-    values = list(LOCALIZATION_STATE.unpack(payload[:LOCALIZATION_STATE.size]))
-    state: Dict[str, Any] = {}
-    for name, fmt in LOCALIZATION_FIELDS:
-        count = int(fmt[:-1]) if len(fmt) > 1 else 1
-        state[name] = values[:count] if count > 1 else values[0]
-        del values[:count]
-    state["flags"] = {name: bool(state["flags"] >> bit & 1) for bit, name in enumerate(LOCALIZATION_FLAGS)}
-    state["input_flags"] = {name: bool(state["input_flags"] >> bit & 1)
-                            for bit, name in enumerate(LOCALIZATION_INPUT_FLAGS)}
+    state = unpack_fields(LOCALIZATION_STATE, LOCALIZATION_FIELDS, payload)
+    state["flags"] = flag_names(state["flags"], LOCALIZATION_FLAGS)
+    state["input_flags"] = flag_names(state["input_flags"], LOCALIZATION_INPUT_FLAGS)
     return state
 
 
@@ -1092,7 +1101,7 @@ class WebAssets:
             return None
 
 
-HTML = """<!doctype html>
+HTML = r"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -1774,7 +1783,7 @@ HTML = """<!doctype html>
       else if (item.ignoredWhenOn) lines.push("스위치가 켜져 있어 지금은 무시되고, 스위치를 끄면 이 값을 씁니다.");
       else lines.push("스위치가 켜져 있어 사전값으로만 쓰입니다(controlsd 다음 시작부터).");
       if (item.resets) lines.push("controlsd 다음 시작 때 torqued 학습이 이 값을 새 사전값으로 처음부터 다시 시작합니다.");
-      if (!window.confirm(lines.join("\\n"))) return;
+      if (!window.confirm(lines.join("\n"))) return;
       try {
         await applyValue(item.key, target, shell.card);
       } catch (_) {}
@@ -2049,7 +2058,7 @@ HTML = """<!doctype html>
       const now = c && c.available ? `현재 pitch ${sgn(c.rpy_deg[1], 2)}° · yaw ${sgn(c.rpy_deg[2], 2)}° · 블록 ${c.valid_blocks}` : "현재 상태 없음";
       if (!window.confirm(["카메라 캘리브레이션을 초기화할까요?", now, "",
           "저장된 값(calibration.json)을 지우고 0°에서 다시 수렴합니다.",
-          "수렴할 때까지(시속 24 km 이상 직진 약 30초) 조향이 부정확할 수 있습니다. 학습값은 그대로 둡니다."].join("\\n"))) return;
+          "수렴할 때까지(시속 24 km 이상 직진 약 30초) 조향이 부정확할 수 있습니다. 학습값은 그대로 둡니다."].join("\n"))) return;
       shell.button.disabled = true;
       try {
         const response = await fetch("/api/calibration/reset", {method: "POST"});
