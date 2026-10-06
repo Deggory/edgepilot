@@ -504,7 +504,8 @@ void ControlsTick::on_localization(const LocalizationRead &localization, uint64_
                              fresh && state.lag_status ==
                                  static_cast<uint32_t>(LateralLagStatus::Estimated));
   /* 상류 paramsd·torqued 입력(localizer_sample_from). 표본 시각은 학습기 시계(now_s)로
-   * 옮긴다. 읽기가 쓰기와 겹쳐 실패한 틱은 직전 판단을 그대로 둔다. */
+   * 옮긴다. 읽기가 쓰기와 겹쳐 실패한 틱은 학습기 입력을 직전 값으로 두고, lagd 지연은 그 틱만
+   * 쓰지 않는다(위 set_live_delay가 무효로 받는다). */
   if (localization.read) {
     const double age_s =
         static_cast<double>(static_cast<int64_t>(can_now_ns - state.timestamp_ns)) * 1e-9;
