@@ -49,7 +49,7 @@ CONTROL_STATE = np.dtype([
     ("vehicle_fresh", "<u4"), ("steering_fault", "<u4"),
     ("left_blinker", "<u4"), ("right_blinker", "<u4"), ("cruise_active", "<u4"),
     ("gear", "<i4"),
-    ("speed_kph", "<f4"), ("cruise_max_speed_kph", "<f4"),
+    ("cluster_speed_kph", "<f4"), ("cruise_max_speed_kph", "<f4"),
     ("cruise_command_speed_kph", "<f4"), ("steering_angle_deg", "<f4"),
     ("desired_curvature", "<f4"), ("actual_curvature", "<f4"),
     ("normalized_output", "<f4"),
@@ -70,7 +70,6 @@ CONTROL_STATE = np.dtype([
     ("ego_speed_kph", "<f4"),
 ])
 
-# LearnerState (paramsd/torqued output, 20 Hz). flags bits: ipc_messages.h kLearner*.
 # ImuBatch (src/ipc_messages.h): 16-byte head, then `count` samples (only those are recorded).
 IMU_BATCH_HEAD = struct.Struct("<QII")
 IMU_SAMPLE = np.dtype([
@@ -91,6 +90,7 @@ LOCALIZATION_STATE = np.dtype([
 ])
 assert LOCALIZATION_STATE.itemsize == 128
 
+# LearnerState (paramsd/torqued output, 20 Hz). flags bits: ipc_messages.h kLearner*.
 LEARNER_STATE = np.dtype([
     ("timestamp_ns", "<u8"), ("flags", "<u4"),
     ("steer_ratio", "<f4"), ("stiffness_factor", "<f4"), ("roll_rad", "<f4"),

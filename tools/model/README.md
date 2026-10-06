@@ -53,8 +53,12 @@ the CPU warp in `src/model_input_transform.cc`.
 
 - `recording_reader.py`
   - the Python mirror of `src/recording_format.h` and `src/ipc_messages.h` for
-    the analysis tools (`scripts/param_server.py` keeps its own standard-library
-    copy of the layouts it shows, checked by `diagnostics/check_param_server.py`).
+    the analysis tools, checked against the C++ asserts by
+    `diagnostics/check_recording_reader.py` (`scripts/param_server.py` keeps its
+    own standard-library copy of the layouts it shows, checked by
+    `diagnostics/check_param_server.py`). ControlState's field at offset 56 is
+    `cluster_speed_kph`, the cluster's display speed; `ego_speed_kph` is the
+    wheel speed the controller uses.
 - `make_replay.py`
   - writes an `SCNV12R1` replay for `modeld` replay mode on the board.
 - `lane_bias.py`
@@ -64,3 +68,7 @@ the CPU warp in `src/model_input_transform.cc`.
     `../../docs/diagnostics.md`.
 - `model_warp.py`
   - also used by `tools/calib/warp_preview.py` to show the MaixCAM2 model views.
+    It holds the MaixCAM2 intrinsics once (`maixcam2_intrinsics`, the
+    `src/app_config.h` values) for the preview, the calibration report and the
+    axmodel calibration data; its default intrinsics stay the K230 camera's for
+    K230 recordings.

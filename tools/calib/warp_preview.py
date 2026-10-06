@@ -17,11 +17,10 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
-from model_warp import ModelInputWarp, projection_matrix  # noqa: E402
+from model_warp import ModelInputWarp, maixcam2_intrinsics, projection_matrix  # noqa: E402
 
 W, H = 1280, 720
-FX, FY, CX, CY = 1131.24, 1130.85, 940.13, 552.60          # src/app_config.h, 1080p
-K720 = (FX * W / 1920, FY * H / 1080, CX * W / 1920, CY * H / 1080)
+K720 = maixcam2_intrinsics(W, H)
 MODEL_CY = 47.6                                         # kDefaultModelCy (medmodel)
 
 

@@ -62,7 +62,7 @@ def main():
 
     t_ref, c_ref, _ = load(args.original)
     t_new, c_new, ev_new = load(args.rehearsal)
-    lag, speed_err = align(t_ref, c_ref["speed_kph"], t_new, c_new["speed_kph"])
+    lag, speed_err = align(t_ref, c_ref["cluster_speed_kph"], t_new, c_new["cluster_speed_kph"])
     tn = t_new + lag
     inside = (tn >= t_ref[0]) & (tn <= t_ref[-1])
     tn, c_new = tn[inside], c_new[inside]

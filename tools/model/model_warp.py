@@ -24,6 +24,12 @@ CAMERA_CX_1080 = 954.9441
 CAMERA_CY_1080 = 545.1774
 CAMERA_HEIGHT_M = 1.22
 
+# MaixCAM2 camera at 1920x1080: src/app_config.h kCamera* (check_recording_reader.py keeps them equal).
+MAIXCAM2_FX_1080 = 1131.24
+MAIXCAM2_FY_1080 = 1130.85
+MAIXCAM2_CX_1080 = 940.13
+MAIXCAM2_CY_1080 = 552.60
+
 GROUND_FROM_MEDMODEL = np.array([
     [0.00000000e+00, 0.00000000e+00, 1.00000000e+00],
     [-1.09890110e-03, 0.00000000e+00, 2.81318681e-01],
@@ -40,6 +46,12 @@ GROUND_FROM_SBIGMODEL = np.array([
 def default_intrinsics(width: int, height: int) -> tuple[float, float, float, float]:
     return (CAMERA_FX_1080 * width / 1920.0, CAMERA_FY_1080 * height / 1080.0,
             CAMERA_CX_1080 * width / 1920.0, CAMERA_CY_1080 * height / 1080.0)
+
+
+def maixcam2_intrinsics(width: int, height: int) -> tuple[float, float, float, float]:
+    """The MaixCAM2 runtime intrinsics scaled from 1920x1080 to width x height."""
+    return (MAIXCAM2_FX_1080 * width / 1920.0, MAIXCAM2_FY_1080 * height / 1080.0,
+            MAIXCAM2_CX_1080 * width / 1920.0, MAIXCAM2_CY_1080 * height / 1080.0)
 
 
 def _rotation_from_rpy(roll: float, pitch: float, yaw: float) -> np.ndarray:

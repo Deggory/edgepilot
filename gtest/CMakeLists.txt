@@ -50,3 +50,6 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME check_param_server.py
          COMMAND ${Python3_EXECUTABLE} diagnostics/check_param_server.py
          WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME check_recording_reader.py
+         COMMAND ${Python3_EXECUTABLE} diagnostics/check_recording_reader.py
+         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

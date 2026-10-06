@@ -10,7 +10,7 @@
 ```
 
 `build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 184개와
-Python 1개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
+Python 2개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
 
@@ -51,7 +51,9 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_projection` | 4 | 화면 크기와 무관한 도로 점 투영, 설정된 카메라 내부 파라미터, 카메라 장착 오프셋 |
 | `gtest_recording_writer` | 6 | 디스크의 route 구조: K230LOG1 청크, K230IDX1 인덱스, 매니페스트, params 스냅샷, 스테이징 비우기. 이벤트 로그 리더(끊긴 꼬리에서 멈춤, 큰 파일 머리), 옛 버전 ModelState 해석, 기록한 CAN 페이로드 왕복(CAN-FD, 끊긴 꼬리, 256 프레임 상한), 상태 채널 기록(생산자가 생긴 뒤 붙기, 새 스냅샷만, IMU는 채운 샘플까지), replayd route 리더(세그먼트 경계, 키프레임마다 코덱 설정, 청크를 넘는 CAN·판다 이벤트 시각 순) |
 
-`diagnostics/check_param_server.py`(Python unittest)도 `ctest`에 등록돼 함께 돈다.
+`diagnostics/check_param_server.py`와 `diagnostics/check_recording_reader.py`(Python unittest)도
+`ctest`에 등록돼 함께 돈다. 뒤의 것은 `tools/model/recording_reader.py`의 배치와 기록 타입 번호,
+도구의 MaixCAM2 카메라 내부 파라미터를 C++ 헤더의 고정값과 대조한다.
 파라미터 저장소, 런타임 스키마 동기화, `params/*.json`의 UI 메타데이터, UI min/max와 C++
 `Json*Field` 클램프 표의 일치를 본다.
 

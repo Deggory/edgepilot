@@ -37,10 +37,10 @@ import onnxruntime as ort
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import recording_reader as rr  # noqa: E402
-from model_warp import WarpPair  # noqa: E402
+from model_warp import WarpPair, maixcam2_intrinsics  # noqa: E402
 
 # src/app_config.h: MaixCAM2 1920x1080 intrinsics scaled to the 1280x720 AI stream
-INTRINSICS = (1131.24 * 1280 / 1920, 1130.85 * 720 / 1080, 940.13 * 1280 / 1920, 552.60 * 720 / 1080)
+INTRINSICS = maixcam2_intrinsics(1280, 720)
 FEAT = 1064
 TENSORS = ("input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic_convention")
 

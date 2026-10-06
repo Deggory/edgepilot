@@ -341,7 +341,8 @@ released after that short hold if they persist.
     `gtest/README.md`.
 - `diagnostics/`
   - replay and HUD tools (built by `diagnostics/CMakeLists.txt`), and the
-    Python `check_param_server.py`; see `diagnostics/README.md`.
+    Python `check_param_server.py` and `check_recording_reader.py`; see
+    `diagnostics/README.md`.
 
 ## Shared helpers
 

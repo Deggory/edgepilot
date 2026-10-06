@@ -65,7 +65,7 @@ class RouteLateral:
         self.camera_offset = []  # [N] warp camera offset (recording v7+), else empty
         self.model_ts = []
         self.control = {k: [] for k in
-                        ("ts", "active", "speed_kph", "steer_deg",
+                        ("ts", "active", "cluster_speed_kph", "steer_deg",
                          "desired_curv", "actual_curv", "driver_torque")}
 
     def finish(self):
@@ -105,7 +105,7 @@ def read_route_lateral(route: Path) -> RouteLateral:
                 state = rec.control_state()
                 out.control["ts"].append(rec.timestamp_ns)
                 out.control["active"].append(int(state["active"]))
-                out.control["speed_kph"].append(float(state["speed_kph"]))
+                out.control["cluster_speed_kph"].append(float(state["cluster_speed_kph"]))
                 out.control["steer_deg"].append(float(state["steering_angle_deg"]))
                 out.control["desired_curv"].append(float(state["desired_curvature"]))
                 out.control["actual_curv"].append(float(state["actual_curvature"]))
@@ -140,7 +140,7 @@ def analyse(route: Path) -> None:
     straight = np.abs(data.plan_y[:, 16]) < STRAIGHT_PLAN_Y_M
     keep = (straight
             & (data.left_prob > MIN_LANE_PROB) & (data.right_prob > MIN_LANE_PROB)
-            & (ctl["speed_kph"] > MIN_SPEED_KPH) & (ctl["active"] == 1)
+            & (ctl["cluster_speed_kph"] > MIN_SPEED_KPH) & (ctl["active"] == 1)
             & (np.abs(ctl["driver_torque"]) < MAX_DRIVER_TORQUE)
             & np.isfinite(data.lane_offset).all(1))
 

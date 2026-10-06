@@ -204,7 +204,7 @@ MIN_LAT_ACCEL_RANGE = 0.5   # 창 안에 이만큼의 횡가속 변화가 있어
 
 
 def read_control_states(paths):
-    """[t_s, active, speed_kph, desired_curv, actual_curv] per ControlState record."""
+    """[t_s, active, cluster_speed_kph, desired_curv, actual_curv] per ControlState record."""
     rows = []
     for path in paths:
         try:
@@ -215,7 +215,7 @@ def read_control_states(paths):
                     continue
                 state = rec.control_state()
                 rows.append((rec.timestamp_ns * 1e-9, int(state["active"]),
-                             float(state["speed_kph"]), float(state["desired_curvature"]),
+                             float(state["cluster_speed_kph"]), float(state["desired_curvature"]),
                              float(state["actual_curvature"])))
         except ValueError as error:
             print(f"건너뜀: {error}", file=sys.stderr)

@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
+from model_warp import maixcam2_intrinsics  # noqa: E402
 
 
 def find_corners(gray: np.ndarray, pattern: tuple[int, int]) -> np.ndarray | None:
@@ -142,8 +146,7 @@ def main() -> int:
     print("  " + "  ".join(f"{n} {v:+.6f}" for n, v in zip(names, coefficients)))
 
     # Runtime constants (src/app_config.h kCamera*, at 1920x1080) scaled to this size.
-    sx, sy = size[0] / 1920.0, size[1] / 1080.0
-    runtime = {"fx": 1131.24 * sx, "fy": 1130.85 * sy, "cx": 940.13 * sx, "cy": 552.60 * sy}
+    runtime = dict(zip(("fx", "fy", "cx", "cy"), maixcam2_intrinsics(size[0], size[1])))
     print("  vs runtime kCamera*: " + "  ".join(
         f"{k} {v - runtime[k]:+.2f} px ({(v - runtime[k]) / runtime[k] * 100:+.2f}%)"
         for k, v in (("fx", fx), ("fy", fy), ("cx", cx), ("cy", cy))))

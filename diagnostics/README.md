@@ -38,8 +38,9 @@ cmake --build build-host --target replay_closed_loop -j2
 재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다. 보통은 MaixCAM2 녹화를 쓰고, 같은 형식인
 K230 녹화도 읽는다.
 
-`check_param_server.py`는 파라미터 서버를 검사하는 Python unittest다. 여기 있지만
-`ctest`에 등록돼 `scripts/run_host_tests.sh`로 함께 돈다.
+`check_param_server.py`는 파라미터 서버를, `check_recording_reader.py`는 분석 도구의 녹화 리더
+(`tools/model/recording_reader.py`)와 카메라 내부 파라미터를 C++ 헤더와 대조하는 Python unittest다.
+여기 있지만 `ctest`에 등록돼 `scripts/run_host_tests.sh`로 함께 돈다.
 
 ### replay_closed_loop
 

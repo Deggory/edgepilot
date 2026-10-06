@@ -66,7 +66,7 @@ def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment]]:
 def score(control: np.void, model: ModelMoment) -> float:
     if control["active"] != 1:
         return -1.0
-    speed = float(control["speed_kph"])
+    speed = float(control["cluster_speed_kph"])
     if not 40.0 <= speed <= 95.0:
         return -1.0
     lanes = model.lanes
@@ -108,7 +108,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     raw = control.tobytes()
     (args.out / "control.bin").write_bytes(raw + b"\0" * (CONTROL_STATE_SIZE - len(raw)))
     seconds = (int(model.ts) - int(model_ts[0])) / 1e9
-    print(f"moment t={seconds:.1f}s frame_id={model.frame_id} speed={control['speed_kph']:.1f} "
+    print(f"moment t={seconds:.1f}s frame_id={model.frame_id} speed={control['cluster_speed_kph']:.1f} "
           f"active={control['active']} lanes={np.round(model.lanes, 2)} lead={model.lead_valid}")
 
     if not (args.route / "segments").is_dir():
