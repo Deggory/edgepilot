@@ -157,33 +157,31 @@ CanFrame create_mdps12_frame(const std::array<uint8_t, 8> &seed, int frame_count
 }
 
 std::vector<CanFrame> build_lateral_can_frames(const HyundaiLkas11Values &lkas_seed,
-                                                   const HyundaiClu11Values &clu_seed,
-                                                   const HyundaiLkasCommand &lkas_command,
-                                                   const HyundaiCanConfig &config,
-                                                   bool lkas_active,
-                                                   float cluster_speed_raw,
-                                                   bool is_mph,
-                                                   int frame) {
+                                               const HyundaiClu11Values &clu_seed,
+                                               const std::array<uint8_t, 8> &mdps12_seed,
+                                               const HyundaiLkasCommand &lkas_command,
+                                               float mdps_speed_spoof_kph, bool lkas_active,
+                                               bool is_mph, int frame) {
   std::vector<CanFrame> frames;
-  frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, config.main_bus));
-
-  if (config.send_lkas_on_scc_bus && config.scc_bus != 0 && config.scc_bus != config.main_bus) {
-    frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, config.scc_bus));
+  frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, kPowertrainBus));
+  frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, kMdpsBus));
+  if ((frame % 2) != 0) {
+    HyundaiCluCommand clu_command;
+    clu_command.button = 0;
+    clu_command.speed = mdps_speed_for_lkas(clu_seed.speed, lkas_active, is_mph, mdps_speed_spoof_kph);
+    clu_command.frame = frame;
+    frames.push_back(create_clu11_frame(clu_seed, clu_command, kMdpsBus));
   }
-
-  if (config.send_lkas_on_mdps_bus && config.mdps_bus != 0 && config.mdps_bus != config.main_bus) {
-    frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, config.mdps_bus));
-    if (config.send_clu11_speed_to_mdps && (frame % 2) != 0) {
-      HyundaiCluCommand clu_command;
-      clu_command.button = 0;
-      clu_command.speed = mdps_speed_for_lkas(
-          cluster_speed_raw, lkas_active, is_mph, config.mdps_speed_spoof_kph);
-      clu_command.frame = frame;
-      frames.push_back(create_clu11_frame(clu_seed, clu_command, config.mdps_bus));
-    }
-  }
-
+  frames.push_back(create_mdps12_frame(mdps12_seed, frame));
   return frames;
+}
+
+CanFrame create_cruise_button_frame(const HyundaiClu11Values &clu_seed, int button, int frame) {
+  HyundaiCluCommand command;
+  command.button = button;
+  command.speed = clu_seed.speed;
+  command.frame = frame;
+  return create_clu11_frame(clu_seed, command, kPowertrainBus);
 }
 
 HyundaiSteeringLimits hyundai_limits(const SteeringParams &params) {

@@ -84,15 +84,6 @@ struct HyundaiCluCommand {
   int frame = 0;
 };
 
-struct HyundaiCanConfig {
-  uint8_t main_bus = 0;
-  uint8_t scc_bus = 0;
-  uint8_t mdps_bus = 0;
-  bool send_lkas_on_scc_bus = true;
-  bool send_lkas_on_mdps_bus = true;
-  bool send_clu11_speed_to_mdps = true;
-  float mdps_speed_spoof_kph = 60.0f;
-};
 
 HyundaiLkas11Values decode_lkas11(const std::array<uint8_t, 8> &data);
 HyundaiClu11Values decode_clu11(const std::array<uint8_t, 4> &data);
@@ -105,11 +96,15 @@ CanFrame create_clu11_frame(const HyundaiClu11Values &seed, const HyundaiCluComm
 // 최신 MDPS12 seed에서 openpilot create_mdps12와 같은 오류 회피 frame을 만든다.
 CanFrame create_mdps12_frame(const std::array<uint8_t, 8> &seed, int frame);
 
+/* K7 커뮤니티 하네스(MDPS가 버스 1)의 횡제어 프레임을 송신 순서대로: LKAS11(파워트레인 버스),
+ * LKAS11(MDPS 버스), 홀수 프레임이면 MDPS가 보는 CLU11 속도 바꿔치기(MDPS 버스), MDPS12 오류 회피
+ * 프레임(카메라 버스). */
 std::vector<CanFrame> build_lateral_can_frames(const HyundaiLkas11Values &lkas_seed,
-                                                   const HyundaiClu11Values &clu_seed,
-                                                   const HyundaiLkasCommand &lkas_command,
-                                                   const HyundaiCanConfig &config,
-                                                   bool lkas_active,
-                                                   float cluster_speed_raw,
-                                                   bool is_mph,
-                                                   int frame);
+                                               const HyundaiClu11Values &clu_seed,
+                                               const std::array<uint8_t, 8> &mdps12_seed,
+                                               const HyundaiLkasCommand &lkas_command,
+                                               float mdps_speed_spoof_kph, bool lkas_active,
+                                               bool is_mph, int frame);
+
+// 비전 크루즈의 버튼 펄스: 운전자 CLU11 seed에 버튼만 바꿔 파워트레인 버스로 보낸다.
+CanFrame create_cruise_button_frame(const HyundaiClu11Values &clu_seed, int button, int frame);

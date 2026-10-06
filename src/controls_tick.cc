@@ -538,13 +538,8 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
       model_updated_, lead, ego_speed_kph));
 
   if (adaptive_cruise_.command_button != 0) {
-    const HyundaiClu11Values clu_seed = decode_clu11(vehicle_.clu11_seed);
-    HyundaiCluCommand command;
-    command.button = adaptive_cruise_.command_button;
-    command.speed = clu_seed.speed;
-    command.frame = frame;
     last_result_.frames.push_back(
-        create_clu11_frame(clu_seed, command, kPowertrainBus));
+        create_cruise_button_frame(decode_clu11(vehicle_.clu11_seed), adaptive_cruise_.command_button, frame));
     last_result_.should_send = true;
   }
 

@@ -40,15 +40,7 @@ float interp_lateral(float x, const float *values) {
 }  // namespace
 
 LateralController::LateralController(LateralControllerConfig config)
-    : config_(config), clock_(monotonic_now_ns) {
-  config_.can_config.main_bus = kPowertrainBus;
-  config_.can_config.mdps_bus = kMdpsBus;
-  config_.can_config.scc_bus = kPowertrainBus;
-  config_.can_config.send_lkas_on_scc_bus = false;
-  config_.can_config.send_lkas_on_mdps_bus = true;
-  config_.can_config.send_clu11_speed_to_mdps = true;
-  config_.can_config.mdps_speed_spoof_kph = config_.driving_params.mdps_speed_spoof_kph;
-}
+    : config_(config), clock_(monotonic_now_ns) {}
 
 // 제어 상태를 유지한 채 런타임 파라미터를 즉시 교체한다.
 void LateralController::update_params(
@@ -56,7 +48,6 @@ void LateralController::update_params(
     const DrivingParams &driving_params) {
   config_.steering_params = steering_params;
   config_.driving_params = driving_params;
-  config_.can_config.mdps_speed_spoof_kph = driving_params.mdps_speed_spoof_kph;
 }
 
 void LateralController::set_live_params(const LiveLateralParams &live, bool vehicle_valid,
@@ -352,12 +343,13 @@ LateralControlResult LateralController::update(const LateralPath &path,
     result.apply_torque = 0;
   }
 
+  /* 결합 중이거나 해제 직후(inactive_release_ms) 동안은 토크 0으로 계속 보내 MDPS가 부드럽게 놓게
+   * 한다. */
   result.should_send =
       result.seeds_ready &&
-      (result.active ||
-       (config_.zero_release_when_inactive &&
-        (result.engaged || now_s - last_disengage_s_ <
-            static_cast<double>(config_.driving_params.inactive_release_ms) / 1000.0)));
+      (result.active || result.engaged ||
+       now_s - last_disengage_s_ <
+           static_cast<double>(config_.driving_params.inactive_release_ms) / 1000.0);
   if (result.should_send) {
     result.frames = build_frames(vehicle_state, result, frame);
   } else {
@@ -578,14 +570,6 @@ float lag_adjusted_desired_curvature(const LateralTarget &target, float speed_mp
                         roll_rad);
 }
 
-// LKAS HUD state 값을 lane availability와 active 상태에서 만든다.
-int LateralController::lkas_sys_state(bool active, bool left_lane, bool right_lane) const {
-  if (left_lane && right_lane) return active ? 3 : 4;
-  if (left_lane) return 5;
-  if (right_lane) return 6;
-  return 1;
-}
-
 // 최종 송신 frame 묶음을 만든다.
 std::vector<CanFrame> LateralController::build_frames(
     const VehicleCanState &vehicle_state,
@@ -595,27 +579,21 @@ std::vector<CanFrame> LateralController::build_frames(
   command.apply_steer = result.apply_torque;
   command.steer_req = (result.active || steer_availability_hold_) && !result.large_angle_hold;
   command.cut_steer_temp = result.cut_steer_temp;
-  /* 클러스터는 sys_state 천이마다 부저를 울린다. active(정차 대기 등
-   * 가용성)가 아니라 engaged를 따르게 해 enable/disable에서만 울린다.
+  /* 클러스터 LKAS 표시(양쪽 차선 보임): 3 작동, 4 대기. 클러스터는 sys_state 천이마다 부저를
+   * 울리므로 active(정차 대기 등 가용성)가 아니라 engaged를 따라 enable/disable에서만 울린다.
    * steer_req는 별도 비트로 매 프레임 정확히 나간다. */
-  command.sys_state = lkas_sys_state(result.engaged, true, true);
+  command.sys_state = result.engaged ? 3 : 4;
   command.sys_warning = false;
   command.left_lane = result.left_lane;
   command.right_lane = result.right_lane;
   command.lkas_msg_count = next_lkas11_counter(vehicle_state);
   command.ldws_fix = false;  // 이 K7은 LDWS 전용이지만 LdwsOpt_USM 3은 효과가 없었다(2026-09-24)
 
-  const HyundaiLkas11Values lkas_seed = decode_lkas11(vehicle_state.lkas11_seed);
-  const HyundaiClu11Values clu_seed = decode_clu11(vehicle_state.clu11_seed);
-  std::vector<CanFrame> frames = build_lateral_can_frames(
-      lkas_seed, clu_seed, command, config_.can_config,
-      result.active || steer_availability_hold_,
-      clu_seed.speed, vehicle_state.speed_unit_mph, frame);
-  if (vehicle_state.has_mdps12_seed &&
-      config_.can_config.mdps_bus != config_.can_config.main_bus) {
-    frames.push_back(create_mdps12_frame(vehicle_state.mdps12_seed, frame));
-  }
-  return frames;
+  // should_send면 세 seed가 다 있다(seed_frames_ready).
+  return build_lateral_can_frames(decode_lkas11(vehicle_state.lkas11_seed), decode_clu11(vehicle_state.clu11_seed),
+                                  vehicle_state.mdps12_seed, command,
+                                  config_.driving_params.mdps_speed_spoof_kph,
+                                  result.active || steer_availability_hold_, vehicle_state.speed_unit_mph, frame);
 }
 
 int LateralController::next_lkas11_counter(const VehicleCanState &vehicle_state) {

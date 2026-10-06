@@ -13,30 +13,33 @@
 namespace {
 
 TEST(K7Can, MdpsSpeedSpoof) {
-  HyundaiCanConfig config;
-  config.main_bus = 0;
-  config.mdps_bus = 1;
-  config.send_lkas_on_scc_bus = false;
   HyundaiLkas11Values lkas;
   HyundaiClu11Values clu;
+  clu.speed = 20.0f;
   clu.speed_decimal = 0.375f;
+  const std::array<uint8_t, 8> mdps12_seed{};
   HyundaiLkasCommand command;
   command.steer_req = true;
-  const auto frames = build_lateral_can_frames(
-      lkas, clu, command, config, true, 20.0f, false, 1);
-  ASSERT_EQ(frames.size(), 3) << "저속 프레임 구성(LKAS11, MDPS12, CLU11)";
+  const auto frames = build_lateral_can_frames(lkas, clu, mdps12_seed, command, 60.0f, true, false, 1);
+  ASSERT_EQ(frames.size(), 4) << "홀수 프레임: LKAS11 두 개, MDPS용 CLU11, MDPS12";
+  ASSERT_EQ(frames[0].address, kHyundaiLkas11Address);
+  ASSERT_EQ(frames[0].bus, kPowertrainBus);
+  ASSERT_EQ(frames[1].address, kHyundaiLkas11Address);
+  ASSERT_EQ(frames[1].bus, kMdpsBus) << "MDPS 버스에도 LKAS11을 보낸다";
+  ASSERT_EQ(frames[3].address, kHyundaiMdps12Address);
+  ASSERT_EQ(frames[3].bus, kHyundaiMdps12TxBus);
   std::array<uint8_t, 4> bytes = {};
   std::copy_n(frames[2].data.begin(), bytes.size(), bytes.begin());
   const HyundaiClu11Values decoded = decode_clu11(bytes);
   // MDPS용 CLU11은 버스 1로 나간다
   ASSERT_EQ(frames[2].address, kHyundaiClu11Address);
-  ASSERT_EQ(frames[2].bus, 1);
+  ASSERT_EQ(frames[2].bus, kMdpsBus);
   ASSERT_NEAR(decoded.speed, 60.0f, 0.001f) << "MDPS용 CLU11 속도는 60 km/h로 바꿔 보낸다";
   ASSERT_NEAR(decoded.speed_decimal, 0.375f, 0.001f) << "MDPS용 CLU11의 소수부는 그대로 둔다";
+  ASSERT_EQ(build_lateral_can_frames(lkas, clu, mdps12_seed, command, 60.0f, true, false, 2).size(), 3)
+      << "짝수 프레임에는 MDPS용 CLU11이 없다";
 
-  config.mdps_speed_spoof_kph = 72.0f;
-  const auto custom_frames = build_lateral_can_frames(
-      lkas, clu, command, config, true, 20.0f, false, 1);
+  const auto custom_frames = build_lateral_can_frames(lkas, clu, mdps12_seed, command, 72.0f, true, false, 1);
   std::copy_n(custom_frames[2].data.begin(), bytes.size(), bytes.begin());
   ASSERT_NEAR(decode_clu11(bytes).speed, 72.0f, 0.001f) << "설정한 MDPS 속도로 바꿔 보낸다";
 }

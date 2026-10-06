@@ -52,11 +52,9 @@ float lag_adjusted_desired_curvature(const LateralTarget &target, float speed_mp
                                      float prev_curvature, float roll_rad = 0.0f);
 
 struct LateralControllerConfig {
-  bool zero_release_when_inactive = true;
   bool force_engaged = false;
   SteeringParams steering_params{};
   DrivingParams driving_params{};
-  HyundaiCanConfig can_config{};
 };
 
 struct LateralControlResult {
@@ -164,8 +162,6 @@ private:
   // 제어 내부 상태를 초기값으로 되돌린다.
   void reset_control_state();
 
-  // LKAS HUD state 값을 lane availability와 active 상태에서 만든다.
-  int lkas_sys_state(bool active, bool left_lane, bool right_lane) const;
 
   // 최종 송신 frame 묶음을 만든다.
   std::vector<CanFrame> build_frames(const VehicleCanState &vehicle_state,
