@@ -176,10 +176,24 @@ cmake --build build-host --target replay_planner -j2
 
 Columns include the recorded and re-planned desired curvature, the MPC's own
 `target_curv`/`heading0`, the lane observations behind the plan, and the
-`laneless`/`mpc_valid` flags. Comparing two builds' CSVs over the same route is
-the check used for planner and solver changes. `--laneless` before the event
-files forces Laneless mode, so the same route can be re-planned both ways
-without touching `params/driving.json`.
+`laneless`/`mpc_valid` flags. Options go before the output file:
+
+- `--laneless` or `--lane` forces that mode, so the same route can be re-planned
+  both ways without touching `params/driving.json`.
+- `--steering`/`--driving` load parameter files, such as the route's
+  `params/` snapshot.
+- `--vehicle` feeds the recorded blinkers, driver torque and blind spot (from
+  the CAN, without the Panda's echoes, as controlsd does) and the recorded
+  `active`. Without it the planner sees no blinker and no driver, so lane
+  changes and turn desire never run.
+- `--exact` writes every `LateralTarget` field and the lag-adjusted curvature
+  as `%a` hex floats. Two builds that plan identically give byte-identical
+  files, which is the check used for planner refactors:
+
+```sh
+R=<route>; ./build-host/bin/replay_planner --exact --vehicle --lane \
+  --steering $R/params/steering.json --driving $R/params/driving.json out.csv $R/events/*.bin
+```
 
 ## Related documents
 

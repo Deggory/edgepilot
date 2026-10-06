@@ -27,7 +27,7 @@ cmake --build build-host --target replay_closed_loop -j2
 | 도구 | 사용 | 하는 일 |
 | --- | --- | --- |
 | `replay_closed_loop` | `[옵션] <out.csv\|-> <events.bin...>` | 차 응답을 시뮬레이션해 횡제어 루프를 폐루프로 재생한다 |
-| `replay_planner` | `[--laneless] <out.csv> <events.bin...>` | 녹화한 `ModelState`/`ControlState`로 `LateralPlanner`를 다시 돌려 요구 곡률을 CSV로 쓴다 |
+| `replay_planner` | `[--laneless\|--lane] [--exact] [--vehicle] [--steering s.json] [--driving d.json] <out.csv> <events.bin...>` | 녹화한 `ModelState`/`ControlState`로 `LateralPlanner`를 다시 돌려 요구 곡률을 CSV로 쓴다. `--vehicle`은 녹화한 깜빡이·운전자 토크·active를 주고, `--exact`는 모든 출력을 비트 그대로(`%a`) 써서 리팩토링 전후 비교에 쓴다 |
 | `replay_lateral_learners` | `[옵션] <events.bin...>` | paramsd·torqued 학습기를 녹화에 돌려 학습값을 출력한다 |
 | `replay_localization` | `<out.csv> <events.bin...>` | 녹화를 보드 `locationd`와 같은 코드(자세 칼만 필터 + lagd)에 기록 순서대로 흘려 IMU 묶음마다 CSV 한 행을 쓰고, 끝에 CAN 대비 요레이트 비교와 lagd 결과를 출력한다. IMU 기록이 있는 녹화가 필요하다 |
 | `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
