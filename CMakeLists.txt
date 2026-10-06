@@ -124,7 +124,7 @@ if(EDGEPILOT_BUILD_DIAGNOSTICS)
   # 테스트를 돌릴 곳도 없다. enable_testing()은 루트에 있어야 ctest가 하위 폴더를 찾는다.
   if(NOT CMAKE_CROSSCOMPILING)
     enable_testing()
-    add_subdirectory(gtest)
+    add_subdirectory(tests)
   endif()
   add_subdirectory(diagnostics)
 endif()

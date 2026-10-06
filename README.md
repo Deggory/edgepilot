@@ -143,7 +143,7 @@ source.
 ./scripts/run_host_tests.sh    # build and run every host unit test through ctest
 ```
 
-- [Host unit tests](gtest/README.md): what each test covers and how to add one
+- [Host unit tests](tests/README.md): what each test covers and how to add one
 - [Diagnostic tools](diagnostics/README.md): replay, dataset, and HUD tools
 - [Rehearsal](docs/rehearsal.md): replay a recorded drive through the whole runtime
   on the board (hardware H.264 decode into the frame ring, CAN on the same timeline)
@@ -159,7 +159,7 @@ src/            runtime processes and their libraries
 platform/       MaixCAM2 camera (VI), display (VO), CMM, and GDC wrappers
 params/         runtime parameters, hot-reloaded by the processes
 models/         the axmodel, its manifest, PTQ calibration samples
-gtest/          host unit tests
+tests/          host unit tests and the Python layout checks
 diagnostics/    replay, dataset, and HUD tools
 scripts/        SDK fetch, deploy, host tests, board-side Python
 tools/          axmodel pipeline, camera calibration, build container, route readers

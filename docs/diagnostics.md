@@ -5,7 +5,7 @@
 Procedures and measured results for the diagnostic tools. The tools themselves,
 their options, and how to build them are listed in
 [diagnostics/README.md](../diagnostics/README.md); the host unit tests are in
-[gtest/README.md](../gtest/README.md).
+[tests/README.md](../tests/README.md).
 
 ## HUD snapshots
 

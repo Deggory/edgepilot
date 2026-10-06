@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict
 
-# fastapi/uvicorn은 서버를 띄울 때만 import한다. diagnostics/check_param_server.py가
+# fastapi/uvicorn은 서버를 띄울 때만 import한다. tests/check_param_server.py가
 # stdlib만으로 ParamStore와 PARAM_METADATA를 쓴다. 요청 모델만은 모듈 전역에
 # 있어야 한다: `from __future__ import annotations` 때문에 FastAPI가 라우트의
 # 문자열 애너테이션을 모듈 전역에서 해석하므로, 지역 클래스면 NameError로 죽는다.

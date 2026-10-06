@@ -4,7 +4,7 @@
 
 ## Calibration and input-warp equivalence
 
-- `gtest/gtest_calibration_equivalence.cc` is a host-only verifier for the
+- `tests/gtest_calibration_equivalence.cc` is a host-only verifier for the
   openpilot-derived calibration and input-warp math. It checks the pose-based
   calibration state machine, manual-vs-online feedback policy,
   medmodel/sbigmodel homography matrices, UV `transform_scale_buffer(0.5)`
@@ -66,7 +66,7 @@ Two deliberate reductions:
 
 ### Optimality (host, no second solver)
 
-`gtest/gtest_lateral_mpc.cc` reimplements the dynamics and cost
+`tests/gtest_lateral_mpc.cc` reimplements the dynamics and cost
 independently and checks the warm-started fixed point across eight scenarios
 (standstill through 27 m/s): multiple-shooting defects stay below `2e-15` and the
 central-difference gradient of the true objective below `2e-9` relative to the
@@ -200,9 +200,9 @@ which needs `ModelState` to grow and the recording version to be bumped.
 
 ## Host self-tests
 
-The googletest binaries under `gtest/` need no board; `scripts/run_host_tests.sh`
+The googletest binaries under `tests/` need no board; `scripts/run_host_tests.sh`
 runs them all through `ctest`. What each one covers is listed in
-[gtest/README.md](../gtest/README.md).
+[tests/README.md](../tests/README.md).
 
 The standalone tools, host and on-board, are listed in
 [diagnostics/README.md](../diagnostics/README.md).

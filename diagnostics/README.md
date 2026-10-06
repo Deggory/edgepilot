@@ -2,7 +2,7 @@
 
 런타임 경로 밖에 두는 분석·재생·벤치 도구다. 기본 빌드에는 들어가지 않고
 `EDGEPILOT_BUILD_DIAGNOSTICS=ON`일 때 [`CMakeLists.txt`](CMakeLists.txt)가 만든다.
-단위 테스트는 [`../gtest/`](../gtest/README.md)에 있다.
+단위 테스트와 Python 검사(`check_*.py`)는 [`../tests/`](../tests/README.md)에 있다.
 
 ## 빌드
 
@@ -37,10 +37,6 @@ cmake --build build-host --target replay_closed_loop -j2
 
 재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다. 보통은 MaixCAM2 녹화를 쓰고, 같은 형식인
 K230 녹화도 읽는다.
-
-`check_param_server.py`는 파라미터 서버를, `check_recording_reader.py`는 분석 도구의 녹화 리더
-(`tools/model/recording_reader.py`)와 카메라 내부 파라미터를 C++ 헤더와 대조하는 Python unittest다.
-여기 있지만 `ctest`에 등록돼 `scripts/run_host_tests.sh`로 함께 돈다.
 
 ### replay_closed_loop
 

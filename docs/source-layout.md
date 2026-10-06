@@ -337,14 +337,14 @@ released after that short hold if they persist.
     fixture).
 - `tools/ui/hud_tools.py`
   - extracts `hud_snapshot` inputs from a route and composes its frames.
-- `gtest/`
+- `tests/`
   - host unit tests (`gtest_*.cc`, googletest + CTest), one self-contained file
     per target, each registered by one `add_host_test(<name> <libraries>)` line in
-    `gtest/CMakeLists.txt`; `scripts/run_host_tests.sh` runs them. See
-    `gtest/README.md`.
+    `tests/CMakeLists.txt`, and the Python checks `check_param_server.py` and
+    `check_recording_reader.py`, registered beside them;
+    `scripts/run_host_tests.sh` runs them all. See `tests/README.md`.
 - `diagnostics/`
-  - replay and HUD tools (built by `diagnostics/CMakeLists.txt`), and the
-    Python `check_param_server.py` and `check_recording_reader.py`; see
+  - replay and HUD tools (built by `diagnostics/CMakeLists.txt`); see
     `diagnostics/README.md`.
 
 ## Shared helpers

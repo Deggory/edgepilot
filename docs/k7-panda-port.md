@@ -96,7 +96,7 @@ library for `pandad`.
 
 Export one 60 s chunk of a continuous drive (a `recordd` route from the
 MaixCAM2 or the K230) to a `K230CAN1` fixture and replay it through the controller (see
-[gtest/README.md](../gtest/README.md) for why a parked chunk fails):
+[tests/README.md](../tests/README.md) for why a parked chunk fails):
 
 ```sh
 python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.can

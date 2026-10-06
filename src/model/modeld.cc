@@ -29,7 +29,7 @@ namespace {
 volatile sig_atomic_t g_stop = 0;
 
 /* EDGEPILOT_RAW_DUMP: replay 중 모델 raw 출력을 SCODMP1로 남긴다.
- * gtest/gtest_model_output_parser가 이 포맷을 읽어 보드 출력과 호스트
+ * tests/gtest_model_output_parser가 이 포맷을 읽어 보드 출력과 호스트
  * 기준을 프레임 단위로 비교할 수 있다(모델 교체 검증용). */
 class RawOutputDump
 {
