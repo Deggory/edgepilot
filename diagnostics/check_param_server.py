@@ -517,5 +517,26 @@ class BevTest(unittest.TestCase):
                 self.assertIn(bare, imports, f"{module.name} imports {bare}")
 
 
+class ManagerIpcTest(unittest.TestCase):
+    def test_manager_state_matches_cpp(self):
+        """manager.py가 쓰는 managerState 배치(overlayd가 읽는다)가 ipc_messages.h와 같아야 한다."""
+        from scripts import manager
+
+        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+
+        def constant(name):
+            return int(re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F]+|\d+);", source).group(1), 0)
+
+        def size(struct_name):
+            return int(re.search(rf"sizeof\({struct_name}\) == (\d+)", source).group(1))
+
+        self.assertEqual(manager.IPC_MAGIC, constant("kIpcMagic"))
+        self.assertEqual(manager.IPC_VERSION, constant("kIpcVersion"))
+        self.assertEqual(manager.MAX_PROCESSES, constant("kMaxProcesses"))
+        self.assertEqual(manager.HEADER_SIZE, size("IpcHeader"))
+        self.assertEqual(manager.PROCESS.size, size("ProcessState"))
+        self.assertEqual(manager.MANAGER_STATE_SIZE, size("ManagerState"))
+
+
 if __name__ == "__main__":
     unittest.main()
