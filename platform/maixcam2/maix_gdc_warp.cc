@@ -1,4 +1,4 @@
-#include "maix_gdc_warp.h"
+#include "maixcam2/maix_gdc_warp.h"
 
 #include "ax_ivps_api.h"
 #include "ax_sys_api.h"

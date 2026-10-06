@@ -85,7 +85,7 @@ panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화�
 
 ### 경로 제한
 
-횡방향 경로 제한은 런타임 항목이 아니라 `src/lateral_controller.h`의 고정
+횡방향 경로 제한은 런타임 항목이 아니라 `src/controls/lateral_controller.h`의 고정
 상수다: 최대 횡저크 `5.0 m/s^3`, 최대 횡가속 `3.3 m/s^2`, 최종 목표 곡률의 절대
 상한은 openpilot과 같은 `0.2 1/m`(`kMaxCurvature`)로 적용되며 설정 항목으로 노출하지 않는다.
 
@@ -120,7 +120,7 @@ panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화�
 `steer_max`(384), `steer_delta_up`(3), `steer_delta_down`(7), `steer_driver_allowance`(50),
 `steer_driver_multiplier`(2), `steer_driver_factor`(1)은 panda의 hyundai safety가 같은 숫자를
 강제하므로(`safety_hyundai.h`) 런타임 항목에서 뺐다. 올리면 panda가 프레임을 거부하고 내리면
-순정보다 약해지기만 한다. 바꾸려면 panda 펌웨어와 함께 바꾸고 `src/control_params.h`를 고친다.
+순정보다 약해지기만 한다. 바꾸려면 panda 펌웨어와 함께 바꾸고 `src/controls/control_params.h`를 고친다.
 조향각 게이트(`max_steering_angle_deg`)는 fault 회피가 켜져 있으면 실행되지 않는 죽은 경로라
 파라미터와 코드를 함께 제거했다. 2026-09-18 실측에서 fault 회피는 끌 수 없는 것으로 확인됐다.
 

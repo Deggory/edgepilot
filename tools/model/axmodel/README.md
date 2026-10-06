@@ -1,8 +1,8 @@
 # openpilot master supercombo → AX630C axmodel
 
-MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmodel`을 만드는 과정.
+MaixCAM2 런타임(`src/model/supercombo_model.cc`)이 쓰는 `models/supercombo.axmodel`을 만드는 과정.
 공개 `driving_supercombo.onnx`에서 입력 큐(이미지·desire·특징 시프트 레지스터)를 떼어 낸
-코어만 NPU에 올리고, 큐는 런타임이 CPU에서 관리한다(`src/model_temporal.h`).
+코어만 NPU에 올리고, 큐는 런타임이 CPU에서 관리한다(`src/model/model_temporal.h`).
 
 1. 코어 추출(onnx 필요):
    `python3 extract_core.py driving_supercombo.onnx core_fp32.onnx`
@@ -13,7 +13,7 @@ MaixCAM2 런타임(`src/supercombo_model.cc`)이 쓰는 `models/supercombo.axmod
    원래 코어는 헤드 13개를 Concat 하나로 이어 내보내서, Pulsar2가 전체를 U16 눈금 하나(약 0.007)로
    양자화했다. plan yaw·yaw rate가 0 아니면 ±0.007로 나와 laneless 곡률이 계단마다 약 0.6 m/s²씩
    뛰었다. 헤드마다 출력으로 내보내고 plan은 위치·방향·표준편차로 나눈다. 런타임이
-   `src/model_output_assembly.h`로 다시 모은다. 변환 설정의 `input`은 `core_split.onnx`다.
+   `src/model/model_output_assembly.h`로 다시 모은다. 변환 설정의 `input`은 `core_split.onnx`다.
 2. 보정·평가 데이터(onnxruntime 필요):
    `python3 make_core_data.py` → `calib/*.tar`, `eval/`. PTQ 샘플은 `models/ptq`,
    평가 묶음은 `QEXP094_DIR`(K230 0.9.4 평가, 저장소 밖)에서 읽는다.

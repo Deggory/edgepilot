@@ -1,8 +1,8 @@
 /* LateralMpc가 openpilot 0.8.16 lat_mpc의 OCP를 실제로 최적화하는지 검증한다.
  * 동역학/코스트를 여기서 독립으로 다시 구현해, 수렴점에서 참 목적함수의
  * 기울기가 0인지 유한차분으로 본다. 감도 A/B가 틀리면 이 검사가 걸린다. */
-#include "lateral_mpc.h"
-#include "model_output.h"
+#include "planning/lateral_mpc.h"
+#include "common/model_output.h"
 
 #include <gtest/gtest.h>
 

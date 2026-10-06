@@ -1,6 +1,6 @@
 /* BackgroundWriter: controlsd와 locationd가 SD 쓰기를 루프 밖으로 넘기는 스레드. 같은 경로에 쌓인 쓰기는
  * 최신 내용만 남고, 지우기도 같은 순서를 따르며, 없앨 때 남은 일을 마치고, 실패는 세어 둔다. */
-#include "background_writer.h"
+#include "common/background_writer.h"
 
 #include <gtest/gtest.h>
 #include <sys/stat.h>

@@ -2,11 +2,11 @@
  * 바이트), 20 Hz 직선 도로 모델, Panda 상태를 넣고 ControlState와 보낼 CAN을 본다: SET으로 결합해
  * LKAS11을 보내고 문이 열리면 해제한다, Panda가 허가하지 않으면 1초 유예 뒤 거부한다, 브레이크
  * 페달(AHB1)이 고정형 크루즈 추정을 끈다. 플래너는 그 자리에서 계산한다(SyncPlanner). */
-#include "can_frame.h"
-#include "control_holds.h"
-#include "controls_tick.h"
-#include "ipc_messages.h"
-#include "model_output.h"
+#include "car/can_frame.h"
+#include "controls/control_holds.h"
+#include "controls/controls_tick.h"
+#include "common/ipc_messages.h"
+#include "common/model_output.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>

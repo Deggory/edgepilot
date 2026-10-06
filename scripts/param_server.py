@@ -751,7 +751,7 @@ def flag_names(value: int, names: tuple) -> Dict[str, bool]:
 # ---------------------------------------------------------------- 학습 상태(paramsd·torqued)
 
 LEARNER_STATE_PATH = os.environ.get("EDGEPILOT_LEARNER_STATE_PATH", "/dev/shm/edgepilot_learner_state")
-# LearnerState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ offsetof와 대조한다.
+# LearnerState(src/common/ipc_messages.h) 필드 순서. check_param_server.py가 C++ offsetof와 대조한다.
 LEARNER_FIELDS = (
     ("timestamp_ns", "Q"), ("flags", "I"),
     ("steer_ratio", "f"), ("stiffness_factor", "f"), ("roll_rad", "f"),
@@ -880,7 +880,7 @@ class LearnerMonitor:
 # ---------------------------------------------------------------- locationd(자세·조향 지연)
 
 LOCALIZATION_STATE_PATH = os.environ.get("EDGEPILOT_LOCALIZATION_STATE_PATH", "/dev/shm/edgepilot_localization")
-# LocalizationState(src/ipc_messages.h) 필드 순서. check_param_server.py가 C++ 크기와 대조한다.
+# LocalizationState(src/common/ipc_messages.h) 필드 순서. check_param_server.py가 C++ 크기와 대조한다.
 LOCALIZATION_FIELDS = (
     ("timestamp_ns", "Q"), ("flags", "I"), ("lag_status", "I"),
     ("orientation_calib", "3f"), ("orientation_std", "3f"),
@@ -988,7 +988,7 @@ class CalibrationControl:
 
 # ---------------------------------------------------------------- BEV(위에서 본 장면)
 
-# 웹 BEV 탭이 읽는 ModelState·ControlState 필드의 바이트 위치(src/ipc_messages.h). 보드는 두 페이로드를
+# 웹 BEV 탭이 읽는 ModelState·ControlState 필드의 바이트 위치(src/common/ipc_messages.h). 보드는 두 페이로드를
 # 발행된 그대로 흘려보내기만 하고(해석·JSON 없음), 페이지(web/bev_data.js)가 /api/bev에서 이 위치를
 # 받아 직접 읽고 그린다. check_param_server.py가 EDGEPILOT_MODEL_STATE_AT·EDGEPILOT_CONTROL_STATE_AT과
 # 대조한다.

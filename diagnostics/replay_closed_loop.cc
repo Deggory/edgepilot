@@ -16,18 +16,18 @@
  *   --torque F,O,R             torqued 학습값(배율·절편·마찰)을 이 값으로 바꿔 쓴다(유효해진 뒤를 본다)
  *   --camera-shift D           카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다
  *                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08). */
-#include "control_params.h"
-#include "event_log_reader.h"
-#include "hyundai_can.h"
-#include "ipc_messages.h"
-#include "recorded_model_state.h"
-#include "lateral_controller.h"
-#include "lateral_path.h"
-#include "lateral_planner.h"
-#include "lateral_torque.h"
-#include "recording_format.h"
-#include "utils_time.h"
-#include "vehicle_can.h"
+#include "controls/control_params.h"
+#include "recording/event_log_reader.h"
+#include "car/hyundai_can.h"
+#include "common/ipc_messages.h"
+#include "recording/recorded_model_state.h"
+#include "controls/lateral_controller.h"
+#include "controls/lateral_path.h"
+#include "planning/lateral_planner.h"
+#include "controls/lateral_torque.h"
+#include "recording/recording_format.h"
+#include "common/utils_time.h"
+#include "car/vehicle_can.h"
 
 #include <algorithm>
 #include <cmath>

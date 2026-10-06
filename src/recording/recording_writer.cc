@@ -1,0 +1,611 @@
+#include "recording/recording_writer.h"
+
+#include "recording/recorded_can.h"
+
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <sys/statvfs.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <ctime>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace {
+
+constexpr uint64_t kSegmentDurationNs = 60ULL * 1000000000ULL;
+constexpr uint64_t kStorageCheckIntervalNs = 5ULL * 1000000000ULL;
+constexpr uint64_t kMinimumFreeBytes = 5ULL * 1024 * 1024 * 1024;
+constexpr unsigned kMinimumFreePercent = 10;
+constexpr size_t kFileBufferBytes = 1024 * 1024;
+
+bool make_directories(const std::string &path) {
+  if (path.empty()) return false;
+  std::string current;
+  if (path.front() == '/') current = "/";
+  size_t start = path.front() == '/' ? 1 : 0;
+  while (start <= path.size()) {
+    const size_t slash = path.find('/', start);
+    const std::string component = path.substr(start, slash - start);
+    if (!component.empty()) {
+      if (!current.empty() && current.back() != '/') current += '/';
+      current += component;
+      if (mkdir(current.c_str(), 0775) != 0 && errno != EEXIST) return false;
+    }
+    if (slash == std::string::npos) break;
+    start = slash + 1;
+  }
+  return true;
+}
+
+/* 보드에는 tz 데이터가 없어 localtime이 UTC로 떨어진다. route 이름은 주행을
+ * 되짚는 사람이 읽는 값이므로 KST(DST 없음)로 고정한다. */
+constexpr std::chrono::hours kKoreaStandardTimeOffset{9};
+
+std::string route_name() {
+  const auto now = std::chrono::system_clock::now();
+  const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch()) % 1000;
+  const std::time_t wall =
+      std::chrono::system_clock::to_time_t(now + kKoreaStandardTimeOffset);
+  std::tm korea{};
+  gmtime_r(&wall, &korea);
+  std::ostringstream name;
+  name << std::put_time(&korea, "%Y-%m-%d--%H-%M-%S") << '-'
+       << std::setw(3) << std::setfill('0') << milliseconds.count();
+  return name.str();
+}
+
+/* 닫힌 세그먼트를 SD로 옮긴다. 한 번에 복사하면 더티 페이지가 쌓였다가 한꺼번에 쓰이면서
+ * SD(저가 카드는 쓰기 수 MB/s)를 몇 초씩 붙잡아 다른 프로세스의 IO가 멈췄다(보드에서 부하
+ * 10, SSH 한 번에 36초). 1 MB씩 쓰고 바로 fdatasync하며 초당 kMoveBytesPerSecond로
+ * 제한한다. 녹화 평균(8 Mbps 영상 + CAN·상태 로그 ≈ 1.6 MB/s)보다 넉넉히 빠르다. */
+constexpr size_t kMoveChunkBytes = 1 << 20;
+constexpr double kMoveBytesPerSecond = 3.0 * (1 << 20);
+
+bool copy_file(const std::string &source, const std::string &destination) {
+  const int in = ::open(source.c_str(), O_RDONLY);
+  if (in < 0) return false;
+  const int out = ::open(destination.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (out < 0) {
+    ::close(in);
+    return false;
+  }
+  std::vector<char> buffer(kMoveChunkBytes);
+  bool ok = true;
+  const auto start = std::chrono::steady_clock::now();
+  size_t copied = 0;
+  while (ok) {
+    const ssize_t n = ::read(in, buffer.data(), buffer.size());
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) {
+      ok = n == 0;
+      break;
+    }
+    for (ssize_t done = 0; ok && done < n;) {
+      const ssize_t w = ::write(out, buffer.data() + done, static_cast<size_t>(n - done));
+      if (w < 0 && errno == EINTR) continue;
+      ok = w > 0;
+      if (ok) done += w;
+    }
+#if defined(__linux__)
+    if (ok) ::fdatasync(out);
+#endif
+    copied += static_cast<size_t>(n);
+    const auto due = start + std::chrono::duration<double>(copied / kMoveBytesPerSecond);
+    std::this_thread::sleep_until(due);
+  }
+  ok = ::close(out) == 0 && ok;
+  ::close(in);
+  return ok;
+}
+
+}  // namespace
+
+/* ---- StagingMover ---- */
+
+void StagingMover::recover(const std::string &staging_root, const std::string &root) {
+  DIR *stale = opendir(staging_root.c_str());
+  if (!stale) return;
+  while (dirent *entry = readdir(stale)) {
+    const std::string name = entry->d_name;
+    if (name == "." || name == "..") continue;
+    std::fprintf(stderr, "recordd: recovering staged route %s\n", name.c_str());
+    enqueue_tree(staging_root + "/" + name, root + "/" + name);
+  }
+  closedir(stale);
+}
+
+void StagingMover::enqueue_file(std::string from, std::string to) {
+  enqueue(Job{false, std::move(from), std::move(to)});
+}
+
+void StagingMover::enqueue_tree(std::string from, std::string to) {
+  enqueue(Job{true, std::move(from), std::move(to)});
+}
+
+void StagingMover::enqueue(Job &&job) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.push_back(std::move(job));
+    pending_.store(queue_.size());
+  }
+  cv_.notify_one();
+}
+
+void StagingMover::stop() {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stop_ = true;
+  }
+  cv_.notify_one();
+  if (thread_.joinable()) thread_.join();
+}
+
+void StagingMover::loop() {
+#if defined(__linux__)
+  // 옮기기는 급하지 않으니 가장 낮은 IO 우선순위(idle)로 한다: 다른 IO가 없을 때만 쓴다.
+  constexpr int kIoprioWhoProcess = 1, kIoprioClassIdle = 3, kIoprioClassShift = 13;
+  syscall(SYS_ioprio_set, kIoprioWhoProcess, static_cast<int>(syscall(SYS_gettid)),
+          kIoprioClassIdle << kIoprioClassShift);
+#endif
+  while (true) {
+    Job job;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+      if (queue_.empty()) {
+        if (stop_) return;
+        continue;
+      }
+      job = std::move(queue_.front());
+      queue_.pop_front();
+      pending_.store(queue_.size());
+    }
+    if (job.tree) {
+      move_tree(job.from, job.to);
+    } else {
+      move_file(job.from, job.to);
+    }
+  }
+}
+
+void StagingMover::move_file(const std::string &from, const std::string &to) {
+  const size_t slash = to.rfind('/');
+  if (slash != std::string::npos) make_directories(to.substr(0, slash));
+  if (!copy_file(from, to)) {
+    std::fprintf(stderr, "recordd: move failed %s -> %s: %s\n",
+                 from.c_str(), to.c_str(), std::strerror(errno));
+    return;
+  }
+  unlink(from.c_str());
+}
+
+void StagingMover::move_tree(const std::string &from, const std::string &to) {
+  DIR *directory = opendir(from.c_str());
+  if (!directory) return;
+  while (dirent *entry = readdir(directory)) {
+    const std::string name = entry->d_name;
+    if (name == "." || name == "..") continue;
+    const std::string source = from + "/" + name;
+    struct stat info = {};
+    if (stat(source.c_str(), &info) != 0) continue;
+    if (S_ISDIR(info.st_mode)) {
+      move_tree(source, to + "/" + name);
+    } else {
+      move_file(source, to + "/" + name);
+    }
+  }
+  closedir(directory);
+  rmdir(from.c_str());
+}
+
+/* ---- RecordingWriter ---- */
+
+RecordingWriter::RecordingWriter(std::string root, std::string params_directory,
+                                 unsigned width, unsigned height, unsigned fps,
+                                 unsigned bitrate, VideoCodec codec)
+    : root_(std::move(root)), params_directory_(std::move(params_directory)),
+      width_(width), height_(height), fps_(fps), bitrate_(bitrate), codec_(codec) {
+  const char *staging = std::getenv("EDGEPILOT_RECORD_STAGING");
+  staging_root_ = staging && staging[0] != '\0' ? staging : "/tmp/record_staging";
+  /* 이전 세션이 route 도중 죽었으면 스테이징 잔여가 tmpfs(램)를 계속
+   * 점유한다. 시작할 때 남아 있는 route를 SD로 회수한다. */
+  mover_.recover(staging_root_, root_);
+}
+
+RecordingWriter::~RecordingWriter() {
+  close();
+}
+
+void RecordingWriter::enqueue(PendingWrite &&write, bool force) {
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (!force && queue_.size() >= kMaximumPendingWrites) {
+      queue_drops_.fetch_add(1);
+      return;
+    }
+    queue_.push_back(std::move(write));
+  }
+  queue_cv_.notify_one();
+}
+
+void RecordingWriter::worker_loop() {
+  while (true) {
+    PendingWrite write;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex_);
+      queue_cv_.wait(lock, [this] { return !queue_.empty(); });
+      write = std::move(queue_.front());
+      queue_.pop_front();
+    }
+    const bool stop = write.kind == PendingWrite::Kind::Stop;
+    process(std::move(write));
+    if (stop) return;
+  }
+}
+
+void RecordingWriter::process(PendingWrite &&write) {
+  switch (write.kind) {
+    case PendingWrite::Kind::Enable:
+      if (!start_route(write.timestamp_ns)) {
+        requested_enabled_.store(false);
+      }
+      break;
+    case PendingWrite::Kind::Disable:
+      close_route(true);
+      break;
+    case PendingWrite::Kind::CodecConfig:
+      codec_config_ = std::move(write.data);
+      break;
+    case PendingWrite::Kind::EncodedFrame:
+      write_encoded_frame_impl(write.frame, write.data.data(), write.data.size(),
+                               write.keyframe);
+      break;
+    case PendingWrite::Kind::Can:
+    case PendingWrite::Kind::State:
+      write_record_impl(write.record_type, write.timestamp_ns, write.data.data(),
+                        write.data.size());
+      break;
+    case PendingWrite::Kind::Stop:
+      close_route(true);
+      break;
+  }
+}
+
+FILE *RecordingWriter::open_buffered(const std::string &path) {
+  FILE *file = std::fopen(path.c_str(), "wb");
+  if (file) setvbuf(file, nullptr, _IOFBF, kFileBufferBytes);
+  return file;
+}
+
+bool RecordingWriter::has_storage_reserve() const {
+  struct statvfs space {};
+  if (statvfs(root_.c_str(), &space) != 0 || space.f_blocks == 0) return false;
+  const uint64_t block_size = space.f_frsize ? space.f_frsize : space.f_bsize;
+  const uint64_t free_bytes = block_size * space.f_bavail;
+  const uint64_t total_bytes = block_size * space.f_blocks;
+  return free_bytes >= kMinimumFreeBytes &&
+      free_bytes * 100ULL >= total_bytes * kMinimumFreePercent;
+}
+
+void RecordingWriter::set_enabled(bool enabled, uint64_t now_ns) {
+  if (!enabled) {
+    if (!requested_enabled_.exchange(false)) return;
+    blocked_for_space_.store(false);
+    PendingWrite write;
+    write.kind = PendingWrite::Kind::Disable;
+    enqueue(std::move(write), true);
+    return;
+  }
+  if (requested_enabled_.exchange(true)) return;
+  blocked_for_space_.store(false);
+  PendingWrite write;
+  write.kind = PendingWrite::Kind::Enable;
+  write.timestamp_ns = now_ns;
+  enqueue(std::move(write), true);
+}
+
+bool RecordingWriter::start_route(uint64_t now_ns) {
+  if (!make_directories(root_) || !has_storage_reserve()) {
+    std::fprintf(stderr, "recordd: recording refused: storage reserve is below 5 GiB/10%%\n");
+    blocked_for_space_.store(true);
+    active_.store(false);
+    return false;
+  }
+  /* 활성 route는 tmpfs에 쓰고 mover가 닫힌 파일을 SD로 옮긴다. */
+  const std::string name = route_name();
+  route_path_ = staging_root_ + "/" + name;
+  final_route_path_ = root_ + "/" + name;
+  if (!make_directories(route_path_ + "/segments")) {
+    std::fprintf(stderr, "recordd: create route failed path=%s error=%s\n",
+                 route_path_.c_str(), std::strerror(errno));
+    return false;
+  }
+  segment_index_ = 0;
+  total_video_frames_.store(0);
+  event_records_ = 0;
+  route_start_ns_ = now_ns;
+  event_chunk_index_ = 0;
+  /* 이벤트 로그는 route 단위 단일 파일이 아니라 60초 청크다. CAN 로깅만으로
+   * ~0.5 MB/s가 쌓이므로 route 단위 파일은 긴 주행에서 tmpfs 스테이징을
+   * 가득 채운다(988 MB / 30분). 닫힌 청크는 세그먼트처럼 mover가 옮긴다. */
+  if (!make_directories(route_path_ + "/events") || !open_event_chunk(now_ns)) {
+    std::fprintf(stderr, "recordd: open event log failed: %s\n", std::strerror(errno));
+    close_route(false);
+    return false;
+  }
+  snapshot_params();
+  write_manifest(false);
+  next_storage_check_ns_ = now_ns + kStorageCheckIntervalNs;
+  active_.store(true);
+  std::fprintf(stderr, "recordd: recording started route=%s staging=%s\n",
+               final_route_path_.c_str(), route_path_.c_str());
+  return true;
+}
+
+void RecordingWriter::set_codec_config(const uint8_t *data, size_t size) {
+  if (!data || size == 0) return;
+  PendingWrite write;
+  write.kind = PendingWrite::Kind::CodecConfig;
+  write.data.assign(data, data + size);
+  enqueue(std::move(write));
+}
+
+bool RecordingWriter::open_segment(const RoadAiFrame &frame) {
+  std::ostringstream number;
+  number << std::setw(3) << std::setfill('0') << segment_index_;
+  segment_relative_ = "segments/" + number.str();
+  const std::string directory = route_path_ + "/" + segment_relative_;
+  if (!make_directories(directory)) return false;
+  video_file_ = open_buffered(directory + "/road." + video_codec_name(codec_));
+  index_file_ = open_buffered(directory + "/frames.bin");
+  if (!video_file_ || !index_file_) {
+    close_segment();
+    return false;
+  }
+  segment_start_ns_ = frame.timestamp_ns;
+  video_offset_ = 0;
+  if (!codec_config_.empty()) {
+    std::fwrite(codec_config_.data(), 1, codec_config_.size(), video_file_);
+    video_offset_ += codec_config_.size();
+  }
+  FrameIndexHeader header;
+  header.record_size = sizeof(FrameIndexRecord);
+  header.width = width_;
+  header.height = height_;
+  header.fps = fps_;
+  header.segment_start_ns = frame.timestamp_ns;
+  if (std::fwrite(&header, sizeof(header), 1, index_file_) != 1) {
+    close_segment();
+    return false;
+  }
+  return true;
+}
+
+void RecordingWriter::write_encoded_frame(const RoadAiFrame &frame,
+                                           const uint8_t *data, size_t size,
+                                           bool keyframe) {
+  if (!requested_enabled_.load() || !data || size == 0) return;
+  PendingWrite write;
+  write.kind = PendingWrite::Kind::EncodedFrame;
+  write.frame = frame;
+  write.keyframe = keyframe;
+  write.data.assign(data, data + size);
+  enqueue(std::move(write));
+}
+
+void RecordingWriter::write_encoded_frame_impl(const RoadAiFrame &frame,
+                                                const uint8_t *data, size_t size,
+                                                bool keyframe) {
+  if (!event_file_) return;
+  if (frame.timestamp_ns >= next_storage_check_ns_) {
+    next_storage_check_ns_ = frame.timestamp_ns + kStorageCheckIntervalNs;
+    if (!has_storage_reserve()) {
+      blocked_for_space_.store(true);
+      requested_enabled_.store(false);
+      close_route(true);
+      std::fprintf(stderr, "recordd: recording stopped to preserve storage reserve\n");
+      return;
+    }
+  }
+  if (!video_file_) {
+    if (!keyframe || codec_config_.empty() || !open_segment(frame)) return;
+  } else if (keyframe && frame.timestamp_ns - segment_start_ns_ >= kSegmentDurationNs) {
+    close_segment();
+    ++segment_index_;
+    if (!open_segment(frame)) return;
+  }
+
+  const uint64_t offset = video_offset_;
+  if (std::fwrite(data, 1, size, video_file_) != size) {
+    std::fprintf(stderr, "recordd: video write failed: %s\n", std::strerror(errno));
+    return;
+  }
+  FrameIndexRecord index;
+  index.frame_id = frame.frame_id;
+  index.capture_timestamp_ns = frame.timestamp_ns;
+  index.encode_index = total_video_frames_.load();
+  index.file_offset = offset;
+  index.packet_size = static_cast<uint32_t>(size);
+  index.flags = keyframe ? 1U : 0U;
+  if (std::fwrite(&index, sizeof(index), 1, index_file_) != 1) {
+    std::fprintf(stderr, "recordd: frame index write failed: %s\n", std::strerror(errno));
+    return;
+  }
+  video_offset_ += size;
+  total_video_frames_.fetch_add(1);
+}
+
+bool RecordingWriter::open_event_chunk(uint64_t now_ns) {
+  std::ostringstream number;
+  number << std::setw(3) << std::setfill('0') << event_chunk_index_;
+  event_file_ = open_buffered(route_path_ + "/events/" + number.str() + ".bin");
+  if (!event_file_) return false;
+  event_chunk_start_ns_ = now_ns;
+  EventFileHeader header;
+  header.route_start_ns = route_start_ns_;
+  if (std::fwrite(&header, sizeof(header), 1, event_file_) != 1) {
+    std::fclose(event_file_);
+    event_file_ = nullptr;
+    return false;
+  }
+  return true;
+}
+
+void RecordingWriter::close_event_chunk() {
+  if (!event_file_) return;
+  std::fclose(event_file_);
+  event_file_ = nullptr;
+  std::ostringstream number;
+  number << std::setw(3) << std::setfill('0') << event_chunk_index_;
+  mover_.enqueue_file(route_path_ + "/events/" + number.str() + ".bin",
+                      final_route_path_ + "/events/" + number.str() + ".bin");
+}
+
+bool RecordingWriter::write_event_header(RecordType type, uint64_t timestamp_ns,
+                                          uint32_t payload_size) {
+  if (!event_file_) return false;
+  if (timestamp_ns >= event_chunk_start_ns_ &&
+      timestamp_ns - event_chunk_start_ns_ >= kSegmentDurationNs) {
+    close_event_chunk();
+    ++event_chunk_index_;
+    if (!open_event_chunk(timestamp_ns)) {
+      std::fprintf(stderr, "recordd: open event chunk failed: %s\n",
+                   std::strerror(errno));
+      return false;
+    }
+  }
+  EventRecordHeader header;
+  header.timestamp_ns = timestamp_ns;
+  header.type = static_cast<uint16_t>(type);
+  header.payload_size = payload_size;
+  return std::fwrite(&header, sizeof(header), 1, event_file_) == 1;
+}
+
+/* 배치를 큐에 넣기 전에 디스크 형식(recorded_can.h)으로 직렬화한다. 이후 경로는
+ * 상태 스냅샷과 같다. */
+void RecordingWriter::write_can(RecordType type, const CanBatch &batch) {
+  if (!requested_enabled_.load() ||
+      (type != RecordType::CanRx && type != RecordType::CanTx)) return;
+  PendingWrite write;
+  write.kind = PendingWrite::Kind::Can;
+  write.record_type = type;
+  write.timestamp_ns = batch.timestamp_ns;
+  write.data = encode_recorded_can(batch);
+  enqueue(std::move(write));
+}
+
+void RecordingWriter::write_state(RecordType type, uint64_t timestamp_ns,
+                                  const void *data, size_t size) {
+  if (!requested_enabled_.load() || !data ||
+      size == 0 || size > UINT32_MAX) return;
+  PendingWrite write;
+  write.kind = PendingWrite::Kind::State;
+  write.record_type = type;
+  write.timestamp_ns = timestamp_ns;
+  write.data.assign(static_cast<const uint8_t *>(data),
+                    static_cast<const uint8_t *>(data) + size);
+  enqueue(std::move(write));
+}
+
+void RecordingWriter::write_record_impl(RecordType type, uint64_t timestamp_ns,
+                                        const void *data, size_t size) {
+  if (!event_file_) return;
+  if (!write_event_header(type, timestamp_ns, static_cast<uint32_t>(size))) return;
+  if (std::fwrite(data, 1, size, event_file_) == size) ++event_records_;
+}
+
+void RecordingWriter::close_segment() {
+  const bool had_files = video_file_ != nullptr || index_file_ != nullptr;
+  if (video_file_) std::fclose(video_file_);
+  if (index_file_) std::fclose(index_file_);
+  video_file_ = nullptr;
+  index_file_ = nullptr;
+  segment_start_ns_ = 0;
+  video_offset_ = 0;
+  if (had_files && !segment_relative_.empty()) {
+    const std::string video = std::string("/road.") + video_codec_name(codec_);
+    for (const std::string &file : {video, std::string("/frames.bin")}) {
+      mover_.enqueue_file(route_path_ + "/" + segment_relative_ + file,
+                          final_route_path_ + "/" + segment_relative_ + file);
+    }
+  }
+  segment_relative_.clear();
+}
+
+void RecordingWriter::write_manifest(bool complete) const {
+  if (route_path_.empty()) return;
+  std::ofstream manifest(route_path_ + "/manifest.json", std::ios::trunc);
+  manifest << "{\n"
+           << "  \"version\": " << kRecordingVersion << ",\n"
+           << "  \"complete\": " << (complete ? "true" : "false") << ",\n"
+           << "  \"video_codec\": \"" << video_codec_name(codec_) << "\",\n"
+           << "  \"width\": " << width_ << ",\n"
+           << "  \"height\": " << height_ << ",\n"
+           << "  \"fps\": " << fps_ << ",\n"
+           << "  \"bitrate\": " << bitrate_ << ",\n"
+           << "  \"segment_seconds\": 60,\n"
+           << "  \"video_frames\": " << total_video_frames_.load() << ",\n"
+           << "  \"event_records\": " << event_records_ << "\n"
+           << "}\n";
+}
+
+void RecordingWriter::snapshot_params() const {
+  DIR *directory = opendir(params_directory_.c_str());
+  if (!directory) return;
+  const std::string destination = route_path_ + "/params";
+  make_directories(destination);
+  while (dirent *entry = readdir(directory)) {
+    const std::string name = entry->d_name;
+    if (name.empty() || name[0] == '.') continue;
+    if (name.size() < 5 || name.substr(name.size() - 5) != ".json") continue;
+    copy_file(params_directory_ + "/" + name, destination + "/" + name);
+  }
+  closedir(directory);
+}
+
+void RecordingWriter::close_route(bool complete) {
+  if (!event_file_ && route_path_.empty()) return;
+  close_segment();
+  close_event_chunk();
+  write_manifest(complete);
+  if (!route_path_.empty()) {
+    std::fprintf(stderr,
+                 "recordd: recording stopped route=%s frames=%llu events=%llu\n",
+                 final_route_path_.c_str(),
+                 static_cast<unsigned long long>(total_video_frames_.load()),
+                 static_cast<unsigned long long>(event_records_));
+    /* 남은 route 파일(events.bin, manifest, params, 마지막 세그먼트)을
+     * 전부 SD로 옮긴다. mover는 순서대로 처리하므로 앞선 파일 이동이
+     * 끝난 뒤 잔여만 쓸어 담는다. */
+    mover_.enqueue_tree(route_path_, final_route_path_);
+  }
+  route_path_.clear();
+  final_route_path_.clear();
+  segment_index_ = 0;
+  active_.store(false);
+}
+
+void RecordingWriter::close() {
+  if (!worker_.joinable()) return;
+  requested_enabled_.store(false);
+  PendingWrite write;
+  write.kind = PendingWrite::Kind::Stop;
+  enqueue(std::move(write), true);
+  if (worker_.joinable()) worker_.join();
+  mover_.stop();
+}

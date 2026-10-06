@@ -47,7 +47,7 @@ build-host/bin/gtest_calibration_equivalence
 
 ## Lateral MPC solver
 
-`src/lateral_mpc.*` replaces the prebuilt riscv64 acados/HPIPM runtime that the
+`src/planning/lateral_mpc.*` replaces the prebuilt riscv64 acados/HPIPM runtime that the
 K230 build used to keep in `deps/acados`. It solves the same OCP as openpilot 0.8.16's
 `lateral_mpc_lib`. The problem was recovered from the generated solver's own
 `.rodata` and cross-checked against openpilot's `lat_mpc.py`: T_IDXS shooting
@@ -119,7 +119,7 @@ The A/B harness (`benchmarks/acados_lateral_mpc.h`,
 `benchmarks/check_lateral_mpc_vs_acados.cc`) was never committed, so the A/B
 cannot be re-run from this repository. Only the prebuilt acados runtime
 (`deps/acados`) is in the history, up to the commit that replaced it with
-`src/lateral_mpc.*`.
+`src/planning/lateral_mpc.*`.
 
 ### Steering-rate cost term (from 0.9.4)
 

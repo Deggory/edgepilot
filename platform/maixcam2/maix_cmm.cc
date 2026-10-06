@@ -1,4 +1,4 @@
-#include "maix_cmm.h"
+#include "maixcam2/maix_cmm.h"
 
 #include "ax_sys_api.h"
 

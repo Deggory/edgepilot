@@ -1,8 +1,8 @@
 /* overlay_state: 공유 상태 스냅샷 → HUD 상태 매핑과 알림 카드 선택(우선순위). 보드 없이, OpenCV 없이
  * 돈다. */
-#include "control_block.h"
-#include "control_params.h"
-#include "overlay_state.h"
+#include "controls/control_block.h"
+#include "controls/control_params.h"
+#include "hud/overlay_state.h"
 
 #include <gtest/gtest.h>
 #include <cmath>

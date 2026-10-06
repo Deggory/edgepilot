@@ -73,9 +73,9 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 
 1. `gtest/gtest_<이름>.cc` 하나에 테스트와 도우미를 모두 둔다. 공유 헤더는 두지 않는다.
 2. [`CMakeLists.txt`](CMakeLists.txt)에 한 줄을 더한다:
-   `add_host_test(gtest_<이름> <라이브러리...>)`. 라이브러리는 루트 CMake의 `common`,
-   `utils_json`, `control_core`, `planning`, `controls`, `perception`, `panda_codec`, `localization`,
-   `recording_writer`, `overlay_state`, `overlay`, `alert_tones` 중에서 고른다.
+   `add_host_test(gtest_<이름> <라이브러리...>)`. 라이브러리는 `src/<폴더>/CMakeLists.txt`가 정의하는
+   `common`, `utils_json`, `car`, `control_core`, `planning`, `learners`, `controls`, `localization`,
+   `model`, `panda`, `recording`, `overlay_state`, `overlay`, `alert_tones` 중에서 고른다.
 3. 작성 규칙:
    - 파일 첫머리에 `/* */` 한글 주석으로 무엇을, 무엇과 대조해 검사하는지 적는다.
    - TEST와 도우미는 익명 namespace 안에 둔다.

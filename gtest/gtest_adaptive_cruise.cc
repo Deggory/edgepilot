@@ -1,7 +1,7 @@
 /* AdaptiveCruiseController: 비전 앞차에 맞춰 SET/RES 버튼을 흉내 내는 크루즈(이 차에는 SCC가
  * 없다). 차량 모형이 버튼 펄스를 실제 설정 속도 변화로 바꿔 돌려준다. */
-#include "adaptive_cruise.h"
-#include "model_output.h"
+#include "controls/adaptive_cruise.h"
+#include "common/model_output.h"
 
 #include <gtest/gtest.h>
 #include <cmath>

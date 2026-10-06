@@ -15,16 +15,16 @@
  *   무효면 ESP12).
  * --metric-from N: 곡률 대조를 0부터 센 N번 이벤트 파일부터 센다(앞 파일로 학습을 수렴시킬 때).
  * 끝에 결합 직진 구간의 조향각 기반 곡률(학습값 차량 모델) − 요레이트 곡률 평균을 출처별로 출력한다. */
-#include "control_params.h"
-#include "event_log_reader.h"
-#include "ipc_messages.h"
-#include "lateral_learners.h"
-#include "localizer_inputs.h"
-#include "lateral_torque.h"
+#include "controls/control_params.h"
+#include "recording/event_log_reader.h"
+#include "common/ipc_messages.h"
+#include "learners/lateral_learners.h"
+#include "learners/localizer_inputs.h"
+#include "controls/lateral_torque.h"
 #include "recorded_vehicle_can.h"
-#include "recording_format.h"
-#include "utils_file.h"
-#include "vehicle_can.h"
+#include "recording/recording_format.h"
+#include "common/utils_file.h"
+#include "car/vehicle_can.h"
 
 #include <algorithm>
 #include <cmath>

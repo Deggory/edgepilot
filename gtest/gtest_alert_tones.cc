@@ -1,6 +1,6 @@
 /* 알림음 합성: 모든 알림이 0에서 시작해 0으로 끝나고(딸깍 소리 없음), 봉우리가 같고, 길이가
  * 알림답게 짧으며, 서로 다른 소리인지 본다. */
-#include "alert_tones.h"
+#include "hud/alert_tones.h"
 
 #include <gtest/gtest.h>
 

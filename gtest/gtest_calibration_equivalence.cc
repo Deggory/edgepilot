@@ -1,11 +1,11 @@
 /* 온라인 보정과 모델 입력 변환을 openpilot 참조식과 대조한다: OnlineCalibrator ↔ calibrationd.py,
  * calibration_service의 저장·복원·수동 보정, app_config 환경 변수, 투영 행렬과 YUV6 워프 ↔
  * openpilot OpenCL 워프. */
-#include "app_config.h"
-#include "calibration_service.h"
-#include "utils_math.h"
-#include "model_input_transform.h"
-#include "calibration_online.h"
+#include "common/app_config.h"
+#include "model/calibration_service.h"
+#include "common/utils_math.h"
+#include "model/model_input_transform.h"
+#include "model/calibration_online.h"
 
 #include <gtest/gtest.h>
 

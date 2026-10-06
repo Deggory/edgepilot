@@ -6,15 +6,15 @@
  *                       [--force-engaged] [--dump out.txt] <events.bin...>
  *   --force-engaged는 EDGEPILOT_FORCE_ENGAGED처럼 버튼 없이 결합한다(녹화 전에 결합해 둔 route용).
  *   마지막 줄에 출력 전체의 FNV-1a 다이제스트와, 녹화된 ControlState와의 일치율을 쓴다. */
-#include "adaptive_cruise.h"
-#include "control_params.h"
-#include "controls_tick.h"
-#include "event_log_reader.h"
-#include "ipc_messages.h"
-#include "recorded_can.h"
-#include "recorded_model_state.h"
-#include "recording_format.h"
-#include "utils_file.h"
+#include "controls/adaptive_cruise.h"
+#include "controls/control_params.h"
+#include "controls/controls_tick.h"
+#include "recording/event_log_reader.h"
+#include "common/ipc_messages.h"
+#include "recording/recorded_can.h"
+#include "recording/recorded_model_state.h"
+#include "recording/recording_format.h"
+#include "common/utils_file.h"
 
 #include <cmath>
 #include <cstdio>

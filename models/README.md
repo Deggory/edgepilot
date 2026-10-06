@@ -54,7 +54,7 @@ desire              [1, 25, 8]         float   5 Hz max-pooled desire history
 features_buffer     [1, 24, 512]       float   5 Hz hidden-state history
 traffic_convention  [1, 2]             float
 -> 15 outputs (out_meta ... out_desire_state), reassembled into the openpilot
-   [2576] layout by src/model_output_assembly.h
+   [2576] layout by src/model/model_output_assembly.h
 ```
 
 The heads are separate outputs (tools/model/axmodel/split_outputs.py) so each
@@ -74,7 +74,7 @@ Both image towers are active: the runtime warps one `1280x720` NV12 frame
 through two calibrated virtual cameras (`medmodel` fl=910 and `sbigmodel`
 fl=455) and keeps a 5-frame history per tower. The queues the released ONNX
 keeps in its graph (images, desire, features) are kept on the CPU by
-`src/model_temporal.h`; the 512-float hidden state at offset 1064 is fed back
+`src/model/model_temporal.h`; the 512-float hidden state at offset 1064 is fed back
 through `features_buffer`.
 
 `modeld` verifies this contract at load and refuses any other axmodel, so

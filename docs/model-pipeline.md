@@ -27,8 +27,8 @@ The model is the openpilot master `driving_supercombo` with its history queues
 cut off, compiled with Pulsar2 6.0 as a U16 axmodel (S8 weights, SmoothQuant)
 whose image inputs are uint8. How it is built is in
 [tools/model/axmodel](../tools/model/axmodel/README.md); the result is committed
-as `models/supercombo.axmodel` and deployed by `scripts/upload_to_board.sh`. `src/ax_engine_session.*` wraps `libax_engine`
-(the board image ships no engine headers, so `src/ax_engine_api.h` declares the
+as `models/supercombo.axmodel` and deployed by `scripts/upload_to_board.sh`. `src/model/ax_engine_session.*` wraps `libax_engine`
+(the board image ships no engine headers, so `src/model/ax_engine_api.h` declares the
 API) with a cached CMM buffer per tensor.
 
 ```text
@@ -43,7 +43,7 @@ traffic_convention  [1, 2]             float   constant (right-hand traffic)
 
 The heads are separate outputs, with the plan split into motion, orientation,
 and std parts (`tools/model/axmodel/split_outputs.py`), so each gets its own
-quantization range; `src/model_output_assembly.h` puts them back into the
+quantization range; `src/model/model_output_assembly.h` puts them back into the
 2576-float layout below. `modeld` also accepts a single `[1, 2576]` output.
 
 `modeld` checks every name, shape, dtype, and buffer size at load and
@@ -53,7 +53,7 @@ misparsed.
 ## Temporal inputs
 
 The released ONNX keeps the history queues inside the graph; the NPU core does
-not, so `src/model_temporal.h` keeps them on the CPU with the same convention.
+not, so `src/model/model_temporal.h` keeps them on the CPU with the same convention.
 Every queue has the newest entry last and shifts one slot per frame:
 
 - desire: rising-edge pulses at 20 Hz over 100 ticks, max-pooled 4:1 into the
@@ -87,7 +87,7 @@ YUV6 plane order
   0.4 LSB on average; on a K230 replay the plan lateral offset at 2 s against
   the fp32 host reference differs by 0.0005 m.
 - **CPU (`EDGEPILOT_WARP_CPU=1`, NV21 frames, or GDC unavailable).**
-  `src/model_input_transform.*` fuses the homography sampling with YUV6
+  `src/model/model_input_transform.*` fuses the homography sampling with YUV6
   packing through compact fixed-point lookup tables (12-bit weights). The wide
   tower is warped on the second core. The ring slot is mapped uncached for this
   path. It is much slower (~23 ms for both towers) and meant for diagnostics.
@@ -98,7 +98,7 @@ openpilot's `cameraOdometry -> liveCalibration -> modeld` loop.
 ## Intrinsics
 
 The source intrinsics are scaled from the measured `1920x1080` MaixCAM2
-(`ov_os04d10`) camera matrix in `src/app_config.h` `kCamera*`:
+(`ov_os04d10`) camera matrix in `src/common/app_config.h` `kCamera*`:
 `fx=1131.24`, `fy=1130.85`, `cx=940.13`, `cy=552.60`.
 
 - **At 1280x720** (the capture size) that is `fx=754.2`, `fy=753.9`,
@@ -123,7 +123,7 @@ camera (`1583.3981,1583.7622,954.9441,545.1774`) to replay K230 recordings.
 
 ## Model output
 
-The master supercombo emits 2576 floats. `src/model_output.*` owns the layout,
+The master supercombo emits 2576 floats. `src/common/model_output.*` owns the layout,
 taken from the ONNX metadata `output_slices`:
 
 | Block | Offset | Floats | Contents |

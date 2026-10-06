@@ -7,9 +7,9 @@
  * 바이트 단위로 같은지 비교할 때 쓴다.
  * 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
  *                    [--portrait [--flip-x] [--flip-y]] */
-#include "overlay_state.h"
-#include "ipc_messages.h"
-#include "overlay_renderer.h"
+#include "hud/overlay_state.h"
+#include "common/ipc_messages.h"
+#include "hud/overlay_renderer.h"
 
 #include <algorithm>
 #include <chrono>

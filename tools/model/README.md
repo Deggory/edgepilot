@@ -17,7 +17,7 @@ recordings) and reproduce the device's input pipeline.
     LpNorm) into equivalent ones; fp16 is promoted to fp32.
 - `axmodel/split_outputs.py`
   - exports every head as its own output so each gets its own U16 scale. The
-    runtime puts them back together (`src/model_output_assembly.h`).
+    runtime puts them back together (`src/model/model_output_assembly.h`).
 - `axmodel/make_core_data.py`
   - writes `calib/*.tar` from the 180 PTQ samples in `models/ptq` and an
     `eval/` set from the K230 v0.9.4 evaluation bundle (`QEXP094_DIR`, outside
@@ -49,10 +49,10 @@ requirements) and the Pulsar2 6.0 Docker image for the compile step.
 ## Recording-driven helpers
 
 `recording_reader.py` decodes a route and `model_warp.py` is a numpy port of
-the CPU warp in `src/model_input_transform.cc`.
+the CPU warp in `src/model/model_input_transform.cc`.
 
 - `recording_reader.py`
-  - the Python mirror of `src/recording_format.h` and `src/ipc_messages.h` for
+  - the Python mirror of `src/recording/recording_format.h` and `src/common/ipc_messages.h` for
     the analysis tools, checked against the C++ asserts by
     `diagnostics/check_recording_reader.py` (`scripts/param_server.py` keeps its
     own standard-library copy of the layouts it shows, checked by
@@ -69,6 +69,6 @@ the CPU warp in `src/model_input_transform.cc`.
 - `model_warp.py`
   - also used by `tools/calib/warp_preview.py` to show the MaixCAM2 model views.
     It holds the MaixCAM2 intrinsics once (`maixcam2_intrinsics`, the
-    `src/app_config.h` values) for the preview, the calibration report and the
+    `src/common/app_config.h` values) for the preview, the calibration report and the
     axmodel calibration data; its default intrinsics stay the K230 camera's for
     K230 recordings.

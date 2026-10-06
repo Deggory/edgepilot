@@ -1,7 +1,7 @@
 /* overlay_policy: overlayd가 그리기 밖에서 정하는 것. 제어 이벤트 카운터 → 알림(첫 스냅샷은 기준값,
  * 우선순위, 한 프레임 하나, controlsd 재시작), 프레임마다 알림음 하나(해제 예고는 미루고 불가용 천이는
  * 넘긴다, engage 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활. */
-#include "overlay_policy.h"
+#include "hud/overlay_policy.h"
 
 #include <gtest/gtest.h>
 #include <cmath>

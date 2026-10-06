@@ -39,8 +39,8 @@
 누르거나 차량이 다시 움직이면 다음 정차 주기를 준비한다. 알림은 engage 여부와
 무관하며 LCD에 3초 동안 표시된다.
 
-K230에서 passive piezo로 내던 알람은 MaixCAM2 보드 스피커로 낸다(`src/alert_sound.cc`).
-소리는 HUD에 맞춘 짧은 종소리 같은 음이다(`src/alert_tones.cc`: 부드러운 시작, 지수 감쇠,
+K230에서 passive piezo로 내던 알람은 MaixCAM2 보드 스피커로 낸다(`src/hud/alert_sound.cc`).
+소리는 HUD에 맞춘 짧은 종소리 같은 음이다(`src/hud/alert_tones.cc`: 부드러운 시작, 지수 감쇠,
 더 빨리 사라지는 2·3배음). engage는 완전5도 위로(G5→D6), disengage는 아래로, 출발 알림은
 밝은 세 음(B5 D6 G6), engage 거부와 조향 넘겨받기는 같은 음 두 번 뒤 4도 아래로(A5 A5 E5),
 사용 불가 경고는 트라이톤 두 번(B5 F5 B5 F5)이다. `alert_sound_preview`가 같은 소리를 WAV로

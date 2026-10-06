@@ -1,9 +1,9 @@
 /* K7 YG HEV CAN: 받은 신호 해석(vehicle_can: LCA11, WHL_SPD11, TPMS11, TCS13/15, AHB1 페달, SCC11,
  * CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 보낼 프레임 구성(hyundai_can: MDPS용
  * CLU11 속도 바꿔치기). 신호 배치대로 손으로 채운 바이트로 검사한다. */
-#include "can_frame.h"
-#include "hyundai_can.h"
-#include "vehicle_can.h"
+#include "car/can_frame.h"
+#include "car/hyundai_can.h"
+#include "car/vehicle_can.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>

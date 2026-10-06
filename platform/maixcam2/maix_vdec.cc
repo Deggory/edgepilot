@@ -1,4 +1,4 @@
-#include "maix_vdec.h"
+#include "maixcam2/maix_vdec.h"
 
 #include "ax_buffer_tool.h"
 #include "ax_ivps_api.h"

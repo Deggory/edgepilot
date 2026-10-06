@@ -1,4 +1,4 @@
-"""Numpy port of src/model_input_transform.cc.
+"""Numpy port of src/model/model_input_transform.cc.
 
 Reproduces the device's fixed-point bilinear warp (kWeightBits=12) so the
 student trains on the same pixel distribution the K230 runtime produces. The
@@ -16,7 +16,7 @@ WEIGHT_BITS = 12
 WEIGHT_SCALE = 1 << WEIGHT_BITS
 
 # K230 camera at 1920x1080 (these tools read K230 recordings; the MaixCAM2 values
-# are in src/app_config.h). Replaying a K230 route on the AX630 runtime needs
+# are in src/common/app_config.h). Replaying a K230 route on the AX630 runtime needs
 # EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774
 CAMERA_FX_1080 = 1583.3981
 CAMERA_FY_1080 = 1583.7622
@@ -24,7 +24,7 @@ CAMERA_CX_1080 = 954.9441
 CAMERA_CY_1080 = 545.1774
 CAMERA_HEIGHT_M = 1.22
 
-# MaixCAM2 camera at 1920x1080: src/app_config.h kCamera* (check_recording_reader.py keeps them equal).
+# MaixCAM2 camera at 1920x1080: src/common/app_config.h kCamera* (check_recording_reader.py keeps them equal).
 MAIXCAM2_FX_1080 = 1131.24
 MAIXCAM2_FY_1080 = 1130.85
 MAIXCAM2_CX_1080 = 940.13

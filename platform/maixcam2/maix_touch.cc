@@ -1,6 +1,6 @@
-#include "maix_touch.h"
+#include "maixcam2/maix_touch.h"
 
-#include "maix_display.h"
+#include "maixcam2/maix_display.h"
 
 #include <fcntl.h>
 #include <linux/input.h>

@@ -1,12 +1,12 @@
 /* 횡 플래너(LateralPlanner): laneless는 openpilot 메인의 get_curvature_from_plan과, 차선 변경은
  * 상류 desire_helper와 대조한다. 실험용 회전 desire와 path_offset_m의 적용 범위도 본다. MPC 자체의
  * 최적성은 gtest_lateral_mpc가 본다. */
-#include "control_params.h"
-#include "ipc_messages.h"
-#include "lateral_controller.h"
-#include "lateral_planner.h"
-#include "model_output.h"
-#include "vehicle_can.h"
+#include "controls/control_params.h"
+#include "common/ipc_messages.h"
+#include "controls/lateral_controller.h"
+#include "planning/lateral_planner.h"
+#include "common/model_output.h"
+#include "car/vehicle_can.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>

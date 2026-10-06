@@ -2,8 +2,8 @@
 
 Every sample is exactly what the runtime feeds the core on the board: the recorded H.264 frame
 (1280x720) through the device warp (tools/model/model_warp.py, MaixCAM2 intrinsics from
-src/app_config.h, the calibration the recording carries), the 5-frame image history per tower
-(t-4 and t), the desire pulses controlsd sent (src/model_temporal.h: rising edge, turn desire
+src/common/app_config.h, the calibration the recording carries), the 5-frame image history per tower
+(t-4 and t), the desire pulses controlsd sent (src/model/model_temporal.h: rising edge, turn desire
 cleared with its blinker, 100 ticks max-pooled to 25), and the core's own 96-tick hidden-state
 history from running the fp32 core in order. make_core_data.py instead calibrated with K230-camera
 samples, t-1 standing in for t-4 and features from random frames; the resulting U16 model lost the
@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import recording_reader as rr  # noqa: E402
 from model_warp import WarpPair, maixcam2_intrinsics  # noqa: E402
 
-# src/app_config.h: MaixCAM2 1920x1080 intrinsics scaled to the 1280x720 AI stream
+# src/common/app_config.h: MaixCAM2 1920x1080 intrinsics scaled to the 1280x720 AI stream
 INTRINSICS = maixcam2_intrinsics(1280, 720)
 FEAT = 1064
 TENSORS = ("input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic_convention")

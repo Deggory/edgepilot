@@ -1,8 +1,8 @@
 /* modeld가 채우고(fill_model_state, compute_lane_t) overlayd가 되돌리는(parsed_from_model_state)
  * ModelState. 왕복에서 남는 값과 빠지는 값(lead는 t=0 하나, road_transform 없음), 보정 상태 칸, 그리고
  * lane_t: 일정 속도 plan이면 거리/속도, 짧은 plan이면 끝 뒤가 NaN, 뒤로 뛰는 knot에도 단조. */
-#include "model_state_fill.h"
-#include "overlay_state.h"
+#include "model/model_state_fill.h"
+#include "hud/overlay_state.h"
 
 #include <gtest/gtest.h>
 #include <cmath>

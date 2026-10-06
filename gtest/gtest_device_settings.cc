@@ -1,6 +1,6 @@
 /* 웹 기기 설정(display.json) 읽기: 범위 클램프, 잘못된 값은 프로세스를 죽이지 않고 이전 값을
  * 유지(modeld가 죽으면 횡제어가 멈춘다), 파일이 바뀔 때만 다시 읽기. */
-#include "device_settings.h"
+#include "common/device_settings.h"
 
 #include <gtest/gtest.h>
 

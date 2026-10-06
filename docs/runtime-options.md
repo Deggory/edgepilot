@@ -175,7 +175,7 @@ brightness % x `disp_max_backlight` %, and `enabled: false` sets the duty to 0.
 
 ## Alerts
 
-`overlayd` plays the alert sounds (`src/alert_tones.cc`) on the board speaker. One
+`overlayd` plays the alert sounds (`src/hud/alert_tones.cc`) on the board speaker. One
 `aplay` starts with overlayd and stays open. A sound thread feeds it silence,
 or the alert's samples when one fires. The HUD loop never spawns a process at
 alert time. The amplifier stays on, so the first note is not cut. Latency is

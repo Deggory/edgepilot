@@ -6,7 +6,7 @@ add_host_tool(replay_closed_loop replay_closed_loop.cc)
 target_link_libraries(replay_closed_loop PRIVATE planning)
 
 add_host_tool(replay_lateral_learners replay_lateral_learners.cc)
-target_link_libraries(replay_lateral_learners PRIVATE control_core)
+target_link_libraries(replay_lateral_learners PRIVATE learners)
 
 add_host_tool(replay_planner replay_planner.cc)
 target_link_libraries(replay_planner PRIVATE planning)
@@ -20,7 +20,7 @@ add_host_tool(alert_sound_preview alert_sound_preview.cc)
 target_link_libraries(alert_sound_preview PRIVATE alert_tones)
 
 add_host_tool(replay_localization replay_localization.cc)
-target_link_libraries(replay_localization PRIVATE localization control_core)
+target_link_libraries(replay_localization PRIVATE localization car)
 
 # controlsd 한 틱의 로직(ControlsTick)을 녹화로 다시 돌린다. 리팩토링 전후 다이제스트 비교용.
 add_host_tool(replay_controls replay_controls.cc)

@@ -5,8 +5,8 @@
  * 이 차와 무관해 건너뛴다. skip_echoes면 controlsd처럼 Panda가 되돌려 준 송신 프레임(flags != 0)과
  * 가상 버스(src > 7)도 건너뛴다. */
 
-#include "recorded_can.h"
-#include "vehicle_can.h"
+#include "recording/recorded_can.h"
+#include "car/vehicle_can.h"
 
 #include <array>
 #include <cstddef>

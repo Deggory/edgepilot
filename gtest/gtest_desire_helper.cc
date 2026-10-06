@@ -2,8 +2,8 @@
  * 깜빡이 쪽으로 핸들을 밀어야 변경이 시작되고, 차선선을 0.5초에 빼고 되돌린다. 사각지대면
  * 기다리고, 10초가 넘으면 끈다. 도로 경계 쪽으로는 시작하지 않다가 경계가 사라지면 시작한다.
  * 회전 desire는 차선 변경 속도 아래에서 2.5초마다 펄스를 다시 낸다. 모델 프레임(20 Hz)마다 부른다. */
-#include "desire_helper.h"
-#include "vehicle_can.h"
+#include "planning/desire_helper.h"
+#include "car/vehicle_can.h"
 
 #include <gtest/gtest.h>
 

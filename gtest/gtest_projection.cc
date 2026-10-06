@@ -1,9 +1,9 @@
 /* project_point_subpixel: 화면 크기가 달라도(800x480, MaixCAM2 640x480) 같은 도로 점이 화면의
  * 같은 비율 위치에 놓여야 한다. 폭을 하드코딩하면 오버레이가 영상과 어긋난다. */
-#include "app_config.h"
-#include "ipc_messages.h"
-#include "overlay_state.h"
-#include "projection.h"
+#include "common/app_config.h"
+#include "common/ipc_messages.h"
+#include "hud/overlay_state.h"
+#include "common/projection.h"
 
 #include <cmath>
 #include <cstdlib>

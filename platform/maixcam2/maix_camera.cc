@@ -1,4 +1,4 @@
-#include "maix_camera.h"
+#include "maixcam2/maix_camera.h"
 
 #include "ax_middleware.hpp"
 #include "maix_app.hpp"

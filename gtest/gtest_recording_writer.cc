@@ -3,13 +3,13 @@
  * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h, 상태 채널을 이벤트 로그로
  * 옮기는 StateRecorder, 그 route를 다시 읽는 replayd의 ReplayRoute도 같이 본다. 보드·인코더 없이
  * 합성 레코드로 검사한다. */
-#include "event_log_reader.h"
-#include "recorded_can.h"
-#include "recorded_model_state.h"
-#include "recording_format.h"
-#include "recording_writer.h"
-#include "replay_route.h"
-#include "state_recorder.h"
+#include "recording/event_log_reader.h"
+#include "recording/recorded_can.h"
+#include "recording/recorded_model_state.h"
+#include "recording/recording_format.h"
+#include "recording/recording_writer.h"
+#include "recording/replay_route.h"
+#include "recording/state_recorder.h"
 
 #include <gtest/gtest.h>
 #include <dirent.h>

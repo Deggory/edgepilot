@@ -1,6 +1,6 @@
 /* DepartureAlertDetector: 정차 중 앞차 출발(lead_departed)과 신호 대기 뒤 길이 열릴 때
  * (green_light) 알림. 입력은 0.05~0.1 s 틱으로 합성한다. */
-#include "departure_alert.h"
+#include "controls/departure_alert.h"
 
 #include <gtest/gtest.h>
 

@@ -30,7 +30,7 @@ of this branch; the piezo alerts are now bell-like tones on the board speaker.
   core, compiled with Pulsar2 6.0 (U16 activations, uint8 image inputs), runs in
   about 15.5 ms on one NPU core (the other core runs the AI-ISP denoiser); a
   whole `modeld` frame is about 19.5 ms, inside the 20 Hz budget. The history queues the released ONNX keeps in-graph
-  (images, desire, features) run on the CPU in `src/model_temporal.h`.
+  (images, desire, features) run on the CPU in `src/model/model_temporal.h`.
 - **Hardware all the way to the model.** The camera frame goes into a CMM
   (physically contiguous) frame ring by IVPS copy; the GDC warps it straight
   from there into both model views, and IVPS scales it onto the LCD. No process

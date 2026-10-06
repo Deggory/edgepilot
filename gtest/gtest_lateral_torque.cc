@@ -1,8 +1,8 @@
 /* 토크 횡제어기(TorqueController, openpilot LatControlTorque 이식): 넘겨받은 조향 지연만큼의 요청
  * 버퍼, 속도별 비례 이득(KP_INTERP), 라이브 뱅크·latAccelOffset feedforward, 그리고 학습값 소비.
  * 실제 곡률은 opendbc calc_curvature의 독립 전사본과, 출력 구조는 상류의 횡가속 공간 PID와 대조한다. */
-#include "control_params.h"
-#include "lateral_torque.h"
+#include "controls/control_params.h"
+#include "controls/lateral_torque.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>

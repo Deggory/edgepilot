@@ -201,11 +201,11 @@ class ParamStoreTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         row = re.compile(r'\{"(\w+)",\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?,\s*&\w+::\w+\}')
         tables = {
-            "steering": ("src/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
-            "driving": ("src/control_params.cc", ("kDrivingInts", "kDrivingFloats")),
-            "adaptive_cruise": ("src/adaptive_cruise.cc", ("kAdaptiveInts", "kAdaptiveFloats")),
+            "steering": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
+            "driving": ("src/controls/control_params.cc", ("kDrivingInts", "kDrivingFloats")),
+            "adaptive_cruise": ("src/controls/adaptive_cruise.cc", ("kAdaptiveInts", "kAdaptiveFloats")),
             # display는 백라이트(display_control.py) 항목도 있어 런타임이 읽는 키만 대조한다
-            "display": ("src/device_settings.h", ("kDeviceSettingsFloats",)),
+            "display": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
         }
         for group, (source, names) in tables.items():
             text = (root / source).read_text(encoding="utf-8")
@@ -249,7 +249,7 @@ class LearnerStateTest(unittest.TestCase):
 
     def test_layout_matches_cpp_offsets(self):
         """ipc_messages.h의 offsetof 고정값과 Python 필드 배치가 같아야 한다."""
-        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
         size = int(re.search(r"sizeof\(LearnerState\) == (\d+)", source).group(1))
         self.assertEqual(LEARNER_STATE.size, size)
         offsets, offset = {}, 0
@@ -340,7 +340,7 @@ class CalibrationControlTest(unittest.TestCase):
         self.write(self.control, CONTROL_STATE_HEAD.pack(1, 1, engaged) + bytes(228), stamp)
 
     def test_offset_matches_cpp(self):
-        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
         offset = re.search(r"offsetof\(ModelState, calibration\) == (\d+)", source)
         self.assertEqual(int(offset.group(1)), MODEL_CALIBRATION_OFFSET)
         self.assertEqual(CALIBRATION_STATE.size, 32)
@@ -375,7 +375,7 @@ class CalibrationControlTest(unittest.TestCase):
 
 class LocalizationStateTest(unittest.TestCase):
     def test_layout_matches_cpp_size(self):
-        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
         size = int(re.search(r"sizeof\(LocalizationState\) == (\d+)", source).group(1))
         self.assertEqual(LOCALIZATION_STATE.size, size)
         flags = re.findall(r"constexpr uint32_t kLocalization(\w+) = 1U << (\d+);", source)
@@ -418,7 +418,7 @@ class LocalizationStateTest(unittest.TestCase):
 class BevTest(unittest.TestCase):
     def test_layout_matches_cpp_offsets(self):
         """페이지가 위치로 읽는 필드는 ipc_messages.h가 offsetof로 고정한 그 위치여야 한다."""
-        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
         self.assertEqual(int(re.search(r"sizeof\(ModelState\) == (\d+)", source).group(1)), MODEL_STATE_SIZE)
         self.assertEqual(int(re.search(r"sizeof\(ControlState\) == (\d+)", source).group(1)), CONTROL_STATE_SIZE)
         model = {name: int(at) for name, at in re.findall(r"EDGEPILOT_MODEL_STATE_AT\((\w+), (\d+)\);", source)}
@@ -434,7 +434,7 @@ class BevTest(unittest.TestCase):
 
     def test_lead_probability_matches_cpp(self):
         """페이지의 앞차 확률 문턱은 비전 크루즈·출발 알림·HUD와 같은 kLeadProbabilityThreshold여야 한다."""
-        source = (Path(__file__).resolve().parents[1] / "src" / "model_output.h").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "src" / "common" / "model_output.h").read_text(encoding="utf-8")
         cpp = float(re.search(r"constexpr float kLeadProbabilityThreshold = ([\d.]+)f;", source).group(1))
         text = (WEB_DIR / "bev_data.js").read_text(encoding="utf-8")
         page = float(re.search(r"const LEAD_PROBABILITY = ([\d.]+);", text).group(1))
@@ -530,7 +530,7 @@ class ManagerIpcTest(unittest.TestCase):
         """manager.py가 쓰는 managerState 배치(overlayd가 읽는다)가 ipc_messages.h와 같아야 한다."""
         from scripts import manager
 
-        source = (Path(__file__).resolve().parents[1] / "src" / "ipc_messages.h").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
 
         def constant(name):
             return int(re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F]+|\d+);", source).group(1), 0)

@@ -1,5 +1,5 @@
 /* CanQueue: 공유 메모리 CAN 링 큐. 가득 참, 순서, 생산자 재열기·reset, 신선도 판정. */
-#include "ipc_channels.h"
+#include "common/ipc_channels.h"
 
 #include <gtest/gtest.h>
 

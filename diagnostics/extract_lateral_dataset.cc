@@ -1,15 +1,15 @@
 /* v2/v3 녹화에서 횡제어 분석/학습용 CSV를 뽑는다. CAN 디코드와 부호 규약은
  * 런타임과 같은 vehicle_can을 그대로 쓴다.
  * 사용: extract_lateral_dataset <out.csv> <events...> */
-#include "utils_math.h"
-#include "utils_time.h"
-#include "ipc_messages.h"
-#include "recorded_model_state.h"
+#include "common/utils_math.h"
+#include "common/utils_time.h"
+#include "common/ipc_messages.h"
+#include "recording/recorded_model_state.h"
 #include "recorded_vehicle_can.h"
-#include "recording_format.h"
-#include "control_params.h"
-#include "event_log_reader.h"
-#include "vehicle_can.h"
+#include "recording/recording_format.h"
+#include "controls/control_params.h"
+#include "recording/event_log_reader.h"
+#include "car/vehicle_can.h"
 
 #include <cmath>
 #include <cstdio>

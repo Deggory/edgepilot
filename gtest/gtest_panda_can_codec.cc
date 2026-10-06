@@ -1,6 +1,6 @@
 /* panda USB CAN 버퍼 코덱: panda python의 pack_can_buffer와 같은 바이트로 싸는지,
  * 소프트 청크(256 B)를 넘는 스트림까지 왕복하는지, 범위 밖 TX를 거부하는지 본다. */
-#include "panda_can_codec.h"
+#include "panda/panda_can_codec.h"
 
 #include <gtest/gtest.h>
 #include <array>

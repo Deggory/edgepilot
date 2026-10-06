@@ -5,13 +5,13 @@
  * CSV(IMU 묶음마다): t, 속도, CAN 요레이트, locationd 보정 요레이트·표준편차, 롤·피치, 플래그,
  *   lagd 값. 끝에 요레이트 비교와 lagd 결과를 출력한다. (CAN 횡가속 LatAccel은 부호가 반대이고
  *   배율이 맞지 않아 롤 비교 기준으로 쓰지 않는다: 2026-09-27 경로에서 요레이트·속도 대비 −0.35배) */
-#include "event_log_reader.h"
-#include "ipc_messages.h"
-#include "localization_pipeline.h"
-#include "recorded_model_state.h"
+#include "recording/event_log_reader.h"
+#include "common/ipc_messages.h"
+#include "localization/localization_pipeline.h"
+#include "recording/recorded_model_state.h"
 #include "recorded_vehicle_can.h"
-#include "recording_format.h"
-#include "vehicle_can.h"
+#include "recording/recording_format.h"
+#include "car/vehicle_can.h"
 
 #include <algorithm>
 #include <cmath>

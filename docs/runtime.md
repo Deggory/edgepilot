@@ -138,7 +138,7 @@ keeps the AX system open.
   every tap is logged as `overlayd: tap x=... y=... <action>`
 - turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`, level from
   `/boot/configs`)
-- plays the alert sounds (short bell-like tones, `src/alert_tones.cc`) on the
+- plays the alert sounds (short bell-like tones, `src/hud/alert_tones.cc`) on the
   board speaker, shows departure
   alerts and engage refusals on screen, and writes every alert as a
   `overlayd: alert=...` log line
@@ -203,7 +203,7 @@ keeps the AX system open.
 
 - runs the openpilot locationd pose filter on the IMU batches, the model's
   camera odometry (`ModelState` pose) and `controlState`, and the lagd
-  steering-delay estimate (`src/localization_pipeline.*`)
+  steering-delay estimate (`src/localization/localization_pipeline.*`)
 - publishes `LocalizationState` to `/dev/shm/edgepilot_localization`; with no
   IMU input it publishes nothing and waits
 - saves the lagd estimate to `params/live_delay.json` every 60 s and on exit,
@@ -247,7 +247,7 @@ missed model frames.
 `recordd` writes the K230 recorder's format, with H.264 video instead of HEVC,
 so the host tools (`recording_reader.py`, the replay tools, `lane_bias.py`)
 read MaixCAM2 and K230 drives. `gtest_recording_writer` covers
-`src/recording_writer.*`.
+`src/recording/recording_writer.*`.
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
 an 8-byte `K230LOG1` magic, a version word, and fixed 16-byte record headers.
@@ -259,7 +259,7 @@ Version 7 added the camera mount the warp used for that frame
 tools use exactly what modeld applied. Version 6 added the plan yaw and yaw
 rate (`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode steers from.
 Readers take version 7 and older payloads as before, with the missing fields
-zeroed (`src/recorded_model_state.h`, `recording_reader.model_state_layout`).
+zeroed (`src/recording/recorded_model_state.h`, `recording_reader.model_state_layout`).
 
 | Record type | Payload |
 | --- | ---: |

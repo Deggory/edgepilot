@@ -145,7 +145,7 @@ def main() -> int:
     names = ["k1", "k2", "p1", "p2", "k3"]
     print("  " + "  ".join(f"{n} {v:+.6f}" for n, v in zip(names, coefficients)))
 
-    # Runtime constants (src/app_config.h kCamera*, at 1920x1080) scaled to this size.
+    # Runtime constants (src/common/app_config.h kCamera*, at 1920x1080) scaled to this size.
     runtime = dict(zip(("fx", "fy", "cx", "cy"), maixcam2_intrinsics(size[0], size[1])))
     print("  vs runtime kCamera*: " + "  ".join(
         f"{k} {v - runtime[k]:+.2f} px ({(v - runtime[k]) / runtime[k] * 100:+.2f}%)"

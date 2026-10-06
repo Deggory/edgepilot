@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """IMU 외부 회전(카메라 ← IMU) 추정: 녹화 route의 선회 구간에서 보드 자이로 회전축과 모델 pose
-회전축(보정 → 기기)을 맞춘다. 결과는 src/location_estimator.cc kDefaultImuExtrinsicRpy에 넣는다.
+회전축(보정 → 기기)을 맞춘다. 결과는 src/localization/location_estimator.cc kDefaultImuExtrinsicRpy에 넣는다.
 
 - 축 기울기 차: 우·좌회전을 합쳐 두 축의 기울기(pitch, roll) 차. x·y 각속도 바이어스는 선회
   방향에 따라 부호가 바뀌어 합치면 상쇄된다.

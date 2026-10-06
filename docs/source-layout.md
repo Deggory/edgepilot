@@ -4,11 +4,11 @@
 
 ## Configuration and input
 
-- `src/app_config.*`
+- `src/common/app_config.*`
   - parses the small runtime option set once at startup, and holds the
     MaixCAM2 camera intrinsics, the capture size, and the 4:3 preview crop
     shared by `overlayd` and `projection`.
-- `src/replay_source.*`
+- `src/model/replay_source.*`
   - reads `SCNV12R1` replay files into `Nv12Frame` for `modeld` replay
     mode. POSIX only.
 
@@ -54,63 +54,63 @@ only in the board build, against `deps/ax630` from
 
 ## Perception
 
-- `src/model_output.*`
+- `src/common/model_output.*`
   - owns the openpilot master supercombo raw-output layout
     (`model_output_layout`, every block offset with a `static_assert`) and
     exposes parsed plan, lanes, road edges, leads, pose, and the meta pedal
     predictions (the chance the driver presses gas or brake 0, 2, …, 10 s
     ahead; the departure alert uses gas at 2 s). Also owns the shared
     `T_IDXS`/`X_IDXS` trajectory grids.
-- `src/model_temporal.h`
+- `src/model/model_temporal.h`
   - the history queues the NPU core does not carry: 100-tick desire pulses
     pooled to 25x8, 96 ticks of hidden state strided to 24x512, and the
     5-frame image history per tower. No engine dependency, so
     `gtest_model_output_parser` pins the convention on the host.
-- `src/model_input_transform.*`
+- `src/model/model_input_transform.*`
   - the CPU input warp: direct `NV12 -> calibrated warped YUV6`, fusing
     homography sampling and YUV6 packing through a compact fixed-point LUT.
     Also produces the projection matrices the GDC warp uses.
-- `src/supercombo_model.*`
+- `src/model/supercombo_model.*`
   - loads the axmodel, enforces the input/output contract, runs the GDC (or
     CPU) warp into the image histories, fills the temporal inputs, and runs one
     frame. `run_frame_phys` reads a ring slot by physical address and drops the
     frame if it was overwritten during the warp.
-- `src/ax_engine_session.*`, `src/ax_engine_api.h`
+- `src/model/ax_engine_session.*`, `src/model/ax_engine_api.h`
   - a minimal `libax_engine` session with a cached CMM buffer per tensor. The
     board image ships no engine headers, so `ax_engine_api.h` declares the API.
     The only files under `src/` that touch the NPU.
-- `src/calibration_service.*`, `src/calibration_online.*`
+- `src/model/calibration_service.*`, `src/model/calibration_online.*`
   - wrap pose-based online calibration, manual override, projection policy, and
     the model-input calibration feedback loop.
-- `src/projection.*`
+- `src/common/projection.*`
   - converts model road coordinates through the openpilot-style `view_from_calib`
     matrix onto the display, using the target's real width and the same 4:3
     preview crop as the video layer.
 
 ## Planning and control
 
-- `src/lateral_planner.*`
+- `src/planning/lateral_planner.*`
   - applies openpilot lane probability/width logic and the lateral MPC in
-    `src/lateral_mpc.*` (Lane mode), or the plan yaw (Laneless mode and Lane
+    `src/planning/lateral_mpc.*` (Lane mode), or the plan yaw (Laneless mode and Lane
     mode's model-path stretches), to produce curvature targets. This is the
     only producer of `LateralTarget`.
-- `src/desire_helper.*`
+- `src/planning/desire_helper.*`
   - the openpilot desire_helper port the planner runs each model frame: lane
     change states (`LaneChangeState`), the blinker/torque/blind-spot/road-edge
     gates, the lane-line fade and the experimental turn desire pulses, and the
     `Desire` the model gets.
-- `src/lateral_mpc.*`
+- `src/planning/lateral_mpc.*`
   - the lateral MPC itself: one Gauss-Newton SQP iteration per call over the
     openpilot 0.8.16 OCP, solved by a backward Riccati recursion. No external
     solver. See [Verification](verification.md#lateral-mpc-solver).
-- `src/lateral_target.h`
+- `src/controls/lateral_target.h`
   - declares `LateralTarget`, the planner-to-controller interface.
-- `src/lateral_controller.*`, `src/lateral_torque.*`,
-  `src/control_params.*`, `src/hyundai_can.*`
+- `src/controls/lateral_controller.*`, `src/controls/lateral_torque.*`,
+  `src/controls/control_params.*`, `src/car/hyundai_can.*`
   - apply the planner's lag-adjusted curvature through the validated K7
     torque/CAN path.
-- `src/vehicle_params_learner.*`, `src/torque_estimator.*`,
-  `src/lateral_learners.*`, `src/localizer_inputs.h`
+- `src/learners/vehicle_params_learner.*`, `src/learners/torque_estimator.*`,
+  `src/learners/lateral_learners.*`, `src/learners/localizer_inputs.h`
   - the paramsd/torqued ports that estimate steer ratio and torque response
     while driving (`use_live_vehicle_params`, `use_live_torque_params`, both on
     by default). `vehicle_params_learner` is paramsd with its
@@ -120,15 +120,15 @@ only in the board build, against `deps/ax630` from
     `LiveLateralParams`. `localizer_inputs.h` converts the IPC
     `LocalizationState` into a learner sample, so the learner library does not
     depend on the IPC layout.
-- `src/location_estimator.*`, `src/lateral_lag.*`, `src/localization_pipeline.*`
+- `src/localization/location_estimator.*`, `src/localization/lateral_lag.*`, `src/localization/localization_pipeline.*`
   - ports of openpilot locationd (the 18-state pose EKF over the board IMU and
     the model's camera odometry) and lagd (the steering delay from desired vs
     actual lateral acceleration), and the pipeline that feeds them in time
     order. `locationd` and `replay_localization` share it.
-- `src/lateral_path.*`
+- `src/controls/lateral_path.*`
   - reduces `modelState` to the steering-usability gate (reach and point
     count). It computes no path geometry; curvature comes from the MPC.
-- `src/adaptive_cruise.*`, `src/departure_alert.*`
+- `src/controls/adaptive_cruise.*`, `src/controls/departure_alert.*`
   - vision cruise setpoint control and departure alerting. The cruise
     controller dead-reckons the car's set speed per session (this car does not
     report it), re-anchors to the cluster speed once the driver's buttons
@@ -136,11 +136,11 @@ only in the board build, against `deps/ax630` from
     filtered vision lead and the learned cluster/wheel speed ratio. The
     departure detector runs three trackers per stop: close lead, lead
     departure and green light.
-- `src/can_frame.h`, `src/vehicle_can.*`, `src/hyundai_can.*`
+- `src/car/can_frame.h`, `src/car/vehicle_can.*`, `src/car/hyundai_can.*`
   - `can_frame.h` holds the transport type and the K7 YG HEV address/bus table;
     `vehicle_can` decodes received frames into vehicle state, `hyundai_can`
     encodes LKAS11/CLU11/MDPS12 commands.
-- `src/control_block.h`
+- `src/controls/control_block.h`
   - the engage/steer block reasons as one table: enum, wire name, HUD label,
     and kind (reject / hard disengage / transient Panda handshake /
     availability). The controller decides in `BlockReason`, `ControlState`
@@ -150,7 +150,7 @@ only in the board build, against `deps/ax630` from
 
 ### Control safety holds
 
-`src/control_holds.*` implements both holds as `PandaHealthGate` and
+`src/controls/control_holds.*` implements both holds as `PandaHealthGate` and
 `PathHoldGate`; `gtest_control_holds` exercises their boundaries.
 `controlsd` tolerates a single malformed plan frame by holding the last
 usable path for at most 150 ms; the normal 250 ms model freshness timeout remains
@@ -161,19 +161,19 @@ released after that short hold if they persist.
 
 ## Processes and IPC
 
-- `src/ipc_messages.h`
+- `src/common/ipc_messages.h`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the state snapshots (`ModelState`, `ControlState`, `PandaState`, …) with
     their `static_assert`s. Recording v8 stores `ModelState`, `ControlState`,
     and `PandaState` as-is, so their offsets are pinned here and tied to
     `kRecordingVersion`. Code that only reads or fills a message includes this
     and nothing else.
-- `src/model_state_fill.*`
+- `src/model/model_state_fill.*`
   - `fill_model_state`, which modeld calls to pack a frame's outputs into
     `ModelState`, and `compute_lane_t` (the openpilot plan→lane time mapping).
-    It needs the online calibrator's snapshot, so it lives in the `perception`
+    It needs the online calibrator's snapshot, so it lives in the `model`
     library and message consumers do not pull in the calibrator.
-- `src/ipc_channels.*`
+- `src/common/ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
     and the camera frame ring, all on one `ShmRegion` (open, size, map, close).
     `Subscription<T>` wraps a latest-message channel with the last snapshot
@@ -181,11 +181,11 @@ released after that short hold if they persist.
     The frame ring (version 5) keeps only its header in shm; the slots are
     camerad's CMM blocks, listed by physical address, each with a seqlock that
     hardware readers check before and after reading.
-- `src/camerad.cc`, `src/modeld.cc`, `src/overlayd.cc`
+- `src/camera/camerad.cc`, `src/model/modeld.cc`, `src/hud/overlayd.cc`
   - openpilot-style process split: capture into the ring, model, and the
     two-layer LCD HUD.
-- `src/overlay_renderer.*`, `src/overlay_scene.cc`, `src/overlay_cards.cc`,
-  `src/overlay_draw.h`, `src/overlay_canvas.*`, `src/overlay_font.*`
+- `src/hud/overlay_renderer.*`, `src/hud/overlay_scene.cc`, `src/hud/overlay_cards.cc`,
+  `src/hud/overlay_draw.h`, `src/hud/overlay_canvas.*`, `src/hud/overlay_font.*`
   - draw the 640x480 HUD into a straight-alpha BGRA buffer (landscape
     coordinates; `HudOrientation` maps them onto the portrait panel buffer):
     state border, speed with yellow turn-signal/hazard chevrons, set speed
@@ -212,7 +212,7 @@ released after that short hold if they persist.
     No OpenCV, so `gtest_overlay_canvas` and `hud_snapshot` run on the host.
     The renderer keeps only coverage scratch and the per-buffer tiles; the
     turn-signal phase and the card toggles come from `overlay_policy`.
-- `src/overlay_state.*`
+- `src/hud/overlay_state.*`
   - `OverlayHudState`, the IPC state (`ControlState`, `ModelState`, …) →
     `OverlayHudState` mapping shared by
     `overlayd` and `hud_snapshot`, the `ModelState` →
@@ -220,7 +220,7 @@ released after that short hold if they persist.
     table, and `hud_select_alert`, the one alert card a HUD state shows (its
     priority, text and severity; the renderer only colours it).
     `gtest_overlay_state` pins it on the host.
-- `src/overlay_policy.*`
+- `src/hud/overlay_policy.*`
   - what `overlayd` decides besides drawing, without the screen, speaker or
     touch device: `OverlayAlertEvents` turns the controlsd event counters into
     one alert a frame (baseline on first sight, rebaseline on a controlsd
@@ -232,19 +232,19 @@ released after that short hold if they persist.
     changed, `HudTouch` opens and closes the network and debug cards, and
     `smooth_lane_center_offset` filters the lane-position readout.
     `gtest_overlay_policy` pins it on the host.
-- `src/alert_tones.*`, `src/alert_sound.*`
+- `src/hud/alert_tones.*`, `src/hud/alert_sound.*`
   - the alert sounds: `alert_tones` synthesises them (overlapping bell-like
     notes with soft attacks and decaying overtones; portable, so
     `alert_sound_preview` writes them as WAV and `gtest_alert_tones` checks
     them on the host), and `alert_sound` streams them to one long-lived
     `aplay` on the board speaker.
-- `src/system_monitor.*`
+- `src/hud/system_monitor.*`
   - `/proc`, thermal-zone, and network sampling (the Wi-Fi SSID through the
     `SIOCGIWESSID` ioctl) into `OverlayHudState`, called at 1 Hz by `overlayd`.
     Only a `wlan` link with an address and an associated SSID counts as
     connected; another link (the USB virtual Ethernet, which always has an
     address) is kept apart for the network card.
-- `src/recording_writer.*`, `src/state_recorder.*`, `src/recording_format.h`
+- `src/recording/recording_writer.*`, `src/recording/state_recorder.*`, `src/recording/recording_format.h`
   - the event-log writer and on-disk contract that `recordd` writes. It is the
     K230 recorder's format, so the host tools read MaixCAM2 and K230 drives.
     `StateRecorder` copies each new state snapshot (model, control, Panda,
@@ -253,40 +253,40 @@ released after that short hold if they persist.
     state recording; `recording_format.h`
     (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
     is mirrored by `tools/model/recording_reader.py`.
-- `src/event_log_reader.h`
+- `src/recording/event_log_reader.h`
   - the one C++ reader of `events/NNN.bin`, shared by `replayd` and the replay
     and dataset tools. It checks the magic, skips `header_size`, and stops
     without resyncing at a truncated tail (record type out of range, a payload
     over 1 MiB, or a short header or payload), which `truncated()` reports.
-- `src/panda_client.*`, `src/panda_can_codec.*`, `src/pandad.cc`
+- `src/panda/panda_client.*`, `src/panda/panda_can_codec.*`, `src/panda/pandad.cc`
   - optional panda USB bridge. It handles USB, health, heartbeat, receive CAN,
     and the final TX gate, but does not generate vehicle control messages.
-- `src/controls_tick.*`
+- `src/controls/controls_tick.*`
   - one 100 Hz controlsd tick without shared memory or files: CAN, model, Panda
     and locationd inputs in; the lateral controller, departure alerts, vision
     cruise and learners in between; the frames to send, `ControlState` and
     `LearnerState` out. The 20 Hz planner sits behind `PlannerPort`: a worker
     thread on the board (`LateralPlannerWorker`), computed in place in tools
     and tests (`SyncPlanner`). It also holds the parameter-file watcher.
-- `src/controlsd.cc`
+- `src/controls/controlsd.cc`
   - the controlsd process: opens the channels, reads them each tick in the
     order `ControlsTick` documents, publishes, sends, writes the learner files
     on a background thread, and logs the one-second stats line.
-- `src/recordd.cc`
+- `src/recording/recordd.cc`
   - the drive recorder: encodes the frames `modeld` used and writes the CAN
     and state channels through `recording_writer` and `StateRecorder`.
-- `src/imud.cc`, `src/locationd.cc`
+- `src/localization/imud.cc`, `src/localization/locationd.cc`
   - the board IMU reader (LSM6DSOW over `i2c-dev`) and the process that runs
     `localization_pipeline` on its samples and publishes `LocalizationState`.
     It hands the lag cache to `BackgroundWriter`, so an SD stall never holds up
     the IMU loop.
-- `src/replayd.cc`, `src/replay_route.*`
+- `src/recording/replayd.cc`, `src/recording/replay_route.*`
   - rehearsal: plays a recorded route in place of `camerad` and `pandad`
     ([Rehearsal](rehearsal.md)). `ReplayRoute` reads the route (frame
     indexes, the frames with their parameter sets, and the CAN/Panda events
     in time order) without the decoder, so `gtest_recording_writer` reads back
     a route the writer made.
-- `src/camcal.cc`
+- `src/camera/camcal.cc`
   - still capture through the runtime's camera path for the intrinsics
     measurement ([Camera calibration](camcal.md)).
 - `scripts/manager.py`
@@ -349,22 +349,22 @@ released after that short hold if they persist.
 
 ## Shared helpers
 
-- `src/utils_process.h`
+- `src/common/utils_process.h`
   - what a process gets from the OS: environment variables (`env_flag` is the
     one boolean convention), the `params/` directory path, and the
     SIGINT/SIGTERM → stop-flag hookup used by every `*d` main.
-- `src/utils_math.h`
+- `src/common/utils_math.h`
   - clamping, openpilot `interp`, degree/radian conversion.
-- `src/utils_time.h`
+- `src/common/utils_time.h`
   - `monotonic_now_ns` (`CLOCK_BOOTTIME`), the clock behind every timestamp that
     crosses a process boundary, and the freshness predicates for ns and
     CAN-seconds timestamps. Per-process scheduling may still use
     `std::chrono::steady_clock`.
-- `src/utils_json.*`
+- `src/common/utils_json.*`
   - minimal JSON value readers, the clamped `parse_json_optional_*` helpers, and
     the `Json*Field` tables that `control_params` and `adaptive_cruise` fill
     their structs from: one `{key, min, max, member}` row per parameter.
-- `src/utils_file.h`, `src/background_writer.h`
+- `src/common/utils_file.h`, `src/common/background_writer.h`
   - `file_stamp` (the stat fingerprint the processes poll parameter files
     with), `read_text_file`, and `write_file_atomic` (temporary file + rename,
     so a reader never sees a half-written file). `BackgroundWriter` is the

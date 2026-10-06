@@ -17,7 +17,7 @@ so the small orientation columns get a range of their own:
   out_plan_orient  mean columns 9-14 (euler, orientation rate), 33x6
   out_plan_std     the 495 log-std values
 
-src/model_output_assembly.h puts the outputs back into the 2576 layout; keep
+src/model/model_output_assembly.h puts the outputs back into the 2576 layout; keep
 the names and the row order in sync with it.
 
 usage: python3 split_outputs.py core_fp32.onnx core_split.onnx

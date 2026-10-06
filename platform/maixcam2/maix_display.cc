@@ -1,4 +1,4 @@
-#include "maix_display.h"
+#include "maixcam2/maix_display.h"
 
 #include "ax_middleware.hpp"
 

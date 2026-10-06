@@ -1,9 +1,9 @@
 /* locationd(PoseKalman·LocationEstimator)와 lagd(LateralLagEstimator) 이식 검사.
  * lagd의 상관·신뢰도는 upstream 식을 그대로 옮긴 파이썬(FFT 방식)과 같은 입력에서 대조한다. */
-#include "lateral_lag.h"
-#include "localization_pipeline.h"
-#include "ipc_messages.h"
-#include "location_estimator.h"
+#include "localization/lateral_lag.h"
+#include "localization/localization_pipeline.h"
+#include "common/ipc_messages.h"
+#include "localization/location_estimator.h"
 
 #include <gtest/gtest.h>
 

@@ -2,8 +2,8 @@
  * 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
  * 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
  * 아래 모서리 카드, 상태 알약 터치 영역도 본다. */
-#include "overlay_canvas.h"
-#include "overlay_renderer.h"
+#include "hud/overlay_canvas.h"
+#include "hud/overlay_renderer.h"
 
 #include <gtest/gtest.h>
 

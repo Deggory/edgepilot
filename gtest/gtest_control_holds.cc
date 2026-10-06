@@ -1,10 +1,10 @@
 /* 조향 경로 게이트(lateral_path: 모델 plan의 도달 거리와 점 수)와 문서화된 안전 홀드 두 개
  * (control_holds: Panda 헬스 공백은 100 ms까지, 잘못된 plan 프레임은 150 ms까지). 경계값은
  * docs/source-layout.md의 Control safety holds와 같다. */
-#include "control_holds.h"
-#include "ipc_messages.h"
-#include "lateral_path.h"
-#include "model_output.h"
+#include "controls/control_holds.h"
+#include "common/ipc_messages.h"
+#include "controls/lateral_path.h"
+#include "common/model_output.h"
 
 #include <gtest/gtest.h>
 

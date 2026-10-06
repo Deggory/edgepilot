@@ -3,13 +3,13 @@
  * 픽스처를 컨트롤러에 흘려 openpilot 참조식과 대조하며, 픽스처를 인자로 줄 때만 돈다. CAN 신호는
  * gtest_k7_can, 토크 제어기는 gtest_lateral_torque, 홀드는 gtest_control_holds, 플래너는
  * gtest_lateral_planner가 본다. */
-#include "control_params.h"
-#include "hyundai_can.h"
-#include "lateral_controller.h"
-#include "lateral_path.h"
-#include "lateral_torque.h"
-#include "model_output.h"
-#include "vehicle_can.h"
+#include "controls/control_params.h"
+#include "car/hyundai_can.h"
+#include "controls/lateral_controller.h"
+#include "controls/lateral_path.h"
+#include "controls/lateral_torque.h"
+#include "common/model_output.h"
+#include "car/vehicle_can.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>

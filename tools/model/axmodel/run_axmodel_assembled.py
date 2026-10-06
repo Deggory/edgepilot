@@ -3,7 +3,7 @@
 usage: run_axmodel_assembled.py <model.axmodel> <input_dir> <out.bin>
 <input_dir> holds one frame-major <input>.npy per model input (make_m2_data.py eval writes them).
 Each frame's output goes to <out.bin> as 2576 float32 in the original output layout; an axmodel
-with split heads (split_outputs.py) is put back together the way src/model_output_assembly.h does,
+with split heads (split_outputs.py) is put back together the way src/model/model_output_assembly.h does,
 so single-output and split builds compare with the same metrics. Run it with edgepilot.service
 stopped, because modeld holds the NPU core.
 """

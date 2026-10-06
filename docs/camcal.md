@@ -5,7 +5,7 @@
 This measures the MaixCAM2 camera's pinhole intrinsics (`fx fy cx cy`) from photos
 of a checkerboard shown on a 65" 4K TV. It is a port of the K230 `camcal`
 workflow. The runtime uses these values for the model input warp and the HUD
-projection (`src/app_config.h` `kCamera*`, given at 1920x1080).
+projection (`src/common/app_config.h` `kCamera*`, given at 1920x1080).
 
 ```
 tools/camcal/calib_checkerboard_65in_4k.png   target to show on the TV
@@ -111,7 +111,7 @@ Copy the shots to the host and solve. The solver needs `opencv-python` and `nump
 The solver prints `fx fy cx cy` at the capture size, the difference from the
 runtime `kCamera*`, the field of view, the distortion terms, and the worst views.
 The runtime warp is pinhole only. Put the four numbers, which are at 1920x1080,
-into `src/app_config.h` `kCamera*`. They can also be set per run with
+into `src/common/app_config.h` `kCamera*`. They can also be set per run with
 `EDGEPILOT_CAMERA_INTRINSICS=fx,fy,cx,cy`.
 
 ## 2026-09-26 measurement

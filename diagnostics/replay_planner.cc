@@ -8,15 +8,15 @@
  *               없으면 깜빡이·개입 없음, active로 돌려 차선 변경과 회전 desire가 돌지 않는다.
  *   --steering, --driving  파라미터 파일(예: route의 params 스냅샷). 없으면 기본값.
  *   --laneless, --lane     파라미터 파일과 상관없이 Laneless 또는 Lane 모드로 돌린다. */
-#include "control_params.h"
-#include "event_log_reader.h"
-#include "ipc_messages.h"
-#include "lateral_controller.h"
-#include "lateral_planner.h"
-#include "recorded_model_state.h"
+#include "controls/control_params.h"
+#include "recording/event_log_reader.h"
+#include "common/ipc_messages.h"
+#include "controls/lateral_controller.h"
+#include "planning/lateral_planner.h"
+#include "recording/recorded_model_state.h"
 #include "recorded_vehicle_can.h"
-#include "recording_format.h"
-#include "vehicle_can.h"
+#include "recording/recording_format.h"
+#include "car/vehicle_can.h"
 
 #include <algorithm>
 #include <cmath>

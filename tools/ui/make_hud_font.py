@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake the HUD fonts into src/overlay_font_data.inc.
+"""Bake the HUD fonts into src/hud/overlay_font_data.inc.
 
   make_hud_font.py [out.inc]
 
@@ -70,7 +70,7 @@ def hex_rows(data: bytes, per_row: int = 24) -> str:
 
 def main() -> None:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-        Path(__file__).resolve().parents[2] / "src" / "overlay_font_data.inc"
+        Path(__file__).resolve().parents[2] / "src" / "hud" / "overlay_font_data.inc"
     parts = ["/* tools/ui/make_hud_font.py가 Pillow 기본 글꼴(Aileron Regular, CC0)로 만든 파일이다.\n"
              " * 고치지 말고 스크립트를 다시 돌린다. overlay_font.cc만 include한다. */\n"]
     for spec in SPECS:

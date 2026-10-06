@@ -2,7 +2,7 @@
 """tools/model/recording_reader.py의 바이너리 배치가 C++ 헤더의 고정값과 같은지 본다:
 ControlState·LearnerState·ModelState의 offsetof 고정값과 크기, LocalizationState·ImuSample·
 CalibrationState 크기, 이벤트 레코드 머리·프레임 인덱스 레코드 크기, 기록 타입 번호. 도구가 쓰는
-MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/app_config.h와 같은지도 본다.
+MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지도 본다.
 ctest가 저장소 루트에서 돌린다."""
 
 import re
@@ -16,9 +16,9 @@ sys.path.insert(0, str(ROOT / "tools" / "model"))
 import model_warp  # noqa: E402
 import recording_reader as rr  # noqa: E402
 
-IPC = (ROOT / "src" / "ipc_messages.h").read_text(encoding="utf-8")
-FORMAT = (ROOT / "src" / "recording_format.h").read_text(encoding="utf-8")
-APP_CONFIG = (ROOT / "src" / "app_config.h").read_text(encoding="utf-8")
+IPC = (ROOT / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
+FORMAT = (ROOT / "src" / "recording" / "recording_format.h").read_text(encoding="utf-8")
+APP_CONFIG = (ROOT / "src" / "common" / "app_config.h").read_text(encoding="utf-8")
 
 
 def pinned_offsets(macro: str) -> dict[str, int]:

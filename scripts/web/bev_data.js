@@ -1,6 +1,6 @@
 // What the board's model and controlsd publish, as the BEV (bev.js) draws it. The board only copies:
 // /api/bev says where the fields the BEV reads sit in ModelState and ControlState
-// (src/ipc_messages.h; check_param_server.py holds the two together), and /api/bev/stream sends both
+// (src/common/ipc_messages.h; check_param_server.py holds the two together), and /api/bev/stream sends both
 // payloads as they were published, a frame per new model frame. A frame is a 16-byte head, magic
 // "BEV1" (u32), ModelState and ControlState byte counts (u16 each) and the board's CLOCK_BOOTTIME ns
 // (u64), then the payloads. A payload is 0 bytes when the board has none or, for the model, nothing

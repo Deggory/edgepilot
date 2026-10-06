@@ -2,7 +2,7 @@
 
 K230 routes carry HEVC (road.hevc); MaixCAM2 routes carry H.264 (road.h264).
 
-Binary layouts mirror src/recording_format.h and src/ipc_messages.h. Struct sizes
+Binary layouts mirror src/recording/recording_format.h and src/common/ipc_messages.h. Struct sizes
 are asserted against the payload sizes found in the stream, so a layout drift
 fails loudly instead of decoding garbage.
 """
@@ -70,7 +70,7 @@ CONTROL_STATE = np.dtype([
     ("ego_speed_kph", "<f4"),
 ])
 
-# ImuBatch (src/ipc_messages.h): 16-byte head, then `count` samples (only those are recorded).
+# ImuBatch (src/common/ipc_messages.h): 16-byte head, then `count` samples (only those are recorded).
 IMU_BATCH_HEAD = struct.Struct("<QII")
 IMU_SAMPLE = np.dtype([
     ("timestamp_ns", "<u8"), ("accel_mps2", "<f4", 3), ("gyro_rad_s", "<f4", 3),
