@@ -1,8 +1,15 @@
 # edgepilot · MaixCAM2
 
 <p align="center">
+  <img src="docs/images/drive-hud.gif" width="640" alt="A recorded drive with the edgepilot HUD: planned path, lead car with distance and closing speed, lane position, speed, and status cards">
+</p>
+
+<p align="center">
   <strong>openpilot perception and lateral control, native on a Sipeed MaixCAM2 (AX630C)</strong><br>
-  KIA K7 YG HEV · supercombo on the AX630C NPU · Panda USB/CAN · 640x480 driving HUD
+  KIA K7 YG HEV · supercombo on the AX630C NPU · Panda USB/CAN · 640x480 driving HUD<br>
+  <sub>A recorded laneless drive at about 60 km/h, with the HUD redrawn from the logged model,
+  control and learner states by the runtime's own renderer, as <code>overlayd</code> shows it on the
+  board's screen. The board load card holds typical values; the recording does not log them.</sub>
 </p>
 
 | Board | Vehicle | Model | Control | Runtime |
@@ -49,44 +56,81 @@ branch keeps the earlier Kendryte K230 port.
   macOS or Linux, with a googletest suite (188 tests) that needs neither the
   board nor its SDK.
 
-## Architecture
+## How it works
 
-```mermaid
-flowchart TB
-  camera([ov_os04d10]) -->|VI 1280x720 NV12| camerad[camerad]
-  camerad -->|"CMM frame ring (phys addr)"| modeld["modeld<br/>GDC warp · supercombo · NPU"]
-  camerad -->|CMM frame ring| overlayd["overlayd<br/>VO video layer · fb0 HUD"]
-  modeld -->|modelState| controlsd["controlsd<br/>planner · MPC · torque"]
-  controlsd <-->|"sendcan · CAN RX"| pandad[pandad]
-  pandad <--> panda(["Panda · vehicle CAN"])
-  modeld & controlsd & pandad --> overlayd
-```
+### The pipeline
+
+<p align="center"><img src="docs/images/pipeline.svg" width="760" alt="Processes and data paths: camera to camerad to the CMM frame ring; modeld reads the ring through the GDC and runs supercombo on the NPU, overlayd and recordd read it through IVPS; modeld, controlsd, locationd, imud, pandad, overlayd and recordd exchange states through /dev/shm; pandad talks to the Panda over USB and the Panda to the car over CAN"></p>
 
 Each process does one job and talks to the others through `/dev/shm`, keeping
-openpilot's process boundaries without Cap'n Proto/cereal. `manager.py`
-starts and supervises them, and `param_server.py` serves the tuning UI. See
-[Split runtime](docs/runtime.md) for each process.
-
+openpilot's process boundaries without Cap'n Proto/cereal. Camera pixels never
+pass through the CPU: the frame ring lives in physically contiguous memory, the
+GDC warps it straight into both model views, and IVPS scales it onto the LCD and
+copies it for the recorder. `manager.py` starts and supervises the processes,
+`param_server.py` serves the tuning UI, and `recordd` logs every state next to
+the H.264 video. See [Split runtime](docs/runtime.md) for each process.
 `scripts/install_autostart.sh` installs a systemd unit that starts the runtime at
-boot in place of the stock launcher. `recordd` records drives with the
-AX630C hardware H.264 encoder.
+boot in place of the stock launcher.
+
+### One frame, end to end
+
+<p align="center"><img src="docs/images/latency.svg" width="760" alt="Timeline of one camera frame: 43.1 ms capture and ISP into the frame ring, 1 ms GDC warp, 15.5 ms NPU, 3 ms inputs, parse and publish, then up to 10 ms until the next controlsd tick; model output after about 63 ms, steering command within 73 ms"></p>
+
+### Lateral control
+
+<p align="center"><img src="docs/images/lateral-control.svg" width="760" alt="Lateral control: supercombo, then lane mode (lane-centre path and MPC) or laneless mode (curvature from the plan), desired curvature, torque controller with the learners, Hyundai limits, LKAS11, MDPS12 and CLU11 through the Panda safety firmware to the MDPS"></p>
+
+On a recorded minute of engaged lane keeping, the car's measured curvature (from
+the steering angle and yaw rate) follows what the controller asks for closely:
+
+<p align="center"><img src="docs/images/curvature-tracking.svg" width="760" alt="Desired and actual curvature over 60 s of engaged lane keeping at 41 to 66 km/h; the two lines overlap with a correlation of 0.98"></p>
+
+### What it costs the board
+
+<p align="center"><img src="docs/images/cpu-load.svg" width="760" alt="CPU per process: overlayd 14.9%, camerad 11%, modeld 8.2%, locationd 2%, controlsd 1.6%, imud 1.3%, param_server 0.7%, recordd 0.5%, pandad 0.5%, manager 0.3% of one core; 41% of one core in total"></p>
+
+## The HUD
+
+`overlayd` draws the HUD at 20 Hz on the display's hardware overlay layer, above
+the camera preview. These states are rendered off-line with
+[`hud_snapshot`](diagnostics/README.md), the same renderer the board runs:
+
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top"><img src="docs/images/hud/drive.jpg" width="240" alt="Engaged"><br><sub><b>Engaged</b>: path, lead distance and closing speed, lane position</sub></td>
+    <td width="33%" align="center" valign="top"><img src="docs/images/hud/lane-change.jpg" width="240" alt="Lane change"><br><sub><b>Lane change</b>: blinker on, steer to start once safe</sub></td>
+    <td width="33%" align="center" valign="top"><img src="docs/images/hud/depart.jpg" width="240" alt="Green light"><br><sub><b>Green light</b>: departure alert while held at a stop</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center" valign="top"><img src="docs/images/hud/saturated.jpg" width="240" alt="Take control"><br><sub><b>Take control</b>: the turn needs more torque than allowed</sub></td>
+    <td width="33%" align="center" valign="top"><img src="docs/images/hud/paused.jpg" width="240" alt="Steering paused"><br><sub><b>Steering paused</b>: the driver turned the wheel past 85°; steering resumes below 15°</sub></td>
+    <td width="33%" align="center" valign="top"><img src="docs/images/hud/fault.jpg" width="240" alt="Steering fault"><br><sub><b>Steering fault</b>: the MDPS reports a fault</sub></td>
+  </tr>
+</table>
+
+Alerts also play on the board speaker. Tapping the status pill opens a network
+card, and tapping the left column toggles a diagnostic card.
 
 ## Safety model
 
 Every layer must agree before steering torque reaches the car:
 
-1. **Panda safety firmware** (`hyundaiCommunity`) enforces the Hyundai torque,
-   rate, and driver-override limits and is never bypassed.
-2. **`controlsd` gates** require a fresh model, a valid MPC solution, fresh
+<p align="center"><img src="docs/images/safety-layers.svg" width="760" alt="Four layers in a row: controlsd gates, controller limits, the EDGEPILOT_PANDA_TX switch and the Panda safety firmware, before the MDPS"></p>
+
+1. **`controlsd` gates** require a fresh model, a valid MPC solution, fresh
    vehicle state, the right gear, a fastened seatbelt, and an explicit driver
    SET press. A failing gate shows its reason on the HUD.
-3. **Controller limits** cap the curvature at openpilot's `0.2 1/m` with a jerk
+2. **Controller limits** cap the curvature at openpilot's `0.2 1/m` with a jerk
    limit, rate-limit the torque, and ramp it to zero before the MDPS fault angle.
-4. **`EDGEPILOT_PANDA_TX`** is the final transmit switch; the controller never
+3. **`EDGEPILOT_PANDA_TX`** is the final transmit switch; the controller never
    transmits on its own. On the MaixCAM2 the manager starts `pandad` only
    with `EDGEPILOT_ENABLE_PANDA=1`.
+4. **Panda safety firmware** (`hyundaiCommunity`) enforces the Hyundai torque,
+   rate, and driver-override limits and is never bypassed.
 
 ## Hardware
+
+<p align="center"><img src="docs/images/hardware.svg" width="760" alt="Hardware: the Sipeed MaixCAM2 (AX630C, camera, LCD and speaker) connects over USB-C in host mode to a comma Panda, which sits on three K7 CAN buses: bus 0 powertrain (TX LKAS11), bus 1 MDPS (TX LKAS11 and CLU11) and bus 2 the stock LKAS camera (TX MDPS12)"></p>
 
 - Sipeed MaixCAM2 (AX630C: 2x Cortex-A53 + NPU, 1 GB), with its stock
   `ov_os04d10` camera and 640x480 LCD, on the stock image (Ubuntu 22.04 arm64,
@@ -152,12 +196,12 @@ source.
 src/            runtime code, one folder per subsystem (docs/source-layout.md)
 platform/       MaixCAM2 camera (VI), display (VO), CMM, and GDC wrappers
 params/         runtime parameters, hot-reloaded by the processes
-models/         the axmodel, its manifest, PTQ calibration samples
+models/         the axmodel and its manifest
 tests/          host unit tests and the Python layout checks
 diagnostics/    replay, dataset, and HUD tools
 scripts/        SDK fetch, deploy, host tests, board-side Python
 tools/          axmodel pipeline, camera calibration, build container, route readers
-docs/           documentation
+docs/           documentation; docs/images holds the README media
 ```
 
 ## Documentation

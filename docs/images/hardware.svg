@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="262" viewBox="0 0 760 262" role="img" aria-label="edgepilot hardware and CAN buses">
+<style>
+  .h { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .s { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+  .bt { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .btm { font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #1f2328; }
+  .bs { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+  .el { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+  .num { font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+</style>
+<defs><marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#656d76"/></marker><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f9e9a"/></marker><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f0883e"/></marker></defs>
+<rect x="0.5" y="0.5" width="759" height="261" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text class="h" x="20" y="26">Hardware and CAN buses</text>
+<text class="s" x="20" y="45">The Panda joins the board to three of the car's CAN buses; TX lists the frames edgepilot sends on each.</text>
+<rect x="24" y="60" width="252" height="186" rx="10" fill="#f6f8fa" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="38" y="82">Sipeed MaixCAM2</text>
+<rect x="38" y="96" width="224" height="40" rx="6" fill="#ebf3fe" stroke="#2f81f7" stroke-width="1.5"/>
+<text class="bt" x="150.0" y="113.0" text-anchor="middle">AX630C</text>
+<text class="bs" x="150.0" y="127.0" text-anchor="middle">2x Cortex-A53 · NPU · 1 GB</text>
+<rect x="38" y="146" width="108" height="40" rx="6" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="92.0" y="163.0" text-anchor="middle">camera</text>
+<text class="bs" x="92.0" y="177.0" text-anchor="middle">ov_os04d10</text>
+<rect x="154" y="146" width="108" height="40" rx="6" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="208.0" y="163.0" text-anchor="middle">640x480 LCD</text>
+<text class="bs" x="208.0" y="177.0" text-anchor="middle">+ speaker</text>
+<rect x="38" y="196" width="224" height="30" rx="6" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="150.0" y="215.0" text-anchor="middle">USB-C (host mode)</text>
+<rect x="330" y="133" width="110" height="40" rx="6" fill="#fff3e8" stroke="#f0883e" stroke-width="1.5"/>
+<text class="bt" x="385.0" y="157.0" text-anchor="middle">comma Panda</text>
+<polyline points="262.0,211.0 302.0,211.0 302.0,153.0 330.0,153.0" fill="none" stroke="#f0883e" stroke-width="1.5" marker-end="url(#a2)" marker-start="url(#a2)"/>
+<text class="el" x="308.0" y="202.0" text-anchor="start">USB</text>
+<rect x="500" y="60" width="240" height="186" rx="10" fill="#fffaf5" stroke="#f0883e" stroke-width="1.5"/>
+<text class="bt" x="514" y="82">KIA K7 YG HEV</text>
+<rect x="512" y="92" width="216" height="48" rx="6" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="620.0" y="106.0" text-anchor="middle">bus 0 · powertrain</text>
+<text class="bs" x="620.0" y="120.0" text-anchor="middle">cluster · SAS · brake · gear</text>
+<text class="bs" x="620.0" y="134.0" text-anchor="middle">TX: LKAS11</text>
+<polyline points="440.0,153.0 474.0,153.0 474.0,116.0 512.0,116.0" fill="none" stroke="#f0883e" stroke-width="1.5" marker-end="url(#a2)" marker-start="url(#a2)"/>
+<rect x="512" y="144" width="216" height="48" rx="6" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="620.0" y="158.0" text-anchor="middle">bus 1 · MDPS</text>
+<text class="bs" x="620.0" y="172.0" text-anchor="middle">MDPS state</text>
+<text class="bs" x="620.0" y="186.0" text-anchor="middle">TX: LKAS11 · CLU11</text>
+<polyline points="440.0,153.0 474.0,153.0 474.0,168.0 512.0,168.0" fill="none" stroke="#f0883e" stroke-width="1.5" marker-end="url(#a2)" marker-start="url(#a2)"/>
+<rect x="512" y="196" width="216" height="48" rx="6" fill="#ffffff" stroke="#8b949e" stroke-width="1.5"/>
+<text class="bt" x="620.0" y="210.0" text-anchor="middle">bus 2 · camera</text>
+<text class="bs" x="620.0" y="224.0" text-anchor="middle">stock LKAS camera</text>
+<text class="bs" x="620.0" y="238.0" text-anchor="middle">TX: MDPS12</text>
+<polyline points="440.0,153.0 474.0,153.0 474.0,220.0 512.0,220.0" fill="none" stroke="#f0883e" stroke-width="1.5" marker-end="url(#a2)" marker-start="url(#a2)"/>
+</svg>

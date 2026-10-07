@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="160" viewBox="0 0 760 160" role="img" aria-label="edgepilot safety layers">
+<style>
+  .h { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .s { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+  .bt { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .btm { font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #1f2328; }
+  .bs { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+  .el { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+  .num { font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+</style>
+<defs><marker id="a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#656d76"/></marker><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f9e9a"/></marker><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f0883e"/></marker></defs>
+<rect x="0.5" y="0.5" width="759" height="159" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text class="h" x="20" y="26">Four layers before the steering motor</text>
+<text class="s" x="20" y="45">A steering request reaches the MDPS only when all four pass it. The numbers match the list below.</text>
+<rect x="24" y="66" width="142" height="70" rx="6" fill="#eaf7ee" stroke="#2da44e" stroke-width="1.5"/>
+<text class="bt" x="95.0" y="84.0" text-anchor="middle">controlsd gates</text>
+<text class="bs" x="95.0" y="98.0" text-anchor="middle">model · MPC · CAN</text>
+<text class="bs" x="95.0" y="112.0" text-anchor="middle">gear · seatbelt</text>
+<text class="bs" x="95.0" y="126.0" text-anchor="middle">driver SET press</text>
+<circle cx="27" cy="69" r="9" fill="#2da44e" stroke="#ffffff" stroke-width="2"/>
+<text class="num" x="27" y="73" text-anchor="middle">1</text>
+<polyline points="166.0,101.0 188.0,101.0" fill="none" stroke="#656d76" stroke-width="1.5" marker-end="url(#a0)"/>
+<rect x="188" y="66" width="142" height="70" rx="6" fill="#eaf7ee" stroke="#2da44e" stroke-width="1.5"/>
+<text class="bt" x="259.0" y="84.0" text-anchor="middle">controller limits</text>
+<text class="bs" x="259.0" y="98.0" text-anchor="middle">curvature · jerk</text>
+<text class="bs" x="259.0" y="112.0" text-anchor="middle">torque rate</text>
+<text class="bs" x="259.0" y="126.0" text-anchor="middle">fault-angle ramp</text>
+<circle cx="191" cy="69" r="9" fill="#2da44e" stroke="#ffffff" stroke-width="2"/>
+<text class="num" x="191" y="73" text-anchor="middle">2</text>
+<polyline points="330.0,101.0 352.0,101.0" fill="none" stroke="#656d76" stroke-width="1.5" marker-end="url(#a0)"/>
+<rect x="352" y="66" width="142" height="70" rx="6" fill="#eaf7ee" stroke="#2da44e" stroke-width="1.5"/>
+<text class="btm" x="423.0" y="91.0" text-anchor="middle">EDGEPILOT_PANDA_TX</text>
+<text class="bs" x="423.0" y="105.0" text-anchor="middle">final transmit switch</text>
+<text class="bs" x="423.0" y="119.0" text-anchor="middle">0 = shadow mode</text>
+<circle cx="355" cy="69" r="9" fill="#2da44e" stroke="#ffffff" stroke-width="2"/>
+<text class="num" x="355" y="73" text-anchor="middle">3</text>
+<polyline points="494.0,101.0 516.0,101.0" fill="none" stroke="#656d76" stroke-width="1.5" marker-end="url(#a0)"/>
+<rect x="516" y="66" width="142" height="70" rx="6" fill="#eaf7ee" stroke="#2da44e" stroke-width="1.5"/>
+<text class="bt" x="587.0" y="84.0" text-anchor="middle">Panda safety</text>
+<text class="bs" x="587.0" y="98.0" text-anchor="middle">hyundaiCommunity</text>
+<text class="bs" x="587.0" y="112.0" text-anchor="middle">torque and rate limits</text>
+<text class="bs" x="587.0" y="126.0" text-anchor="middle">never bypassed</text>
+<circle cx="519" cy="69" r="9" fill="#2da44e" stroke="#ffffff" stroke-width="2"/>
+<text class="num" x="519" y="73" text-anchor="middle">4</text>
+<polyline points="658.0,101.0 680.0,101.0" fill="none" stroke="#f0883e" stroke-width="1.5" marker-end="url(#a2)"/>
+<rect x="680" y="84.0" width="56" height="34" rx="17.0" fill="#fff3e8" stroke="#f0883e" stroke-width="1.5"/>
+<text class="bt" x="708.0" y="105.0" text-anchor="middle">MDPS</text>
+</svg>
