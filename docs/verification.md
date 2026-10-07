@@ -19,14 +19,14 @@
 - The verifier checks the ISP-normalized medmodel defaults and compares its
   matrix with the original openpilot formula.
 - With zero rpy, the warped YUV6 must equal a direct (unwarped) pack byte for byte.
-- Against openpilot's OpenCL interpolation on a `640x360` K230 source, the
+- Against openpilot's OpenCL interpolation on a `640x360` source frame, the
   worst 12-case mean absolute pixel difference of the CPU warp is `0.314/255`
   and the worst absolute difference is `7/255`. The paths use the same
   projection and YUV6 layout, but are not bit-exact because openpilot quantizes
   coordinates to 1/32 pixel with 15-bit coefficients while this warp uses 12-bit
   coefficients.
 - On the board, the GDC warp matches the CPU warp to 1 LSB in Y and 0.4 LSB on
-  average in U/V; on a K230 replay the plan lateral offset at 2 s against the
+  average in U/V; on a replay the plan lateral offset at 2 s against the
   fp32 host reference differs by 0.0005 m.
 - Automatic calibration requires both CAN `vEgo` and camera-odometry `trans[0]`
   above 15 mph, matching openpilot's acceptance gate.
@@ -47,8 +47,7 @@ build-host/bin/gtest_calibration
 
 ## Lateral MPC solver
 
-`src/planning/lateral_mpc.*` replaces the prebuilt riscv64 acados/HPIPM runtime that the
-K230 build used to keep in `deps/acados`. It solves the same OCP as openpilot 0.8.16's
+`src/planning/lateral_mpc.*` solves the same OCP as openpilot 0.8.16's acados
 `lateral_mpc_lib`. The problem was recovered from the generated solver's own
 `.rodata` and cross-checked against openpilot's `lat_mpc.py`: T_IDXS shooting
 nodes (16 intervals, 2.5 s), `idxbx=[2,3]` bounded at radians(90)/radians(50),
@@ -74,60 +73,13 @@ cost. A wrong sensitivity in the RK4 forward VDE fails this check, since the
 iteration would then settle where the linearized KKT holds but the true gradient
 does not.
 
-### A/B against the acados runtime (K230 board, 2026-09-10)
-
-400 cycles per speed with identical references, both solvers warm-started from
-reset. `lockstep` feeds both the same initial curvature; `free` lets each feed
-back its own.
-
-| v (m/s) | curvature, all nodes | curvature_rate | curvature[0], free |
-| --- | --- | --- | --- |
-| 0 | 0 | 0 | 0 |
-| 3 | 1.4e-5 | 2.7e-5 | 1.3e-6 |
-| 12 | 1.3e-6 | 1.1e-6 | 1.3e-8 |
-| 27 | 2.3e-8 | 4.4e-8 | 5.5e-9 |
-
-Solve time on the K230 board (C908, single core, with `modeld` running, so
-the minimum is the meaningful figure; not re-measured on the AX630C):
-
-| Solver | min | p50 | p90 |
-| --- | --- | --- | --- |
-| acados | 964 us | 1368 us | 3246 us |
-| `LateralMpc` | 33.5 us | 33.6 us | 33.8 us |
-
-The millisecond tail is what mattered on a one-core board: 3.2 ms of the 50 ms
-control cycle could disappear into a single solve.
-
-### End-to-end replay
-
-`replay_planner` over three segments of route `2026-09-07--02-21-46-703`
-(3545 frames, 1217 of them at standstill, 0-76 kph, recorded on the K230). Both
-runs are K230 board binaries, so nothing here is host/target float noise; the host build produces a
-byte-identical CSV to the board build.
-
-| Segment | commanded curvature, max diff | RMS | signal range | frames differing |
-| --- | --- | --- | --- | --- |
-| 000 | 2.0e-6 | 1.8e-7 | 2.7e-3 | 27/1183 |
-| 007 | 1.4e-5 | 6.3e-7 | 6.2e-3 | 50/1182 |
-| 008 | 4.0e-6 | 2.3e-7 | 1.3e-2 | 34/1180 |
-
-`mpcSolutionValid` and laneless mode never differ. The largest differences are at
-low speed, matching the synthetic A/B; 1.4e-5 1/m is about 0.002 degrees of front
-wheel angle, well below the torque command quantum.
-
-The A/B harness (`benchmarks/acados_lateral_mpc.h`,
-`benchmarks/check_lateral_mpc_vs_acados.cc`) was never committed, so the A/B
-cannot be re-run from this repository. Only the prebuilt acados runtime
-(`deps/acados`) is in the history, up to the commit that replaced it with
-`src/planning/lateral_mpc.*`.
-
 ### Steering-rate cost term (from 0.9.4)
 
 openpilot 0.9.4's lat MPC splits the input cost into lateral-jerk and
 steering-rate terms. Its steering-rate residual, `psi_accel / (v_ego + 0.1)`, is
 the same quantity as this solver's `curvature_rate`, so the shipped weight of
 700 transplants directly. All three of 0.9.4's extra terms were implemented and
-swept over the three replay segments; only this one earned its place:
+swept over three recorded drive segments; only this one earned its place:
 
 | Term | Effect at a sane weight | Verdict |
 | --- | --- | --- |
@@ -154,13 +106,12 @@ most of the benefit. `mpcSolutionValid` and laneless mode never differ, and the
 command deviation from the pre-term baseline stays under 4.1e-3 1/m, confined to
 below 20 kph (7e-5 above 50 kph).
 
-Solve time is unchanged at 33.5 us on the K230 board; the term is one extra
-weight in the input Hessian.
+The term is one extra weight in the input Hessian, so a solve costs the same.
 
 ### Rejected: more than one SQP iteration per cycle
 
-Since a solve costs 33.5 us instead of 964 us, running 2-3 SQP iterations per
-cycle looked like free tracking accuracy. It buys nothing, because the NLS
+Since a solve is cheap, running 2-3 SQP iterations per cycle looked like free
+tracking accuracy. It buys nothing, because the NLS
 residuals are *linear* in the state and control at a fixed speed, so the
 Gauss-Newton Hessian is exact and the only nonlinearity in the whole problem is
 `sin/cos(psi)` at `|psi| < 0.05 rad`. One Newton step lands on the optimum.
@@ -180,9 +131,7 @@ at the actuator delay, so the gap is reported as the equivalent curvature error
 
 Cold start immediately after `reset()` is the same order (2.8e-6 at 3 m/s), so
 the failure-recovery path needs no extra iterations either. For scale, one
-iteration's residual suboptimality is ~40x smaller than the acados-vs-this-solver
-difference already accepted on real logs, and ~2500x smaller than the command
-range. `curvature_rates` are logged but never consumed by the controller.
+iteration's residual suboptimality is ~2500x smaller than the command range. `curvature_rates` are logged but never consumed by the controller.
 
 ### Rejected: per-node speed profile
 

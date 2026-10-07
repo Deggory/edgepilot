@@ -31,7 +31,7 @@
 #include <thread>
 #include <vector>
 
-/* 카메라 내부 파라미터 측정용 스틸 캡처(K230 camcal의 k230_snapshot을 옮긴 것).
+/* 카메라 내부 파라미터 측정용 스틸 캡처.
  *
  * 런타임과 같은 MaixCamera 경로(센서 2560x1440 전체 화각을 크롭 없이 줄임, 보드
  * cam_flip/mirror, AI-ISP 설정)로 1920x1080을 받아, LCD에는 전체 화면을 원본 비율로

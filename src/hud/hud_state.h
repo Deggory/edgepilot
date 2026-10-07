@@ -1,7 +1,7 @@
 #ifndef HUD_STATE_H
 #define HUD_STATE_H
 
-/* 공유 상태 스냅샷(K230*State) → HUD 표시 상태. 그리기와 무관해 OpenCV 없이
+/* 공유 상태 스냅샷(ModelState·ControlState 등) → HUD 표시 상태. 그리기와 무관해 OpenCV 없이
  * 컴파일되며, overlayd와 hud_snapshot이 같은 매핑을 쓴다. */
 
 #include "controls/departure_alert.h"

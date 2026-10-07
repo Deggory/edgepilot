@@ -11,13 +11,7 @@
 
 edgepilot runs openpilot's driving model and lateral control on small embedded
 boards. This `main` branch targets the MaixCAM2; the [`k230`](../../tree/k230)
-branch keeps the original Kendryte K230 port with the same code layout and
-names. The project started as the K230 runtime (the legacy
-[supercombo_k230](https://github.com/cwal1220/supercombo_k230) repository), and
-this branch ports it to the MaixCAM2. The control stack, Panda/CAN protocol,
-parameter server, and recording format are carried over unchanged; the camera, display, model, and build are
-new. The K230 nncase/kmodel pipeline, VGLite warp, and MVX recorder are not part
-of this branch; the piezo alerts are now bell-like tones on the board speaker.
+branch keeps the earlier Kendryte K230 port.
 
 > [!WARNING]
 > This is experimental vehicle-control software. Keep Panda safety enabled, run
@@ -75,7 +69,7 @@ starts and supervises them, and `param_server.py` serves the tuning UI. See
 
 `scripts/install_autostart.sh` installs a systemd unit that starts the runtime at
 boot in place of the stock launcher. `recordd` records drives with the
-AX630C hardware H.264 encoder in the K230 recording format.
+AX630C hardware H.264 encoder.
 
 ## Safety model
 

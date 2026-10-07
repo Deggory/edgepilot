@@ -10,9 +10,8 @@ against a frozen recording.
 
 `replay_planner` holds the vehicle response at whatever the recording captured.
 Change a gain and the measured curvature does not move, so the error the
-controller sees is fiction. That is how the 2026-09-21 prediction for the
-mid-curve torque dropout came out at `36% -> 14%` offline while the road gave
-`43% -> 46%` (`p=0.699`).
+controller sees is fiction, and an offline prediction can point the opposite
+way from the road.
 
 The missing piece is not graphics, it is the plant. Curvature to vehicle pose is
 already in the code (`TorqueController::estimate_actual_curvature`); only torque
@@ -29,17 +28,15 @@ accumulates a pose difference against the recorded car,
 and every model frame is rotated and translated into the simulated car's frame
 before the planner sees it. Real camera output, real model output, closed loop.
 
-This holds while the deviation stays inside what the camera saw. Measured on
-`route_711` and `route_829`, `|dy|` p90 is `0.07 m` and the worst segment peak is
-`0.56 m`, against a `2 m` clamp that never fired.
+This holds while the deviation stays inside what the camera saw; a `2 m` clamp
+on `|dy|` guards against reading the model's lines beyond that.
 
 Driver torque and inactive ticks are disturbances the simulation cannot
 reproduce, so those ticks resync to the recording and the next free-running
 segment starts from the real pose. The driver gate has hysteresis
 (`150` counts in, `60` counts and `0.5 s` out); a single threshold shatters
-`route_711` into 847 segments with a median length of `0.06 s`, because driver
-torque is noisy even hands-off (p50 `14`, p90 `156` while active). With the
-hysteresis the same route gives 35 segments over `398 s`, the longest `68 s`.
+a drive into hundreds of sub-second segments, because driver torque is noisy
+even hands-off; the hysteresis keeps the free-running segments long.
 
 ## Plant
 
@@ -54,22 +51,12 @@ lateral acceleration tracks the recorded one. An earlier attempt to identify the
 plant by fitting recorded torque against recorded angle gave `tau = 2210 ms` at
 14% explained and was not usable.
 
-Identified on `route_711`, `wn = 10 rad/s`, `zeta = 4`, `delay = 0`,
-gain `0.7 / 0.35 / 0.7 / 1.2` at `3 / 8 / 15 / 25 m/s`:
-
-| route | ticks | R² open-loop | R² closed-loop |
-| --- | --- | --- | --- |
-| `route_711` (fit) | 38163 | 0.941 | 0.924 |
-| `route_829` (held out) | 146803 | 0.965 | 0.959 |
-
-Per speed band on the held-out route: `0.90 / 0.93 / 0.96 / 0.96` for
-`<20 / 20-35 / 35-55 / >55 km/h`.
-
-Re-identified on MaixCAM2 drives (2026-10-04): the K230 curve under-estimates
-the car's torque response. Scaling it, the open-loop R² peaks at `1.5x` on the
-10-04 lane route (`0.960 -> 0.971`) and `1.7-2.0x` on the 10-03 lane route
-(`0.956 -> 0.977`), so the default is now `1.5x`
-(`1.05 / 0.525 / 1.05 / 1.80`). With the old curve, raising the controller's
+The default plant is `wn = 10 rad/s`, `zeta = 4`, `delay = 0`, gain
+`1.05 / 0.525 / 1.05 / 1.80` at `3 / 8 / 15 / 25 m/s`, identified on MaixCAM2
+lane drives (2026-10-04): scaling an earlier gain curve, the open-loop R² peaks
+at `1.5x` on the 10-04 lane route (`0.960 -> 0.971`) and at `1.7-2.0x` on the
+10-03 lane route (`0.956 -> 0.977`), so the default is the `1.5x` curve. With
+the earlier curve, raising the controller's
 `lat_accel_factor` to the torqued estimate (3.15) looked like a 12 cm push to
 the outside of left curves; with the re-identified plant the same change is
 neutral (RMS `0.109 -> 0.110 m`). The DC gain is fixed relative to
@@ -80,15 +67,12 @@ the open-loop R² against a gain scale before trusting such a comparison.
 ## What the numbers do and do not support
 
 A naive model that assumes the car follows the requested curvature exactly
-already explains `R² = 0.82` on `route_711`. The plant removes 62% of the error
-that model leaves (RMSE `0.059 -> 0.036 m/s²`), which is what the identification
-is worth — not the `0.94` on its own.
+already explains most of the variance, so judge a plant by how much of the
+remaining error it removes, not by its R² alone.
 
-Rankings survive plant uncertainty. Across four plants spanning
-`wn 6-14`, `zeta 1.5-4`, `delay 0-3` and flat-vs-scheduled gain, `SAD 0.46`
-scores worse than `SAD 0.34` on every metric every time, matching the road. The
-absolute gap moves; the order does not. Rank configurations with this tool, do
-not read absolute numbers off it.
+Rank configurations with this tool; do not read absolute numbers off it. Across
+plausible plants the absolute gap between two configurations moves, while their
+order holds.
 
 The optimum `SAD` is not one of the things it can find. The identification puts
 the transport delay at 0 and carries the lag in an over-damped pole, and
@@ -104,15 +88,8 @@ an unmodelled disturbance.
 ## Coverage
 
 The hands-off requirement is not a detail, it decides which questions the tool
-can answer. Sorted by lateral acceleration over both routes:
-
-| band | time | driver torque p50 | in a free segment |
-| --- | --- | --- | --- |
-| straight, `|a| < 0.3` | 2057 s | 9-11 | 83-87% |
-| moderate, `0.3-1.0` | 232 s | 26-74 | 34-55% |
-| curve, `|a| >= 1.0` | 55 s | 231-245 | 0-6% |
-
-Real curves are curves the driver is co-steering, so the tool covers almost none
+can answer: most straight driving falls in free segments, a third to a half of
+the moderate bends do, and almost no curve above `1 m/s²` does. Real curves are curves the driver is co-steering, so the tool covers almost none
 of them. Lane keeping on straights and moderate bends is what it measures.
 
 Feeding the recorded driver torque into the plant would raise that coverage and
@@ -129,5 +106,5 @@ rate-limit binding fraction, for A/B.
 
 ## Cost
 
-`route_829`, 24 minutes of driving, replays in `0.6 s` on an M5. A full sweep of
-840 plant candidates over `route_711` takes 31 s at 8-way parallelism.
+A 24-minute drive replays in under a second on an M5; a sweep of 840 plant
+candidates over a 6-minute drive takes about 30 s at 8-way parallelism.

@@ -18,9 +18,6 @@ The AI-ISP denoiser always runs on the other NPU core, so the NPU boots split
 (`/boot/configs` `maix_npu_ai_isp=1`, set by `install_autostart.sh`) and the model
 is compiled for one core.
 
-The K230 ran openpilot v0.9.4 as an nncase kmodel in 27.7 ms of KPU time; that
-pipeline is not part of this branch.
-
 ## Model
 
 The model is the openpilot master `driving_supercombo` with its history queues
@@ -84,7 +81,7 @@ YUV6 plane order
   in perspective mode, reading the ring slot straight from its physical address
   and producing two 512x256 NV12 views, then unpacks them into the newest
   history slot. Against the CPU warp, Y differs by at most 1 LSB and U/V by
-  0.4 LSB on average; on a K230 replay the plan lateral offset at 2 s against
+  0.4 LSB on average; on a replay the plan lateral offset at 2 s against
   the fp32 host reference differs by 0.0005 m.
 - **CPU (`EDGEPILOT_WARP_CPU=1`, NV21 frames, or GDC unavailable).**
   `src/model/model_input_transform.*` fuses the homography sampling with YUV6

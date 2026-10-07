@@ -66,8 +66,3 @@ The stock UI (`launcher.service`) and the apps it starts from `/maixapp/apps/`
 use about 30% CPU and hold the camera and NPU. `manager.py` stops both
 before starting the runtime unless `EDGEPILOT_STOP_LAUNCHER=0`. It does not restart
 them on exit; `systemctl start launcher.service` brings the stock UI back.
-
-## Physical mounting
-
-The printable windshield mount on the `k230` branch (`docs/hardware/windshield_mount`)
-was designed for the K230 board and its LCD; it does not fit the MaixCAM2.

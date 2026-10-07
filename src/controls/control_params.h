@@ -26,7 +26,7 @@ struct SteeringParams {
   int steering_pressed_threshold = 150;
 
   /* openpilot 토크 튜닝 그대로(횡가속도 공간). 토크 = (FF + P + I) / 배율 + 마찰.
-   * 배율은 MaixCAM2 torqued 학습값(2026-09-27, 6769점 TLS 2.75; K230 때 2.65~2.95). */
+   * 배율은 MaixCAM2 torqued 학습값(2026-09-27, 6769점 TLS 2.75). */
   float torque_lat_accel_factor = 2.75f;
   // KP_INTERP의 30 m/s 끝점. 나머지 점은 상류 고정값이다.
   float torque_kp = 0.8f;
@@ -49,7 +49,7 @@ struct SteeringParams {
    * (openpilot 방식). 켠 경우 85도 위에서는 짧게 끊지 않고 85도 아래로 올 때까지 끈다. K7에서
    * 2프레임 컷 뒤 다시 켜면 3~14 ms 안에 fault가 났다(2026-10-03, 4번 중 4번). */
   int avoid_lkas_fault_cut_frames = 2;
-  float angle_offset_deg = -1.57f;  // paramsd 학습 평균(2026-09-27; K230 때 −1.5~−1.6°)
+  float angle_offset_deg = -1.57f;  // paramsd 학습 평균(2026-09-27)
   /* openpilot latAccelOffset(m/s^2). 상수 횡가속 편향을 FF에서 뺀다.
    * +y=오른쪽 관례라 양수 = 우측 쏠림 보정. fit 도구 출력을 그대로 넣는다. */
   float torque_lat_accel_offset = -0.06f;  // torqued 학습값(2026-09-27)

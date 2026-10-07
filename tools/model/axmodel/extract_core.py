@@ -108,7 +108,7 @@ g.initializer.extend([numpy_helper.from_array(np.array([-9], np.int64), "last9_s
 sl = helper.make_node("Slice", [t_in.input[0], "last9_start", "last9_end", "last9_axis"], [t_out.output[0]], name="last9_slice")
 wh = byname["model/p_node_masked_fill"]
 mask = consts[wh.input[0]]
-# scores measured in [-6.3, 4.7] on K230 drives: -30 leaves masked weights < e^-19
+# scores measured in [-6.3, 4.7] on recorded drives: -30 leaves masked weights < e^-19
 # and keeps the quantized range tight (an -inf/-1e4 fill would wreck it)
 g.initializer.append(numpy_helper.from_array(np.where(mask, -30.0, 0.0).astype(np.float32), "attn_mask_add"))
 add = helper.make_node("Add", [wh.input[2], "attn_mask_add"], [wh.output[0]], name="attn_mask_add")

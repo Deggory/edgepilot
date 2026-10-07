@@ -3,8 +3,8 @@
 [← Documentation index](../README.md)
 
 This measures the MaixCAM2 camera's pinhole intrinsics (`fx fy cx cy`) from photos
-of a checkerboard shown on a 65" 4K TV. It is a port of the K230 `camcal`
-workflow. The runtime uses these values for the model input warp and the HUD
+of a checkerboard shown on a 65" 4K TV. The runtime uses these values for the
+model input warp and the HUD
 projection (`src/common/app_config.h` `kCamera*`, given at 1920x1080).
 
 ```
@@ -80,8 +80,7 @@ The pattern is only a rigid lattice if the TV shows it pixel for pixel:
 
 ## Shooting
 
-The MaixCAM2 lens is wider than the K230's: about 80 x 51 degrees against
-62 x 38. The distances are therefore shorter than in the K230 notes.
+The MaixCAM2 lens covers about 80 x 51 degrees, which sets these distances:
 
 | Goal | Distance |
 | --- | --- |
@@ -97,7 +96,7 @@ The MaixCAM2 lens is wider than the K230's: about 80 x 51 degrees against
 - Tilt the camera about ±30° on both axes and roll it a little. Frontal views alone
   do not separate focal length from distance.
 - Brace the camera. The sensor has a rolling shutter, and hand motion shears the
-  board. That was the main error source in the K230 measurement.
+  board.
 - 20–30 usable shots is plenty. If moiré appears, change the distance slightly.
 
 ## Solving
