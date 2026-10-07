@@ -170,7 +170,7 @@ docs/           documentation
 ## Documentation
 
 - **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md) ·
-  [Boot time](docs/boot_time.md)
+  [Boot time](docs/boot-time.md)
 - **How it works:** [Split runtime](docs/runtime.md) · [Model pipeline](docs/model-pipeline.md) ·
   [Model package](models/README.md) · [Source layout](docs/source-layout.md)
 - **Operating:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·

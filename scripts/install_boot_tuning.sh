@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MaixCAM2 부팅을 빠르게 한다(docs/boot_time.md). 순정 이미지에서 edgepilot이 늦게 뜨는 이유는 세 가지다:
+# MaixCAM2 부팅을 빠르게 한다(docs/boot-time.md). 순정 이미지에서 edgepilot이 늦게 뜨는 이유는 세 가지다:
 #   1) AX 드라이버를 rc.local에서 올리는데 rc-local.service는 Wi-Fi 연결(network-online) 뒤에 돈다.
 #   2) 쓰지 않는 서비스(tailscale·nginx·bluetooth·ttyd·maixvision·rsyslog)가 같은 시각에 떠서
 #      느린 SD와 CPU 두 개를 나눠 쓴다.
