@@ -41,7 +41,6 @@
 namespace {
 
 constexpr double kDtCtrl = 0.01;
-constexpr int kGearDriveSim = 5;
 // 녹화가 본 차선 범위 밖은 외삽이라 신뢰 구간을 벗어난다.
 constexpr float kMaxDeviationY = 2.0f;
 constexpr float kMaxDeviationPsi = 0.15f;
@@ -307,7 +306,7 @@ int main(int argc, char **argv) {
                           &vehicle.cgw2_time_s}) {
       *stamp = sim_t;
     }
-    vehicle.gear = kGearDriveSim;
+    vehicle.gear = kGearDrive;
     vehicle.cluster_speed_raw = ex.v_kph;
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = ex.v_kph;
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = ex.v_kph;

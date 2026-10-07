@@ -188,7 +188,6 @@ public:
   // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영.
   LearnerOutputs update_learners(double now_s);
 
-  const LateralControllerConfig &config() const { return config_; }
   const LateralControlResult &result() const { return last_result_; }
   const PandaGateOutput &panda() const { return panda_; }
   const LateralTarget &target() const { return lateral_target_; }
@@ -200,8 +199,8 @@ public:
   const LateralController &controller() const { return controller_; }
 
 private:
-  LateralControllerConfig config_;
-  ControlParams params_;
+  LateralControllerConfig config_;  // 조향·주행 파라미터는 여기에 있다
+  AdaptiveCruiseConfig cruise_;
   PlannerPort &planner_;
   LateralController controller_;
   LateralLearners learners_;
@@ -222,7 +221,3 @@ private:
   int control_frame_ = 0;
   uint32_t last_logged_alert_event_id_ = 0;
 };
-
-// 학습기·컨트롤러 상태를 HUD와 웹 편집기가 읽는 LearnerState로(timestamp_ns 제외).
-LearnerState make_learner_state(const LateralLearners &learners, const SteeringParams &params,
-                                float road_bank_lat_accel, bool live_delay_in_use, float plan_delay_s);

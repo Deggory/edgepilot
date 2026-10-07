@@ -16,15 +16,15 @@ const HEADER = 16;
 const TRAJECTORY = 33;
 // openpilot T_IDXS: when the car is at each plan point, s
 const T_IDXS = Array.from({length: TRAJECTORY}, (_, i) => 10 * (i / (TRAJECTORY - 1)) ** 2);
-const RADAR_TO_CAMERA = 1.52;           // controls_tick.cc, hud_scene.cc kRadarToCameraDistanceM
+const RADAR_TO_CAMERA = 1.52;           // model_output.h kRadarToCameraDistanceM (check_param_server.py)
 const LEAD_PROBABILITY = 0.5;           // model_output.h kLeadProbabilityThreshold (check_param_server.py)
 const LANE_SURE = 0.5;                  // both ego lines at least this sure for the lane width
 const LANE_WIDTH_INDEX = 6;             // hud_scene.cc kLaneRulerIndex: 6.75 m from the camera
 // hud_scene.cc draw_scene: lines and the path reach as far as the plan does, 10 to 100 m
 const DRAW = {min: 10, max: 100};
 const PLAN_NOW_INDEX = 2;               // the plan's speed now: at 0.04 s, past the first point's noise
-const GAS_PRESS_HORIZON = 1;            // departure_alert.cc reads gas_press_probs[1], 2 s ahead
-const DRIVE_GEAR = 5;                   // departure_alert.cc kDriveGear: it only watches in D
+const GAS_PRESS_HORIZON = 1;            // controls_tick.cc feeds the departure alert gas_press_probs[1], 2 s ahead
+const DRIVE_GEAR = 5;                   // can_frame.h kGearDrive: the departure alert only watches in D
 const HISTORY_S = 10;                   // how much of the departure inputs the card keeps
 const MODEL_STALE_S = 0.5, CONTROL_STALE_S = 1.0;
 const RETRY_MS = [500, 5000];

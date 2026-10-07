@@ -16,9 +16,6 @@ constexpr double kBlinkerHoldSeconds = 0.5;
  * 4 mm), 비제동 주행의 99%가 3 mm 이하. 이 기준이 AHB1 작동 상태(CF_Ahb_Act)와 98% 같다. */
 constexpr float kBrakePedalStrokeMm = 3.0f;
 constexpr float kWheelSpeedScaleKph = 0.03125f;
-constexpr float kFixedCruiseStep = 2.0f;
-constexpr float kMinimumCruiseSpeedKph = 30.0f;
-constexpr float kMinimumCruiseSpeedMph = 20.0f;
 
 // signed raw 값을 지정 bit 수로 sign extension한다.
 int32_t sign_extend(uint32_t raw, int bits) {

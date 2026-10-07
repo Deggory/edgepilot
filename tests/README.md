@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 187개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 188개와
 Python 2개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -32,7 +32,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_calibration` | 12 | 온라인 보정 상태 기계(calibrationd.py 참조, 카메라 높이·높이 표준편차 조건 포함), 장착 변경·초기화 재보정, 범위 밖 저장값 복원, 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조), NV21 색차 순서, 카메라 장착 위치 |
 | `gtest_car` | 12 | K7 CAN 신호 해석(LCA11, WHL_SPD11, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 MDPS용 CLU11 속도 바꿔치기, CGW1 B-CAN 타임아웃을 안전한 값으로 읽기(깜빡이·비상등 꺼짐, 문 열림, 안전벨트 미착용), AHB1 페달 스트로크(3 mm 초과)와 TCS13 BrakeLight(AUTO HOLD)로 켜는 브레이크등, AHB1 페달이 끄는 고정형 크루즈 추정(TCS13 0이 덮어쓰지 않음, 밟은 채 RES 무시) |
 | `gtest_control_holds` | 3 | 조향 경로 게이트(plan 도달 거리와 점 수), Panda 헬스 공백 홀드(100 ms), 잘못된 plan 홀드(150 ms) |
-| `gtest_controls_tick` | 3 | controlsd 한 틱(`ControlsTick`)을 main처럼 10 ms마다: 신호 배치대로 채운 K7 CAN·20 Hz 모델·Panda 상태로 SET 결합과 LKAS11 송신(파워트레인·MDPS 버스), 문 열림 해제, Panda 거부 1초 유예 뒤 거절, AHB1 페달이 끄는 크루즈 추정(횡제어는 유지) |
+| `gtest_controls_tick` | 4 | controlsd 한 틱(`ControlsTick`)을 main처럼 10 ms마다: 신호 배치대로 채운 K7 CAN·20 Hz 모델·Panda 상태로 SET 결합과 LKAS11 송신(파워트레인·MDPS 버스), 문 열림 해제, Panda 거부 1초 유예 뒤 거절, AHB1 페달이 끄는 크루즈 추정(횡제어는 유지), 휠 속도가 끊기면 0.5초 뒤 비우는 크루즈·발행 속도(조향은 설정한 시간까지) |
 | `gtest_departure_alert` | 14 | 정차 중 앞차 출발과 신호 대기 알림(짧은 plan 1.5초 무장, 무장 전 열림이면 다시 재기, 정차 2.7초 만의 녹색, 가속 확률, 서 있는 가까운 앞차 뒤 경로 깜빡임 거르기, 깜빡이 대기 중 가속 확률 끄기, 앞차 끊김 허용), controlsd 주기(100 Hz 틱, 모델 5틱마다)의 녹색 확인, 모델 프레임 사이에서 판단하는 가까운 앞차 거부, 서행은 정차를 끝내지 않고 가속 페달은 끝냄 |
 | `gtest_desire_helper` | 5 | 차선 변경·회전 desire 상태 머신(`DesireHelper`): 깜빡이 쪽으로 핸들을 밀어야 시작, 차선선 0.5초 페이드 아웃·인, 사각지대 대기, 10초 시한, 도로 경계 쪽 차단과 경계가 사라질 때의 시작, 회전 desire 2.5초 펄스 |
 | `gtest_device_settings` | 3 | 웹 기기 설정(`display.json`) 읽기: 범위 클램프, 잘못된 값은 이전 값 유지, 파일이 바뀔 때만 다시 읽기 |

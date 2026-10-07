@@ -2,6 +2,7 @@
 
 #include "localization/lateral_lag.h"
 #include "learners/localizer_inputs.h"
+#include "common/model_output.h"
 #include "common/utils_file.h"
 #include "common/utils_time.h"
 
@@ -14,7 +15,6 @@
 namespace {
 
 constexpr uint64_t kAlertModelTimeoutNs = 500000000ULL;
-constexpr float kRadarToCameraDistanceM = 1.52f;
 constexpr uint64_t kMaxCanRxAgeNs = 100000000ULL;
 constexpr int kParamPollIntervalMs = 100;
 
@@ -390,6 +390,9 @@ void EngageEvents::update(const LateralControlResult &result, const VehicleCanSt
   have_previous = true;
 }
 
+namespace {
+
+// 학습기·컨트롤러 상태를 HUD와 웹 편집기가 읽는 LearnerState로(timestamp_ns 제외).
 LearnerState make_learner_state(const LateralLearners &learners,
                                 const SteeringParams &params, float road_bank_lat_accel,
                                 bool live_delay_in_use, float plan_delay_s) {
@@ -443,8 +446,6 @@ LearnerState make_learner_state(const LateralLearners &learners,
   return state;
 }
 
-namespace {
-
 LateralControllerConfig controller_config(const ControlParams &params, bool force_engaged) {
   LateralControllerConfig config;
   config.force_engaged = force_engaged;
@@ -459,19 +460,19 @@ ControlsTick::ControlsTick(const ControlParams &params, bool force_engaged, Plan
                            const std::string &vehicle_learn_json, const std::string &torque_learn_cache,
                            uint64_t seed)
     : config_(controller_config(params, force_engaged)),
-      params_(params),
+      cruise_(params.cruise),
       planner_(planner),
       controller_(config_),
       learners_(params.steering, vehicle_learn_json, torque_learn_cache, seed),
       adaptive_cruise_controller_(params.cruise) {}
 
 void ControlsTick::apply_params(const ControlParams &params) {
-  params_ = params;
+  cruise_ = params.cruise;
   config_.steering_params = params.steering;
   config_.driving_params = params.driving;
   controller_.update_params(config_.steering_params, config_.driving_params);
   planner_.update_params(config_.steering_params, config_.driving_params);
-  adaptive_cruise_controller_.update_config(params_.cruise);
+  adaptive_cruise_controller_.update_config(cruise_);
 }
 
 bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s) {
@@ -528,13 +529,15 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
   events_.update(last_result_, vehicle_, panda_, panda_state_, held, model_, now_ns);
 
   const bool radar_lead_fresh = signal_time_fresh(vehicle_.scc11_time_s, now_s, 0.5);
-  const float ego_speed_kph = last_result_.control_speed_kph;  // 컨트롤러가 이번 틱에 쓴 휠 속도
+  /* 크루즈·이탈 경보·발행 속도는 휠 속도를 0.5 s까지만 믿는다. 조향(control_speed_kph)은 설정한
+   * vehicle_state_timeout_ms를 쓰므로 그 값을 늘려도 크루즈 버튼이 낡은 속도로 나가지 않는다. */
+  const float ego_speed_kph = vehicle_speed_kph(vehicle_, now_s);
   const float ego_speed_mps = ego_speed_kph / 3.6f;
   const VisionLead lead = observe_vision_lead(model_, now_ns, ego_speed_mps);
   alert_input_ = make_alert_input(
       now_s, vehicle_, last_result_, model_, model_updated_, lead, ego_speed_mps);
   adaptive_cruise_ = adaptive_cruise_controller_.update(make_adaptive_input(
-      now_s, params_.cruise.enabled, vehicle_, last_result_, panda_, model_,
+      now_s, cruise_.enabled, vehicle_, last_result_, panda_, model_,
       model_updated_, lead, ego_speed_kph));
 
   if (adaptive_cruise_.command_button != 0) {

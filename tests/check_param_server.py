@@ -432,13 +432,15 @@ class BevTest(unittest.TestCase):
         layout = bev_layout()
         self.assertEqual((layout["model"]["size"], layout["control"]["size"]), (MODEL_STATE_SIZE, CONTROL_STATE_SIZE))
 
-    def test_lead_probability_matches_cpp(self):
-        """페이지의 앞차 확률 문턱은 비전 크루즈·출발 알림·HUD와 같은 kLeadProbabilityThreshold여야 한다."""
+    def test_lead_constants_match_cpp(self):
+        """페이지의 앞차 확률 문턱과 레이더-카메라 거리는 비전 크루즈·출발 알림·HUD와 같은 model_output.h 값이어야 한다."""
         source = (Path(__file__).resolve().parents[1] / "src" / "common" / "model_output.h").read_text(encoding="utf-8")
-        cpp = float(re.search(r"constexpr float kLeadProbabilityThreshold = ([\d.]+)f;", source).group(1))
         text = (WEB_DIR / "bev_data.js").read_text(encoding="utf-8")
-        page = float(re.search(r"const LEAD_PROBABILITY = ([\d.]+);", text).group(1))
-        self.assertEqual(page, cpp)
+        for cpp_name, page_name in (("kLeadProbabilityThreshold", "LEAD_PROBABILITY"),
+                                    ("kRadarToCameraDistanceM", "RADAR_TO_CAMERA")):
+            cpp = float(re.search(rf"constexpr float {cpp_name} = ([\d.]+)f;", source).group(1))
+            page = float(re.search(rf"const {page_name} = ([\d.]+);", text).group(1))
+            self.assertEqual(page, cpp, page_name)
 
     def test_page_reads_what_the_server_says(self):
         """bev_data.js NEEDS가 /api/bev 레이아웃과 같은 필드를 가져야 한다(어긋나면 페이지가 그리지 않는다)."""

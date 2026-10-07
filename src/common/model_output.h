@@ -152,6 +152,11 @@ struct ParsedLeadPrediction {
  * 본다. */
 constexpr float kLeadProbabilityThreshold = 0.5f;
 
+/* 모델 앞차 거리(카메라 기준)를 레이더 기준으로 바꾸는 오프셋(openpilot RADAR_TO_CAMERA). 비전 크루즈와
+ * 출발 알림(controls_tick.cc), HUD 거리 표시(hud_scene.cc), 웹 BEV(bev_data.js RADAR_TO_CAMERA,
+ * check_param_server.py가 대조)가 같은 값을 쓴다. */
+constexpr float kRadarToCameraDistanceM = 1.52f;
+
 /* 시간 오프셋(0/2/4 s)마다 궤적 하나와 존재 확률 하나. */
 struct ParsedLeads {
     bool valid = false;

@@ -1,7 +1,8 @@
 /* controlsd 한 틱(ControlsTick)을 controlsd main처럼 10 ms마다 돌린다. K7 수신 CAN(신호 배치대로 채운
  * 바이트), 20 Hz 직선 도로 모델, Panda 상태를 넣고 ControlState와 보낼 CAN을 본다: SET으로 결합해
  * LKAS11을 보내고 문이 열리면 해제한다, Panda가 허가하지 않으면 1초 유예 뒤 거부한다, 브레이크
- * 페달(AHB1)이 고정형 크루즈 추정을 끈다. 플래너는 그 자리에서 계산한다(SyncPlanner). */
+ * 페달(AHB1)이 고정형 크루즈 추정을 끈다, 휠 속도가 끊기면 크루즈·발행 속도는 0.5초 뒤 비운다.
+ * 플래너는 그 자리에서 계산한다(SyncPlanner). */
 #include "car/can_frame.h"
 #include "controls/control_holds.h"
 #include "controls/controls_tick.h"
@@ -18,9 +19,10 @@ namespace {
 
 struct K7Inputs {
   float speed_kph = 60.0f;
-  int cruise_button = 0;  // CLU11 CF_Clu_CruiseSwState: 1 RES, 2 SET, 4 CANCEL
+  int cruise_button = 0;  // CLU11 CF_Clu_CruiseSwState(kCruiseButton*)
   bool door_open = false;
   float brake_stroke_mm = 0.0f;
+  bool wheel_speed = true;  // WHL_SPD11을 보낼지
 };
 
 void add_frame(CanBatch *batch, uint32_t address, uint8_t bus, const std::array<uint8_t, 8> &data,
@@ -52,16 +54,18 @@ CanBatch k7_batch(const K7Inputs &in, uint64_t now_ns) {
   set_signal_le(&d, 0, 11, 1023);   // 횡가속 0
   set_signal_le(&d, 40, 13, 4095);  // 요레이트 0
   add_frame(&batch, kHyundaiEsp12Address, kPowertrainBus, d);
-  d = {};
-  for (const int start : {0, 16, 32, 48})
-    set_signal_le(&d, start, 14, static_cast<uint32_t>(std::lround(in.speed_kph / 0.03125f)));
-  add_frame(&batch, kHyundaiWhlSpd11Address, kPowertrainBus, d);
+  if (in.wheel_speed) {
+    d = {};
+    for (const int start : {0, 16, 32, 48})
+      set_signal_le(&d, start, 14, static_cast<uint32_t>(std::lround(in.speed_kph / 0.03125f)));
+    add_frame(&batch, kHyundaiWhlSpd11Address, kPowertrainBus, d);
+  }
   d = {};
   add_frame(&batch, kHyundaiTcs13Address, kPowertrainBus, d);
   add_frame(&batch, kHyundaiTcs15Address, kPowertrainBus, d);
   add_frame(&batch, kHyundaiEEms11Address, kPowertrainBus, d);
   add_frame(&batch, kHyundaiCgw2Address, kPowertrainBus, d);
-  set_signal_le(&d, 16, 4, 5);  // D
+  set_signal_le(&d, 16, 4, kGearDrive);
   add_frame(&batch, kHyundaiElectGearAddress, kPowertrainBus, d);
   d = {};
   set_signal_le(&d, 10, 2, 1);  // 안전벨트 착용
@@ -98,12 +102,13 @@ PandaState panda_state(uint64_t now_ns, bool controls_allowed) {
 /* controlsd main의 순서대로 틱을 돈다(Laneless: 차선 없이 plan으로 경로를 만든다). */
 class Drive {
 public:
-  Drive() : planner_(params().steering, params().driving),
-            tick_(params(), false, planner_, std::string(), std::string(), 1) {
+  explicit Drive(const ControlParams &params = laneless_params())
+      : planner_(params.steering, params.driving),
+        tick_(params, false, planner_, std::string(), std::string(), 1) {
     tick_.controller().set_clock([this] { return now_ns_; });
   }
 
-  static ControlParams params() {
+  static ControlParams laneless_params() {
     ControlParams params;
     params.driving.laneless_mode = true;
     return params;
@@ -157,7 +162,7 @@ TEST(ControlsTick, EngagesOnSetAndDisengagesWhenADoorOpens) {
   ASSERT_STREQ(state.active_block, "not_engaged");
   ASSERT_EQ(state.vehicle_fresh, 1) << "수신 프레임이 컨트롤러가 보는 메시지를 다 채운다";
 
-  state = drive.press(2, in);
+  state = drive.press(kCruiseButtonSet, in);
   ASSERT_EQ(state.engaged, 1);
   ASSERT_EQ(state.engage_event_id, 1);
   state = drive.run(1.0, in);  // 경로 유효 0.5 s 디바운스를 넘긴다
@@ -176,7 +181,7 @@ TEST(ControlsTick, PandaRefusalRejectsEngageAfterTheGrace) {
   Drive drive;
   K7Inputs in;
   drive.run(1.0, in, false);
-  ControlState state = drive.press(2, in, false);
+  ControlState state = drive.press(kCruiseButtonSet, in, false);
   ASSERT_EQ(state.engage_reject_event_id, 0) << "Panda 허가를 1초 기다린다";
   state = drive.run(1.1, in, false);
   ASSERT_EQ(state.engaged, 0);
@@ -188,12 +193,26 @@ TEST(ControlsTick, BrakePedalCancelsTheCruiseEstimate) {
   Drive drive;
   K7Inputs in;
   drive.run(1.0, in);
-  ControlState state = drive.press(2, in);
+  ControlState state = drive.press(kCruiseButtonSet, in);
   ASSERT_EQ(state.cruise_active, 1) << "SET은 고정형 크루즈 추정을 켠다";
   in.brake_stroke_mm = 15.0f;
   state = drive.run(0.05, in);
   ASSERT_EQ(state.cruise_active, 0) << "AHB1 페달 15 mm는 크루즈 추정을 끈다";
   ASSERT_EQ(state.engaged, 1) << "브레이크는 횡제어를 해제하지 않는다";
+}
+
+TEST(ControlsTick, CruiseSpeedGoesStaleAfterHalfASecond) {
+  ControlParams params = Drive::laneless_params();
+  params.driving.vehicle_state_timeout_ms = 1000;
+  Drive drive(params);
+  K7Inputs in;
+  ControlState state = drive.run(1.0, in);
+  ASSERT_FLOAT_EQ(state.ego_speed_kph, 60.0f);
+  in.wheel_speed = false;
+  state = drive.run(0.7, in);
+  ASSERT_TRUE(std::isfinite(drive.tick().result().control_speed_kph))
+      << "조향은 설정한 1 s까지 마지막 휠 속도를 쓴다";
+  ASSERT_TRUE(std::isnan(state.ego_speed_kph)) << "크루즈·경보·발행 속도는 0.5 s가 지나면 쓰지 않는다";
 }
 
 }  // namespace

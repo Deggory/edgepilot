@@ -34,16 +34,12 @@ constexpr float kDisplayScaleMin = 0.97f;
 constexpr float kDisplayScaleMax = 1.25f;
 constexpr float kDisplayScaleLearnMinKph = 30.0f;
 
-constexpr float kDisplayStep = 2.0f;
-constexpr float kMinimumSpeedKph = 30.0f;
-constexpr float kMinimumSpeedMph = 20.0f;
-
 float minimum_speed_kph(bool speed_unit_mph) {
-  return speed_unit_mph ? kMinimumSpeedMph * kMphToKph : kMinimumSpeedKph;
+  return speed_unit_mph ? kMinimumCruiseSpeedMph * kMphToKph : kMinimumCruiseSpeedKph;
 }
 
 float display_step_kph(bool speed_unit_mph) {
-  return kDisplayStep * (speed_unit_mph ? kMphToKph : 1.0f);
+  return kFixedCruiseStep * (speed_unit_mph ? kMphToKph : 1.0f);
 }
 
 bool valid_set_speed(float speed_kph) {

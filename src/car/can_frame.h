@@ -38,6 +38,10 @@ constexpr int kGearReverse = 7;
 constexpr int kGearSport = 8;
 // 클러스터가 mph 단위일 때의 환산
 constexpr float kMphToKph = 1.609344f;
+// 고정형 크루즈의 설정 속도 한 칸과 최저 설정 속도(클러스터 표시 단위)
+constexpr float kFixedCruiseStep = 2.0f;
+constexpr float kMinimumCruiseSpeedKph = 30.0f;
+constexpr float kMinimumCruiseSpeedMph = 20.0f;
 
 constexpr uint8_t kPowertrainBus = 0;
 constexpr uint8_t kMdpsBus = 1;
