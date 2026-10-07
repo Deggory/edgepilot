@@ -1,13 +1,16 @@
 # edgepilot · MaixCAM2
 
-<p align="center">
-  <img src="docs/images/drive-hud.gif" width="640" alt="A recorded drive with the edgepilot HUD: planned path, lead car with distance and closing speed, lane position, speed, and status cards">
-</p>
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top"><img src="docs/images/drive-day.webp" width="100%" alt="Daytime drive in lane mode at about 60 km/h behind a lead car: the HUD shows the green lane-mode path, the lead's distance and the car a few centimetres from the lane centre as the road turns into a right-hand curve"><br><sub><b>Day</b>: about 60 km/h behind a lead car, from a straight into a 250 m right-hand curve</sub></td>
+    <td width="50%" align="center" valign="top"><img src="docs/images/drive-night.webp" width="100%" alt="Night drive in lane mode at about 77 km/h: the HUD shows the green lane-mode path and the car within about 10 cm of the lane centre, under overpasses and into a right-hand curve"><br><sub><b>Night</b>: about 77 km/h under overpasses, from a straight into a 240 m right-hand curve</sub></td>
+  </tr>
+</table>
 
 <p align="center">
   <strong>openpilot perception and lateral control, native on a Sipeed MaixCAM2 (AX630C)</strong><br>
   KIA K7 YG HEV · supercombo on the AX630C NPU · Panda USB/CAN · 640x480 driving HUD<br>
-  <sub>A recorded laneless drive at about 60 km/h, with the HUD redrawn from the logged model,
+  <sub>Both clips are recorded drives steering in lane mode, with the HUD redrawn from the logged model,
   control and learner states by the runtime's own renderer, as <code>overlayd</code> shows it on the
   board's screen. The board load card holds typical values; the recording does not log them.</sub>
 </p>
