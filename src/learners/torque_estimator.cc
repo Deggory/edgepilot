@@ -36,7 +36,9 @@ constexpr double kSteerBucketBounds[TorqueEstimator::kBuckets][2] = {
     {0.0, 0.1},   {0.1, 0.2},   {0.2, 0.3},   {0.3, 0.5}};
 constexpr int kMinBucketPoints[TorqueEstimator::kBuckets] = {100, 300, 500, 500,
                                                              500, 500, 300, 100};
-constexpr char kTorqueCacheMagic[8] = {'K', '2', '3', '0', 'T', 'Q', 'C', '1'};
+constexpr char kTorqueCacheMagic[8] = {'E', 'D', 'G', 'E', 'T', 'Q', 'C', '1'};
+// 2026-10-07 이전 빌드가 쓴 캐시의 매직. 읽기만 한다.
+constexpr char kLegacyTorqueCacheMagic[8] = {'K', '2', '3', '0', 'T', 'Q', 'C', '1'};
 
 uint64_t splitmix64(uint64_t *state) {
   uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
@@ -351,7 +353,9 @@ TorqueRestore TorqueEstimator::restore(const std::string &cache, double *factor,
   float key_friction = 0, key_factor = 0, f_factor = 0, f_offset = 0, f_friction = 0, decay = 0;
   uint8_t source = 0, valid = 0;
   uint32_t n = 0;
-  if (cache.size() < pos || std::memcmp(cache.data(), kTorqueCacheMagic, pos) != 0 ||
+  if (cache.size() < pos ||
+      (std::memcmp(cache.data(), kTorqueCacheMagic, pos) != 0 &&
+       std::memcmp(cache.data(), kLegacyTorqueCacheMagic, pos) != 0) ||
       !take(cache, &pos, &version) || !take(cache, &pos, &key_friction) ||
       !take(cache, &pos, &key_factor) || (version >= 2 && !take(cache, &pos, &source)) ||
       !take(cache, &pos, &valid) || !take(cache, &pos, &f_factor) || !take(cache, &pos, &f_offset) ||

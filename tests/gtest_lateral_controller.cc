@@ -1099,7 +1099,7 @@ uint64_t read_u64_le(const uint8_t *data) {
          (static_cast<uint64_t>(read_u32_le(data + 4)) << 32u);
 }
 
-/* K230CAN1: "K230CAN1", u32 version 1, u32 record_size 24, u64 count, 이어서 레코드
+/* EDGECAN1: "EDGECAN1", u32 version 1, u32 record_size 24, u64 count, 이어서 레코드
  * (u64 timestamp_us, u32 address, u8 bus, u8 length, data[8], 2 B 패딩). 시간순이어야 한다.
  * 형식이 틀리면 실패를 남기고 빈 목록을 돌려준다. */
 std::vector<TimedCanFrame> read_can_fixture(const std::string &path) {
@@ -1112,7 +1112,7 @@ std::vector<TimedCanFrame> read_can_fixture(const std::string &path) {
   }
   const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
                                    std::istreambuf_iterator<char>());
-  if (bytes.size() < kHeaderSize || std::memcmp(bytes.data(), "K230CAN1", 8) != 0) {
+  if (bytes.size() < kHeaderSize || std::memcmp(bytes.data(), "EDGECAN1", 8) != 0) {
     ADD_FAILURE() << "CAN 픽스처 magic이 틀림";
     return {};
   }

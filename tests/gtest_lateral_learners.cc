@@ -715,6 +715,13 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
   ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, bad_magic).restore_status(),
             TorqueRestore::Corrupt);
   ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, "").restore_status(), TorqueRestore::None);
+  // 예전 매직으로 쓴 캐시(2026-10-07 이전 빌드)도 그대로 이어 쓴다
+  std::string old_magic_cache = valid_cache;
+  old_magic_cache.replace(0, 8, "K230TQC1");
+  TorqueEstimator from_old_magic(tuning, kTorqueLag, 5, old_magic_cache);
+  ASSERT_EQ(from_old_magic.restore_status(), TorqueRestore::Restored);
+  ASSERT_EQ(from_old_magic.points().size(), valid_points.size());
+  ASSERT_EQ(valid_cache.compare(0, 8, "EDGETQC1"), 0) << "새로 쓰는 캐시는 새 매직";
 
   /* 다른 요레이트·롤 출처의 캐시: 점과 절편은 버리고(롤 출처 차이만큼 어긋난다) 배율·마찰만
    * 이어 쓴다. 출처 바이트가 없는 옛 캐시(버전 1)는 ESP12 출처다. */

@@ -94,8 +94,8 @@ library for `pandad`.
 
 ## Offline Validation
 
-Export one 60 s chunk of a continuous drive (a `recordd` route from the
-MaixCAM2 or the K230) to a `K230CAN1` fixture and replay it through the controller (see
+Export one 60 s chunk of a continuous drive (a `recordd` route) to an
+`EDGECAN1` fixture and replay it through the controller (see
 [tests/README.md](../tests/README.md) for why a parked chunk fails):
 
 ```sh

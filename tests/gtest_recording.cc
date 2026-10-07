@@ -1,5 +1,5 @@
-/* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(K230LOG1), 세그먼트
- * 프레임 인덱스(K230IDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
+/* RecordingWriter가 디스크에 남기는 것: 60초 청크 이벤트 로그(EDGELOG1), 세그먼트
+ * 프레임 인덱스(EDGEIDX1), 매니페스트, params 스냅샷, 그리고 tmpfs 스테이징 →
  * 최종 경로 이동. 기록한 CAN 페이로드를 쓰고 읽는 recorded_can.h, 상태 채널을 이벤트 로그로
  * 옮기는 StateRecorder, 그 route를 다시 읽는 replayd의 ReplayRoute도 같이 본다. 보드·인코더 없이
  * 합성 레코드로 검사한다. */
@@ -126,7 +126,7 @@ TEST(RecordingWriter, RouteOnDisk) {
 
   // events/000.bin: 헤더 + CanRx(3) + CanTx(256으로 잘림) + 상태 2개
   const std::vector<uint8_t> events = read_file(route + "/events/000.bin");
-  ASSERT_EQ(std::memcmp(events.data(), "K230LOG1", 8), 0) << "이벤트 로그 magic";
+  ASSERT_EQ(std::memcmp(events.data(), kEventLogMagic, 8), 0) << "이벤트 로그 magic";
   ASSERT_EQ(read_at<uint32_t>(events, 8), kRecordingVersion) << "이벤트 로그 버전";
   const uint32_t header_size = read_at<uint32_t>(events, 12);
   // 이벤트 로그 헤더 크기와 route 시작 시각
@@ -210,7 +210,7 @@ TEST(RecordingWriter, RouteOnDisk) {
   const std::vector<uint8_t> index = read_file(route + "/segments/000/frames.bin");
   const auto index_header = read_at<FrameIndexHeader>(index, 0);
   // 프레임 인덱스 헤더
-  ASSERT_EQ(std::memcmp(index_header.magic, "K230IDX1", 8), 0);
+  ASSERT_EQ(std::memcmp(index_header.magic, kFrameIndexMagic, 8), 0);
   ASSERT_EQ(index_header.width, 1280);
   ASSERT_EQ(index_header.height, 720);
   ASSERT_EQ(index_header.fps, 20);
@@ -404,6 +404,14 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
   EXPECT_EQ(decode_recorded_can(route.events[1].payload.data(), route.events[1].payload.size(), 0).count, 2);
   EXPECT_EQ(route.events[2].timestamp_ns, t0 + kMinute + 10'000'000ULL);
 
+  // v8 이하 녹화의 예전 매직 인덱스도 읽는다
+  const std::string first_index = root + "/recordings/" + routes[0] + "/segments/000/frames.bin";
+  std::vector<uint8_t> legacy = read_file(first_index);
+  std::memcpy(legacy.data(), kLegacyFrameIndexMagic, 8);
+  std::ofstream(first_index, std::ios::binary).write(reinterpret_cast<const char *>(legacy.data()),
+                                                     static_cast<std::streamsize>(legacy.size()));
+  ASSERT_EQ(ReplayRoute(root + "/recordings/" + routes[0]).frames.size(), std::size(written));
+
   // header_size가 파일보다 큰 인덱스(깨진 머리)는 그 세그먼트만 건너뛴다
   const std::string index_path = root + "/recordings/" + routes[0] + "/segments/001/frames.bin";
   std::vector<uint8_t> index = read_file(index_path);
@@ -506,6 +514,19 @@ TEST(EventLogReader, StopsAtTruncatedTail) {
     ASSERT_TRUE(reader.next(&header, &payload));
     ASSERT_FALSE(reader.next(&header, &payload));
     ASSERT_FALSE(reader.truncated());
+  }
+  {
+    // v8 이하 녹화는 예전 매직으로 시작한다
+    const std::string path = write_log("legacy.bin", 0, 4, std::string(4, '\x11'));
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    const uint32_t version = 8;
+    file.write(kLegacyEventLogMagic, 8);
+    file.write(reinterpret_cast<const char *>(&version), sizeof(version));
+    file.close();
+    EventLogReader reader(path);
+    ASSERT_TRUE(reader.ok()) << "예전 매직";
+    ASSERT_EQ(reader.version(), 8u);
+    ASSERT_TRUE(reader.next(&header, &payload));
   }
   // 페이로드가 모자람, 길이가 1 MiB 초과, 다음 레코드 머리가 반만 있음
   const struct {

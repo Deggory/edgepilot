@@ -18,8 +18,9 @@ from typing import Iterator
 
 import numpy as np
 
-FRAME_INDEX_MAGIC = b"K230IDX1"
-EVENT_LOG_MAGIC = b"K230LOG1"
+# v9 magics first; recordings up to v8 carry the earlier ones (recording_format.h kLegacy*)
+FRAME_INDEX_MAGICS = (b"EDGEIDX1", b"K230IDX1")
+EVENT_LOG_MAGICS = (b"EDGELOG1", b"K230LOG1")
 EVENT_RECORD_HEADER = struct.Struct("<QHHI")  # timestamp_ns, type, flags, size
 
 RECORD_CAN_RX = 1
@@ -202,7 +203,7 @@ def read_segment_index(segment_dir: Path) -> SegmentInfo:
     data = (segment_dir / "frames.bin").read_bytes()
     magic, version, header_size, record_size, width, height, fps = struct.unpack_from(
         "<8sIIIIII", data, 0)
-    if magic != FRAME_INDEX_MAGIC:
+    if magic not in FRAME_INDEX_MAGICS:
         raise ValueError(f"{segment_dir}: bad frames.bin magic {magic!r}")
     segment_start_ns, = struct.unpack_from("<Q", data, 32)
     if record_size != FRAME_INDEX_RECORD.itemsize:
@@ -330,7 +331,7 @@ def route_event_files(route_dir: Path) -> list[Path]:
 
 @dataclass
 class EventRecord:
-    """One K230LOG1 record. ``payload`` is a zero-copy view into the chunk."""
+    """One event-log record. ``payload`` is a zero-copy view into the chunk."""
     path: Path
     version: int
     timestamp_ns: int
@@ -372,7 +373,7 @@ def iter_event_records(path: Path) -> Iterator[EventRecord]:
     if len(data) < 16:
         return
     magic, version, header_size = struct.unpack_from("<8sII", data, 0)
-    if magic != EVENT_LOG_MAGIC:
+    if magic not in EVENT_LOG_MAGICS:
         raise ValueError(f"{path}: bad event log magic {magic!r}")
     view = memoryview(data)
     offset, end = header_size, len(data)

@@ -10,7 +10,7 @@
       active, 40-95 km/h, all lane lines confident, a lead if any.
 
   hud_tools.py compose <prefix> [camera.png]
-      Turn hud_snapshot K230ARGB frames (<prefix>_<scenario>.argb, 640x480)
+      Turn hud_snapshot EDGEARGB frames (<prefix>_<scenario>.argb, 640x480)
       into PNGs: <name>_overlay.png (transparent) and, with a camera frame,
       <name>_composite.png over the centre 4:3 of the frame, as the screen
       shows it.
@@ -35,7 +35,7 @@ from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa:
 
 MODEL_STATE_SIZE = model_state_layout(8)["__size__"]  # hud_snapshot reads the current struct
 CONTROL_STATE_SIZE = 240
-FRAME_MAGIC = b"K230ARGB"
+FRAME_MAGIC = b"EDGEARGB"
 
 
 # ---- inputs ----
@@ -135,7 +135,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
 def load_frame(path: Path) -> np.ndarray:
     data = path.read_bytes()
     if data[:8] != FRAME_MAGIC:
-        raise ValueError(f"{path}: not a K230ARGB file")
+        raise ValueError(f"{path}: not an EDGEARGB file")
     width, height = struct.unpack_from("<II", data, 8)
     pixels = np.frombuffer(data, np.uint8, count=width * height * 4, offset=16)
     return pixels.reshape(height, width, 4)[..., [2, 1, 0, 3]].copy()  # BGRA -> RGBA

@@ -12,7 +12,7 @@ their options, and how to build them are listed in
 `hud_snapshot` renders the HUD renderer off-line for 28 scenarios (driving,
 alerts, cards, warnings and the less common branches: soft disable, panda fault,
 radar-only lead, bar TPMS, engaged but blocked, ...) at the HUD's 640x480
-landscape size, writes each frame as a `K230ARGB` file and prints draw timings.
+landscape size, writes each frame as an `EDGEARGB` file and prints draw timings.
 `--portrait` draws the way `overlayd` does, transposed into the portrait panel's
 480x640 buffer (`--flip-x`/`--flip-y` add the board's axis flips), and writes
 that buffer. The renderer needs no OpenCV, so the tool builds on the host as
@@ -29,7 +29,7 @@ container build separately: GCC fuses multiply-adds that clang leaves apart).
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
 `ModelState` / `ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
-pair (current v8 layout; v7 records are zero-filled), plus the matching camera frame when the route copy has
+pair (the current layout, unchanged in v9; v7 records are zero-filled), plus the matching camera frame when the route copy has
 its `segments/`. `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]`
 turns the frames into PNGs and composites them over the centre 4:3 of the
 camera frame, as the screen shows it.

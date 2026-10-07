@@ -1,5 +1,5 @@
 /* HUD 스냅샷·타이밍 도구. 렌더러만 떼어 MaixCAM2 화면과 같은 640x480 BGRA 버퍼에 그리고
- * 시나리오별 프레임을 K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
+ * 시나리오별 프레임을 EDGEARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
  * ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 주지 않으면 합성
  * 장면을 쓰고, 준 파일을 읽지 못하거나 프레임을 쓰지 못하면 1로 끝난다. 호스트와 보드에서 같은
  * 소스로 빌드한다.
@@ -39,7 +39,7 @@ bool read_file(const std::string &path, void *dst, size_t size)
     return got == size;
 }
 
-/* K230ARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). 크기는 버퍼(세로면 480x640)다. */
+/* EDGEARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). 크기는 버퍼(세로면 480x640)다. */
 bool write_frame_file(const std::string &path, const HudTarget &target)
 {
     FILE *file = std::fopen(path.c_str(), "wb");
@@ -47,7 +47,7 @@ bool write_frame_file(const std::string &path, const HudTarget &target)
     const bool transpose = target.orientation.transpose;
     const uint32_t buffer_w = transpose ? target.height : target.width;
     const uint32_t buffer_h = transpose ? target.width : target.height;
-    const char magic[8] = {'K', '2', '3', '0', 'A', 'R', 'G', 'B'};
+    const char magic[8] = {'E', 'D', 'G', 'E', 'A', 'R', 'G', 'B'};
     const uint32_t dims[2] = {buffer_w, buffer_h};
     bool ok = std::fwrite(magic, 1, 8, file) == 8 && std::fwrite(dims, 4, 2, file) == 2;
     for (uint32_t row = 0; ok && row < buffer_h; ++row) {

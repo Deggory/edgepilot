@@ -244,14 +244,16 @@ missed model frames.
 
 ## Recording format
 
-`recordd` writes the K230 recorder's format, with H.264 video instead of HEVC,
-so the host tools (`recording_reader.py`, the replay tools, `lane_bias.py`)
-read MaixCAM2 and K230 drives. `gtest_recording` covers
+`recordd` writes the routes the host tools read (`recording_reader.py`, the
+replay tools, `lane_bias.py`). `gtest_recording` covers
 `src/recording/recording_writer.*`.
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
-an 8-byte `K230LOG1` magic, a version word, and fixed 16-byte record headers.
-The current version is `8`: `ModelState` gained the model's pedal predictions
+an 8-byte `EDGELOG1` magic, a version word, and fixed 16-byte record headers;
+each segment's `frames.bin` starts with `EDGEIDX1`. The current version is `9`,
+which only changed those two magics: recordings up to version 8 carry the
+earlier ones, and every reader still accepts them. Version 8 gave `ModelState`
+the model's pedal predictions
 (`gas_press_probs`, `brake_press_probs`: the chance the driver presses the
 pedal 0, 2, …, 10 s ahead, 3576 B), which the departure alert reads.
 Version 7 added the camera mount the warp used for that frame
@@ -279,7 +281,7 @@ Version 2 also kept a single route-level `events.bin`; CAN logging alone
 (~0.5 MB/s) filled the 988 MB tmpfs staging in about 30 minutes on long drives
 and silently killed the rest of the recording, which is why version 3 rotates
 event chunks alongside video segments. `tools/model/recording_reader.py` reads
-the v2 to v8 layouts; `lane_bias.py`, `hud_tools.py`,
+the v2 to v9 layouts; `lane_bias.py`, `hud_tools.py`,
 `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event log
 through its `iter_event_records`.
 

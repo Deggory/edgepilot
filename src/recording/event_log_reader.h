@@ -1,6 +1,6 @@
 #pragma once
 
-/* 녹화 이벤트 로그(events/NNN.bin) 읽기. 진단 도구와 replayd가 같이 쓴다. 파일 머리(K230LOG1)를
+/* 녹화 이벤트 로그(events/NNN.bin) 읽기. 진단 도구와 replayd가 같이 쓴다. 파일 머리(EDGELOG1, v8 이하는 예전 매직)를
  * 확인하고 header_size 뒤부터 레코드를 차례로 돌려준다. 끊긴 꼬리(tmpfs가 차서 0으로 채워진 구간,
  * 전원이 끊긴 마지막 청크)를 만나면 재동기화하지 않고 거기서 끝낸다: 타입이 범위 밖이거나 길이가
  * 1 MiB를 넘거나 레코드 머리·페이로드가 모자라면 truncated()가 참이다. */
@@ -17,7 +17,7 @@ class EventLogReader {
 public:
   explicit EventLogReader(const std::string &path) : file_(path, std::ios::binary) {
     file_.read(reinterpret_cast<char *>(&header_), sizeof(header_));
-    ok_ = static_cast<bool>(file_) && std::memcmp(header_.magic, "K230LOG1", 8) == 0 &&
+    ok_ = static_cast<bool>(file_) && is_event_log_magic(header_.magic) &&
           header_.header_size >= sizeof(EventFileHeader);
     if (ok_) file_.seekg(header_.header_size);
   }

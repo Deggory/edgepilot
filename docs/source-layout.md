@@ -72,9 +72,9 @@ Libraries `common` and `utils_json`.
 - `ipc_messages.h`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the state snapshots (`ModelState`, `ControlState`, `PandaState`, …) with
-    their `static_assert`s. Recording v8 stores `ModelState`, `ControlState`,
-    and `PandaState` as-is, so their offsets are pinned here and tied to
-    `kRecordingVersion` (that assert sits in `state_recorder.cc`). Code that
+    their `static_assert`s. Recording v9 stores the state snapshots as-is, so
+    their layouts are pinned here and tied to `kRecordingVersion` (that assert
+    sits in `state_recorder.cc`). Code that
     only reads or fills a message includes this and nothing else.
 - `ipc_channels.*`
   - the `/dev/shm` channel implementations: latest-message channel, CAN queue,
@@ -360,14 +360,14 @@ Libraries `hud_state`, `hud` and `alert_tones`, and on the board
 Library `recording`, processes `recordd` and `replayd`.
 
 - `recording_format.h`, `recording_writer.*`, `state_recorder.*`
-  - the event-log writer and on-disk contract that `recordd` writes. It is the
-    K230 recorder's format, so the host tools read MaixCAM2 and K230 drives.
+  - the event-log writer and on-disk contract that `recordd` writes.
     `StateRecorder` copies each new state snapshot (model, control, Panda,
     learner, IMU, locationd) into the log, attaching to a channel once its
     producer has created it. `gtest_recording` pins the layout and the
     state recording; `recording_format.h`
-    (`kRecordingVersion`, the `K230LOG1` / `K230IDX1` headers, record types)
-    is mirrored by `tools/model/recording_reader.py`.
+    (`kRecordingVersion`, the `EDGELOG1` / `EDGEIDX1` headers and the earlier
+    magics that recordings up to v8 carry, record types) is mirrored by
+    `tools/model/recording_reader.py`.
 - `event_log_reader.h`
   - the one C++ reader of `events/NNN.bin`, shared by `replayd` and the replay
     and dataset tools. It checks the magic, skips `header_size`, and stops
@@ -375,7 +375,7 @@ Library `recording`, processes `recordd` and `replayd`.
     over 1 MiB, or a short header or payload), which `truncated()` reports.
 - `recorded_can.h`, `recorded_model_state.h`
   - the recorded CAN payload (written by `recordd`, read back by `replayd` and
-    the tools, whole frames only) and the reader that turns a v3 to v8
+    the tools, whole frames only) and the reader that turns a v3 to v9
     `ModelState` payload into the current struct.
 - `recordd.cc`
   - the drive recorder: encodes the frames `modeld` used and writes the CAN

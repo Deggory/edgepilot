@@ -80,6 +80,13 @@ class RecordingReaderLayout(unittest.TestCase):
         for name in rr.MODEL_STATE_HEAD.names:
             self.assertEqual(offset_in(rr.MODEL_STATE_HEAD, name), layout[name], name)
 
+    def test_magics(self):
+        def magic(name: str) -> bytes:
+            chars = re.search(name + r"\[8\] = \{([^}]*)\}", FORMAT).group(1)
+            return "".join(re.findall(r"'(.)'", chars)).encode()
+        self.assertEqual(rr.EVENT_LOG_MAGICS, (magic("kEventLogMagic"), magic("kLegacyEventLogMagic")))
+        self.assertEqual(rr.FRAME_INDEX_MAGICS, (magic("kFrameIndexMagic"), magic("kLegacyFrameIndexMagic")))
+
     def test_recording_format(self):
         self.assertEqual(rr.EVENT_RECORD_HEADER.size, size_of("EventRecordHeader", FORMAT))
         self.assertEqual(rr.FRAME_INDEX_RECORD.itemsize, size_of("FrameIndexRecord", FORMAT))
