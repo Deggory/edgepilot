@@ -3,8 +3,8 @@
 #include <string>
 
 /* controlsd가 함께 읽는 런타임 파라미터. params/steering.json과
- * params/driving.json이 각각의 출처다. CAN 계층은 이 헤더에 의존하지만
- * 반대 방향은 없다 — 토크 제한 변환은 hyundai_can.h가 제공한다. */
+ * params/driving.json이 각각의 출처다. CAN 계층(car/)은 이 헤더를 보지 않는다 —
+ * 토크 제한은 lateral_controller.cc가 HyundaiSteeringLimits로 바꿔 넘긴다. */
 
 /* 기본값은 params/steering.json(K7 YG HEV 실차 검증값)과 일치시킨다. 로드 실패는
  * controlsd가 throw하므로 이 값은 파일 폴백이 아니라, JSON에 키가 빠졌을 때와

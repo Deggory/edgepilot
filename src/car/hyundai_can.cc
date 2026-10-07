@@ -112,6 +112,25 @@ HyundaiClu11Values decode_clu11(const std::array<uint8_t, 4> &short_data) {
   return values;
 }
 
+namespace {
+
+struct HyundaiCluCommand {
+  int button = 0;
+  float speed = 0.0f;
+  int frame = 0;
+};
+
+float mdps_speed_for_lkas(float cluster_speed_raw, bool lkas_active, bool is_mph,
+                          float spoof_speed_kph) {
+  if (!std::isfinite(cluster_speed_raw) || cluster_speed_raw < 0.0f) return 0.0f;
+  const float safe_spoof_kph = std::isfinite(spoof_speed_kph)
+      ? std::clamp(spoof_speed_kph, 30.0f, 100.0f)
+      : 60.0f;
+  const float threshold = is_mph ? safe_spoof_kph / kMphToKph : safe_spoof_kph;
+  if (!lkas_active || cluster_speed_raw > threshold) return cluster_speed_raw;
+  return threshold;
+}
+
 uint8_t hyundai_lkas11_checksum(const std::array<uint8_t, 8> &data) {
   return static_cast<uint8_t>((data[0] + data[1] + data[2] + data[3] + data[4] + data[5] + data[7]) % 256);
 }
@@ -141,6 +160,7 @@ CanFrame create_clu11_frame(const HyundaiClu11Values &seed, const HyundaiCluComm
   return frame;
 }
 
+// 최신 MDPS12 seed에서 openpilot create_mdps12와 같은 오류 회피 frame을 만든다.
 CanFrame create_mdps12_frame(const std::array<uint8_t, 8> &seed, int frame_count) {
   std::array<uint8_t, 8> data = seed;
   set_signal_le(&data, 13, 1, 0);
@@ -155,6 +175,8 @@ CanFrame create_mdps12_frame(const std::array<uint8_t, 8> &seed, int frame_count
   set_signal_le(&data, 24, 8, checksum & 0xffU);
   return {kHyundaiMdps12Address, kHyundaiMdps12TxBus, 8, data};
 }
+
+}  // namespace
 
 std::vector<CanFrame> build_lateral_can_frames(const HyundaiLkas11Values &lkas_seed,
                                                const HyundaiClu11Values &clu_seed,
@@ -207,15 +229,4 @@ int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int d
                             std::min(last_torque + limits.steer_delta_down, limits.steer_delta_up));
   }
   return apply_torque;
-}
-
-float mdps_speed_for_lkas(float cluster_speed_raw, bool lkas_active, bool is_mph,
-                          float spoof_speed_kph) {
-  if (!std::isfinite(cluster_speed_raw) || cluster_speed_raw < 0.0f) return 0.0f;
-  const float safe_spoof_kph = std::isfinite(spoof_speed_kph)
-      ? std::clamp(spoof_speed_kph, 30.0f, 100.0f)
-      : 60.0f;
-  const float threshold = is_mph ? safe_spoof_kph / kMphToKph : safe_spoof_kph;
-  if (!lkas_active || cluster_speed_raw > threshold) return cluster_speed_raw;
-  return threshold;
 }

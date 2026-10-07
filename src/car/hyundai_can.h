@@ -16,10 +16,7 @@ struct HyundaiSteeringLimits {
 };
 
 int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque,
-                                      const HyundaiSteeringLimits &limits = HyundaiSteeringLimits{});
-
-float mdps_speed_for_lkas(float cluster_speed_raw, bool lkas_active, bool is_mph,
-                          float spoof_speed_kph = 60.0f);
+                                      const HyundaiSteeringLimits &limits);
 
 struct HyundaiLkas11Values {
   int ldws_active_mode = 0;
@@ -74,23 +71,8 @@ struct HyundaiLkasCommand {
   bool ldws_fix = false;
 };
 
-struct HyundaiCluCommand {
-  int button = 0;
-  float speed = 0.0f;
-  int frame = 0;
-};
-
-
 HyundaiLkas11Values decode_lkas11(const std::array<uint8_t, 8> &data);
 HyundaiClu11Values decode_clu11(const std::array<uint8_t, 4> &data);
-
-uint8_t hyundai_lkas11_checksum(const std::array<uint8_t, 8> &data);
-CanFrame create_lkas11_frame(const HyundaiLkas11Values &seed, const HyundaiLkasCommand &command,
-                             uint8_t bus);
-CanFrame create_clu11_frame(const HyundaiClu11Values &seed, const HyundaiCluCommand &command,
-                            uint8_t bus);
-// 최신 MDPS12 seed에서 openpilot create_mdps12와 같은 오류 회피 frame을 만든다.
-CanFrame create_mdps12_frame(const std::array<uint8_t, 8> &seed, int frame);
 
 /* K7 커뮤니티 하네스(MDPS가 버스 1)의 횡제어 프레임을 송신 순서대로: LKAS11(파워트레인 버스),
  * LKAS11(MDPS 버스), 홀수 프레임이면 MDPS가 보는 CLU11 속도 바꿔치기(MDPS 버스), MDPS12 오류 회피
