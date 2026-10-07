@@ -235,6 +235,8 @@ int main(int argc, char **argv) {
   cfg.steering_params = steering;
   cfg.driving_params = driving;
   LateralController controller(cfg);
+  constexpr uint64_t kControllerNowNs = 1'000'000'000'000ULL;  // plan 나이를 재는 컨트롤러 시계(고정)
+  controller.set_clock([] { return kControllerNowNs; });
   TorqueController inverse_model;
   SteeringParams angle_params = steering;
   angle_params.torque_use_angle = true;
@@ -314,10 +316,10 @@ int main(int argc, char **argv) {
     vehicle.driver_torque = ex.driver_torque;
     vehicle.yaw_rate_valid = false;
 
-    /* plan 나이는 컨트롤러가 monotonic_now_ns()로 직접 잰다. 캡처 시각을 그만큼
-     * 앞당겨 결정론적으로 만든다. */
+    /* plan 나이는 컨트롤러가 자기 시계로 잰다. 그 시계를 고정해 두고 캡처 시각을 나이만큼
+     * 앞당겨, 호스트 시간과 무관하게 결정론적으로 만든다. */
     LateralTarget t = target;
-    if (t.valid) t.capture_timestamp_ns = monotonic_now_ns() -
+    if (t.valid) t.capture_timestamp_ns = kControllerNowNs -
         static_cast<uint64_t>(age_s * 1e9);
     const uint64_t path_now_ns = ms_sim.model_timestamp_ns +
         static_cast<uint64_t>(age_s * 1e9);

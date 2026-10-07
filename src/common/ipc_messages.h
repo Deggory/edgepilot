@@ -339,6 +339,7 @@ struct ControlState {
     uint32_t engage_reject_event_id = 0;
     char engage_reject_block[32] = {};
     float ego_speed_kph = 0.0f;
+    uint32_t reserved = 0;  // 정렬 꼬리를 0으로 채워 발행·기록 바이트가 매번 같다
 };
 
 /* paramsd·torqued 출력(상류 vehicleParameters·lateralTorqueParameters). controlsd가

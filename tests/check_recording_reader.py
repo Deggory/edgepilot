@@ -3,7 +3,7 @@
 ControlState·LearnerState·ModelState의 offsetof 고정값과 크기, LocalizationState·ImuSample·
 CalibrationState 크기, 이벤트 레코드 머리·프레임 인덱스 레코드 크기, 기록 타입 번호. 도구가 쓰는
 MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지도 본다.
-ctest가 저장소 루트에서 돌린다."""
+ctest가 저장소 루트에서 돌린다. 두 도구가 numpy를 쓰므로 numpy가 없으면 77로 끝나고 ctest는 건너뛴 것으로 센다."""
 
 import re
 import sys
@@ -12,6 +12,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "model"))
+
+try:
+    import numpy  # noqa: F401
+except ModuleNotFoundError:
+    print("numpy가 없어 건너뛴다")
+    sys.exit(77)
 
 import model_warp  # noqa: E402
 import recording_reader as rr  # noqa: E402
@@ -50,7 +56,9 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(-(-rr.CONTROL_STATE.itemsize // 8) * 8, size_of("ControlState"))
 
     def test_learner_state(self):
-        for name, offset in pinned_offsets("EDGEPILOT_LEARNER_STATE_AT").items():
+        offsets = pinned_offsets("EDGEPILOT_LEARNER_STATE_AT")
+        self.assertGreater(len(offsets), 5)
+        for name, offset in offsets.items():
             self.assertEqual(offset_in(rr.LEARNER_STATE, name), offset, name)
         self.assertEqual(rr.LEARNER_STATE.itemsize, size_of("LearnerState"))
 
@@ -62,7 +70,9 @@ class RecordingReaderLayout(unittest.TestCase):
     def test_model_state(self):
         layout = rr.model_state_layout(pinned(r"kRecordingVersion = (\d+)", FORMAT))
         self.assertEqual(layout["__size__"], size_of("ModelState"))
-        for name, offset in pinned_offsets("EDGEPILOT_MODEL_STATE_AT").items():
+        offsets = pinned_offsets("EDGEPILOT_MODEL_STATE_AT")
+        self.assertGreater(len(offsets), 5)
+        for name, offset in offsets.items():
             self.assertEqual(layout[name], offset, name)
         self.assertEqual(layout["calibration"], pinned(r"offsetof\(ModelState, calibration\) == (\d+)"))
         self.assertEqual(layout["plan_yaw"], pinned(r"offsetof\(ModelState, plan_yaw\) == (\d+)"))

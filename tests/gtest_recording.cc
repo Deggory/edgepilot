@@ -404,6 +404,18 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
   EXPECT_EQ(decode_recorded_can(route.events[1].payload.data(), route.events[1].payload.size(), 0).count, 2);
   EXPECT_EQ(route.events[2].timestamp_ns, t0 + kMinute + 10'000'000ULL);
 
+  // header_size가 파일보다 큰 인덱스(깨진 머리)는 그 세그먼트만 건너뛴다
+  const std::string index_path = root + "/recordings/" + routes[0] + "/segments/001/frames.bin";
+  std::vector<uint8_t> index = read_file(index_path);
+  FrameIndexHeader index_header = read_at<FrameIndexHeader>(index, 0);
+  index_header.header_size = 0xFFFFFFF0u;
+  std::memcpy(index.data(), &index_header, sizeof(index_header));
+  std::ofstream(index_path, std::ios::binary).write(reinterpret_cast<const char *>(index.data()),
+                                                    static_cast<std::streamsize>(index.size()));
+  ReplayRoute broken(root + "/recordings/" + routes[0]);
+  ASSERT_EQ(broken.segments.size(), 1);
+  ASSERT_EQ(broken.frames.size(), 3);
+
   std::system(("rm -rf '" + root + "'").c_str());
 }
 

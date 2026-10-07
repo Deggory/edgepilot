@@ -16,6 +16,7 @@
 #include "recording/recording_format.h"
 #include "common/utils_file.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,7 @@ namespace {
 struct Record {
   uint64_t timestamp_ns = 0;
   RecordType type = RecordType::CanRx;
+  uint32_t version = kRecordingVersion;  // 레코드가 든 파일의 기록 버전
   std::vector<char> payload;
 };
 
@@ -78,11 +80,9 @@ int main(int argc, char **argv) {
   const std::string vehicle_json = vehicle_json_path.empty() ? std::string() : read_text_file(vehicle_json_path);
 
   std::deque<Record> records;
-  uint32_t version = kRecordingVersion;
   for (const std::string &path : events) {
     EventLogReader reader(path);
     if (!reader.ok()) continue;
-    version = reader.version();
     EventRecordHeader rh{};
     std::vector<char> buf;
     while (reader.next(&rh, &buf)) {
@@ -90,17 +90,22 @@ int main(int argc, char **argv) {
       if (type != RecordType::CanRx && type != RecordType::ModelState && type != RecordType::PandaState &&
           type != RecordType::Localization && type != RecordType::ControlState)
         continue;
-      records.push_back({rh.timestamp_ns, type, buf});
+      records.push_back({rh.timestamp_ns, type, reader.version(), buf});
     }
   }
   if (records.empty()) {
     std::fprintf(stderr, "no records\n");
     return 1;
   }
+  /* recordd는 쌓인 CAN을 먼저 쓰고 상태 스냅샷을 그 뒤에 쓰므로 파일 순서는 시각 순이 아니다. 시각 순으로
+   * 늘어놓되 첫 틱은 파일의 첫 레코드 시각에 둔다(route 첫 PandaState가 1초쯤 앞서 있어도 틱을 늘리지 않는다). */
+  const uint64_t first_record_ns = records.front().timestamp_ns;
+  std::stable_sort(records.begin(), records.end(),
+                   [](const Record &a, const Record &b) { return a.timestamp_ns < b.timestamp_ns; });
 
   SyncPlanner planner(params.steering, params.driving);
   ControlsTick tick(params, force_engaged, planner, vehicle_json, std::string(), 1);
-  uint64_t tick_ns = records.front().timestamp_ns;
+  uint64_t tick_ns = first_record_ns;
   tick.controller().set_clock([&tick_ns] { return tick_ns; });
   const uint64_t start_ns = tick_ns;
 
@@ -123,7 +128,7 @@ int main(int argc, char **argv) {
           break;
         case RecordType::ModelState: {
           ModelState model{};
-          if (decode_recorded_model_state(r.payload.data(), static_cast<uint32_t>(r.payload.size()), version,
+          if (decode_recorded_model_state(r.payload.data(), static_cast<uint32_t>(r.payload.size()), r.version,
                                           &model))
             tick.on_model(model, now_s);
           break;

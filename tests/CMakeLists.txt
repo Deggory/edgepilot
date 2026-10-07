@@ -54,3 +54,5 @@ add_test(NAME check_param_server.py
 add_test(NAME check_recording_reader.py
          COMMAND ${Python3_EXECUTABLE} tests/check_recording_reader.py
          WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+# numpy가 없으면 77로 끝난다(건너뜀)
+set_tests_properties(check_recording_reader.py PROPERTIES SKIP_RETURN_CODE 77)

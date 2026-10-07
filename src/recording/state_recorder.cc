@@ -7,7 +7,9 @@
 
 /* 기록 버전과 그대로 저장하는 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다. */
 static_assert(kRecordingVersion == 8 && sizeof(ModelState) == 3576 &&
-                  sizeof(ControlState) == 240 && sizeof(PandaState) == 96,
+                  sizeof(ControlState) == 240 && sizeof(PandaState) == 96 &&
+                  sizeof(LearnerState) == 128 && sizeof(ImuSample) == 40 &&
+                  offsetof(ImuBatch, samples) == 16 && sizeof(LocalizationState) == 128,
               "recording v8 pins these payloads; bump kRecordingVersion together");
 
 StateRecorder::StateRecorder(const std::string &topic_suffix)

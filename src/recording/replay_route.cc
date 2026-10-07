@@ -50,7 +50,9 @@ ReplayRoute::ReplayRoute(const std::string &dir)
         if (index.size() < sizeof(FrameIndexHeader)) continue;
         FrameIndexHeader header;
         std::memcpy(&header, index.data(), sizeof(header));
-        if (std::memcmp(header.magic, "K230IDX1", 8) != 0 || header.record_size != sizeof(FrameIndexRecord))
+        // header_size가 파일보다 크면(깨진 머리) 아래 레코드 수 계산이 size_t로 넘친다
+        if (std::memcmp(header.magic, "K230IDX1", 8) != 0 || header.record_size != sizeof(FrameIndexRecord) ||
+            header.header_size < sizeof(FrameIndexHeader) || header.header_size > index.size())
             continue;
         width = header.width;
         height = header.height;
