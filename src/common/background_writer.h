@@ -34,20 +34,25 @@ public:
   BackgroundWriter(const BackgroundWriter &) = delete;
   BackgroundWriter &operator=(const BackgroundWriter &) = delete;
 
-  void write(const std::string &path, const std::string &content) { submit(path, true, content); }
+  void write(const std::string &path, std::string content) { submit(path, true, std::move(content)); }
   void remove(const std::string &path) { submit(path, false, std::string()); }
   // 지금까지 실패한 쓰기 수. 넘긴 쪽이 다시 넘길지 정할 때 본다.
   uint64_t failures() const { return failures_.load(); }
+  // 넘긴 일을 다 마칠 때까지 기다린다. 돌아오면 그 일들의 실패가 failures()에 들어 있다.
+  void flush() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    idle_.wait(lock, [this] { return pending_.empty() && !busy_; });
+  }
 
 private:
   struct Job {
     bool write = false;
     std::string content;
   };
-  void submit(const std::string &path, bool write, const std::string &content) {
+  void submit(const std::string &path, bool write, std::string content) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      pending_[path] = Job{write, content};
+      pending_[path] = Job{write, std::move(content)};
     }
     condition_.notify_one();
   }
@@ -60,6 +65,7 @@ private:
         condition_.wait(lock, [this] { return stop_ || !pending_.empty(); });
         jobs.swap(pending_);
         stop = stop_;
+        busy_ = true;
       }
       for (const auto &[path, job] : jobs) {
         if (!job.write) {
@@ -71,6 +77,11 @@ private:
           failures_.fetch_add(1);
         }
       }
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        busy_ = false;
+      }
+      idle_.notify_all();
       if (stop) return;
     }
   }
@@ -78,7 +89,9 @@ private:
   const std::string log_prefix_;
   std::mutex mutex_;
   std::condition_variable condition_;
+  std::condition_variable idle_;  // flush(): 쌓인 일도, 하던 일도 없다
   std::map<std::string, Job> pending_;
+  bool busy_ = false;
   bool stop_ = false;
   std::atomic<uint64_t> failures_{0};
   std::thread thread_;  // 마지막 멤버: 위가 다 준비된 뒤 시작한다

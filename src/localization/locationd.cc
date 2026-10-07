@@ -135,6 +135,7 @@ int main()
             last_counters = c;
         }
     }
+    writer.flush();  // 하던 쓰기가 실패했으면 failures()에 잡혀 아래 persist가 다시 넘긴다
     persist();
     std::fprintf(stderr, "locationd: done\n");
     return 0;

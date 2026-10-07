@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -268,8 +269,8 @@ int main() {
 
       /* 송신 뒤에 둬서 적합·직렬화 틱이 CAN 송신을 늦추지 않게 한다. */
       LearnerOutputs learned = tick.update_learners(now_s);
-      if (learned.vehicle_json) learner_store.write(vehicle_learn_path, *learned.vehicle_json);
-      if (learned.torque_cache) learner_store.write(torque_learn_path, *learned.torque_cache);
+      if (learned.vehicle_json) learner_store.write(vehicle_learn_path, std::move(*learned.vehicle_json));
+      if (learned.torque_cache) learner_store.write(torque_learn_path, std::move(*learned.torque_cache));
       if (learned.learner_state) {
         learned.learner_state->timestamp_ns = monotonic_now_ns();
         if (!learner_state_pub.publish(&*learned.learner_state, sizeof(LearnerState)))

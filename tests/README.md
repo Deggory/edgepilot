@@ -28,7 +28,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | --- | ---: | --- |
 | `gtest_adaptive_cruise` | 15 | 비전 크루즈 버튼 간격과 한계. 차량 모형과 폐루프로 돌려 설정 속도 동기화, 재설정, 반응 없는 차, 오르내림 반복, 고정 앞차 확률(0.5)을 본다 |
 | `gtest_alert_tones` | 1 | 알림음 합성: 모든 소리가 무음에서 시작해 무음으로 끝나고, 봉우리가 같고, 0.3~2.5초이며, 서로 다르다 |
-| `gtest_background_writer` | 1 | 루프 밖 파일 쓰기 스레드: 같은 경로는 최신 내용, 지우기, 실패 수, 없앨 때 남은 쓰기 마치기 |
+| `gtest_background_writer` | 1 | 루프 밖 파일 쓰기 스레드: 같은 경로는 최신 내용, 지우기, 실패 수, flush는 넘긴 쓰기가 끝날 때까지 기다림, 없앨 때 남은 쓰기 마치기 |
 | `gtest_calibration` | 12 | 온라인 보정 상태 기계(calibrationd.py 참조, 카메라 높이·높이 표준편차 조건 포함), 장착 변경·초기화 재보정, 범위 밖 저장값 복원, 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조), NV21 색차 순서, 카메라 장착 위치 |
 | `gtest_car` | 12 | K7 CAN 신호 해석(LCA11, WHL_SPD11, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 MDPS용 CLU11 속도 바꿔치기, CGW1 B-CAN 타임아웃을 안전한 값으로 읽기(깜빡이·비상등 꺼짐, 문 열림, 안전벨트 미착용), AHB1 페달 스트로크(3 mm 초과)와 TCS13 BrakeLight(AUTO HOLD)로 켜는 브레이크등, AHB1 페달이 끄는 고정형 크루즈 추정(TCS13 0이 덮어쓰지 않음, 밟은 채 RES 무시) |
 | `gtest_control_holds` | 3 | 조향 경로 게이트(plan 도달 거리와 점 수), Panda 헬스 공백 홀드(100 ms), 잘못된 plan 홀드(150 ms) |
