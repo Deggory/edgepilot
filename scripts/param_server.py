@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""파라미터 편집 웹 서버(FastAPI). params/의 JSON 설정을 보여 주고 고쳐 쓰며(바꾸면 controlsd에 SIGHUP을
+보내 다시 읽게 한다), /dev/shm 채널을 읽어 학습값·추이·온라인 보정 초기화와 BEV 탭을 낸다. 매니저가
+함께 띄운다.
+
+사용: python3 param_server.py [--host 주소] [--port 포트]   (기본 0.0.0.0:8080,
+EDGEPILOT_PARAM_HOST·EDGEPILOT_PARAM_PORT로도 바꿀 수 있다)
+"""
 from __future__ import annotations
 
 import argparse

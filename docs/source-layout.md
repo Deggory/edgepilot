@@ -26,11 +26,17 @@ src/
 platform/maixcam2/   AX and MaixCDK wrappers (board build only)
 ```
 
-Libraries depend downward only: `common` ← `car` ← `control_core` ←
+Libraries link downward only: `common` ← `car` ← `control_core` ←
 `planning`, `learners` ← `controls`. `localization`, `model`, `hud_state` /
 `hud`, `recording` and `panda` build on `common`. `controls/` holds two
 libraries because the planner and the learners sit between the controller
-(`control_core`) and the tick that drives them (`controls`).
+(`control_core`) and the tick that drives them (`controls`). A few headers are
+read across that order for their enums, constants and default values only:
+the HUD reads `controls/departure_alert.h`, `controls/control_block.h`,
+`controls/control_params.h`, `car/can_frame.h`, `model/calibration_online.h`
+and `localization/lateral_lag.h`, and `controls_tick.cc` reads
+`localization/lateral_lag.h`. Those uses stay header-only; calling a function
+defined in one of those libraries means linking it.
 
 ## Naming
 
@@ -38,13 +44,22 @@ libraries because the planner and the learners sit between the controller
   headers are `.h`, sources `.cc`, generated data `.inc`.
 - File names read `<subject>_<role>` (`recording_writer`, `lateral_planner`)
   and are unique across the repository, so comments and documents can name a
-  file alone. Folders do not strip the prefix.
-- A process's main is `<name>d.cc`, named like its executable; the deploy
-  scripts and `manager.py` start it by that name.
+  file alone. Folders do not strip the prefix. Prefix families (`utils_*`,
+  `maix_*`) and one-word programs (`projection`, `manager.py`) are fine.
+- A C++ process's main is `<name>d.cc`, named like its executable; the deploy
+  scripts and `manager.py` start it by that name. `camcal`, the intrinsics
+  capture that `camcal.service` runs while the runtime is stopped, keeps its
+  tool name.
 - Tests are `tests/gtest_<module>.cc`, or `gtest_<folder>.cc` when they cover a
-  folder.
+  folder. A module can be a family of files on one subject: `gtest_calibration`
+  covers `calibration_online`, `calibration_service` and the model input warp.
 - The HUD module is `hud` in files, types and libraries. Only `overlayd`, the
   process, and the display's hardware overlay layer keep "overlay".
+- Names something else fixes keep their form: files tools look for
+  (`CMakeLists.txt`, `README.md`, `Dockerfile`), systemd units and the scripts
+  installed under their names (`edgepilot-drivers.service`,
+  `wifi-dhcp-renew.sh`), `requirements-param-server.txt`, and vendored
+  third-party files (`scripts/web/three/`).
 
 ## src/common
 

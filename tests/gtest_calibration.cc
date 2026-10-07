@@ -1160,8 +1160,6 @@ TEST(CalibrationEquivalence, Nv21ChromaOrder)
         << "순서를 안 맞추면 U와 V가 뒤바뀐다";
 }
 
-} // namespace
-
 /* 카메라 장착 보정(sunnypilot camera offset): 가상 카메라가 offset만큼 오른쪽에 있을 때 가상 기준
  * 도로면 점의 모델 픽셀은, 실제 카메라에서 그 도로 점(가상 위치 + offset)이 찍히는 픽셀로 간다.
  * offset 0이면 기존 행렬과 같다. */
@@ -1210,3 +1208,5 @@ TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane)
         }
     }
 }
+
+} // namespace

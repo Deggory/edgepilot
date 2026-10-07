@@ -24,8 +24,9 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool acti
   if (vehicle.left_blinker) direction_now = -1;
   if (vehicle.right_blinker) direction_now = 1;
 
-  /* 깜빡이 쪽이 도로 경계(경계는 또렷하고 그 너머 차선선은 없음)면 차선 변경을 시작하지 않고,
-   * 깜빡이를 다시 켜야 다시 본다(dragonpilot의 도로 경계 판정). */
+  /* 깜빡이 쪽이 도로 경계(경계는 또렷하고 그 너머 차선선은 없음)면 차선 변경을 시작하지 않는다
+   * (dragonpilot의 도로 경계 판정). 막힌 동안 깜빡이를 꺼진 것으로 두므로, 경계가 사라지면 깜빡이를
+   * 켠 채로도 그 틱에 시작한다. */
   const double left_edge_prob = std::clamp(1.0 - model.road_edge_stds[0], 0.0, 1.0);
   const double right_edge_prob = std::clamp(1.0 - model.road_edge_stds[1], 0.0, 1.0);
   const double left_nearside_prob = model.lane_probabilities[0];
