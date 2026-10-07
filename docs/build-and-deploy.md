@@ -62,7 +62,7 @@ scripts/upload_to_board.sh [root@192.168.219.117]
 ```
 
 The script copies the binaries from `build-ax630/bin`, the board-side Python, the
-UI sprites, the parameter defaults and `models/supercombo.axmodel`
+parameter defaults and `models/supercombo.axmodel`
 ([how it is built](../tools/model/axmodel/README.md)) to `/root/edgepilot`. The
 33 MB model is sent only when its SHA-256 differs from the board's copy.
 

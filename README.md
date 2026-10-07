@@ -163,7 +163,6 @@ tests/          host unit tests and the Python layout checks
 diagnostics/    replay, dataset, and HUD tools
 scripts/        SDK fetch, deploy, host tests, board-side Python
 tools/          axmodel pipeline, camera calibration, build container, route readers
-assets/         UI sprites installed next to the binaries
 docs/           documentation
 ```
 

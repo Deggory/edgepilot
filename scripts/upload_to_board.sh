@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 교차 빌드한 런타임을 MaixCAM2에 올린다: 실행 파일, 보드용 Python, UI 스프라이트, 파라미터 기본값,
+# 교차 빌드한 런타임을 MaixCAM2에 올린다: 실행 파일, 보드용 Python, 파라미터 기본값,
 # 그리고 모델(models/supercombo.axmodel, 보드의 것과 체크섬이 다를 때만 보낸다).
 # 보드의 params/는 덮어쓰지 않고, 기본값은 params.defaults/에 두어 없는 파일만 채운다.
 # 실행 중인 바이너리는 덮어쓸 수 없으므로 .upload/에 올린 뒤 mv로 바꾼다. 매니저는 다시
@@ -34,18 +34,13 @@ runtime_files=(
 )
 [ -x "${BIN_DIR}/pandad" ] && runtime_files+=("${BIN_DIR}/pandad")
 param_files=(calibration.json adaptive_cruise.json steering.json driving.json recording.json display.json)
-ui_assets=(
-  assets/ui/traffic_wait_red_retro-270x155-v3.png
-  assets/ui/traffic_go_green_retro-270x155-v3.png
-)
 
-for file in "${runtime_files[@]}" "${ui_assets[@]}" "$AXMODEL"; do
+for file in "${runtime_files[@]}" "$AXMODEL"; do
   [ -f "$file" ] || { echo "Missing: $file" >&2; exit 1; }
 done
 
-"${SSH[@]}" "$BOARD" "rm -rf '$DEST/.upload' && mkdir -p '$DEST/.upload/assets/ui' '$DEST/assets/ui' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
+"${SSH[@]}" "$BOARD" "rm -rf '$DEST/.upload' && mkdir -p '$DEST/.upload' '$DEST/models' '$DEST/params' '$DEST/params.defaults'"
 "${SCP[@]}" "${runtime_files[@]}" "$BOARD:$DEST/.upload/"
-"${SCP[@]}" "${ui_assets[@]}" "$BOARD:$DEST/.upload/assets/ui/"
 model_sha="$(shasum -a 256 "$AXMODEL" | cut -d' ' -f1)"
 board_sha="$("${SSH[@]}" "$BOARD" "sha256sum '$DEST/models/supercombo.axmodel' 2>/dev/null | cut -d' ' -f1" || true)"
 model_note="model unchanged"
@@ -55,7 +50,6 @@ if [ "$model_sha" != "$board_sha" ]; then
 fi
 "${SCP[@]}" "${param_files[@]/#/params/}" "$BOARD:$DEST/params.defaults/"
 "${SSH[@]}" "$BOARD" "set -e; cd '$DEST'
-  for f in .upload/assets/ui/*; do mv \"\$f\" assets/ui/; done
   if [ -f .upload/supercombo.axmodel ]; then mv .upload/supercombo.axmodel models/; fi
   rm -f models/supercombo_npu1.axmodel  # 예전 AI-ISP용 별도 모델(이제 supercombo.axmodel 하나)
   for f in .upload/*; do [ -f \"\$f\" ] && mv \"\$f\" .; done
