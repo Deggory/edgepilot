@@ -29,7 +29,7 @@ IPC_MAGIC = 0x4B323349
 IPC_VERSION = 1
 HEADER = struct.Struct("<IIIIQQII")
 HEADER_SIZE = HEADER.size
-# ProcessState: 오버레이가 읽는 것은 이름과 running뿐이다.
+# ProcessState: overlayd가 읽는 것은 이름과 running뿐이다.
 PROCESS = struct.Struct("<16sI")
 MAX_PROCESSES = 12
 # C++ ManagerState는 8바이트 정렬이라 배열 뒤에 꼬리 패딩이 붙는다.

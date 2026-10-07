@@ -385,7 +385,7 @@ void HudRenderer::draw(const HudTarget &target, const ParsedModelOutput &output,
     const int left_y = draw_maneuver(canvas, draw_cruise(canvas, hud), hud);
     draw_system(canvas, hud);
     // 진단 카드는 보드 상태 카드 뒤에: 조작 칩까지 있어 길어지면 위에 겹쳐 보인다
-    if (hud.debug_overlay) draw_debug_card(canvas, left_y, hud);
+    if (hud.debug_card) draw_debug_card(canvas, left_y, hud);
     // 학습 카드는 오른쪽 열 칩보다 먼저: 칩이 많아 겹치면 경고가 위에 보인다
     draw_learned(canvas, hud);
     draw_status(canvas, hud, lead);

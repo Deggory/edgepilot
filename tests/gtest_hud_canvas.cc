@@ -141,7 +141,7 @@ TEST(HudRenderer, ReusedBufferMatchesFreshBuffer) {
     HudState first;
     first.controller_enabled = first.controller_engaged = first.controller_active = true;
     first.services_healthy = true;
-    first.debug_overlay = true;
+    first.debug_card = true;
     first.network_card = true;
     first.network_connected = true;
     first.brake_hold = true;
@@ -190,7 +190,7 @@ TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
     hud.controller_enabled = hud.controller_engaged = hud.controller_active = true;
     hud.cluster_speed_kph = 64.0f;
     hud.steer_saturated = true;  // 알림 카드
-    hud.debug_overlay = true;
+    hud.debug_card = true;
     const ProjectionState projection = make_projection_state(0, 0, 0);
 
     Surface landscape(640, 480), portrait(480, 640), flipped(480, 640);

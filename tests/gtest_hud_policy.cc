@@ -223,11 +223,11 @@ TEST(HudTouch, CardsToggleAndTheNetworkCardTimesOut) {
   ASSERT_FALSE(hud.network_card);
 
   ASSERT_STREQ(touch.tap(100, 200, kW, kH, 24000 * kMs, &hud), "debug card") << "왼쪽 열";
-  ASSERT_TRUE(hud.debug_overlay);
+  ASSERT_TRUE(hud.debug_card);
   touch.expire(60000 * kMs, &hud);
-  ASSERT_TRUE(hud.debug_overlay) << "진단 카드는 시간으로 닫지 않는다";
+  ASSERT_TRUE(hud.debug_card) << "진단 카드는 시간으로 닫지 않는다";
   touch.tap(100, 200, kW, kH, 61000 * kMs, &hud);
-  ASSERT_FALSE(hud.debug_overlay);
+  ASSERT_FALSE(hud.debug_card);
 }
 
 TEST(LaneCenterSmoothing, FollowsAtATenthPerFrameAndRestartsAfterALoss) {

@@ -176,7 +176,7 @@ void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model
     hud->services_healthy = fresh && total >= 3 && running == total && model_ok;
 }
 
-/* ---- 이벤트 카운터 → 알림 ---- */
+/* ---- ModelState → ParsedModelOutput·ProjectionState ---- */
 
 ParsedModelOutput parsed_from_model_state(const ModelState &state)
 {

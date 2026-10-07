@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-/* 오버레이가 울리는 제어 이벤트 알림. 열거 순서가 같은 프레임 안의 우선순위다. */
+/* overlayd가 울리는 제어 이벤트 알림. 열거 순서가 같은 프레임 안의 우선순위다. */
 enum class HudAlert { none, unable, engage, disengage, signal_changed };
 
 /* controlsd 이벤트 카운터 → 이 프레임에 울릴 알림 하나. 신선한 제어 스냅샷에만

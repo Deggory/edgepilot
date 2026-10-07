@@ -1,7 +1,8 @@
 /* HUD 스냅샷·타이밍 도구. 렌더러만 떼어 MaixCAM2 화면과 같은 640x480 BGRA 버퍼에 그리고
  * 시나리오별 프레임을 K230ARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
- * ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 없으면 합성
- * 장면을 쓴다. 호스트와 보드에서 같은 소스로 빌드한다.
+ * ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 주지 않으면 합성
+ * 장면을 쓰고, 준 파일을 읽지 못하거나 프레임을 쓰지 못하면 1로 끝난다. 호스트와 보드에서 같은
+ * 소스로 빌드한다.
  * --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고(--flip-x/--flip-y는
  * 보드의 disp_flip/disp_mirror 축 뒤집기), 파일도 그 버퍼 그대로 쓴다. 리팩토링 전후 그림이
  * 바이트 단위로 같은지 비교할 때 쓴다.
@@ -136,8 +137,14 @@ int main(int argc, char **argv)
     ControlState control_state{};
     const bool have_model = !model_path.empty() && read_file(model_path, &model_state, sizeof(model_state));
     const bool have_control = !control_path.empty() && read_file(control_path, &control_state, sizeof(control_state));
-    if (!model_path.empty() && !have_model) std::fprintf(stderr, "cannot read %s\n", model_path.c_str());
-    if (!control_path.empty() && !have_control) std::fprintf(stderr, "cannot read %s\n", control_path.c_str());
+    if (!model_path.empty() && !have_model) {
+        std::fprintf(stderr, "cannot read %s\n", model_path.c_str());
+        return 1;
+    }
+    if (!control_path.empty() && !have_control) {
+        std::fprintf(stderr, "cannot read %s\n", control_path.c_str());
+        return 1;
+    }
 
     ParsedModelOutput output = have_model ? parsed_from_model_state(model_state) : synthetic_output();
     ProjectionState projection = have_model ? projection_from_model_state(model_state)
@@ -235,7 +242,7 @@ int main(int argc, char **argv)
     saturated.steer_saturated = true;
 
     HudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면(torqued·lagd는 아직 학습 중)
-    debug.debug_overlay = true;
+    debug.debug_card = true;
 
     HudState learned = drive;  // 학습값을 다 쓰는 중, 후진
     learned.torque_learned = learned.delay_learned = true;
@@ -395,6 +402,7 @@ int main(int argc, char **argv)
                 have_control ? control_path.c_str() : "synthetic", width, height,
                 orientation.transpose ? " portrait" : "");
 
+    bool written = true;
     for (const Scenario &scenario : scenarios) {
         const ParsedModelOutput &scene = scenario.scene ? *scenario.scene : ParsedModelOutput{};
         std::vector<double> draw_ms;
@@ -406,7 +414,10 @@ int main(int argc, char **argv)
         std::printf("scenario %s (%d iters)\n", scenario.name, iterations);
         print_stats("draw", draw_ms);
         const std::string path = out_prefix + "_" + scenario.name + ".argb";
-        if (!write_frame_file(path, target)) std::fprintf(stderr, "cannot write %s\n", path.c_str());
+        if (!write_frame_file(path, target)) {
+            std::fprintf(stderr, "cannot write %s\n", path.c_str());
+            written = false;
+        }
     }
-    return 0;
+    return written ? 0 : 1;
 }

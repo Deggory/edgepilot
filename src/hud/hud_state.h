@@ -93,7 +93,7 @@ struct HudState {
     bool network_card = false;   // 상태 알약을 눌러 연 네트워크 카드
     bool recording = false;      // recordd가 route를 쓰는 중
     bool storage_full = false;   // 저장 공간이 모자라 녹화를 거부했거나 멈춤
-    bool debug_overlay = false;  // 웹 기기 설정의 HUD 진단: 수치 카드를 띄운다
+    bool debug_card = false;     // 웹 기기 설정의 HUD 진단: 수치 카드를 띄운다
     // 학습값(진단 카드). learner_fresh가 아니면 "--".
     bool learner_fresh = false;
     bool params_valid = false;     // paramsd: SR·강성·평균 오프셋이 다 유효

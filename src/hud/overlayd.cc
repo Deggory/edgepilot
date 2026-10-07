@@ -199,7 +199,7 @@ private:
     {
         if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
         if (!device_settings_read_ || device_settings_.hud_debug != applied_hud_debug_) {
-            hud_.debug_overlay = applied_hud_debug_ = device_settings_.hud_debug;
+            hud_.debug_card = applied_hud_debug_ = device_settings_.hud_debug;
             pending_redraw_ = true;
         }
         const float percent = device_settings_.alert_volume_percent;
@@ -242,14 +242,14 @@ private:
     /* 터치로 네트워크·진단 카드를 여닫고(HudTouch) 탭은 로그에 남긴다. 화면이 바뀌면 true. */
     bool update_touch(uint64_t now_ns)
     {
-        const bool was_open = hud_.network_card, was_debug = hud_.debug_overlay;
+        const bool was_open = hud_.network_card, was_debug = hud_.debug_card;
         int x = 0, y = 0;
         if (touch_.poll_tap(&x, &y)) {
             const char *action = hud_touch_.tap(x, y, kOutW, kOutH, now_ns, &hud_);
             std::fprintf(stderr, "\noverlayd: tap x=%d y=%d %s\n", x, y, action);
         }
         hud_touch_.expire(now_ns, &hud_);
-        return hud_.network_card != was_open || hud_.debug_overlay != was_debug;
+        return hud_.network_card != was_open || hud_.debug_card != was_debug;
     }
 
     static bool fresh(uint64_t timestamp_ns, uint64_t now)

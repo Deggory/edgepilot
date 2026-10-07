@@ -160,7 +160,7 @@ const char *HudTouch::tap(int x, int y, int width, int height, uint64_t now_ns, 
         return "network card";
     }
     if (hud_left_column_touch(x, y, height)) {
-        hud->debug_overlay = !hud->debug_overlay;
+        hud->debug_card = !hud->debug_card;
         return "debug card";
     }
     hud->network_card = false;
