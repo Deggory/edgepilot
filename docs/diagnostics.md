@@ -84,16 +84,14 @@ board restored from `params/calibration.json`, because the calibration service
 feeds the input warp on every frame.
 
 For the master core, the fp32 reference with the runtime's queue semantics is
-built by `tools/model/axmodel/make_m2_data.py eval` from a MaixCAM2 recording
-(or by `make_core_data.py` from the K230 evaluation bundle), and
+built by `tools/model/axmodel/make_m2_data.py eval` from a MaixCAM2 recording, and
 `tools/model/axmodel/run_axmodel_assembled.py` runs an axmodel on the same
 inputs on the board. A host runner that takes an `SCNV12R1` replay is not in
 the repository yet.
 
-Measured when the master axmodel was brought up (200-frame K230 replay): the
-board output against the host axengine runner gave a plan lateral difference of
-0.0008 m at 2 s and a hidden-state cosine similarity of 0.9994. The K230 v0.9.4
-numbers (int16 PTQ vs fp32) are in [models/README.md](../models/README.md).
+Measured when the master axmodel was brought up (200-frame replay): the board
+output against the host axengine runner gave a plan lateral difference of
+0.0008 m at 2 s and a hidden-state cosine similarity of 0.9994.
 
 ## Lateral bias
 

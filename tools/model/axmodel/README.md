@@ -15,14 +15,10 @@ MaixCAM2 런타임(`src/model/supercombo_model.cc`)이 쓰는 `models/supercombo
    뛰었다. 헤드마다 출력으로 내보내고 plan은 위치·방향·표준편차로 나눈다. 런타임이
    `src/model/model_output_assembly.h`로 다시 모은다. 변환 설정의 `input`은 `core_split.onnx`다.
 2. 보정·평가 데이터(onnxruntime 필요):
-   `python3 make_core_data.py` → `calib/*.tar`, `eval/`. PTQ 샘플은 `models/ptq`,
-   평가 묶음은 `QEXP094_DIR`(K230 0.9.4 평가, 저장소 밖)에서 읽는다.
-   MaixCAM2 녹화로 만들려면 `python3 make_m2_data.py calib m2_calib_20261004.json calib_m2`.
+   `python3 make_m2_data.py calib m2_calib_20261004.json calib` → `calib/*.tar`.
    보드가 코어에 넣는 입력을 그대로 만든다: 녹화 H.264 → 장치 워프(MaixCAM2 내부 파라미터,
    녹화 보정값) → 탑마다 t−4·t 이미지, controlsd가 보낸 desire 펄스, fp32 코어를 차례로 돌린
-   진짜 특징 이력. `make_core_data.py`는 K230 카메라 표본에 t−1을 t−4 대신 쓰고 특징을 아무
-   프레임에서 가져와, 그 U16 모델이 2026-10-04 녹화의 일부 녹색 신호에서 코어의 반응(경로 열림,
-   가속 확률)을 잃었다. 같은 도구의 `eval`은 보드 비교용 입력과 fp32 출력을 만든다
+   진짜 특징 이력. 같은 도구의 `eval`은 보드 비교용 입력과 fp32 출력을 만든다
    (보드에서 `run_axmodel_assembled.py`). 영상 세그먼트는 `video_dir`(보드 녹화에서 받은 사본),
    이벤트는 `routes_dir`에서 읽는다.
 3. 변환(Pulsar2 6.0-lite, docker amd64):
@@ -31,16 +27,18 @@ MaixCAM2 런타임(`src/model/supercombo_model.cc`)이 쓰는 `models/supercombo
    FP32 가중치 설정을 무시한다), SmoothQuant(`enable_smooth_quant`), 이미지 입력은
    uint8(`input_processors`)이다. 2026-10-04 비교(보드, 같은 입력의 fp32 대비): SmoothQuant가
    MaixCAM2 주행 구간 laneless 횡가속 오차 평균 0.020 → 0.018, p95 0.063 → 0.057 m/s², 특징
-   cosine 0.947 → 0.952, 녹색 신호 8곳 중 가속 확률 반응 4 → 6. MaixCAM2 녹화 보정(`make_m2_data.py`)은
-   MinMax 범위를 넓혀 오히려 나빴고, highest_mix_precision은 빌드가 안 되며, EasyQuant는 Docker
-   메모리 9.7 GB로 모자랐다. 결과 `build/core.axmodel`을 저장소의
+   cosine 0.947 → 0.952, 녹색 신호 8곳 중 가속 확률 반응 4 → 6. highest_mix_precision은 빌드가
+   안 되고, EasyQuant는 Docker 메모리 9.7 GB로 모자랐다. 배포 중인 빌드는 지금 저장소에 없는 이전
+   표본으로 보정했다. 같은 날 비교에서 MaixCAM2 녹화 보정은 MinMax 범위를 넓혀 그보다 나빴으므로,
+   새 빌드는 같은 입력으로 배포 빌드와 비교한 뒤 바꾼다. 결과 `build/core.axmodel`을 저장소의
    `models/supercombo.axmodel`로 넣고 `models/manifest.sha256`을 갱신하면
    `scripts/upload_to_board.sh`가 보드로 보낸다.
 
 2026-09-29 분할 빌드(보드, 평가 552프레임, fp32 대비): laneless 목표 횡가속 오차 평균 0.109 → 0.054 m/s²
 (p95 0.35 → 0.22), yaw 서로 다른 값 12 → 568개, 차선·선행차·plan 위치는 그대로다.
 
-보정 데이터의 desire에는 펄스가 들어 있어야 한다(`make_core_data.py`). 예전 모델은 전부 0으로
+보정 데이터의 desire에는 펄스가 들어 있어야 한다(`make_m2_data.py`는 녹화된 펄스에 네 번째 표본마다
+합성 펄스를 더한다). 예전 모델은 전부 0으로
 보정해 desire 입력 범위가 [0, 0]이었고, NPU 모델이 차선 변경 명령에 전혀 반응하지 않았다
 (2026-09-27: 보드에서 펄스를 넣어도 laneChangeLeft 확률 0.00, 새 모델은 0.99이고 desire가 없을 때
 출력은 같다, plan y 차이 0.0006 m).

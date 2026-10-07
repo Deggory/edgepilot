@@ -6,8 +6,8 @@ and evaluation data, and compiles it with Pulsar2 6.0 into the axmodel that
 `modeld` loads. See [`../../models/README.md`](../../models/README.md) for
 the contract and the board numbers.
 
-The other scripts here read recorded routes (MaixCAM2 and the older K230
-recordings) and reproduce the device's input pipeline.
+The other scripts here read recorded routes and reproduce the device's input
+pipeline.
 
 ## axmodel pipeline
 
@@ -18,13 +18,8 @@ recordings) and reproduce the device's input pipeline.
 - `axmodel/split_outputs.py`
   - exports every head as its own output so each gets its own U16 scale. The
     runtime puts them back together (`src/model/model_output_assembly.h`).
-- `axmodel/make_core_data.py`
-  - writes `calib/*.tar` from the 180 PTQ samples in `models/ptq` and an
-    `eval/` set from the K230 v0.9.4 evaluation bundle (`QEXP094_DIR`, outside
-    the repository), run through the fp32 core with the runtime's queue
-    semantics. The shipped axmodel is calibrated on this set.
 - `axmodel/make_m2_data.py`
-  - builds calibration and evaluation sets from MaixCAM2 recordings with the
+  - builds the calibration and evaluation sets from MaixCAM2 recordings with the
     exact runtime inputs (device warp, t-4/t pairs, recorded desire, the fp32
     core's own feature history). `m2_calib_20261004.json` is the spec used on
     2026-10-04.

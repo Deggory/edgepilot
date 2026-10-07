@@ -5,10 +5,7 @@ Every sample is exactly what the runtime feeds the core on the board: the record
 src/common/app_config.h, the calibration the recording carries), the 5-frame image history per tower
 (t-4 and t), the desire pulses controlsd sent (src/model/model_temporal.h: rising edge, turn desire
 cleared with its blinker, 100 ticks max-pooled to 25), and the core's own 96-tick hidden-state
-history from running the fp32 core in order. make_core_data.py instead calibrated with K230-camera
-samples, t-1 standing in for t-4 and features from random frames; the resulting U16 model lost the
-core's green-light response at some 2026-10-04 stops (plan stayed at 2.5 m where fp32 opened to
-46 m, and the gas-press probability stayed flat).
+history from running the fp32 core in order.
 
   make_m2_data.py calib <spec.json> <out_dir>
       Pulsar2 calibration set (<out_dir>/<tensor>.tar of NNNN.npy, float32 with a batch axis).
@@ -130,7 +127,7 @@ def cmd_calib(spec: dict, out_dir: Path):
             excluded = any(g - 12.0 <= t <= g + 5.0 for g in spec.get("exclude", {}).get(route, []))
             if t - start < 5.0 or excluded or n % (dense_stride if dense else stride):
                 continue
-            if count % 4 == 1:  # 합성 desire 펄스: 범위 [0, 1] 유지(make_core_data.py와 같은 이유)
+            if count % 4 == 1:  # 합성 desire 펄스: desire 범위를 [0, 1]로 유지한다
                 d = rng.choice([1, 2, 3, 4, 5, 6], p=[0.1, 0.1, 0.3, 0.3, 0.1, 0.1])
                 feed["desire"] = feed["desire"].copy()
                 feed["desire"][0, rng.integers(0, 25), d] = 1.0
