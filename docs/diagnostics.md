@@ -45,8 +45,7 @@ speaker.
 `modeld` can run headless from a recorded route: replay mode reads an
 `SCNV12R1` file instead of the camera ring and feeds the same GDC warp as live
 capture, so it validates model execution and online calibration from stored
-segments. It needs the NPU, so it runs on the board. A K230 route needs the
-K230 camera's intrinsics, as below; a MaixCAM2 route needs none.
+segments. It needs the NPU, so it runs on the board.
 
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
@@ -56,7 +55,6 @@ scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.117:/root/edgepilot/
 # board (stop the manager first, or at least modeld)
 cd /root/edgepilot
 EDGEPILOT_REPLAY_NV12=/root/edgepilot/replay.scnv12 \
-EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
   ./modeld models/supercombo.axmodel
 ```
 
@@ -71,7 +69,6 @@ with the raw outputs dumped:
 EDGEPILOT_REPLAY_NV12=/root/verify/replay.scnv12 \
 EDGEPILOT_RAW_DUMP=/root/verify/board_raw.bin \
 EDGEPILOT_CALIB_AUTO=0 \
-EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774 \
   ./modeld models/<candidate>.axmodel
 ```
 
@@ -95,8 +92,7 @@ output against the host axengine runner gave a plan lateral difference of
 
 ## Lateral bias
 
-The tools below run on the host over recorded drives: `recordd` routes from
-the MaixCAM2, or older K230 routes.
+The tools below run on the host over `recordd` routes.
 
 If the car holds one side of the lane, `tools/model/lane_bias.py` says whether
 the camera calibration is responsible:

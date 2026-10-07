@@ -1,6 +1,4 @@
-"""Reader for recordd routes (frames.bin / event log / road.hevc or road.h264).
-
-K230 routes carry HEVC (road.hevc); MaixCAM2 routes carry H.264 (road.h264).
+"""Reader for recordd routes (frames.bin / event log / road.h264).
 
 Binary layouts mirror src/recording/recording_format.h and src/common/ipc_messages.h. Struct sizes
 are asserted against the payload sizes found in the stream, so a layout drift
@@ -215,13 +213,10 @@ def read_segment_index(segment_dir: Path) -> SegmentInfo:
     return SegmentInfo(segment_dir, width, height, fps, segment_start_ns, frames)
 
 
-def segment_video(seg_dir: Path) -> tuple[Path, str] | None:
-    """The segment's video file and its codec ("h264" or "hevc"), or None."""
-    for codec in ("h264", "hevc"):
-        path = seg_dir / f"road.{codec}"
-        if path.exists():
-            return path, codec
-    return None
+def segment_video(seg_dir: Path) -> Path | None:
+    """The segment's H.264 video file, or None."""
+    path = seg_dir / "road.h264"
+    return path if path.exists() else None
 
 
 def route_segments(route_dir: Path) -> list[SegmentInfo]:
@@ -244,43 +239,31 @@ def route_segments(route_dir: Path) -> list[SegmentInfo]:
 def decode_route_yuv(segments: list[SegmentInfo]):
     """Yield (index_record, y, u, v) across a whole route in stream order.
 
-    The segments of a route are 60 s slices of one continuous HEVC (K230) or
-    H.264 (MaixCAM2) stream, and the K230 MVX encoder splits large access units
-    (keyframes) across several
-    dequeued buffers, so the per-record packet boundaries in frames.bin are not
-    reliable AU boundaries. The bytes ARE in stream order though: feed them
-    through one ffmpeg parser + decoder for the whole route and pair decoded
+    The segments of a route are 60 s slices of one continuous H.264 stream:
+    feed the bytes through one decoder for the whole route and pair decoded
     frames with index records by order (one encoder output per index record).
     """
     import av
     import re
 
-    codec_name = segment_video(segments[0].path)[1]
-    codec = av.CodecContext.create(codec_name, "r")
+    codec = av.CodecContext.create("h264", "r")
 
     def au_starts(payload: bytes) -> int:
-        """Access units starting in payload: slices with first_slice_segment_in_pic
-        (HEVC) or first_mb_in_slice == 0 (H.264)."""
+        """Access units starting in payload: slices with first_mb_in_slice == 0."""
         count = 0
         for match in re.finditer(b"\x00\x00\x01", payload):
             pos = match.end()
-            if codec_name == "hevc":
-                if pos + 2 < len(payload) and ((payload[pos] >> 1) & 0x3F) <= 31 \
-                        and (payload[pos + 2] >> 7) & 1:
-                    count += 1
-            elif pos + 1 < len(payload) and (payload[pos] & 0x1F) in (1, 5) \
+            if pos + 1 < len(payload) and (payload[pos] & 0x1F) in (1, 5) \
                     and (payload[pos + 1] >> 7) & 1:
                 count += 1
         return count
 
-    # The MVX encoder does not keep a 1:1 mapping between dequeued buffers
-    # (= index records) and access units around large keyframes, so map each
-    # AU (in stream order) to the record whose byte range starts it. The
-    # decoder also skips AUs with the MVX RPS/POC nonconformance, so packets
-    # are tagged with their AU index as pts to keep the pairing exact.
+    # Map each access unit (in stream order) to the index record whose byte
+    # range starts it, and tag packets with their AU index as pts, so decoded
+    # frames pair with records exactly even if the decoder drops one.
     au_records: list[tuple[np.void, int]] = []
     for segment in segments:
-        data = segment_video(segment.path)[0].read_bytes()
+        data = segment_video(segment.path).read_bytes()
         for rec in segment.frames:
             payload = data[int(rec["file_offset"]):
                            int(rec["file_offset"]) + int(rec["packet_size"])]
@@ -304,7 +287,7 @@ def decode_route_yuv(segments: list[SegmentInfo]):
             yield rec, y[:vis_h], u[: vis_h // 2], v[: vis_h // 2]
 
     for segment in segments:
-        data = segment_video(segment.path)[0].read_bytes()
+        data = segment_video(segment.path).read_bytes()
         # only bytes covered by index records are trustworthy; an unclean stop
         # can leave a partially written tail
         last = segment.frames[-1]

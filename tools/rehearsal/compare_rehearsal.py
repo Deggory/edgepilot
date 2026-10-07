@@ -8,10 +8,8 @@ cross-correlating speed_kph. Reported per 100 Hz control tick, over the ticks
 the original drive had lateral control active:
 
 - engagement agreement (engaged/active),
-- desired curvature: correlation, mean |difference|, p95 |difference|
-  (the MaixCAM2 runs the openpilot master model, the K230 ran v0.9.4, so part
-  of the difference is the model),
-- apply torque the MaixCAM2 would have sent (shadow) vs what the K230 sent,
+- desired curvature: correlation, mean |difference|, p95 |difference|,
+- apply torque the rehearsal would have sent (shadow) vs what the drive sent,
 - control loop and model rates.
 
   python3 compare_rehearsal.py ORIGINAL_ROUTE REHEARSAL_ROUTE

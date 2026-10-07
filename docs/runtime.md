@@ -219,7 +219,7 @@ keeps the AX system open.
   H.264 because the board's decoder only decodes H.264, so a route can be
   replayed as recorded ([Rehearsal](rehearsal.md))
 - writes the recording format with the codec in the manifest
-  (`segments/NNN/road.h264` + `frames.bin`; K230 routes are `road.hevc`),
+  (`segments/NNN/road.h264` + `frames.bin`,
   event log with CAN, model, control, panda, learner, IMU and localization
   state, params snapshot), staged in tmpfs and moved to `recordings/` on the SD card
 - `params/recording.json` `enabled` starts/stops a route; `bitrate_bps` is read

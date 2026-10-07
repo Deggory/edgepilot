@@ -53,7 +53,7 @@ class RecordingWriter {
 public:
   RecordingWriter(std::string root, std::string params_directory,
                   unsigned width, unsigned height, unsigned fps,
-                  unsigned bitrate, VideoCodec codec);
+                  unsigned bitrate);
   ~RecordingWriter();
 
   void set_enabled(bool enabled, uint64_t now_ns);
@@ -126,7 +126,6 @@ private:
   unsigned height_ = 0;
   unsigned fps_ = 0;
   unsigned bitrate_ = 0;
-  VideoCodec codec_ = VideoCodec::H264;
   std::atomic<bool> requested_enabled_{false};
   std::atomic<bool> active_{false};
   std::atomic<bool> blocked_for_space_{false};

@@ -118,8 +118,8 @@ was trained on.
 
 `tools/camera/warp_preview.py` shows what the model sees from a captured frame:
 both model views and their footprints on the source image.
-`EDGEPILOT_CAMERA_INTRINSICS` overrides the matrix, for example with the K230
-camera (`1583.3981,1583.7622,954.9441,545.1774`) to replay K230 recordings.
+`EDGEPILOT_CAMERA_INTRINSICS` overrides the matrix, for footage from another
+camera.
 
 ## Model output
 

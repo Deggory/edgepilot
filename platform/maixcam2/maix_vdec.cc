@@ -33,12 +33,11 @@ struct VideoDecoder::Impl {
     bool ivps = false, vdec = false, group = false, receiving = false;
 };
 
-VideoDecoder::VideoDecoder(Codec codec, int width, int height) : impl_(new Impl)
+VideoDecoder::VideoDecoder(int width, int height) : impl_(new Impl)
 {
     Impl &m = *impl_;
     m.width = width;
     m.height = height;
-    const AX_PAYLOAD_TYPE_E type = codec == Codec::HEVC ? PT_H265 : PT_H264;
     if (AX_SYS_Init() != 0) throw std::runtime_error("AX_SYS_Init failed");
     if (AX_IVPS_Init() != 0) throw std::runtime_error("AX_IVPS_Init failed");
     m.ivps = true;
@@ -49,7 +48,7 @@ VideoDecoder::VideoDecoder(Codec codec, int width, int height) : impl_(new Impl)
     m.vdec = true;
 
     AX_VDEC_GRP_ATTR_T attr = {};
-    attr.enCodecType = type;
+    attr.enCodecType = PT_H264;
     attr.enInputMode = AX_VDEC_INPUT_MODE_FRAME;
     attr.enLinkMode = AX_UNLINK_MODE;
     attr.enOutOrder = AX_VDEC_OUTPUT_ORDER_DISP;
@@ -67,7 +66,7 @@ VideoDecoder::VideoDecoder(Codec codec, int width, int height) : impl_(new Impl)
     AX_POOL_CONFIG_T pool = {};
     pool.MetaSize = 512;
     pool.BlkCnt = kFrameBuffers;
-    pool.BlkSize = AX_VDEC_GetPicBufferSize(stride, AX_COMM_ALIGN(height, 16), type);
+    pool.BlkSize = AX_VDEC_GetPicBufferSize(stride, AX_COMM_ALIGN(height, 16), PT_H264);
     pool.CacheMode = AX_POOL_CACHE_MODE_NONCACHE;
     std::strcpy(reinterpret_cast<char *>(pool.PartitionName), "anonymous");
     m.pool = AX_POOL_CreatePool(&pool);

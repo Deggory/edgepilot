@@ -22,7 +22,7 @@ bool project_point_subpixel(const ProjectionState &projection, float x_forward, 
                             float z_down, int width, int height, float *px, float *py);
 /* project_point_subpixel이 쓰는 카메라 내부 파라미터(1920x1080 기준). 기본은 MaixCAM2 카메라
  * (app_config.h kCamera*)이고, overlayd가 EDGEPILOT_CAMERA_INTRINSICS를 따라 바꾼다
- * (예: K230 녹화 리허설에서 차선이 영상과 맞게). */
+ * (다른 카메라 영상을 재생할 때 차선이 영상과 맞게). */
 void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy);
 
 // RPY(rad) -> 3x3 회전행렬(row-major), Rz*Ry*Rx.

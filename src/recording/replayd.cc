@@ -1,8 +1,7 @@
 /* 실차 전 리허설: 녹화 route를 카메라와 판다처럼 실시간으로 재생한다. camerad·pandad
  * 자리에서 돌고(manager.py EDGEPILOT_REPLAY_ROUTE), modeld·controlsd·overlayd·recordd는
  * 차에서와 똑같이 돈다.
- *  - 영상: segments/NNN/road.h264(AX630C VDEC는 H.264만 디코딩한다; 녹화의 HEVC는
- *    tools/rehearsal/transcode_route.py로 바꿔 둔다)를 프레임 인덱스로 한 프레임씩 VDEC에
+ *  - 영상: segments/NNN/road.h264를 프레임 인덱스로 한 프레임씩 VDEC에
  *    넣고, 디코딩된 프레임을 IVPS로 프레임 링 슬롯(CMM)에 복사해 roadAiFrame을 낸다.
  *  - CAN·판다 상태: events/NNN.bin의 CanRx와 PandaState를 같은 시간축으로 판다 채널에
  *    낸다(pandad처럼 CAN은 녹화용 로그 큐에도 넣는다). controlsd의 송신 요청은 보내지
@@ -75,9 +74,7 @@ int main(int argc, char *argv[])
         if (!ring.open(true, route.width, route.height))
             throw std::runtime_error("open frame ring failed");
 
-        VideoDecoder decoder(route.h264 ? VideoDecoder::Codec::H264 : VideoDecoder::Codec::HEVC,
-                             static_cast<int>(route.width),
-                             static_cast<int>(route.height));
+        VideoDecoder decoder(static_cast<int>(route.width), static_cast<int>(route.height));
         std::vector<CmmBlock> slots(ring.slot_count());
         for (unsigned i = 0; i < slots.size(); ++i) {
             if (!cmm_alloc(&slots[i], ring.frame_bytes(), "replay_ring"))

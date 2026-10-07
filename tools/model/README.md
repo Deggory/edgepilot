@@ -65,5 +65,4 @@ the CPU warp in `src/model/model_input_transform.cc`.
   - also used by `tools/camera/warp_preview.py` to show the MaixCAM2 model views.
     It holds the MaixCAM2 intrinsics once (`maixcam2_intrinsics`, the
     `src/common/app_config.h` values) for the preview, the calibration report and the
-    axmodel calibration data; its default intrinsics stay the K230 camera's for
-    K230 recordings.
+    axmodel calibration data; the warp uses them unless given others.

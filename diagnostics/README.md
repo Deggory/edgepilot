@@ -35,8 +35,7 @@ cmake --build build-host --target replay_closed_loop -j2
 | `hud_snapshot` | `[--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--portrait [--flip-x] [--flip-y]]` | HUD 시나리오 28개(또는 녹화한 모델·제어 상태)를 `overlayd`와 같은 640x480으로 `EDGEARGB` 프레임에 그리고 그리기 시간을 출력한다. `--portrait`는 보드처럼 세로 480x640 버퍼에 transpose로 그린다. 시간은 보드에서 잰다 |
 | `alert_sound_preview` | `[--out PREFIX]` | `overlayd` 알림음을 같은 합성 코드로 `PREFIX_<이름>.wav`(48 kHz 모노, 100% 크기)에 쓴다 |
 
-재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다. 보통은 MaixCAM2 녹화를 쓰고, 같은 형식인
-K230 녹화도 읽는다.
+재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다.
 
 ### replay_closed_loop
 

@@ -38,14 +38,14 @@ TEST(Projection, SameRelativePositionAcrossLandscapeWidths) {
 }
 
 TEST(Projection, FollowsConfiguredIntrinsics) {
-  // 초점거리가 길면(K230 카메라) 같은 옆 지점이 화면 가운데에 더 멀리 찍힌다.
+  // 초점거리가 긴 카메라면 같은 옆 지점이 화면 가운데에서 더 멀리 찍힌다.
   const ProjectionState p = make_projection_state(0.0f, 0.0f, 0.0f);
   const Point maix = project(p, 20.0f, 2.0f, 0.0f, 640, 480);
   projection_set_camera_intrinsics(1583.3981f, 1583.7622f, 954.9441f, 545.1774f);
-  const Point k230 = project(p, 20.0f, 2.0f, 0.0f, 640, 480);
+  const Point longer = project(p, 20.0f, 2.0f, 0.0f, 640, 480);
   projection_set_camera_intrinsics(kCameraFx, kCameraFy, kCameraCx, kCameraCy);
   const Point back = project(p, 20.0f, 2.0f, 0.0f, 640, 480);
-  EXPECT_GT(std::abs(k230.x - 320), std::abs(maix.x - 320));
+  EXPECT_GT(std::abs(longer.x - 320), std::abs(maix.x - 320));
   EXPECT_EQ(back.x, maix.x);
   EXPECT_EQ(back.y, maix.y);
 }

@@ -757,13 +757,13 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
     EXPECT_NEAR(fallback.input_warp_cy, kDefaultInputWarpCy, 1e-5)
         << "ISP 출력 크기로 카메라 cy를 맞춘다";
 
-    // 다른 카메라(예: K230 녹화 리플레이)의 1080p 내부 파라미터로 바꾸면 비례 환산된다
+    // 다른 카메라의 1080p 내부 파라미터로 바꾸면 비례 환산된다
     setenv("EDGEPILOT_CAMERA_INTRINSICS", "1583.3981,1583.7622,954.9441,545.1774", 1);
-    AppConfig k230 = AppConfig::from_env_defaults();
-    EXPECT_NEAR(k230.input_warp_fx, 1583.3981f * 1280.0f / 1920.0f, 1e-3) << "fx 덮어쓰기";
-    EXPECT_NEAR(k230.input_warp_cy, 545.1774f * 720.0f / 1080.0f, 1e-3) << "cy 덮어쓰기";
-    k230.set_warp_source(1920, 1080);
-    EXPECT_NEAR(k230.input_warp_cx, 954.9441f, 1e-3) << "1080p 소스면 그대로";
+    AppConfig other = AppConfig::from_env_defaults();
+    EXPECT_NEAR(other.input_warp_fx, 1583.3981f * 1280.0f / 1920.0f, 1e-3) << "fx 덮어쓰기";
+    EXPECT_NEAR(other.input_warp_cy, 545.1774f * 720.0f / 1080.0f, 1e-3) << "cy 덮어쓰기";
+    other.set_warp_source(1920, 1080);
+    EXPECT_NEAR(other.input_warp_cx, 954.9441f, 1e-3) << "1080p 소스면 그대로";
     setenv("EDGEPILOT_CAMERA_INTRINSICS", "oops", 1);
     EXPECT_THROW(AppConfig::from_env_defaults(), std::runtime_error) << "잘못된 형식은 거부";
     unsetenv("EDGEPILOT_CAMERA_INTRINSICS");

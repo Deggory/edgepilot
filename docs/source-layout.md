@@ -468,7 +468,7 @@ only in the board build, against `deps/ax630` from
     config).
 - `tools/model/`
   - the recording readers: `recording_reader.py` decodes `recordd` routes
-    (frame index, event log, H.264 from MaixCAM2 or HEVC from K230) and mirrors
+    (frame index, event log, H.264 video) and mirrors
     `recording_format.h` / `ipc_messages.h` for the analysis tools;
     `lane_bias.py` and `make_replay.py` build on it. See
     `tools/model/README.md`.

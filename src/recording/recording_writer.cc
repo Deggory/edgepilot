@@ -217,9 +217,9 @@ void StagingMover::move_tree(const std::string &from, const std::string &to) {
 
 RecordingWriter::RecordingWriter(std::string root, std::string params_directory,
                                  unsigned width, unsigned height, unsigned fps,
-                                 unsigned bitrate, VideoCodec codec)
+                                 unsigned bitrate)
     : root_(std::move(root)), params_directory_(std::move(params_directory)),
-      width_(width), height_(height), fps_(fps), bitrate_(bitrate), codec_(codec) {
+      width_(width), height_(height), fps_(fps), bitrate_(bitrate) {
   const char *staging = std::getenv("EDGEPILOT_RECORD_STAGING");
   staging_root_ = staging && staging[0] != '\0' ? staging : "/tmp/record_staging";
   /* 이전 세션이 route 도중 죽었으면 스테이징 잔여가 tmpfs(램)를 계속
@@ -371,7 +371,7 @@ bool RecordingWriter::open_segment(const RoadAiFrame &frame) {
   segment_relative_ = "segments/" + number.str();
   const std::string directory = route_path_ + "/" + segment_relative_;
   if (!make_directories(directory)) return false;
-  video_file_ = open_buffered(directory + "/road." + video_codec_name(codec_));
+  video_file_ = open_buffered(directory + "/road.h264");
   index_file_ = open_buffered(directory + "/frames.bin");
   if (!video_file_ || !index_file_) {
     close_segment();
@@ -538,7 +538,7 @@ void RecordingWriter::close_segment() {
   segment_start_ns_ = 0;
   video_offset_ = 0;
   if (had_files && !segment_relative_.empty()) {
-    const std::string video = std::string("/road.") + video_codec_name(codec_);
+    const std::string video = "/road.h264";
     for (const std::string &file : {video, std::string("/frames.bin")}) {
       mover_.enqueue_file(route_path_ + "/" + segment_relative_ + file,
                           final_route_path_ + "/" + segment_relative_ + file);
@@ -553,7 +553,7 @@ void RecordingWriter::write_manifest(bool complete) const {
   manifest << "{\n"
            << "  \"version\": " << kRecordingVersion << ",\n"
            << "  \"complete\": " << (complete ? "true" : "false") << ",\n"
-           << "  \"video_codec\": \"" << video_codec_name(codec_) << "\",\n"
+           << "  \"video_codec\": \"h264\",\n"
            << "  \"width\": " << width_ << ",\n"
            << "  \"height\": " << height_ << ",\n"
            << "  \"fps\": " << fps_ << ",\n"

@@ -31,9 +31,8 @@ true.
     `overlayd` adds HUD draw and video push timing to its status line.
 - `EDGEPILOT_CAMERA_INTRINSICS=fx,fy,cx,cy`
   - camera intrinsics at 1920x1080, scaled to the capture size. The default is
-    the calibrated MaixCAM2 camera (`1131.24,1130.85,940.13,552.60`). Replaying a
-    K230 recording needs the K230 camera:
-    `1583.3981,1583.7622,954.9441,545.1774`.
+    the calibrated MaixCAM2 camera (`1131.24,1130.85,940.13,552.60`); set it to
+    replay footage from another camera.
 - `EDGEPILOT_CALIB_ROLL_DEG`, `EDGEPILOT_CALIB_PITCH_DEG`,
   `EDGEPILOT_CALIB_YAW_DEG`
   - manual calibration in degrees for both the HUD projection and the model
@@ -204,8 +203,8 @@ its 100 ms fallback poll.
 `params/calibration.json` is also tracked as the initial calibration seed. The
 runtime replaces it atomically when a stable calibration is learned, while
 `scripts/upload_to_board.sh` preserves an existing runtime copy and installs the
-repository copy under `params.defaults/` as a fallback. A seed learned on the
-K230 does not describe the MaixCAM2 mounting; let online calibration relearn it.
+repository copy under `params.defaults/` as a fallback. After a mount change,
+let online calibration relearn it.
 
 ## Live parameter editor
 

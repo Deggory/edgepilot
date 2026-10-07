@@ -3,7 +3,6 @@
 #include "recording/event_log_reader.h"
 
 #include <dirent.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
@@ -59,14 +58,7 @@ ReplayRoute::ReplayRoute(const std::string &dir)
         const size_t count = (index.size() - header.header_size) / header.record_size;
         if (count == 0) continue;
         Segment segment;
-        // AX630C 디코더는 H.264만 받으므로 tools/rehearsal/transcode_route.py가 만든
-        // road.h264를 먼저 쓴다. 없으면 원본 road.hevc(디코더가 지원하면).
         segment.video_path = seg_dir + "/road.h264";
-        if (access(segment.video_path.c_str(), R_OK) == 0) {
-            h264 = true;
-        } else {
-            segment.video_path = seg_dir + "/road.hevc";
-        }
         for (size_t i = 0; i < count; ++i) {
             FrameIndexRecord r;
             std::memcpy(&r, index.data() + header.header_size + i * sizeof(r), sizeof(r));

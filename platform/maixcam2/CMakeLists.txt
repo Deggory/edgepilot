@@ -30,7 +30,7 @@ target_include_directories(maixcam2_gdc SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_ms
 target_compile_options(maixcam2_gdc PRIVATE ${PROJECT_WARNINGS})
 target_link_libraries(maixcam2_gdc PUBLIC "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
 
-# 녹화용 하드웨어 H.264/HEVC 인코더. GDC와 같이 MSP SDK를 직접 쓴다.
+# 녹화용 하드웨어 H.264 인코더. GDC와 같이 MSP SDK를 직접 쓴다.
 add_library(maixcam2_venc STATIC maix_venc.cc)
 target_include_directories(maixcam2_venc PUBLIC "${PROJECT_SOURCE_DIR}/platform")
 target_include_directories(maixcam2_venc SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_msp/out/arm64_glibc/include")

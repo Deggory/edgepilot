@@ -37,15 +37,8 @@ inline bool is_frame_index_magic(const char *magic)
   return std::memcmp(magic, kFrameIndexMagic, 8) == 0 || std::memcmp(magic, kLegacyFrameIndexMagic, 8) == 0;
 }
 
-/* 세그먼트 영상 코덱. manifest의 video_codec과 파일 이름(road.h264 / road.hevc)이 따른다.
- * MaixCAM2는 H.264로 녹화한다(보드 디코더가 H.264만 풀어 녹화를 그대로 리허설에 쓴다).
- * K230 녹화는 HEVC다. */
-enum class VideoCodec : uint8_t { H264, Hevc };
-
-inline const char *video_codec_name(VideoCodec codec)
-{
-  return codec == VideoCodec::H264 ? "h264" : "hevc";
-}
+/* 세그먼트 영상은 H.264(segments/NNN/road.h264, manifest의 video_codec "h264")다. 보드 디코더가
+ * H.264를 풀어 녹화를 그대로 리허설에 쓴다. */
 
 enum class RecordType : uint16_t {
   CanRx = 1,

@@ -1,8 +1,7 @@
 #pragma once
 
-/* 녹화 route 읽기(replayd 리허설): 세그먼트마다 프레임 인덱스(frames.bin)로 영상 프레임 목록을 만들고,
- * 이벤트 로그에서 CanRx와 PandaState를 시각 순으로 모은다. 영상은 road.h264를 먼저 쓴다(AX630C
- * VDEC는 H.264만 디코딩한다; tools/rehearsal/transcode_route.py가 만든다). 없으면 road.hevc. */
+/* 녹화 route 읽기(replayd 리허설): 세그먼트마다 프레임 인덱스(frames.bin)로 영상(road.h264) 프레임
+ * 목록을 만들고, 이벤트 로그에서 CanRx와 PandaState를 시각 순으로 모은다. */
 
 #include "recording/recording_format.h"
 
@@ -45,7 +44,6 @@ public:
     bool read_frame(const VideoFrame &frame, std::vector<uint8_t> *out);
 
     unsigned width = 0, height = 0;
-    bool h264 = false;
     std::vector<Segment> segments;
     std::vector<VideoFrame> frames;
     std::vector<Event> events;

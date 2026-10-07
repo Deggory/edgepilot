@@ -43,7 +43,6 @@ AX_VIDEO_FRAME_T nv12(int w, int h, AX_U64 phys)
 } // namespace
 
 struct VideoEncoder::Impl {
-    Codec codec = Codec::H264;
     int width = 0;
     int height = 0;
     AX_U64 frame_bytes = 0;
@@ -55,10 +54,9 @@ struct VideoEncoder::Impl {
     bool ivps = false, venc = false, channel = false, receiving = false;
 };
 
-VideoEncoder::VideoEncoder(Codec codec, int width, int height, int fps, unsigned bitrate) : impl_(new Impl)
+VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : impl_(new Impl)
 {
     Impl &m = *impl_;
-    m.codec = codec;
     m.width = width;
     m.height = height;
     m.frame_bytes = static_cast<AX_U64>(width) * height * 3 / 2;
@@ -73,7 +71,7 @@ VideoEncoder::VideoEncoder(Codec codec, int width, int height, int fps, unsigned
     m.venc = true;
 
     AX_VENC_CHN_ATTR_T attr = {};
-    attr.stVencAttr.enType = codec == Codec::HEVC ? PT_H265 : PT_H264;
+    attr.stVencAttr.enType = PT_H264;
     attr.stVencAttr.u32PicWidthSrc = width;
     attr.stVencAttr.u32PicHeightSrc = height;
     attr.stVencAttr.u32MaxPicWidth = width;
@@ -87,32 +85,17 @@ VideoEncoder::VideoEncoder(Codec codec, int width, int height, int fps, unsigned
     attr.stRcAttr.stFrameRate.fSrcFrameRate = static_cast<AX_F32>(fps);
     attr.stRcAttr.stFrameRate.fDstFrameRate = static_cast<AX_F32>(fps);
     // CBR, 1초마다 IDR: 세그먼트를 1초 단위로 자를 수 있다.
-    if (codec == Codec::HEVC) {
-        attr.stVencAttr.enProfile = AX_VENC_HEVC_MAIN_PROFILE;
-        attr.stVencAttr.enLevel = AX_VENC_HEVC_LEVEL_5_1;
-        attr.stVencAttr.enTier = AX_VENC_HEVC_MAIN_TIER;
-        attr.stRcAttr.enRcMode = AX_VENC_RC_MODE_H265CBR;
-        AX_VENC_H265_CBR_T &cbr = attr.stRcAttr.stH265Cbr;
-        cbr.u32Gop = static_cast<AX_U32>(fps);
-        cbr.u32BitRate = bitrate / 1000;  // kbps
-        cbr.u32MinQp = cbr.u32MinIQp = 10;
-        cbr.u32MaxQp = cbr.u32MaxIQp = 51;
-        cbr.u32MaxIprop = 40;
-        cbr.u32MinIprop = 30;
-        cbr.s32IntraQpDelta = -2;
-    } else {
-        attr.stVencAttr.enProfile = AX_VENC_H264_MAIN_PROFILE;
-        attr.stVencAttr.enLevel = AX_VENC_H264_LEVEL_5_1;
-        attr.stRcAttr.enRcMode = AX_VENC_RC_MODE_H264CBR;
-        AX_VENC_H264_CBR_T &cbr = attr.stRcAttr.stH264Cbr;
-        cbr.u32Gop = static_cast<AX_U32>(fps);
-        cbr.u32BitRate = bitrate / 1000;  // kbps
-        cbr.u32MinQp = cbr.u32MinIQp = 10;
-        cbr.u32MaxQp = cbr.u32MaxIQp = 51;
-        cbr.u32MaxIprop = 40;
-        cbr.u32MinIprop = 10;
-        cbr.s32IntraQpDelta = -2;
-    }
+    attr.stVencAttr.enProfile = AX_VENC_H264_MAIN_PROFILE;
+    attr.stVencAttr.enLevel = AX_VENC_H264_LEVEL_5_1;
+    attr.stRcAttr.enRcMode = AX_VENC_RC_MODE_H264CBR;
+    AX_VENC_H264_CBR_T &cbr = attr.stRcAttr.stH264Cbr;
+    cbr.u32Gop = static_cast<AX_U32>(fps);
+    cbr.u32BitRate = bitrate / 1000;  // kbps
+    cbr.u32MinQp = cbr.u32MinIQp = 10;
+    cbr.u32MaxQp = cbr.u32MaxIQp = 51;
+    cbr.u32MaxIprop = 40;
+    cbr.u32MinIprop = 10;
+    cbr.s32IntraQpDelta = -2;
     attr.stGopAttr.enGopMode = AX_VENC_GOPMODE_NORMALP;
     if (AX_VENC_CreateChn(kChannel, &attr) != 0) throw std::runtime_error("AX_VENC_CreateChn failed");
     m.channel = true;
@@ -185,17 +168,9 @@ unsigned VideoEncoder::drain(const std::function<void(const uint8_t *, size_t)> 
         for (AX_U32 i = 0; i < pack.u32NaluNum; ++i) {
             const AX_VENC_NALU_INFO_T &nalu = pack.stNaluInfo[i];
             const uint8_t *begin = pack.pu8Addr + nalu.u32NaluOffset;
-            bool parameter_set, idr;
-            if (m.codec == Codec::HEVC) {
-                const AX_H265E_NALU_TYPE_E type = nalu.unNaluType.enH265EType;
-                parameter_set = type == AX_H265E_NALU_VPS || type == AX_H265E_NALU_SPS ||
-                                type == AX_H265E_NALU_PPS;
-                idr = type == AX_H265E_NALU_IDRSLICE;
-            } else {
-                const AX_H264E_NALU_TYPE_E type = nalu.unNaluType.enH264EType;
-                parameter_set = type == AX_H264E_NALU_SPS || type == AX_H264E_NALU_PPS;
-                idr = type == AX_H264E_NALU_IDRSLICE;
-            }
+            const AX_H264E_NALU_TYPE_E type = nalu.unNaluType.enH264EType;
+            const bool parameter_set = type == AX_H264E_NALU_SPS || type == AX_H264E_NALU_PPS;
+            const bool idr = type == AX_H264E_NALU_IDRSLICE;
             if (parameter_set) {
                 config.insert(config.end(), begin, begin + nalu.u32NaluLength);
             } else {

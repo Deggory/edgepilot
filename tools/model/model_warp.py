@@ -1,7 +1,7 @@
 """Numpy port of src/model/model_input_transform.cc.
 
 Reproduces the device's fixed-point bilinear warp (kWeightBits=12) so the
-student trains on the same pixel distribution the K230 runtime produces. The
+student trains on the same pixel distribution the runtime produces. The
 output is the YUV6 tensor layout the supercombo models consume:
 channels [Y(2x,2y), Y(2x,2y+1), Y(2x+1,2y), Y(2x+1,2y+1), U, V] at 128x256.
 """
@@ -15,13 +15,6 @@ HALF_W, HALF_H = MODEL_W // 2, MODEL_H // 2
 WEIGHT_BITS = 12
 WEIGHT_SCALE = 1 << WEIGHT_BITS
 
-# K230 camera at 1920x1080 (these tools read K230 recordings; the MaixCAM2 values
-# are in src/common/app_config.h). Replaying a K230 route on the AX630 runtime needs
-# EDGEPILOT_CAMERA_INTRINSICS=1583.3981,1583.7622,954.9441,545.1774
-CAMERA_FX_1080 = 1583.3981
-CAMERA_FY_1080 = 1583.7622
-CAMERA_CX_1080 = 954.9441
-CAMERA_CY_1080 = 545.1774
 CAMERA_HEIGHT_M = 1.22
 
 # MaixCAM2 camera at 1920x1080: src/common/app_config.h kCamera* (check_recording_reader.py keeps them equal).
@@ -41,11 +34,6 @@ GROUND_FROM_SBIGMODEL = np.array([
     [-2.19780220e-03, 4.11497335e-19, 5.62637363e-01],
     [-5.46146580e-20, 1.80147721e-03, -2.73464241e-01],
 ], dtype=np.float32)
-
-
-def default_intrinsics(width: int, height: int) -> tuple[float, float, float, float]:
-    return (CAMERA_FX_1080 * width / 1920.0, CAMERA_FY_1080 * height / 1080.0,
-            CAMERA_CX_1080 * width / 1920.0, CAMERA_CY_1080 * height / 1080.0)
 
 
 def maixcam2_intrinsics(width: int, height: int) -> tuple[float, float, float, float]:
@@ -137,7 +125,7 @@ class ModelInputWarp:
 
     def __init__(self, src_w: int, src_h: int, rpy: np.ndarray, sbig: bool,
                  intrinsics: tuple[float, float, float, float] | None = None):
-        fx, fy, cx, cy = intrinsics or default_intrinsics(src_w, src_h)
+        fx, fy, cx, cy = intrinsics or maixcam2_intrinsics(src_w, src_h)
         proj_y = projection_matrix(fx, fy, cx, cy, rpy, sbig)
         proj_uv = _scale_transform(proj_y, 0.5)
         self.src_w, self.src_h = src_w, src_h

@@ -96,11 +96,10 @@ int main() {
       throw std::runtime_error("open CAN recording queues failed");
     }
 
-    VideoEncoder encoder(VideoEncoder::Codec::H264, static_cast<int>(frame_ring.width()),
+    VideoEncoder encoder(static_cast<int>(frame_ring.width()),
                          static_cast<int>(frame_ring.height()), kRecordingFps, recording_bitrate);
     RecordingWriter writer(recording_root, params_dir(), frame_ring.width(),
-                           frame_ring.height(), kRecordingFps, recording_bitrate,
-                           VideoCodec::H264);
+                           frame_ring.height(), kRecordingFps, recording_bitrate);
 
     /* 인코더는 넣은 순서대로 내놓는다. 패킷의 frame_id로 넣을 때의 메타데이터를 찾는다. */
     std::array<RoadAiFrame, 16> in_flight{};

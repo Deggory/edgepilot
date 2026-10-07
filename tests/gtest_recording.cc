@@ -90,7 +90,7 @@ TEST(RecordingWriter, RouteOnDisk) {
 
   const uint64_t t0 = 5'000'000'000ULL;
   {
-    RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000, VideoCodec::H264);
+    RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000);
     writer.set_enabled(true, t0);
     const uint8_t codec_config[] = {'C', 'F', 'G', 0x01};
     writer.set_codec_config(codec_config, sizeof(codec_config));
@@ -266,7 +266,7 @@ TEST(StateRecorder, WritesEachNewSnapshotOnce) {
   ImuBatch imu;
   LocalizationState localization;
   {
-    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000, VideoCodec::H264);
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
     writer.set_enabled(true, t0);
     StateRecorder recorder(suffix);
     recorder.record(writer);  // 생산자가 아직 없다
@@ -338,7 +338,7 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
                              {t0 + kMinute, true, 0xA3, 48},         // 60초 뒤 키프레임: 다음 세그먼트
                              {t0 + kMinute + 50'000'000ULL, false, 0xA4, 16}};
   {
-    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000, VideoCodec::H264);
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
     writer.set_enabled(true, t0);
     writer.set_codec_config(config, sizeof(config));
     for (size_t i = 0; i < std::size(written); ++i) {
@@ -361,10 +361,9 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
   ASSERT_EQ(routes.size(), 1);
   ReplayRoute route(root + "/recordings/" + routes[0]);
 
-  // 세그먼트 둘, 프레임 다섯, H.264
+  // 세그먼트 둘, 프레임 다섯
   ASSERT_EQ(route.segments.size(), 2);
   ASSERT_EQ(route.frames.size(), std::size(written));
-  ASSERT_TRUE(route.h264);
   ASSERT_EQ(route.width, 1280);
   ASSERT_EQ(route.height, 720);
   for (size_t i = 0; i < std::size(written); ++i) {

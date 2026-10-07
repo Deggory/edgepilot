@@ -80,7 +80,7 @@ struct AppConfig {
     bool profile = false;
 
     /* 카메라 내부 파라미터(1920x1080 기준). EDGEPILOT_CAMERA_INTRINSICS="fx,fy,cx,cy"로
-     * 바꿀 수 있다(예: K230 녹화 리플레이에는 K230 카메라 값). input_warp_*는
+     * 바꿀 수 있다(다른 카메라로 찍은 영상을 재생할 때). input_warp_*는
      * 이 값을 캡처 해상도로 비례 환산한 것이다. */
     float camera_fx = kCameraFx;
     float camera_fy = kCameraFy;

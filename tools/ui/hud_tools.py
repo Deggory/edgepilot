@@ -121,7 +121,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
             continue
         index = int(frames["encode_index"][hits[0]]) - int(frames["encode_index"][0])
         camera = args.out / "camera.png"
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(segment_video(segment.path)[0]),
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(segment_video(segment.path)),
                         "-vf", f"select=eq(n\\,{index})", "-frames:v", "1", str(camera)], check=True)
         print(f"camera frame: {segment.path.name} index {index} -> {camera}")
         break
