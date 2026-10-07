@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 186개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 187개와
 Python 2개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -39,7 +39,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_hud_canvas` | 10 | HUD 캔버스: 스트레이트 알파 합성(부동소수 기준식 대조), 다각형 커버리지 합 = 기하 넓이, 먼 쪽 흐림, 둥근 사각형 곧은 행(이음매 없음), 그린 칸만 지우기, 글자 폭, 세로 패널 버퍼 = 가로 그림의 전치. 렌더러의 상태 테두리와 알림 카드, 다시 받은 버퍼 = 새 버퍼, 늘 있는 카드(TPMS·보정·보드 상태·학습값), 오토 홀드 배지, 세 자리 속도에서도 카드에 닿지 않는 노란 깜빡이, 설정 속도 카드 안의 SET, 상태 알약·왼쪽 열 터치 영역 |
 | `gtest_hud_policy` | 12 | overlayd의 그리기 밖 판단: 제어 이벤트 알림(기준값, 카운터 리셋, 우선순위), 프레임마다 알림음 하나(해제 예고는 미루고 불가용 천이는 넘김, engage 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활 |
 | `gtest_hud_state` | 5 | 제어·녹화·학습기·locationd 상태 → HUD 매핑(차선 변경·회전·조향 쉼 플래그, 운전자 토크 눈금, 제어가 쓰는 학습값), 차선 안 위치, 모든 `BlockReason`의 라벨, 알림 카드 우선순위 |
-| `gtest_ipc_channels` | 1 | 공유 메모리 CAN 큐 |
+| `gtest_ipc_channels` | 2 | 공유 메모리 CAN 큐, 헤더가 맞지 않는 최신값 채널에는 붙지 않는 구독 |
 | `gtest_lateral_controller` | 26 | 횡제어기: engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피(85도 위 토크 상한과 steer 요청 끄기, 정차 대기·85도 위 결합, 손을 뗐을 때 80도 상한, 운전자가 넘겨받은 회전은 15도까지 해제), 회전 desire 중 깜빡이 방향으로 돌리는 운전자를 밀지 않음, 곡률 제한, Panda 게이트와 넘겨받기, LKAS HUD, 학습값 소비(끄면 비트 동일, `paramsd_invalid`, 롤 반영 곡률 한계, lagd 지연), CAN 픽스처 재생 |
 | `gtest_lateral_learners` | 18 | paramsd EKF(야코비안, Joseph 양정치, 수렴, 게이트, 출력 한계, 저장, 자이로 바이어스), torqued(TLS와 닫힌 해 대조, 버킷, 게이트, 필터·decay, 4 Hz/12 s 스케줄, 캐시), controlsd 연결 |
 | `gtest_lateral_mpc` | 1 | 횡 MPC 최적성. 동역학과 코스트를 따로 구현해 시나리오 8개의 수렴점에서 기울기를 본다([검증 기록](../docs/verification.md#lateral-mpc-solver)) |

@@ -683,6 +683,7 @@ class ParamStore:
 # ---------------------------------------------------------------- 공유 메모리 채널 읽기
 
 IPC_MAGIC = 0x4B323349
+IPC_VERSION = 1
 IPC_HEADER = struct.Struct("<IIIIQQII")  # IpcHeader; seq가 홀수면 쓰는 중
 
 
@@ -720,8 +721,8 @@ class IpcReader:
             self._reopen_if_needed()
             assert self._map is not None
             for _ in range(4):
-                magic, _, _, _, seq, stamp, size, _ = IPC_HEADER.unpack_from(self._map, 0)
-                if magic != IPC_MAGIC or seq == 0 or seq & 1 or size < self.payload_size:
+                magic, version, _, _, seq, stamp, size, _ = IPC_HEADER.unpack_from(self._map, 0)
+                if magic != IPC_MAGIC or version != IPC_VERSION or seq == 0 or seq & 1 or size < self.payload_size:
                     return None
                 payload = self._map[IPC_HEADER.size:IPC_HEADER.size + self.payload_size]
                 if IPC_HEADER.unpack_from(self._map, 0)[4] == seq:

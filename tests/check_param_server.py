@@ -527,8 +527,9 @@ class BevTest(unittest.TestCase):
 
 class ManagerIpcTest(unittest.TestCase):
     def test_manager_state_matches_cpp(self):
-        """manager.py가 쓰는 managerState 배치(overlayd가 읽는다)가 ipc_messages.h와 같아야 한다."""
-        from scripts import manager
+        """manager.py가 쓰는 managerState 배치(overlayd가 읽는다)와 param_server.py가 읽는 채널 머리가
+        ipc_messages.h와 같아야 한다."""
+        from scripts import manager, param_server
 
         source = (Path(__file__).resolve().parents[1] / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
 
@@ -544,6 +545,9 @@ class ManagerIpcTest(unittest.TestCase):
         self.assertEqual(manager.HEADER_SIZE, size("IpcHeader"))
         self.assertEqual(manager.PROCESS.size, size("ProcessState"))
         self.assertEqual(manager.MANAGER_STATE_SIZE, size("ManagerState"))
+        self.assertEqual(param_server.IPC_MAGIC, constant("kIpcMagic"))
+        self.assertEqual(param_server.IPC_VERSION, constant("kIpcVersion"))
+        self.assertEqual(param_server.IPC_HEADER.size, size("IpcHeader"))
 
 
 if __name__ == "__main__":

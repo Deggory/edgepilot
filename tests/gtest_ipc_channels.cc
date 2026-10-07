@@ -1,4 +1,5 @@
-/* CanQueue: 공유 메모리 CAN 링 큐. 가득 참, 순서, 생산자 재열기·reset, 신선도 판정. */
+/* CanQueue: 공유 메모리 CAN 링 큐. 가득 참, 순서, 생산자 재열기·reset, 신선도 판정.
+ * Subscription: 헤더가 맞지 않는 채널에는 붙지 않는다. */
 #include "common/ipc_channels.h"
 
 #include <gtest/gtest.h>
@@ -76,6 +77,41 @@ TEST(CanQueue, SharedMemoryQueue) {
 
   consumer.close();
   producer.close();
+}
+
+TEST(Subscription, StaleHeaderIsNotAttached) {
+  struct Payload {
+    uint64_t value;
+  };
+  const std::string name = "/edgepilot_latest_test_" + std::to_string(getpid() % 100000);
+  struct Unlink {
+    const std::string &name;
+    ~Unlink() { shm_unlink(name.c_str()); }
+  } cleanup{name};
+  LatestChannel producer;
+  ASSERT_TRUE(producer.open(name.c_str(), sizeof(Payload), true)) << "생산자 열기";
+  const Payload stale{7};
+  ASSERT_TRUE(producer.publish(&stale, sizeof(stale)));
+
+  // 다른 빌드가 남긴 채널: 헤더 버전이 다르다
+  ShmRegion raw;
+  ASSERT_TRUE(raw.open(name.c_str(), false));
+  ASSERT_TRUE(raw.map(sizeof(IpcHeader)));
+  IpcHeader *header = static_cast<IpcHeader *>(raw.data());
+  header->version = kIpcVersion + 1;
+
+  Subscription<Payload> subscription;
+  ASSERT_FALSE(subscription.attach(name.c_str())) << "버전이 다른 채널에 붙기";
+  ASSERT_FALSE(subscription.attach(name.c_str())) << "다시 시도해도 붙지 않는다";
+  ASSERT_FALSE(subscription.poll()) << "붙지 않은 채널은 읽지 않는다";
+
+  // 생산자가 채널을 다시 초기화하면 붙는다
+  header->version = kIpcVersion;
+  const Payload fresh{9};
+  ASSERT_TRUE(producer.publish(&fresh, sizeof(fresh)));
+  ASSERT_TRUE(subscription.attach(name.c_str())) << "초기화된 채널에 붙기";
+  ASSERT_TRUE(subscription.poll()) << "새 스냅샷";
+  ASSERT_EQ(subscription.latest().value, 9u);
 }
 
 }  // namespace

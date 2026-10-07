@@ -263,9 +263,12 @@ bool LatestChannel::open(const char *name, size_t payload_capacity, bool create)
         header_->reserved1 = 0;
         std::memset(payload_, 0, payload_capacity);
     }
-    return header_->magic == kIpcMagic &&
+    // 다른 빌드의 레이아웃이 남은 채널은 매핑도 풀어 valid()가 거짓이게 한다(CanQueue·FrameRing과 같다).
+    const bool valid = header_->magic == kIpcMagic &&
         header_->version == kIpcVersion &&
         header_->payload_capacity >= payload_capacity;
+    if (!valid) close();
+    return valid;
 }
 
 void LatestChannel::close()
