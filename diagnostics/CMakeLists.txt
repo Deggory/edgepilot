@@ -25,3 +25,10 @@ target_link_libraries(replay_localization PRIVATE localization car)
 # controlsd 한 틱의 로직(ControlsTick)을 녹화로 다시 돌린다. 리팩토링 전후 다이제스트 비교용.
 add_host_tool(replay_controls replay_controls.cc)
 target_link_libraries(replay_controls PRIVATE controls)
+
+# 보드 전용: 광류 보정기(modeld와 같은 FlowWindowTracker)를 녹화 구간 하나에 돌린다. VDEC 디코딩, IVE.
+if(EDGEPILOT_BUILD_RUNTIME)
+  add_executable(flow_calibration_replay flow_calibration_replay.cc
+                 ${PROJECT_SOURCE_DIR}/src/model/flow_calibration_worker.cc)
+  configure_board_target(flow_calibration_replay model maixcam2_ive maixcam2_vdec maixcam2_gdc)
+endif()

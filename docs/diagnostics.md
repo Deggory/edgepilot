@@ -29,7 +29,7 @@ container build separately: GCC fuses multiply-adds that clang leaves apart).
 `hud_snapshot --model model.bin --control control.bin` replays a recorded
 `ModelState` / `ControlState` pair instead of the synthetic scene;
 `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts such a
-pair (the current layout, unchanged in v9; v7 records are zero-filled), plus the matching camera frame when the route copy has
+pair (the current v11 layout; older records are zero-filled), plus the matching camera frame when the route copy has
 its `segments/`. `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]`
 turns the frames into PNGs and composites them over the centre 4:3 of the
 camera frame, as the screen shows it.

@@ -46,7 +46,7 @@ CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`
 | `alert_volume_percent` | 70 | % / 0~100 | 보드 스피커 알림음 크기. 0이면 소리를 내지 않는다. overlayd가 1초마다 파일을 보고 바뀌면 적용한 뒤 확인음을 한 번 낸다. 값이 없으면 `EDGEPILOT_ALERT_VOLUME`(기본 70)을 쓴다. |
 | `camera_offset_m` | 0.0 | m / -0.35~0.35 | 보드를 차 중심에서 옆으로 달았을 때 모델이 차 중심에서 본 것처럼 입력 영상을 옮긴다(sunnypilot camera offset 방식). +면 차가 차선 안에서 왼쪽으로 간다(보드를 운전석 쪽에 달았으면 그 거리만큼 +). Lane·Laneless 모두에 적용되고 HUD 차선도 같이 맞춘다. ±0.35 m를 넘으면 앞차·신호등 인식이 나빠져 막아 둔다. modeld가 1초마다 파일을 보고, 바뀐 값은 초당 0.1 m씩 옮긴다. |
 | `camera_height_m` | 1.22 | m / 0.8~2.0 | 도로면에서 카메라까지 높이다. `camera_offset_m`의 효과 크기를 정하는 데만 쓴다(오프셋이 0이면 무관). |
-| `hud_debug` | false | bool | 주행 화면 왼쪽에 다른 카드에 없는 수치를 모은 진단 카드(FPS, 조향 토크, paramsd 강성·평균 영점, torqued 원시 추정·진행률, lagd 블록)를 띄운다. 아직 유효하지 않은 학습기 줄은 주황이다. 기어는 설정 속도 옆 카드에, TPMS와 카메라 보정은 아래 모서리 카드에, 보드 상태(CPU 온도·CPU·RAM·디스크)는 TPMS 위 카드에, 제어가 쓰는 학습값(SR·영점·토크 계수·지연)은 보정 위 카드에 늘 있고, 네트워크 정보는 오른쪽 위 상태 알약을 누르면 나온다. overlayd가 1초 안에 반영한다. 주행 화면 왼쪽 열을 눌러도 켜고 끌 수 있고, 그건 이 값이 바뀌거나 overlayd가 다시 시작할 때까지만 간다. |
+| `calibration_use_flow` | false | bool | 워프 보정의 pitch·yaw를 광류 추정(영상에서 직접 잰 카메라 이동 방향, `flow_calibration.json`)에서 가져온다. 광류 추정이 쓸 만할 때(3블록 이상, 블록 중앙값 표준편차 0.5° 안, upstream 각도 한계 안)만 쓰고, 아니면 모델 포즈 보정(`calibration.json`)을 쓴다. roll은 포즈 보정 값이다. modeld가 1초마다 파일을 보고, 광류로 바꾸는 것은 해제 상태에서만 한다(설정이 결합 중에 바뀌거나 광류 추정이 주행 중 생기면 해제까지 기다린다). 광류가 쓸 만하지 않게 되면(표준편차 0.8° 초과 등) 결합 중에도 포즈로 돌아간다. 바뀐 값으로 워프를 남은 차이의 1/5씩 초당, 최소 0.05°/s로 옮긴다. 광류가 워프를 맡는 동안(옮기는 중 포함) 포즈 보정기는 멈추고 마지막 값과 `calibration.json`을 그대로 둔다. 웹의 차량 특성 탭 카메라 캘리브레이션 카드에서만 바꾼다: 카드의 `POST /api/calibration/source`는 결합 중에는 받지 않고, 파라미터 API(`PATCH /api/params/display`)는 이 항목을 받지 않는다. 기기 설정 탭에는 나오지 않는다 ([광류 보정](../docs/flow-calibration.md)). |
 
 설정은 웹의 `기기 설정` 메뉴에서 바꾼다. 백라이트는 웹 콘솔이 즉시 적용하고, 뜰 때마다
 다시 적용한다. 알림음 크기는 웹 콘솔이 파일만 고치고 overlayd가 읽는다.
@@ -213,9 +213,9 @@ calibrationd와 같다). 5(`kInputsNeeded`) 미만이면 `rpy_rad`는 모델 입
 
 카메라 마운트를 옮겼으면 웹 콘솔 `차량 특성` 탭의 **캘리브레이션 초기화**를
 누른다. 해제(disengaged) 상태에서만 받으며(openpilot의 Reset Calibration과 같다),
-`/dev/shm/edgepilot_calibration_reset`을 만들면 modeld가 1초 안에 이 파일을 지우고
-보정기를 `rpy=[0,0,0]`, 0블록에서 다시 시작한다. 옛 장착의 값은 틀렸으므로 seed로
-남기지 않는다. paramsd·torqued 학습값은 CAN 요레이트로 배우므로 그대로 둔다.
+`/dev/shm/edgepilot_calibration_reset`을 만들면 modeld가 1초 안에 이 파일과
+`flow_calibration.json`을 지우고 보정기를 `rpy=[0,0,0]`, 0블록에서, 광류 보정기를 블록 없이
+다시 시작한다. 옛 장착의 값은 틀렸으므로 seed로 남기지 않는다. paramsd·torqued 학습값은 CAN 요레이트로 배우므로 그대로 둔다.
 modeld가 안 떠 있으면 요청 파일은 남아 있다가 다음 시작 때 처리된다.
 블록 사이 편차가 yaw 2°, pitch 4°를 넘으면 openpilot calibrationd와 같이 장착이
 바뀐 것으로 보고 스스로 다시 보정한다: 마지막 블록 하나에서 다시 모으며 상태는
@@ -227,6 +227,19 @@ modeld가 안 떠 있으면 요청 파일은 남아 있다가 다음 시작 때 
 정차 상태에서 파이프라인을 멈추고 보드의 `params/calibration.json`을 백업한 뒤
 `valid_blocks`를 0으로 바꿔 다시 쓰고 파이프라인을 시작한다. 실차에서는 충분한
 속도로 직선에 가까운 도로를 주행하면서 카메라가 움직이지 않게 고정해야 한다.
+
+## flow_calibration.json
+
+저장소에 없는 런타임 파일이다. 광류 보정기의 블록 중앙값(창 20개의 중앙값, 오래된 것부터 최대 30개)을 modeld가
+저장해, 다시 시작하면 그 추정으로 바로 시작한다. 첫 추정과 장착 변경은 바로, 그 밖에는 1분에 한 번과 끝낼 때
+쓴다. 웹 콘솔의 캘리브레이션 초기화가 `calibration.json`과 함께 지운다.
+
+| 키 | 단위 | 설명 |
+|---|---|---|
+| `version` | schema version | 1 |
+| `yaw_rad`, `pitch_rad` | radian | 블록 중앙값들. 길이가 같아야 하고, 하나라도 유한하지 않거나 10°를 넘으면 파일 전체를 버린다 |
+| `windows` | count | 지금까지 받아들인 측정 창 수 |
+| `mount_changes` | count | 장착 변경(최근 3블록이 1° 넘게 같은 쪽)으로 예전 블록을 버린 횟수 |
 
 ## 권장 튜닝 순서
 

@@ -2,8 +2,11 @@
 #define RECORDED_MODEL_STATE_H
 
 /* 녹화된 ModelState 페이로드를 현재 구조체로 읽는다(진단 도구 공용).
- *   v8: 현재 구조체 그대로
- *   v7: gas_press_probs/brake_press_probs가 없다(0으로 둔다)
+ *   v11: 현재 구조체 그대로
+ *   v10: flow_calibration이 56 B(v11 끝의 네 필드가 없다)이고 calibration_source가 없다
+ *        (0 = 모델 포즈 출처)
+ *   v8~v9: flow_calibration도 없다(0 = 꺼짐)
+ *   v7: gas_press_probs/brake_press_probs도 없다(0으로 둔다)
  *   v6: camera_offset_m/camera_height_m이 없다(오프셋 0, 높이 0 = 모름)
  *   v5: plan_yaw/plan_yaw_rate도 없다(0으로 둔다)
  *   v4 이하: plan 뒤에 stds/orientations가 더 있다
@@ -24,7 +27,9 @@ inline bool decode_recorded_model_state(const char *src, uint32_t payload_size, 
     const size_t body = version <= 5   ? offsetof(ModelState, plan_yaw)
                         : version == 6 ? offsetof(ModelState, camera_offset_m)
                         : version == 7 ? offsetof(ModelState, gas_press_probs)
-                                       : sizeof(ModelState);
+                        : version <= 9 ? offsetof(ModelState, flow_calibration)
+                        : version == 10 ? offsetof(ModelState, flow_calibration) + 56
+                                        : sizeof(ModelState);
     if (payload_size < body + plan_extra + lead_extra) return false;
     const size_t lanes_off = offsetof(ModelState, lanes);
     const size_t pose_off = offsetof(ModelState, pose);

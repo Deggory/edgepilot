@@ -191,17 +191,12 @@ private:
         ++overlay_frames_;
     }
 
-    /* 웹 기기 설정: HUD 진단 카드의 기본값. 그 값이 바뀔 때만 적용해, 다른 설정(소리·밝기)을 바꿔도
-     * 터치로 켜고 끈 진단 카드가 되돌아가지 않는다. 알림음 크기는 바뀌면 적용하고 확인음을 한 번
-     * 낸다(시작 때 읽은 값은 소리 없이).
+    /* 웹 기기 설정: 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다(시작 때 읽은 값은 소리 없이). HUD 진단
+     * 카드는 설정이 아니라 화면 왼쪽 열을 눌러 켜고 끈다(overlayd가 다시 시작하면 꺼진다).
      * 카메라 장착 오프셋은 modeld가 그 프레임에 쓴 값을 ModelState로 받는다(projection_from_model_state). */
     void apply_device_settings(uint64_t now_ns)
     {
         if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
-        if (!device_settings_read_ || device_settings_.hud_debug != applied_hud_debug_) {
-            hud_.debug_card = applied_hud_debug_ = device_settings_.hud_debug;
-            pending_redraw_ = true;
-        }
         const float percent = device_settings_.alert_volume_percent;
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
@@ -338,7 +333,6 @@ private:
     DeviceSettingsFile device_settings_file_;
     DeviceSettings device_settings_;
     bool device_settings_read_ = false;
-    bool applied_hud_debug_ = false;  // 마지막으로 적용한 웹 설정의 HUD 진단
     int test_sounds_played_ = 0;
     bool profile_ = false;
 

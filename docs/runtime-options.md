@@ -46,6 +46,13 @@ true.
 - `EDGEPILOT_LOG_CALIB=1`
   - prints the online calibrator status, accepted/rejected sample counts, valid
     block count, rpy, and spread.
+- `EDGEPILOT_FLOW_CALIB=0`
+  - turns off the optical-flow calibrator (VPP/IVE). On, it is recorded in
+    `ModelState.flow_calibration` and logged as `flowcal:` lines; the warp uses
+    it only when the web device setting `calibration_use_flow` is on
+    ([Flow calibration](flow-calibration.md)). Off, nothing new is measured; a
+    stored estimate (`params/flow_calibration.json`) is still recorded and can
+    still be applied, and with none the recorded status stays 0.
 
 ## Camera and input warp
 

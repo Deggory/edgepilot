@@ -126,9 +126,14 @@ class ParamStore:
             "paths": {group: str(path) for group, path in self.paths.items()},
         }
 
-    def update(self, group: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    def update(self, group: str, values: Dict[str, Any], *, allow_managed: bool = False) -> Dict[str, Any]:
+        """값을 바꾼다. 전용 카드가 바꾸는 항목(메타데이터 card, 예: 보정 출처)은 그 카드의 API만
+        allow_managed=True로 바꾼다. 그 API가 받을 조건(예: 해제 상태)을 일반 경로로 건너뛰지 않게 한다."""
         if not values:
             raise ValueError("no parameter values supplied")
+        managed = sorted(key for key in values if PARAM_METADATA.get(group, {}).get(key, {}).get("card"))
+        if managed and not allow_managed:
+            raise ValueError(f"changed through its own card only: {', '.join(managed)}")
         with self.lock:
             document = self.read_group(group)
             unknown = sorted(set(values) - set(document))

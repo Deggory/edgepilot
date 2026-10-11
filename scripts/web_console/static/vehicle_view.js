@@ -352,17 +352,44 @@ const CALIBRATION_STATUS = {
   calibrated: ["보정 완료", "good"], uncalibrated: ["수렴 중", "warn"], invalid: ["범위 밖", "bad"],
   recalibrating: ["장착 변경 · 재보정 중", "warn"],
 };
+const POSE_STATUS_TEXT = {calibrated: "보정 완료", uncalibrated: "수렴 중", invalid: "범위 밖", recalibrating: "재보정 중"};
 
+/* 워프 보정(modeld calibration)과 그 출처. 출처 버튼은 display.json의 calibration_use_flow를 바꾼다(결합 중에는 서버가
+ * 막고 modeld도 해제를 기다린다). 표는 워프에 쓴 값, 광류 추정, 모델 포즈 보정기 자신의 추정과 둘의 차이(모델 pose의
+ * 치우침)다. 초기화는 두 보정을 다 지운다. */
 function calibrationCard() {
   let latest = null;
+  let saving = false;
   const button = actionButton({icon: "↺", danger: true, onclick: () => reset()});
-  const card = liveCard("카메라 캘리브레이션", {actions: [button]});
+  const flowButton = el("button", {type: "button", text: "광류 (없으면 포즈)"});
+  const poseButton = el("button", {type: "button", text: "모델 포즈만"});
+  const sourceControl = el("div.segmented", {role: "group", "aria-label": "워프 보정 출처"}, flowButton, poseButton);
+  const card = liveCard("카메라 캘리브레이션", {control: sourceControl, actions: [button]});
+
+  const choose = async useFlow => {
+    const c = latest;
+    if (!c || !c.available || saving || Boolean(c.use_flow) === useFlow) return;
+    saving = true;
+    update(c);
+    try {
+      latest = await api.post("/api/calibration/source", {use_flow: useFlow});
+      toast(`보정 출처: ${useFlow ? "광류(없으면 포즈)" : "모델 포즈만"} · ${clock()}`);
+    } catch (error) {
+      toast(`보정 출처: ${error.message}`, {failed: true});
+    } finally {
+      saving = false;
+      update(latest);
+    }
+  };
+  flowButton.addEventListener("click", () => choose(true));
+  poseButton.addEventListener("click", () => choose(false));
+
   const reset = async () => {
     const c = latest;
     if (!confirmAction(["카메라 캘리브레이션을 초기화할까요?",
-                        c && c.available ? `현재 pitch ${sgn(c.rpy_deg[1], 2)}° · yaw ${sgn(c.rpy_deg[2], 2)}° · 블록 ${c.valid_blocks}` : "현재 상태 없음",
-                        "", "저장된 값(calibration.json)을 지우고 0°에서 다시 수렴합니다.",
-                        "수렴할 때까지(시속 24 km 이상 직진 약 30초) 조향이 부정확할 수 있습니다. 학습값은 그대로 둡니다."])) return;
+                        c && c.available ? `현재 pitch ${sgn(c.rpy_deg[1], 2)}° · yaw ${sgn(c.rpy_deg[2], 2)}° (${c.source === "flow" ? "광류" : "모델 포즈"})` : "현재 상태 없음",
+                        "", "저장된 값(calibration.json, flow_calibration.json)을 지우고 포즈 보정은 0°에서, 광류는 처음부터 다시 모읍니다.",
+                        "수렴할 때까지(직진 약 30초) 조향이 부정확할 수 있습니다. 학습값은 그대로 둡니다."])) return;
     button.disabled = true;
     try {
       update(await api.post("/api/calibration/reset"));
@@ -372,27 +399,54 @@ function calibrationCard() {
       button.disabled = false;
     }
   };
+
   const update = c => {
     latest = c;
+    const blocked = Boolean(c && c.engaged);
+    flowButton.setAttribute("aria-pressed", String(Boolean(c && c.available && c.use_flow)));
+    poseButton.setAttribute("aria-pressed", String(Boolean(c && c.available && !c.use_flow)));
+    flowButton.disabled = poseButton.disabled = saving || blocked || !(c && c.available);
+    sourceControl.title = blocked ? "결합 중에는 바꿀 수 없습니다" : "";
     if (!c || !c.available) {
       card.update([["상태 없음", "muted"]], [note("modeld가 보정 상태를 발행하지 않습니다.")]);
     } else {
-      const [r, p, y] = c.rpy_deg, [sr, sp, sy] = c.spread_deg;
+      const [r, p, y] = c.rpy_deg;
+      const flow = c.flow || {status: "off", sd_deg: [0, 0], window: {}};
+      const pose = c.pose || {status: c.status, valid_blocks: c.valid_blocks, rpy_deg: c.rpy_deg};
+      const hasFlow = flow.estimate_blocks > 0;
+      const estimate = flow.status === "estimate";
+      const dp = pose.rpy_deg[1] - flow.pitch_deg, dy = pose.rpy_deg[2] - flow.yaw_deg;
+      const w = flow.window;
       card.update([CALIBRATION_STATUS[c.status] || [c.status, "muted"],
-                   [`블록 ${c.valid_blocks}/50`, c.valid_blocks >= 5 ? "accent" : "muted"],
+                   c.source === "flow" ? ["광류 적용 중", "accent"] : ["모델 포즈 적용", "muted"],
+                   c.switch_pending ? ["해제하면 바꿈", "warn"] : null,
+                   c.ramping ? ["워프 옮기는 중", "accent"] : null,
+                   flow.status === "collecting" ? [`광류 ${flow.estimate_blocks}/3블록`, "warn"]
+                     : estimate ? [`광류 블록 ${flow.estimate_blocks}/30`, "muted"] : null,
                    c.age_s > 2 ? [`${Math.round(c.age_s)}초 전`, "bad"] : null], [
-        infoTable(["", "현재 (°)", "블록 편차 (°)", ""], [
-          ["pitch", sgn(p, 2), num(sp, 2), "+ = 아래를 봄"],
-          ["yaw", sgn(y, 2), num(sy, 2), "+ = 왼쪽을 봄"],
-          ["roll", sgn(r, 2), num(sr, 2), ""],
+        infoTable(["", "pitch (°)", "yaw (°)", ""], [
+          ["워프에 적용", sgn(p, 2), sgn(y, 2), `roll ${sgn(r, 2)}° · ${c.source === "flow" ? "광류" : "모델 포즈"}`],
+          ["광류 추정", hasFlow ? sgn(flow.pitch_deg, 2) : "—", hasFlow ? sgn(flow.yaw_deg, 2) : "—",
+           hasFlow ? `${flow.estimate_blocks}/30블록 · 표준편차 ${num(flow.sd_deg[0], 2)}/${num(flow.sd_deg[1], 2)}°`
+                   : flow.status === "off" ? "꺼짐" : "모으는 중"],
+          ["모델 포즈 (참고)", sgn(pose.rpy_deg[1], 2), sgn(pose.rpy_deg[2], 2),
+           `${pose.valid_blocks}/50블록 · ${c.source === "flow" || c.ramping ? "멈춤" : POSE_STATUS_TEXT[pose.status] || pose.status}`],
+          ["포즈 − 광류", estimate ? sgn(dp, 2) : "—", estimate ? [sgn(dy, 2), Math.abs(dy) > 0.2 ? "warn" : ""] : "—", "모델 pose의 치우침"],
         ]),
-        note("시속 24 km 이상 직진 100프레임(약 5초)이 한 블록, 5블록이 모이면 보정 완료. 마운트가 yaw 2°·pitch 4°보다 "
-             + "크게 바뀌면 스스로 다시 보정하고, 그보다 작게 옮겼으면 해제 상태에서 초기화하세요."),
+        c.use_flow && !c.flow_usable
+          ? note("광류 추정이 아직 쓸 만하지 않아 모델 포즈를 씁니다(시속 40 km 이상 직진 약 25초면 3블록이 모입니다).", "warn") : null,
+        flow.windows > 0
+          ? note(`광류 창 ${flow.windows}개(버린 창 ${flow.rejected_windows}) · 마지막 창: 점 ${w.tracks} · inlier ${w.inliers} · `
+                 + `회전 ${num(w.rotation_deg, 3)}° · 시차 ${num(w.parallax_px, 1)} px · 장착 변경 ${flow.mount_changes}회`) : null,
+        note("광류: 시속 40 km 이상 직진에서 0.4초 창 20개가 한 블록(약 8초), 3블록이면 추정이 생기고 최근 30블록을 평균합니다. "
+             + "최근 3블록이 1° 넘게 같은 쪽으로 바뀌면 장착 변경으로 보고 다시 모읍니다. 모델 포즈: 시속 24 km 이상 직진 "
+             + "100프레임이 한 블록, 5블록이면 보정 완료입니다. 모델 포즈 보정은 자기 값으로 워프한 영상을 봐야 맞으므로 광류가 "
+             + "워프를 맡는 동안(옮기는 중 포함) 멈추고 마지막 값을 둡니다. 출처는 결합 중에는 바꿀 수 없고, 바꾸면 워프를 몇 초에 "
+             + "걸쳐 옮깁니다."),
       ]);
     }
-    const blocked = Boolean(c && c.engaged);
     button.setContent(c && c.reset_pending ? "초기화 요청됨 · modeld 대기 중" : "캘리브레이션 초기화",
-                      blocked ? "결합 중에는 초기화할 수 없습니다" : "저장된 보정을 지우고 처음부터 다시 수렴합니다");
+                      blocked ? "결합 중에는 초기화할 수 없습니다" : "두 보정을 지우고 처음부터 다시 모읍니다");
     button.disabled = blocked;
   };
   return {element: card.element, update};

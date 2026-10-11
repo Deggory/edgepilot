@@ -78,6 +78,9 @@ struct AppConfig {
     float manual_yaw = 0.0f;
     bool log_calibration = false;
     bool profile = false;
+    /* 광류 보정기(VPP·IVE 작업 스레드). 끄면 새로 재지 않는다. 저장해 둔 추정(params/flow_calibration.json)은 그래도
+     * 기록되고 설정이 광류면 워프에 쓰이며, 없으면 ModelState.flow_calibration.status가 0이다. EDGEPILOT_FLOW_CALIB=0. */
+    bool flow_calibration = true;
 
     /* 카메라 내부 파라미터(1920x1080 기준). EDGEPILOT_CAMERA_INTRINSICS="fx,fy,cx,cy"로
      * 바꿀 수 있다(다른 카메라로 찍은 영상을 재생할 때). input_warp_*는

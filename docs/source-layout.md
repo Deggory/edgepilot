@@ -73,7 +73,7 @@ Libraries `common` and `utils_json`.
 - `ipc_messages.h`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the state snapshots (`ModelState`, `ControlState`, `PandaState`, …) with
-    their `static_assert`s. Recording v9 stores the state snapshots as-is, so
+    their `static_assert`s. Recording v11 stores the state snapshots as-is, so
     their layouts are pinned here and tied to `kRecordingVersion` (that assert
     sits in `state_recorder.cc`). Code that
     only reads or fills a message includes this and nothing else.
@@ -100,7 +100,8 @@ Libraries `common` and `utils_json`.
     preview crop as the video layer.
 - `device_settings.h`
   - the web device settings (`params/display.json`) the runtime reads: modeld
-    (camera mount) and overlayd (alert volume) poll it from their main loops.
+    (camera mount, calibration source) and overlayd (alert volume) poll it from
+    their main loops.
 - `utils_process.h`
   - what a process gets from the OS: environment variables (`env_flag` is the
     one boolean convention), the `params/` directory path, and the
@@ -270,7 +271,27 @@ Libraries `model` and (board) `replay`, process `modeld`.
     Also produces the projection matrices the GDC warp uses.
 - `calibration_service.*`, `calibration_online.*`
   - wrap pose-based online calibration, manual override, projection policy, and
-    the model-input calibration feedback loop.
+    the model-input calibration feedback loop. `calibration_online` is a plain
+    port of upstream `calibrationd`. The service feeds it only while its own
+    value drives the warp, and it reads the flow calibrator through the
+    `FlowSource` interface (`flow_calibration.h`). It also stores and restores
+    the flow blocks (`params/flow_calibration.json`) and clears both on a web
+    reset. The calibration source setting comes in from `modeld`'s single
+    `display.json` reader with every update.
+- `calibration_source.*`
+  - picks the warp calibration's source each frame: the pose loop, or the flow
+    estimate's pitch and yaw when the web setting asks for it and the estimate
+    is usable; waits for disengage and ramps changes. Host-tested by
+    `gtest_calibration_source` ([Flow calibration](flow-calibration.md)).
+- `flow_calibration.*`
+  - the hardware-free part of the optical-flow calibrator: the travel-direction
+    solver, the per-cell corner pick, the straight-and-fast gate and the block
+    aggregation. Host-tested by `gtest_flow_calibration`
+    ([Flow calibration](flow-calibration.md)).
+- `flow_calibration_worker.*`
+  - board only: `FlowWindowTracker` chains IVE tracking over 8-frame windows,
+    and `FlowCalibrationWorker` (a `FlowSource`) runs it on its own thread in
+    `modeld`. The model loop only hands over ring slots and gate inputs.
 - `model_state_fill.*`
   - `fill_model_state`, which modeld calls to pack a frame's outputs into
     `ModelState`, and `compute_lane_t` (the openpilot plan→lane time mapping).
@@ -313,8 +334,8 @@ Libraries `hud_state`, `hud` and `alert_tones`, and on the board
     (white while control uses them), a
     recording/Wi-Fi status pill (and the network card a tap opens), and chips
     that appear only when something needs attention (panda, storage). The
-    numbers no other card shows sit in a card behind the `hud_debug` device
-    setting. `hud_renderer` lays out the frame and the top and bottom-edge
+    numbers no other card shows sit in a diagnostics card that a tap on the
+    left column shows or hides. `hud_renderer` lays out the frame and the top and bottom-edge
     widgets, `hud_scene` draws the road scene (ribbons, lead chevron, lane
     position), `hud_cards` the cards, and `hud_draw.h` holds what they
     share (design tokens, text placement, state colours). `hud_canvas`
@@ -379,7 +400,7 @@ Library `recording`, processes `recordd` and `replayd`.
     over 1 MiB, or a short header or payload), which `truncated()` reports.
 - `recorded_can.h`, `recorded_model_state.h`
   - the recorded CAN payload (written by `recordd`, read back by `replayd` and
-    the tools, whole frames only) and the reader that turns a v3 to v9
+    the tools, whole frames only) and the reader that turns a v3 to v10
     `ModelState` payload into the current struct.
 - `recordd.cc`
   - the drive recorder: encodes the frames `modeld` used and writes the CAN
@@ -423,7 +444,7 @@ builds and signs it; `panda_version.py` names a build by its sources. See
 `platform/maixcam2/` keeps the AX and MaixCDK headers out of `src/`. It builds
 only in the board build, against `deps/ax630` from
 `scripts/fetch_maixcam2_sdk.sh`, as the `maixcam2_media`, `maixcam2_gdc`,
-`maixcam2_venc` and `maixcam2_vdec` libraries.
+`maixcam2_ive`, `maixcam2_venc` and `maixcam2_vdec` libraries.
 
 - `maix_camera.*`
   - opens the camera (VI) through `libmaixcam_lib`'s `ax_middleware` classes,
@@ -450,10 +471,19 @@ only in the board build, against `deps/ax630` from
     512x256 views from a physical source address, unpacked to YUV6. Uses only
     MSP SDK headers, not the middleware, so the NPU process initialises AX SYS
     once.
+- `maix_ive_flow.*`
+  - the flow calibrator's hardware part. Each frame's 1/2 and 1/4 levels come
+    from one VPP call on `modeld`'s own IVPS queue; a separate tool, which gets
+    no queue, falls back to an IVE pyramid (Filter + DMA). The full level is the
+    ring slot itself. The IVE computes the Shi-Tomasi response and the
+    pyramidal LK, wrapped around its undocumented behaviour (start points in
+    top-level pixels, the ±8 px clip with the +16 px wrap, re-polled queries).
 - `maix_venc.*`, `maix_vdec.*`
   - the hardware H.264 encoder and decoder. `recordd` copies a ring slot into
     the encoder's own pool block with IVPS before encoding; `replayd` decodes a
     recorded frame into a ring slot. Both use only MSP SDK headers.
+    `receive_luma` copies a decoded frame's Y plane with the CPU instead, for
+    tools that run while the runtime holds the IVPS scalers.
 - `maix_shim.cc`, `stub/`
   - the few MaixCDK runtime pieces (log, err, board config lookup) and Kconfig
     stubs that the inline code in `ax_middleware.hpp` references but
@@ -473,7 +503,8 @@ only in the board build, against `deps/ax630` from
     its own module behind it: `param_store.py` and `param_metadata.py` (the
     parameter files, their labels, sections and ranges), `process_status.py`
     (the manager's process table, and signalling a process to reload),
-    `learner_monitor.py` (learner and localization state), `calibration_reset.py`,
+    `learner_monitor.py` (learner and localization state), `calibration_control.py`
+    (the camera calibration card: its state, reset and source switch),
     `panda_update.py` (the Panda firmware card), `bev_stream.py`,
     `backlight.py` (the MaixCAM2 backlight, PWM3) and `static_assets.py`.
     `shm_channel.py` reads the shared-memory channels and `state_layout.py` holds

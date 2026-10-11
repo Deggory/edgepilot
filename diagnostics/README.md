@@ -18,7 +18,8 @@ cmake --build build-host --target replay_closed_loop -j2
 
 보드용으로는 `tools/docker_ax630/`의 컨테이너에서 `build-ax630/`을 구성할 때
 `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`을 더하면 같은 도구가 `build-ax630/bin`에 생긴다
-(`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는 없다.
+(`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는
+`flow_calibration_replay` 하나다(VDEC·IVE를 쓴다).
 
 ## 도구
 
@@ -34,6 +35,12 @@ cmake --build build-host --target replay_closed_loop -j2
 | `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
 | `hud_snapshot` | `[--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--portrait [--flip-x] [--flip-y]]` | HUD 시나리오 27개(또는 녹화한 모델·제어 상태)를 `overlayd`와 같은 640x480으로 `EDGEARGB` 프레임에 그리고 그리기 시간을 출력한다. `--portrait`는 보드처럼 세로 480x640 버퍼에 transpose로 그린다. 시간은 보드에서 잰다 |
 | `alert_sound_preview` | `[--out PREFIX]` | `overlayd` 알림음을 같은 합성 코드로 `PREFIX_<이름>.wav`(48 kHz 모노, 100% 크기)에 쓴다 |
+
+보드:
+
+| 도구 | 사용 | 하는 일 |
+| --- | --- | --- |
+| `flow_calibration_replay` | `<segment_dir> [--open frames.txt]` | 녹화 구간 하나를 VDEC로 디코딩해 `modeld`와 같은 광류 보정기(`FlowWindowTracker`, IVE)에 흘리고, 받아들인 창마다 결과와 끝의 추정·시간을 출력한다. `--open`은 조건이 열린 프레임 번호 목록(없으면 전부 곧은 길로 본다). IVPS를 쓰지 않아 런타임이 도는 중에도 된다 |
 
 재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다.
 

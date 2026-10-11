@@ -140,8 +140,8 @@ void draw_tpms(HudCanvas &canvas, const HudState &hud)
     }
 }
 
-/* 오른쪽 아래 카메라 보정: 머리글에 상태(보정 중이면 진행률, 다시 보정 중이면 이름이 RECAL),
- * 아래에 roll·pitch·yaw. */
+/* 오른쪽 아래 카메라 보정: 머리글에 상태(보정 중이면 진행률, 다시 보정 중이면 이름이 RECAL, 광류 추정을 쓰면
+ * FLOW), 아래에 워프에 쓰는 roll·pitch·yaw. */
 void draw_calibration(HudCanvas &canvas, const HudState &hud)
 {
     const int x = canvas.width() - kMargin - kCornerCardW, y = canvas.height() - kMargin - kCornerCardH;
@@ -151,7 +151,7 @@ void draw_calibration(HudCanvas &canvas, const HudState &hud)
     uint32_t color = kTextSecondary;
     if (hud.calibration_available) {
         switch (static_cast<CalibrationStatus>(hud.calibration_status)) {
-        case CalibrationStatus::Calibrated: status = "OK"; break;
+        case CalibrationStatus::Calibrated: status = hud.calibration_flow ? "FLOW" : "OK"; break;
         case CalibrationStatus::Invalid: status = "INVALID"; color = kRed; break;
         case CalibrationStatus::Recalibrating:
             title = "RECAL";

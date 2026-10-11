@@ -6,6 +6,7 @@
 #include "common/utils_math.h"
 #include "model/model_input_transform.h"
 #include "model/calibration_online.h"
+#include "model/flow_calibration.h"
 
 #include <gtest/gtest.h>
 
@@ -1207,6 +1208,257 @@ TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane)
             }
         }
     }
+}
+
+
+void write_text(const std::string &path, const std::string &text)
+{
+    std::FILE *f = std::fopen(path.c_str(), "w");
+    ASSERT_NE(f, nullptr) << path;
+    std::fputs(text.c_str(), f);
+    std::fclose(f);
+}
+
+// flow_calibration.json: 같은 값의 블록 n개
+std::string flow_json(float yaw_deg, float pitch_deg, int blocks)
+{
+    std::string yaw, pitch;
+    for (int i = 0; i < blocks; ++i) {
+        yaw += (i ? ", " : "") + std::to_string(deg_to_rad(yaw_deg));
+        pitch += (i ? ", " : "") + std::to_string(deg_to_rad(pitch_deg));
+    }
+    return "{\n  \"version\": 1,\n  \"yaw_rad\": [" + yaw + "],\n  \"pitch_rad\": [" + pitch +
+           "],\n  \"windows\": 200,\n  \"mount_changes\": 0\n}\n";
+}
+
+ParsedModelOutput no_pose_output()
+{
+    return ParsedModelOutput{};
+}
+
+AppConfig auto_calibration()
+{
+    AppConfig config;
+    config.calibration_auto = true;
+    config.manual_calibration = false;
+    config.log_calibration = false;
+    return config;
+}
+
+// 광류 측정원 흉내(보드에서는 FlowCalibrationWorker). 초기화를 받으면 바로 처리한 것으로 센다.
+struct FakeFlowSource : FlowSource {
+    FlowCalibrationState current;
+    FlowBlocks blocks;
+    bool blocks_ready = false;
+    uint32_t resets_requested = 0;
+    uint32_t resets_applied = 0;
+    bool apply_resets = true;  // false면 초기화를 아직 처리하지 않은 것처럼 군다
+    FlowCalibrationState state(uint32_t *applied) const override
+    {
+        if (applied) *applied = resets_applied;
+        return current;
+    }
+    bool take_blocks(FlowBlocks *out) override
+    {
+        if (!blocks_ready) return false;
+        *out = blocks;
+        blocks_ready = false;
+        return true;
+    }
+    void request_reset() override
+    {
+        ++resets_requested;
+        if (!apply_resets) return;
+        ++resets_applied;
+        current = FlowCalibrationState{};
+        current.status = 1;
+    }
+};
+
+FlowCalibrationState usable_flow_state(float yaw_deg, float pitch_deg, uint32_t blocks)
+{
+    FlowCalibrationState f;
+    f.status = 2;
+    f.blocks = f.estimate_blocks = blocks;
+    f.yaw = deg_to_rad(yaw_deg);
+    f.pitch = deg_to_rad(pitch_deg);
+    f.sd_yaw = f.sd_pitch = deg_to_rad(0.1f);
+    return f;
+}
+
+TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn)
+{
+    const TempParamsDir params("calibration_flow_source");
+    AppConfig manual_config;
+    manual_config.manual_calibration = true;
+    manual_config.manual_pitch = deg_to_rad(-0.6f);
+    manual_config.manual_yaw = deg_to_rad(-0.5f);
+    { CalibrationService seed(manual_config); }  // 포즈 보정: pitch -0.6°, yaw -0.5°, 5블록
+    write_text(params.file("flow_calibration.json"), flow_json(-0.03f, -0.2f, 6));
+    const AppConfig config = auto_calibration();
+    {
+        CalibrationService pose_only(config, false);
+        float rpy[3] = {};
+        pose_only.input_rpy(rpy);
+        EXPECT_NEAR(rpy[2], deg_to_rad(-0.5f), 1e-6) << "설정이 꺼져 있으면 포즈 보정";
+        EXPECT_EQ(pose_only.source_state().source, 0u);
+        EXPECT_NE(pose_only.source_state().flags & kCalibrationSourceFlowUsable, 0u) << "저장된 광류 추정은 쓸 수 있다";
+        EXPECT_EQ(pose_only.flow_state().estimate_blocks, 6u);
+        EXPECT_EQ(pose_only.snapshot().valid_blocks, 5) << "포즈 출처면 포즈 보정기의 블록 수";
+    }
+    CalibrationService flow(config, true);
+    float rpy[3] = {};
+    flow.input_rpy(rpy);
+    EXPECT_NEAR(rpy[1], deg_to_rad(-0.2f), 1e-6) << "첫 프레임부터 광류";
+    EXPECT_NEAR(rpy[2], deg_to_rad(-0.03f), 1e-6);
+    EXPECT_NEAR(flow.projection().yaw, deg_to_rad(-0.03f), 1e-6) << "HUD 투영도 같은 값";
+    const CalibrationSourceState src = flow.source_state();
+    EXPECT_EQ(src.source, 1u);
+    EXPECT_EQ(src.requested, 1u);
+    EXPECT_NEAR(src.pose_yaw, deg_to_rad(-0.5f), 1e-6) << "포즈 보정기 자신의 값은 따로 남는다";
+    const OnlineCalibrator::Snapshot applied = flow.snapshot();
+    EXPECT_EQ(static_cast<int>(applied.status), static_cast<int>(CalibrationStatus::Calibrated));
+    EXPECT_EQ(applied.valid_blocks, 6) << "광류 출처면 광류 추정에 든 블록 수";
+    EXPECT_NEAR(applied.spread[2], flow.flow_state().sd_yaw, 1e-9) << "광류 출처면 광류 블록 중앙값 표준편차";
+
+    FakeFlowSource source;  // 측정원이 새 추정을 보고하면 천천히 옮긴다
+    source.current = flow.flow_state();
+    source.current.yaw = deg_to_rad(0.3f);
+    flow.attach_flow(&source);
+    const ParsedModelOutput no_pose{};
+    flow.update(no_pose, 0.0f, false, true);
+    flow.input_rpy(rpy);
+    EXPECT_LT(rpy[2], 0.0f) << "한 번에 옮기지 않는다";
+    EXPECT_NE(flow.source_state().flags & kCalibrationSourceRamping, 0u);
+    flow.attach_flow(nullptr);
+}
+
+TEST(CalibrationFlowSource, PoseLoopPausesWhileFlowDrivesTheWarp)
+{
+    // upstream 루프는 모델이 자기 값으로 워프된 영상을 봤다고 가정하므로, 광류가 워프를 맡는 동안에는 멈춘다.
+    // 광류 추정을 포즈 추정과 같게 두어 돌아갈 때 램프가 없게 한다(램프는 실제 시간으로 간다).
+    const TempParamsDir params("calibration_flow_pause");
+    AppConfig manual_config;
+    manual_config.manual_calibration = true;
+    manual_config.manual_yaw = deg_to_rad(-0.5f);
+    { CalibrationService seed(manual_config); }  // 포즈: yaw -0.5°, 5블록
+    write_text(params.file("flow_calibration.json"), flow_json(-0.5f, 0.0f, 6));
+    CalibrationService service(auto_calibration(), true);
+    ASSERT_EQ(service.source_state().source, 1u);
+    const float bias = deg_to_rad(-0.3f);  // 모델 pose의 치우침이 남아도
+    const ParsedModelOutput biased = parsed_from_pose(make_pose(20.0f, 20.0f * std::tan(bias), 0.0f));
+    for (int i = 0; i < 20 * kBlockSize; ++i) service.update(biased, 20.0f, false, true);
+    CalibrationSourceState src = service.source_state();
+    EXPECT_EQ(src.pose_valid_blocks, 5) << "광류가 워프를 맡는 동안 포즈 보정기는 블록을 모으지 않는다";
+    EXPECT_NEAR(src.pose_yaw, deg_to_rad(-0.5f), 1e-7) << "멈춘 마지막 추정 그대로";
+    EXPECT_NEAR(src.pose_roll, 0.0f, 1e-7);
+
+    service.update(no_pose_output(), 0.0f, false, false);  // 포즈로 돌아간다(같은 값이라 바로)
+    src = service.source_state();
+    EXPECT_EQ(src.source, 0u);
+    EXPECT_EQ(src.flags & kCalibrationSourceRamping, 0u);
+    // 복원한 보정기는 upstream reset()처럼 block_idx 0부터 덮어쓰므로 valid_blocks는 5에 머문다. 추정이 움직이는지 본다.
+    for (int i = 0; i < 2 * kBlockSize; ++i) service.update(biased, 20.0f, false, false);
+    EXPECT_LT(service.source_state().pose_yaw, deg_to_rad(-0.55f)) << "포즈 보정기가 다시 돈다";
+}
+
+TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource)
+{
+    const TempParamsDir params("calibration_flow_reset");
+    const std::string reset_request = params.file("calibration_reset");
+    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
+    write_text(params.file("flow_calibration.json"), flow_json(-0.03f, -0.2f, 6));
+    const ParsedModelOutput no_pose{};
+    FakeFlowSource source;
+    source.current = usable_flow_state(-0.03f, -0.2f, 6);
+    source.apply_resets = false;  // 측정원이 초기화를 처리하기 전의 상태를 먼저 본다
+    {
+        CalibrationService service(auto_calibration(), true);
+        service.attach_flow(&source);
+        ASSERT_EQ(service.source_state().source, 1u);
+        write_text(reset_request, "");
+        for (int i = 0; i < 12 && source.resets_requested == 0; ++i) {
+            struct timespec pause = {0, 100'000'000};
+            nanosleep(&pause, nullptr);
+            service.update(no_pose, 0.0f, false, true);
+        }
+        EXPECT_EQ(source.resets_requested, 1u) << "측정원에도 알린다";
+        EXPECT_EQ(service.source_state().source, 0u) << "초기화하면 포즈 0에서 다시";
+        float rpy[3] = {1.0f, 1.0f, 1.0f};
+        service.input_rpy(rpy);
+        EXPECT_NEAR(rpy[2], 0.0f, 1e-7) << "램프 없이 바로";
+
+        source.blocks.yaw = source.blocks.pitch = {0.0f, 0.0f, 0.0f};
+        source.blocks_ready = true;
+        service.update(no_pose, 0.0f, false, true);
+        EXPECT_EQ(service.source_state().source, 0u) << "처리 전의 예전 추정은 무시한다";
+        EXPECT_EQ(service.flow_state().estimate_blocks, 0u);
+        EXPECT_TRUE(source.blocks_ready) << "처리 전에 끝난 블록은 받지 않는다";
+
+        source.resets_applied = 1;  // 측정원이 초기화를 처리했다(그 사이 블록이 쌓였어도 처리 수로 가른다)
+        source.current = FlowCalibrationState{};
+        source.current.status = 1;
+        source.current.blocks = 2;
+        source.blocks_ready = false;
+        service.update(no_pose, 0.0f, false, true);
+        EXPECT_EQ(service.flow_state().status, 1u) << "처리한 뒤의 상태는 받는다";
+        EXPECT_EQ(service.flow_state().blocks, 2u);
+        EXPECT_EQ(source.resets_requested, 1u) << "한 번만 보낸다";
+        service.attach_flow(nullptr);
+    }
+    EXPECT_NE(access(params.file("flow_calibration.json").c_str(), F_OK), 0) << "광류 블록 파일도 지운다";
+    unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
+}
+
+TEST(CalibrationFlowSource, ResetWaitsForDisengage)
+{
+    const TempParamsDir params("calibration_flow_reset_engaged");
+    const std::string reset_request = params.file("calibration_reset");
+    setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
+    write_text(params.file("flow_calibration.json"), flow_json(-0.03f, -0.2f, 6));
+    const ParsedModelOutput no_pose{};
+    CalibrationService service(auto_calibration(), true);
+    write_text(reset_request, "");
+    for (int i = 0; i < 12; ++i) {
+        struct timespec pause = {0, 100'000'000};
+        nanosleep(&pause, nullptr);
+        service.update(no_pose, 0.0f, true, true);
+    }
+    EXPECT_EQ(service.source_state().source, 1u) << "결합 중에는 초기화하지 않는다";
+    EXPECT_EQ(access(reset_request.c_str(), F_OK), 0) << "요청은 남겨 둔다";
+    for (int i = 0; i < 12 && service.source_state().source != 0u; ++i) {
+        struct timespec pause = {0, 100'000'000};
+        nanosleep(&pause, nullptr);
+        service.update(no_pose, 0.0f, false, true);
+    }
+    EXPECT_EQ(service.source_state().source, 0u) << "해제되면 초기화한다";
+    EXPECT_NE(access(reset_request.c_str(), F_OK), 0);
+    unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
+}
+
+TEST(CalibrationFlowSource, SavesFlowBlocksFromTheSource)
+{
+    const TempParamsDir params("calibration_flow_save");
+    const ParsedModelOutput no_pose{};
+    FakeFlowSource source;
+    source.current = usable_flow_state(-0.15f, -1.0f, 3);
+    source.blocks.yaw = {deg_to_rad(-0.1f), deg_to_rad(-0.2f), deg_to_rad(-0.15f)};
+    source.blocks.pitch = {deg_to_rad(-1.0f), deg_to_rad(-1.1f), deg_to_rad(-0.9f)};
+    source.blocks.windows = 60;
+    source.blocks_ready = true;
+    {
+        CalibrationService service(auto_calibration(), false);
+        service.attach_flow(&source);
+        service.update(no_pose, 0.0f, false, false);  // 첫 저장은 바로 나간다
+        EXPECT_FALSE(source.blocks_ready);
+        service.attach_flow(nullptr);
+    }
+    CalibrationService restarted(auto_calibration(), false);
+    ASSERT_EQ(restarted.stored_flow_blocks().yaw.size(), 3u);
+    EXPECT_EQ(restarted.stored_flow_blocks().windows, 60u);
+    EXPECT_EQ(restarted.flow_state().status, 2u);
+    EXPECT_NEAR(restarted.flow_state().yaw, deg_to_rad(-0.15f), 1e-6);
+    EXPECT_NEAR(restarted.flow_state().pitch, deg_to_rad(-1.0f), 1e-6);
 }
 
 } // namespace

@@ -304,10 +304,15 @@ void OnlineCalibrator::smooth_rpy(float out[3]) const
     }
 }
 
-bool OnlineCalibrator::is_calibration_valid(const float rpy[3]) const
+bool OnlineCalibrator::rpy_within_limits(const float rpy[3])
 {
     return kPitchMin < rpy[1] && rpy[1] < kPitchMax &&
            kYawMin < rpy[2] && rpy[2] < kYawMax;
+}
+
+bool OnlineCalibrator::is_calibration_valid(const float rpy[3]) const
+{
+    return rpy_within_limits(rpy);
 }
 
 void OnlineCalibrator::sanity_clip(float rpy[3]) const

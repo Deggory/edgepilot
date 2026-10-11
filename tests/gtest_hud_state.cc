@@ -202,6 +202,22 @@ TEST(HudState, LearnerAndLaneMapping) {
   ASSERT_TRUE(std::isnan(lane_center_offset_m(output))) << "한쪽 선이 불확실하면 모른다";
 }
 
+TEST(HudState, CalibrationMapping) {
+  ModelState m;
+  m.calibration.status = 1;
+  m.calibration.valid_blocks = 12;
+  m.calibration.yaw = -0.03f * 3.14159265f / 180.0f;
+  HudState hud;
+  hud_apply_model_state(m, true, &hud);
+  EXPECT_TRUE(hud.calibration_available);
+  EXPECT_EQ(hud.calibration_status, 1u);
+  EXPECT_NEAR(hud.calibration_yaw_deg, -0.03f, 1e-5f);
+  EXPECT_FALSE(hud.calibration_flow) << "출처 0 = 모델 포즈";
+  m.calibration_source.source = 1;
+  hud_apply_model_state(m, true, &hud);
+  EXPECT_TRUE(hud.calibration_flow) << "광류 추정을 쓰면 CAL 카드가 FLOW";
+}
+
 TEST(HudState, RecordStateMapping) {
   RecordState r;
   r.active = 1;

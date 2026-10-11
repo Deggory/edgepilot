@@ -76,9 +76,45 @@ class RecordingReaderLayout(unittest.TestCase):
             self.assertEqual(layout[name], offset, name)
         self.assertEqual(layout["calibration"], pinned(r"offsetof\(ModelState, calibration\) == (\d+)"))
         self.assertEqual(layout["plan_yaw"], pinned(r"offsetof\(ModelState, plan_yaw\) == (\d+)"))
+        self.assertEqual(layout["flow_calibration"], pinned(r"offsetof\(ModelState, flow_calibration\) == (\d+)"))
+        self.assertEqual(layout["calibration_source"], pinned(r"offsetof\(ModelState, calibration_source\) == (\d+)"))
         self.assertEqual(rr.CALIBRATION_STATE.itemsize, size_of("CalibrationState"))
+        self.assertEqual(rr.FLOW_CALIBRATION_STATE.itemsize, size_of("FlowCalibrationState"))
+        self.assertEqual(rr.CALIBRATION_SOURCE_STATE.itemsize, size_of("CalibrationSourceState"))
+        # v10 녹화는 FlowCalibrationState의 앞 56 B만 담았다(v11이 끝에 덧붙였다)
+        self.assertEqual(rr.model_state_layout(10)["__size__"], layout["flow_calibration"] + 56)
         for name in rr.MODEL_STATE_HEAD.names:
             self.assertEqual(offset_in(rr.MODEL_STATE_HEAD, name), layout[name], name)
+
+    def test_calibration_helpers(self):
+        import numpy as np
+        v11 = bytearray(rr.model_state_layout(11)["__size__"])
+        flow = np.zeros((), rr.FLOW_CALIBRATION_STATE)
+        flow["status"], flow["yaw"], flow["estimate_blocks"], flow["window_parallax"] = 2, 0.01, 7, 3.5
+        flow["sd_yaw"] = 0.002
+        at = rr.model_state_layout(11)["flow_calibration"]
+        v11[at:at + flow.itemsize] = flow.tobytes()
+        source = np.zeros((), rr.CALIBRATION_SOURCE_STATE)
+        source["source"], source["pose_yaw"] = 1, -0.005
+        at = rr.model_state_layout(11)["calibration_source"]
+        v11[at:at + source.itemsize] = source.tobytes()
+        got = rr.flow_calibration(bytes(v11), 11)
+        self.assertEqual((int(got["status"]), int(got["estimate_blocks"])), (2, 7))
+        self.assertAlmostEqual(float(got["window_parallax"]), 3.5, places=5)
+        self.assertAlmostEqual(float(got["sd_yaw"]), 0.002, places=6)
+        self.assertEqual(int(rr.calibration_source(bytes(v11), 11)["source"]), 1)
+        # v10: 앞 56 B만 있고 출처는 늘 포즈(0), pose_*는 calibration을 되풀이한다
+        v10 = bytearray(v11[:rr.model_state_layout(10)["__size__"]])
+        cal = np.zeros((), rr.CALIBRATION_STATE)
+        cal["status"], cal["yaw"] = 1, -0.008
+        at = rr.model_state_layout(10)["calibration"]
+        v10[at:at + cal.itemsize] = cal.tobytes()
+        old = rr.flow_calibration(bytes(v10), 10)
+        self.assertEqual((int(old["status"]), int(old["estimate_blocks"])), (2, 0))
+        src = rr.calibration_source(bytes(v10), 10)
+        self.assertEqual(int(src["source"]), 0)
+        self.assertAlmostEqual(float(src["pose_yaw"]), -0.008, places=6)
+        self.assertEqual(int(rr.flow_calibration(bytes(v10), 9)["status"]), 0)
 
     def test_magics(self):
         def magic(name: str) -> bytes:

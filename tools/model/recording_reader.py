@@ -127,6 +127,34 @@ CALIBRATION_STATE = np.dtype([
     ("spread", "<f4", (3,)),
 ])
 
+# ModelState.flow_calibration (v10+): the optical-flow calibrator's state, angles in rad. v10 recorded the
+# first 56 bytes; v11 appended mount_changes, window_parallax (px), estimate_blocks and rejected_windows. sd_* is
+# the standard deviation of the block medians; v10 stored their range (max - min) in the same place.
+# Read it with flow_calibration().
+_FLOW_CALIBRATION_FIELDS = [
+    ("window_frame_id", "<u8"),
+    ("status", "<u4"), ("windows", "<u4"), ("blocks", "<u4"),
+    ("pitch", "<f4"), ("yaw", "<f4"), ("sd_pitch", "<f4"), ("sd_yaw", "<f4"),
+    ("window_pitch", "<f4"), ("window_yaw", "<f4"), ("window_rotation", "<f4"),
+    ("window_tracks", "<u4"), ("window_inliers", "<u4"),
+]
+FLOW_CALIBRATION_STATE_V10 = np.dtype(_FLOW_CALIBRATION_FIELDS)
+FLOW_CALIBRATION_STATE = np.dtype(_FLOW_CALIBRATION_FIELDS + [
+    ("mount_changes", "<u4"), ("window_parallax", "<f4"), ("estimate_blocks", "<u4"), ("rejected_windows", "<u4"),
+])
+assert FLOW_CALIBRATION_STATE_V10.itemsize == 56 and FLOW_CALIBRATION_STATE.itemsize == 72
+
+# ModelState.calibration_source (v11+): which calibration the warp used and the pose calibrator's own estimate.
+# Before v11 the warp always used the pose calibrator (source 0) and calibration held its value.
+CALIBRATION_SOURCE_STATE = np.dtype([
+    ("source", "<u4"),       # 0 model pose, 1 optical flow
+    ("requested", "<u4"),    # the web setting (calibration_use_flow)
+    ("flags", "<u4"),        # bit 0 flow usable, bit 1 switch pending (engaged), bit 2 warp ramping
+    ("pose_status", "<u4"), ("pose_valid_blocks", "<i4"),
+    ("pose_roll", "<f4"), ("pose_pitch", "<f4"), ("pose_yaw", "<f4"),
+])
+assert CALIBRATION_SOURCE_STATE.itemsize == 32
+
 TRAJECTORY_SIZE = 33
 IPC_POINT = 12  # IpcPoint: three float32
 
@@ -145,6 +173,10 @@ def model_state_layout(version: int) -> dict[str, int]:
          mount the warp used for that frame
       v8 appended gas_press_probs and brake_press_probs (3576), the model's
          pedal predictions at 0, 2, ..., 10 s
+      v10 appended flow_calibration (3632), the optical-flow calibrator's
+         shadow state (v9 only changed the file magics)
+      v11 grew flow_calibration to 72 bytes and appended calibration_source
+         (3680); calibration is the value the warp used, whichever its source
     Callers should check ``layout["__size__"]`` against the payload size they
     actually saw so a future layout change fails loudly instead of decoding
     garbage.
@@ -168,6 +200,10 @@ def model_state_layout(version: int) -> dict[str, int]:
         fields += [("camera_offset_m", 4), ("camera_height_m", 4)]
     if version >= 8:
         fields += [("gas_press_probs", 24), ("brake_press_probs", 24)]
+    if version == 10:
+        fields += [("flow_calibration", 56)]
+    if version >= 11:
+        fields += [("flow_calibration", 72), ("calibration_source", 32)]
 
     layout, offset = {}, 0
     for name, size in fields:
@@ -176,6 +212,33 @@ def model_state_layout(version: int) -> dict[str, int]:
     layout["__size__"] = offset
     return layout
 
+
+
+def flow_calibration(payload: bytes, version: int):
+    """ModelState.flow_calibration as one FLOW_CALIBRATION_STATE record (zeros before v10; v10 lacks the last
+    four fields, left 0, and its sd_* hold the range of the block medians)."""
+    out = np.zeros((), FLOW_CALIBRATION_STATE)
+    if version < 10:
+        return out
+    offset = model_state_layout(version)["flow_calibration"]
+    old = np.frombuffer(payload, FLOW_CALIBRATION_STATE_V10 if version == 10 else FLOW_CALIBRATION_STATE,
+                        count=1, offset=offset)[0]
+    for name in old.dtype.names:
+        out[name] = old[name]
+    return out
+
+
+def calibration_source(payload: bytes, version: int):
+    """ModelState.calibration_source as one CALIBRATION_SOURCE_STATE record. Before v11 the warp used the pose
+    calibrator, so source is 0 and pose_* repeat ModelState.calibration."""
+    if version >= 11:
+        return np.frombuffer(payload, CALIBRATION_SOURCE_STATE, count=1,
+                             offset=model_state_layout(version)["calibration_source"])[0]
+    out = np.zeros((), CALIBRATION_SOURCE_STATE)
+    cal = np.frombuffer(payload, CALIBRATION_STATE, count=1, offset=model_state_layout(version)["calibration"])[0]
+    out["pose_status"], out["pose_valid_blocks"] = cal["status"], cal["valid_blocks"]
+    out["pose_roll"], out["pose_pitch"], out["pose_yaw"] = cal["roll"], cal["pitch"], cal["yaw"]
+    return out
 
 @dataclass
 class SegmentInfo:

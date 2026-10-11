@@ -97,3 +97,33 @@ bool load_json_param_file(const std::string &path,
   }
   return true;
 }
+
+bool parse_json_float_list(const std::string &text, const std::string &key, size_t max_count,
+                           std::vector<float> *out) {
+  if (!out) return false;
+  const std::string quoted_key = "\"" + key + "\"";
+  const size_t key_pos = text.find(quoted_key);
+  if (key_pos == std::string::npos) return false;
+  const size_t open = text.find('[', key_pos + quoted_key.size());
+  if (open == std::string::npos) throw std::runtime_error("json key '" + key + "' is not an array");
+  const size_t close = text.find(']', open + 1);
+  if (close == std::string::npos) throw std::runtime_error("json key '" + key + "' has no closing bracket");
+  std::vector<float> values;
+  const char *cursor = text.c_str() + open + 1;
+  const char *array_end = text.c_str() + close;
+  for (;;) {
+    while (cursor < array_end && (std::isspace(static_cast<unsigned char>(*cursor)) || *cursor == ',')) ++cursor;
+    if (cursor >= array_end) break;
+    errno = 0;
+    char *end = nullptr;
+    const float value = std::strtof(cursor, &end);
+    if (end == cursor || end > array_end || errno == ERANGE || !std::isfinite(value))
+      throw std::runtime_error("json key '" + key + "' has a value that is not a finite float");
+    if (values.size() >= max_count)
+      throw std::runtime_error("json key '" + key + "' has more than " + std::to_string(max_count) + " floats");
+    values.push_back(value);
+    cursor = end;
+  }
+  *out = std::move(values);
+  return true;
+}

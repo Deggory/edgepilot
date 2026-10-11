@@ -83,6 +83,7 @@ struct HudState {
     float calibration_roll_deg = 0.0f;
     float calibration_pitch_deg = 0.0f;
     float calibration_yaw_deg = 0.0f;
+    bool calibration_flow = false;  // 워프 보정의 pitch·yaw가 광류 추정에서 온다(ModelState.calibration_source)
     char active_block[32] = {};
     char network_interface[16] = {};
     char network_ipv4[16] = {};
@@ -92,7 +93,7 @@ struct HudState {
     bool network_card = false;   // 상태 알약을 눌러 연 네트워크 카드
     bool recording = false;      // recordd가 route를 쓰는 중
     bool storage_full = false;   // 저장 공간이 모자라 녹화를 거부했거나 멈춤
-    bool debug_card = false;     // 웹 기기 설정의 HUD 진단: 수치 카드를 띄운다
+    bool debug_card = false;     // HUD 진단 수치 카드. 화면 왼쪽 열을 눌러 켜고 끈다(시작은 꺼짐)
     // 학습값(진단 카드). learner_fresh가 아니면 "--".
     bool learner_fresh = false;
     bool params_valid = false;     // paramsd: SR·강성·평균 오프셋이 다 유효

@@ -217,7 +217,7 @@ docs/           documentation; docs/images holds the README media
 - **Operating:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·
   [Diagnostics](docs/diagnostics.md) · [Verification](docs/verification.md)
 - **Design notes:** [K7 Panda port](docs/k7-panda-port.md) · [Departure alerts](docs/departure-alerts.md) ·
-  [Closed-loop replay](docs/closed-loop-replay.md)
+  [Closed-loop replay](docs/closed-loop-replay.md) · [Flow calibration](docs/flow-calibration.md)
 
 ## Acknowledgements
 

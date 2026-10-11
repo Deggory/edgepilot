@@ -7,7 +7,7 @@ from typing import Any
 
 MODEL_STATE_TOPIC = "/edgepilot_model_state"
 CONTROL_STATE_TOPIC = "/edgepilot_control_state"
-MODEL_STATE_SIZE = 3576
+MODEL_STATE_SIZE = 3680
 CONTROL_STATE_SIZE = 240
 
 MODEL_STATE_AT = {
@@ -15,6 +15,8 @@ MODEL_STATE_AT = {
     "road_edges": 2316, "road_edge_stds": 3108, "lead": 3148, "gas_press_probs": 3528,
 }
 MODEL_CALIBRATION_AT = 3224  # offsetof(ModelState, calibration)
+MODEL_FLOW_CALIBRATION_AT = 3576  # offsetof(ModelState, flow_calibration)
+MODEL_CALIBRATION_SOURCE_AT = 3648  # offsetof(ModelState, calibration_source)
 CONTROL_STATE_AT = {
     "timestamp_ns": 0, "enabled": 8, "engaged": 12, "active": 16, "vehicle_fresh": 32,
     "left_blinker": 40, "right_blinker": 44, "gear": 52, "cluster_speed_kph": 56,

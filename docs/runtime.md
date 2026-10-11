@@ -125,7 +125,7 @@ keeps the AX system open.
   asks for the nudge that starts a lane change (`LANE CHANGE`) and says when the
   wheel is past 85° or held by the driver (`STEERING PAUSED`). Panda,
   storage, and a radar-only lead appear as chips only when they apply,
-  and the green-light wait as a traffic-light icon (red lamp lit); the `hud_debug` device setting
+  and the green-light wait as a traffic-light icon (red lamp lit); a tap on the left column
   adds a card with what no other card shows: camera/model/HUD FPS, steering
   torques, paramsd stiffness and average offset, torqued raw estimates and
   progress, and lagd's blocks (amber until valid)
@@ -133,8 +133,8 @@ keeps the AX system open.
   on the status pill opens a network card (SSID, IPv4, interface, signal, or
   `Not connected`, plus the USB link's address) for
   10 s and a second tap closes it, a tap on the left column (set speed and gear
-  cards, chips, board state card) shows or hides the diagnostics card until the `hud_debug` setting
-  changes or overlayd restarts, and a tap elsewhere closes the network card;
+  cards, chips, board state card) shows or hides the diagnostics card (off when overlayd starts),
+  and a tap elsewhere closes the network card;
   every tap is logged as `overlayd: tap x=... y=... <action>`
 - turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`, level from
   `/boot/configs`)
@@ -253,6 +253,55 @@ CPU per process on the board with the full camera/model/HUD/control pipeline
 `modeld` ~8%, `controlsd` ~1%. Camera, model, and HUD all run at 20 Hz with no
 missed model frames.
 
+### Hardware engines
+
+Per camera frame (20 Hz), from `/proc/ax_proc/ivps` on the board (2026-10):
+
+| Process | Engine | Work | Per frame |
+| --- | --- | --- | ---: |
+| `camerad` | VPP, VI pipeline (group 0) | sensor 2560x1440 (compressed) to 1280x720 | 8.1 ms |
+| `camerad` | TDP, VI pipeline (group 0) | 1280x720 pass-through, see below | 2.0 ms |
+| `camerad` | TDP, sync queue 0 | copy into the next frame ring slot | 2.0 ms |
+| `overlayd` | TDP, sync queue 3 | ring slot centre 4:3 to 640x480 | 1.5 ms |
+| `overlayd` | TDP + VPP, VO pipeline (group 1) | 90° rotation and mirror for the portrait panel | 2.8 + 0.8 ms |
+| `modeld` | GDC | two 512x256 model views | 2 × 0.3 ms |
+| `modeld` | VPP, sync queue 1 | flow calibrator pyramid, NV12 out (straight and fast only) | see below |
+| `modeld` | IVE | flow calibrator corners and LK (straight and fast only) | about 5 ms |
+| `recordd` | TDP, sync queue 2 | ring slot into the encoder's pool block (while recording) | 2.0 ms |
+
+At home (not recording, flow calibrator idle) the engines run at TDP 12%, VPP 17% and GDC 1% duty. None of
+them is a bottleneck.
+
+- **Four queue pairs per board.** Every process that calls `AX_IVPS_Init` gets one TDP and one VPP sync
+  work queue, and the board has four of each (`/dev/ivps_tdp0-3`, `/dev/ivps_vpp0-3`). `camerad`,
+  `modeld`, `recordd` and `overlayd` take all four, so a fifth process gets `AX_ERR_IVPS_BUSY` (`0x800d0111`)
+  from any TDP or VPP call. That fifth process is typically a tool run while the runtime is up.
+  - Such tools must not need TDP or VPP. `VideoDecoder::receive_luma` copies the decoded Y plane with the
+    CPU for that reason.
+  - The GDC (`/dev/ivps_gdc0`) is shared and not limited this way.
+- **Flow calibrator.** `modeld` held its pair only because the GDC warp calls `AX_IVPS_Init`. The flow
+  calibrator now builds its two pyramid levels with that VPP queue in one `AX_IVPS_CropResizeV2Vpp` call
+  straight from the ring slot.
+  - It reads the ring slot itself as the full-resolution level and checks both slots' seqlocks after each
+    LK step.
+  - Without a VPP queue it falls back to an IVE Gaussian pyramid, still without copying the frame.
+  - The earlier version copied every gated frame with IVE DMA first, which cost about 3 ms of IVE time and
+    2.8 MB of memory traffic per frame.
+  - The VPP refuses YUV400 output (`0x800d010a`), so the levels come out as NV12.
+  - A gated frame now takes 9.2 ms of wall time end to end (VPP pyramid plus IVE LK), against 12.7 ms with
+    the IVE pyramid and 15.9 ms with the copy. Thread CPU dropped from 1.6 to 1.2 ms.
+  - Paired by window, the VPP and IVE pyramids agree to within 0.05° of median difference.
+- **The pass-through TDP stage** in `camerad`'s pipeline does no work for us: no mirror, flip, rotation or
+  OSD. The MaixCDK middleware (`VI::add_channel`) always adds it so mirror and flip can be switched at run
+  time, and its implementation is closed. It stays until `camerad` builds its own IVPS group.
+- **The frame ring copy** in `camerad` and the encoder copy in `recordd` are deliberate. The ring outlives
+  the VI pool blocks, and the encoder needs a pool block it can hold until encoding is done.
+- **The sensor delivers 2560x1440,** but the ring is 1280x720. The model's narrow input (f = 910) is
+  therefore upsampled 1.2x from the ring. comma's AR0231/OX03C10 cameras downsample about 2.9x, and its
+  OS04C10 cameras only 1.25x. A larger ring was tested as a fix for the model's weak response to the warp
+  and ruled out: comma footage resampled to our pixel density responds exactly as at full resolution
+  ([Flow calibration](flow-calibration.md#why)).
+
 ## Recording format
 
 `recordd` writes the routes the host tools read (`recording_reader.py`, the
@@ -261,8 +310,15 @@ replay tools, `lane_bias.py`). `gtest_recording` covers
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
 an 8-byte `EDGELOG1` magic, a version word, and fixed 16-byte record headers;
-each segment's `frames.bin` starts with `EDGEIDX1`. The current version is `9`,
-which only changed those two magics: recordings up to version 8 carry the
+each segment's `frames.bin` starts with `EDGEIDX1`. The current version is `11`:
+the optical-flow calibrator's state grew by four fields, its spread became the
+standard deviation of the block medians (`sd_pitch`, `sd_yaw`), and `ModelState`
+gained `calibration_source`, the warp calibration's source and the pose loop's
+own estimate (3680 B). `calibration` is now the value the warp used, with the
+status, block count and spread of that source. Version 10 had appended the flow
+calibrator's shadow state
+(`flow_calibration`, 3632 B; see [Flow calibration](flow-calibration.md)).
+Version 9 only changed those two magics: recordings up to version 8 carry the
 earlier ones, and every reader still accepts them. Version 8 gave `ModelState`
 the model's pedal predictions
 (`gas_press_probs`, `brake_press_probs`: the chance the driver presses the
@@ -271,13 +327,15 @@ Version 7 added the camera mount the warp used for that frame
 (`camera_offset_m`, `camera_height_m`, 3528 B), so the HUD and the analysis
 tools use exactly what modeld applied. Version 6 added the plan yaw and yaw
 rate (`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode steers from.
-Readers take version 7 and older payloads as before, with the missing fields
-zeroed (`src/recording/recorded_model_state.h`, `recording_reader.model_state_layout`).
+Readers take version 10 and older payloads as before, with the missing fields
+zeroed (`src/recording/recorded_model_state.h`, `recording_reader.model_state_layout`;
+`recording_reader.flow_calibration` and `calibration_source` read those two
+fields from any version).
 
 | Record type | Payload |
 | --- | ---: |
 | `CanRx` / `CanTx` | variable CAN batch |
-| `ModelState` | 3576 B |
+| `ModelState` | 3680 B |
 | `ControlState` | 240 B |
 | `PandaState` | 96 B |
 | `LearnerState` | 128 B |
@@ -292,7 +350,7 @@ Version 2 also kept a single route-level `events.bin`; CAN logging alone
 (~0.5 MB/s) filled the 988 MB tmpfs staging in about 30 minutes on long drives
 and silently killed the rest of the recording, which is why version 3 rotates
 event chunks alongside video segments. `tools/model/recording_reader.py` reads
-the v2 to v9 layouts; `lane_bias.py`, `hud_tools.py`,
+the v2 to v11 layouts; `lane_bias.py`, `hud_tools.py`,
 `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event log
 through its `iter_event_records`.
 

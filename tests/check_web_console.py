@@ -18,7 +18,13 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.web_console.backlight import duty_cycle_ns
 from scripts.web_console.bev_stream import BEV_FRAME, BEV_FRAME_MAGIC, bev_frames, bev_layout
-from scripts.web_console.calibration_reset import CALIBRATION_RESET_PATH, CALIBRATION_STATE, CalibrationReset
+from scripts.web_console.calibration_control import (
+    CALIBRATION_RESET_PATH,
+    CALIBRATION_SOURCE_STATE,
+    CALIBRATION_STATE,
+    FLOW_CALIBRATION_STATE,
+    CalibrationControl,
+)
 from scripts.web_console.learner_monitor import (
     LEARNER_FIELDS,
     LEARNER_FLAGS,
@@ -58,6 +64,8 @@ from scripts.web_console.state_layout import (
     GEAR_PARK,
     HUD_FLAG_BITS,
     MODEL_CALIBRATION_AT,
+    MODEL_CALIBRATION_SOURCE_AT,
+    MODEL_FLOW_CALIBRATION_AT,
     MODEL_STATE_AT,
     MODEL_STATE_SIZE,
     MODEL_STATE_TOPIC,
@@ -65,6 +73,8 @@ from scripts.web_console.state_layout import (
 from scripts.web_console.static_assets import STATIC_DIR, StaticAssets
 
 IPC_MESSAGES = ROOT / "src" / "common" / "ipc_messages.h"
+# 메타데이터 card(전용 카드가 바꾸는 항목)마다 그 카드가 부르는 API
+CARD_ROUTES = {"calibration": "/api/calibration/source"}
 
 
 def cpp(path: Path = IPC_MESSAGES) -> str:
@@ -153,6 +163,16 @@ class ParamStoreTest(unittest.TestCase):
         self.assertEqual(self.notified, ["controlsd"])
         self.assertEqual(self.store.read_group("steering"), {"gain": 12, "enabled": True})
         self.assertEqual(list(self.paths["steering"].parent.glob("*.tmp")), [])
+
+    def test_card_managed_setting_is_changed_only_through_its_card(self):
+        """전용 카드가 바꾸는 항목(메타데이터 card)은 일반 경로로 받지 않는다. 카드의 API가 받을 조건을 건너뛰지 않게."""
+        self.paths["display"].write_text(
+            json.dumps({"enabled": True, "brightness_percent": 100, "calibration_use_flow": False}), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.store.update("display", {"calibration_use_flow": True})
+        self.assertIs(self.store.read_group("display")["calibration_use_flow"], False)
+        self.store.update("display", {"calibration_use_flow": True}, allow_managed=True)
+        self.assertIs(self.store.read_group("display")["calibration_use_flow"], True)
 
     def test_unknown_parameter_is_rejected(self):
         with self.assertRaises(KeyError):
@@ -253,12 +273,20 @@ class ParamMetadataTest(unittest.TestCase):
                 for field in ("label", "section", "description", "increase", "decrease"):
                     self.assertTrue(meta.get(field), f"{group}.{key}.{field}")
                 self.assertIn(meta.get("tab", group), {group, "vehicle"}, f"{group}.{key}")
-                if meta.get("tab") == "vehicle":
-                    self.assertEqual(group, "steering", f"{group}.{key}: the vehicle tab edits steering.json")
-                tab = meta.get("tab", group)
-                sections, used = tabs.setdefault(tab, (VEHICLE_TAB["sections"], set()))
-                self.assertIn(meta["section"], sections, f"{group}.{key}")
-                used.add(meta["section"])
+                if meta.get("card"):
+                    # 차량 특성 탭의 전용 카드가 자기 API로 바꾸는 항목: 섹션은 파일 그룹의 것이지만 그 탭에 카드가
+                    # 없으니 섹션을 채우지 않는다
+                    self.assertEqual(meta.get("tab"), "vehicle", f"{group}.{key}")
+                    self.assertIn(meta["card"], CARD_ROUTES, f"{group}.{key}")
+                    self.assertIn(meta["section"], spec["sections"], f"{group}.{key}")
+                    page = (STATIC_DIR / "vehicle_view.js").read_text(encoding="utf-8")
+                    self.assertIn(f'api.post("{CARD_ROUTES[meta["card"]]}"', page, f"{group}.{key}")
+                else:
+                    if meta.get("tab") == "vehicle":
+                        self.assertEqual(group, "steering", f"{group}.{key}: the vehicle tab edits steering.json")
+                    sections, used = tabs.setdefault(meta.get("tab", group), (VEHICLE_TAB["sections"], set()))
+                    self.assertIn(meta["section"], sections, f"{group}.{key}")
+                    used.add(meta["section"])
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     for field in ("step", "min", "max"):
                         self.assertIsInstance(meta.get(field), (int, float), f"{group}.{key}.{field}")
@@ -417,22 +445,30 @@ class LocalizationStateTest(unittest.TestCase):
 
 
 # ------------------------------------------------------------ 카메라 보정
-class CalibrationResetTest(unittest.TestCase):
+class CalibrationControlTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         self.model = root / "edgepilot_model_state"
         self.control = root / "edgepilot_control_state"
         self.request = root / "edgepilot_calibration_reset"
-        self.calibration = CalibrationReset(str(self.model), str(self.control), str(self.request))
+        paths = group_paths(root / "params")
+        paths["display"].parent.mkdir()
+        paths["display"].write_text(json.dumps({"enabled": True, "calibration_use_flow": False}), encoding="utf-8")
+        self.store = ParamStore(paths, notify=lambda name: [])
+        self.calibration = CalibrationControl(self.store, str(self.model), str(self.control), str(self.request))
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def publish_model(self, status, blocks, rpy_deg):
+    def publish_model(self, status, blocks, rpy_deg, flow=None, source=None):
         payload = bytearray(MODEL_STATE_SIZE)
         rad = [x * 3.141592653589793 / 180 for x in rpy_deg]
         CALIBRATION_STATE.pack_into(payload, MODEL_CALIBRATION_AT, status, blocks, *rad, 0.1, 0.2, 0.3)
+        if flow is not None:
+            FLOW_CALIBRATION_STATE.pack_into(payload, MODEL_FLOW_CALIBRATION_AT, *flow)
+        if source is not None:
+            CALIBRATION_SOURCE_STATE.pack_into(payload, MODEL_CALIBRATION_SOURCE_AT, *source)
         publish(self.model, bytes(payload))
 
     def publish_control(self, engaged, stamp=None):
@@ -442,6 +478,13 @@ class CalibrationResetTest(unittest.TestCase):
         offset = re.search(r"offsetof\(ModelState, calibration\) == (\d+)", cpp())
         self.assertEqual(int(offset.group(1)), MODEL_CALIBRATION_AT)
         self.assertEqual(CALIBRATION_STATE.size, 32)
+        for field, at in (("flow_calibration", MODEL_FLOW_CALIBRATION_AT), ("calibration_source", MODEL_CALIBRATION_SOURCE_AT)):
+            self.assertEqual(int(re.search(rf"offsetof\(ModelState, {field}\) == (\d+)", cpp()).group(1)), at, field)
+        self.assertEqual(FLOW_CALIBRATION_STATE.size, int(re.search(r"sizeof\(FlowCalibrationState\) == (\d+)", cpp()).group(1)))
+        self.assertEqual(CALIBRATION_SOURCE_STATE.size,
+                         int(re.search(r"sizeof\(CalibrationSourceState\) == (\d+)", cpp()).group(1)))
+        for name, bit in (("FlowUsable", 0), ("Pending", 1), ("Ramping", 2)):
+            self.assertIn(f"kCalibrationSource{name} = 1u << {bit};", cpp())
         service = cpp(ROOT / "src" / "model" / "calibration_service.cc")
         self.assertIn(f'"EDGEPILOT_CALIBRATION_RESET_PATH",\n                                     "{CALIBRATION_RESET_PATH}"',
                       service)
@@ -455,14 +498,45 @@ class CalibrationResetTest(unittest.TestCase):
         self.assertAlmostEqual(status["rpy_deg"][1], 0.29, places=3)
         self.assertAlmostEqual(status["rpy_deg"][2], -0.18, places=3)
 
+    def test_status_decodes_flow_and_source(self):
+        rad = 3.141592653589793 / 180
+        flow = (1234, 2, 240, 14, -0.15 * rad, -0.03 * rad, 0.04 * rad, 0.06 * rad, -0.2 * rad, 0.1 * rad, 0.002 * rad,
+                297, 296, 1, 6.1, 12, 9)
+        source = (1, 1, 1 | 4, 1, 50, 0.0, -0.06 * rad, -0.30 * rad)
+        self.publish_model(1, 50, [0.0, -0.15, -0.03], flow=flow, source=source)
+        status = self.calibration.status()
+        self.assertEqual((status["source"], status["flow_usable"], status["ramping"]), ("flow", True, True))
+        self.assertFalse(status["switch_pending"])
+        f = status["flow"]
+        self.assertEqual((f["status"], f["estimate_blocks"], f["windows"], f["mount_changes"], f["rejected_windows"]),
+                         ("estimate", 12, 240, 1, 9))
+        self.assertAlmostEqual(f["yaw_deg"], -0.03, places=3)
+        self.assertAlmostEqual(f["sd_deg"][1], 0.06, places=3)
+        self.assertAlmostEqual(f["window"]["parallax_px"], 6.1, places=2)
+        self.assertEqual(f["window"]["tracks"], 297)
+        self.assertEqual((status["pose"]["status"], status["pose"]["valid_blocks"]), ("calibrated", 50))
+        self.assertAlmostEqual(status["pose"]["rpy_deg"][2], -0.30, places=3)
+
     def test_reset_is_refused_while_engaged(self):
         self.publish_control(engaged=1)
         with self.assertRaises(PermissionError):
-            self.calibration.request()
+            self.calibration.request_reset()
         self.assertFalse(self.request.exists())
         self.publish_control(engaged=0)
-        self.assertTrue(self.calibration.request()["reset_pending"])
+        self.assertTrue(self.calibration.request_reset()["reset_pending"])
         self.assertTrue(self.request.exists())
+
+    def test_source_is_changed_only_while_disengaged(self):
+        """보정 출처는 이 카드만 바꾸고(파라미터 API는 받지 않는다) 결합 중에는 받지 않는다. 상태의 use_flow는 modeld가
+        다시 읽기 전에도 고른 값을 보이게 설정 파일에서 읽는다."""
+        self.publish_control(engaged=1)
+        with self.assertRaises(PermissionError):
+            self.calibration.set_source(True)
+        self.assertIs(self.store.read_group("display")["calibration_use_flow"], False)
+        self.publish_control(engaged=0)
+        self.assertTrue(self.calibration.set_source(True)["use_flow"])
+        self.assertIs(self.store.read_group("display")["calibration_use_flow"], True)
+        self.assertFalse(self.calibration.set_source(False)["use_flow"])
 
     def test_stale_or_missing_controlsd_does_not_block(self):
         self.assertFalse(self.calibration.engaged())

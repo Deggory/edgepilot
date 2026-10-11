@@ -46,6 +46,8 @@ public:
 
     // 보정 완료(Calibrated)에 필요한 블록 수. HUD가 보정 진행률을 이것으로 낸다.
     static constexpr int kInputsNeeded = 5;
+    // upstream PITCH_LIMITS·YAW_LIMITS 안인지(Calibrated의 조건). 광류 추정도 같은 한계를 쓴다.
+    static bool rpy_within_limits(const float rpy[3]);
     static constexpr float kHeightInit = 1.22f;  // upstream HEIGHT_INIT
 
 private:

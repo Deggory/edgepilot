@@ -1,7 +1,7 @@
 #ifndef DEVICE_SETTINGS_H
 #define DEVICE_SETTINGS_H
 
-/* 웹 기기 설정(params/display.json) 중 런타임이 읽는 값. modeld(카메라 장착)와 overlayd(알림음)가
+/* 웹 기기 설정(params/display.json) 중 런타임이 읽는 값. modeld(카메라 장착, 보정 출처)와 overlayd(알림음)가
  * 각자 메인 루프에서 poll()을 부른다. 1초에 한 번만 stat하고 파일이 바뀌었을 때만 다시 읽는다. */
 
 #include "common/model_output.h"
@@ -19,7 +19,9 @@ struct DeviceSettings {
     float alert_volume_percent = NAN;  // 없으면 NAN(시작 크기 유지)
     float camera_offset_m = 0.0f;      // 가상 카메라를 오른쪽(+)으로: 차가 왼쪽으로 간다
     float camera_height_m = kModelHeight;
-    bool hud_debug = false;            // HUD 진단 카드(예전 패널의 수치)
+    /* 워프 보정의 pitch·yaw를 광류 추정에서 가져온다(쓸 만할 때만, 아니면 모델 포즈 보정). 결합 중에 바뀌면
+     * 해제될 때까지 기다린다(model/calibration_source). */
+    bool calibration_use_flow = false;
 };
 
 /* 허용 범위(벗어나면 클램프). 웹 콘솔의 min/max와 같아야 한다(check_web_console.py가 대조).
@@ -31,7 +33,7 @@ inline constexpr JsonFloatField<DeviceSettings> kDeviceSettingsFloats[] = {
 };
 
 inline constexpr JsonBoolField<DeviceSettings> kDeviceSettingsBools[] = {
-    {"hud_debug", &DeviceSettings::hud_debug},
+    {"calibration_use_flow", &DeviceSettings::calibration_use_flow},
 };
 
 /* 표의 허용 범위로 자른다(환경 변수로 받은 값 등). */

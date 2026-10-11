@@ -1,5 +1,6 @@
 #include "common/app_config.h"
 #include "model/calibration_service.h"
+#include "model/flow_calibration_worker.h"
 #include "model/replay_source.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
@@ -20,6 +21,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -101,8 +103,8 @@ struct RateWindow
     }
 };
 
-/* controlsd 스냅샷에서 모델 입력용 자차 속도와 desire를 읽는다. controlsd가
- * 아직 없으면 열릴 때까지 마지막 값을 유지한다. */
+/* controlsd 스냅샷에서 모델 입력용 자차 속도와 desire, 광류 보정기의 직진 조건(곡률·깜빡이), 결합 상태(보정
+ * 출처 설정을 해제까지 미룬다)를 읽는다. controlsd가 아직 없으면 열릴 때까지 마지막 값을 유지한다. */
 class EgoStateReader
 {
 public:
@@ -117,50 +119,50 @@ public:
             : control_state.cluster_speed_kph;
         v_ego_ = std::max(0.0f, ego_speed_kph / 3.6f);
         desire_ = static_cast<int>(control_state.desire);
+        gate_.v_ego = v_ego_;
+        gate_.curvature = control_state.actual_curvature;
+        gate_.blinker = control_state.left_blinker != 0 || control_state.right_blinker != 0;
+        gate_.desire = control_state.desire != 0;
+        gate_.vehicle_fresh = control_state.vehicle_fresh != 0;
+        engaged_ = control_state.engaged != 0;
     }
     float v_ego() const { return v_ego_; }
     int desire() const { return desire_; }
+    bool engaged() const { return engaged_; }
+    const FlowGateInput &flow_gate() const { return gate_; }
 
 private:
     LatestChannel sub_;
     bool open_ = false;
     float v_ego_ = 0.0f;
     int desire_ = 0;
+    bool engaged_ = false;
+    FlowGateInput gate_;
 };
 
-/* 카메라 장착(웹 기기 설정 camera_offset_m·camera_height_m). 라이브는 display.json을 1초마다 보고
- * 바뀐 오프셋은 초당 kRateMps로 옮긴다: 모델은 t−4·t 두 프레임과 4.8초 특징 이력을 보므로 한 번에
- * 바꾸면 차가 옆으로 순간 이동한 것처럼 보여 pose·보정·locationd·경로가 튄다(보정 워프도 같은
- * 이유로 kSmoothCycles에 걸쳐 옮긴다). 시작할 때는 첫 프레임부터 그대로 쓴다. 재생은 보드 설정을
- * 읽지 않고 EDGEPILOT_CAMERA_OFFSET_M·EDGEPILOT_CAMERA_HEIGHT_M(기본 0, 모델 높이)만 쓴다. */
-class CameraMount
+/* 웹 기기 설정(display.json). modeld에서는 이것만 파일을 읽어(1초에 한 번 stat) 카메라 장착과 보정 출처가 같은
+ * 값을 받는다. 재생은 보드 설정을 읽지 않고 EDGEPILOT_CAMERA_OFFSET_M·EDGEPILOT_CAMERA_HEIGHT_M(기본 0, 모델
+ * 높이)만 쓰며, 보정 출처는 포즈다. */
+class ModeldSettings
 {
 public:
-    static constexpr float kRateMps = 0.1f;
-    static constexpr float kFrameS = 0.05f;
-
-    explicit CameraMount(bool live) : live_(live)
+    explicit ModeldSettings(bool live) : live_(live)
     {
         if (live_) {
-            file_.poll(monotonic_now_ns(), &target_);
+            file_.poll(monotonic_now_ns(), &settings_);
         } else {
-            target_.camera_offset_m = env_setting("EDGEPILOT_CAMERA_OFFSET_M", &DeviceSettings::camera_offset_m);
-            target_.camera_height_m = env_setting("EDGEPILOT_CAMERA_HEIGHT_M", &DeviceSettings::camera_height_m);
+            settings_.camera_offset_m = env_setting("EDGEPILOT_CAMERA_OFFSET_M", &DeviceSettings::camera_offset_m);
+            settings_.camera_height_m = env_setting("EDGEPILOT_CAMERA_HEIGHT_M", &DeviceSettings::camera_height_m);
         }
-        offset_m_ = target_.camera_offset_m;
         log();
     }
 
-    // 매 프레임 실행 직전. 이번 프레임 워프에 쓴 값이 offset_m()·height_m()이다.
-    void apply(SupercomboModel &model)
+    // 프레임마다 한 번
+    void poll()
     {
-        if (live_ && file_.poll(monotonic_now_ns(), &target_)) log();
-        const float step = kRateMps * kFrameS;
-        offset_m_ += std::clamp(target_.camera_offset_m - offset_m_, -step, step);
-        model.set_camera_mount(offset_m_, target_.camera_height_m);
+        if (live_ && file_.poll(monotonic_now_ns(), &settings_)) log();
     }
-    float offset_m() const { return offset_m_; }
-    float height_m() const { return target_.camera_height_m; }
+    const DeviceSettings &get() const { return settings_; }
 
 private:
     static float env_setting(const char *name, float DeviceSettings::*member)
@@ -175,22 +177,52 @@ private:
     }
     void log() const
     {
-        std::fprintf(stderr, "\nmodeld: camera mount offset=%+.3f m height=%.2f m (%s)\n", target_.camera_offset_m,
-                     target_.camera_height_m, live_ ? "display.json" : "replay env");
+        std::fprintf(stderr, "\nmodeld: settings camera offset=%+.3f m height=%.2f m, calibration source %s (%s)\n",
+                     settings_.camera_offset_m, settings_.camera_height_m,
+                     settings_.calibration_use_flow ? "flow" : "pose", live_ ? "display.json" : "replay env");
     }
 
     bool live_ = false;
     DeviceSettingsFile file_;
-    DeviceSettings target_;
-    float offset_m_ = 0.0f;
+    DeviceSettings settings_;
 };
 
+/* 카메라 장착(기기 설정 camera_offset_m·camera_height_m). 바뀐 오프셋은 초당 kRateMps로 옮긴다: 모델은 t−4·t 두
+ * 프레임과 4.8초 특징 이력을 보므로 한 번에 바꾸면 차가 옆으로 순간 이동한 것처럼 보여 pose·보정·locationd·경로가
+ * 튄다(보정 워프도 같은 이유로 천천히 옮긴다, model/calibration_source). 시작할 때는 첫 프레임부터 그대로 쓴다. */
+class CameraMount
+{
+public:
+    static constexpr float kRateMps = 0.1f;
+    static constexpr float kFrameS = 0.05f;
+
+    explicit CameraMount(const DeviceSettings &start)
+        : offset_m_(start.camera_offset_m), height_m_(start.camera_height_m) {}
+
+    // 매 프레임 실행 직전. 이번 프레임 워프에 쓴 값이 offset_m()·height_m()이다.
+    void apply(SupercomboModel &model, const DeviceSettings &settings)
+    {
+        const float step = kRateMps * kFrameS;
+        offset_m_ += std::clamp(settings.camera_offset_m - offset_m_, -step, step);
+        height_m_ = settings.camera_height_m;
+        model.set_camera_mount(offset_m_, height_m_);
+    }
+    float offset_m() const { return offset_m_; }
+    float height_m() const { return height_m_; }
+
+private:
+    float offset_m_ = 0.0f;
+    float height_m_ = 0.0f;
+};
+
+/* engaged는 controlsd 결합 상태, use_flow는 보정 출처 설정. 워프에 쓴 보정(출처와 상관없이)이 calibration,
+ * 출처와 포즈 보정기 자신의 추정이 calibration_source, 광류 상태가 flow_calibration이다. */
 bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
                     CalibrationService &calibration, const CameraMount &mount,
                     uint64_t frame_id, uint64_t capture_timestamp_ns, float model_ms,
-                    float v_ego)
+                    float v_ego, bool engaged, bool use_flow)
 {
-    calibration.update(parsed, v_ego);
+    calibration.update(parsed, v_ego, engaged, use_flow);
     float input_rpy[3];
     calibration.input_rpy(input_rpy);
     model.set_input_calibration(input_rpy);
@@ -202,6 +234,8 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
                           frame_id, capture_timestamp_ns, model_ms);
     state.camera_offset_m = mount.offset_m();
     state.camera_height_m = mount.height_m();
+    state.flow_calibration = calibration.flow_state();
+    state.calibration_source = calibration.source_state();
     return model_pub.publish(&state, sizeof(state));
 }
 
@@ -221,11 +255,12 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
                  source.frame_count(), config.replay_nv12_path.c_str(), target_frames);
 
     SupercomboModel model(config.axmodel_path.c_str(), replay_config);
-    CalibrationService calibration(config);
+    const ModeldSettings settings(false);
+    CalibrationService calibration(config, settings.get().calibration_use_flow);
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
     model.set_input_calibration(initial_rpy);
-    CameraMount mount(false);
+    CameraMount mount(settings.get());
 
     Nv12Frame frame;
     std::vector<float> raw;
@@ -235,7 +270,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
     RateWindow window;
 
     while (!g_stop && source.read(frame)) {
-        mount.apply(model);
+        mount.apply(model, settings.get());
         const uint64_t t0 = monotonic_now_ns();
         const bool ok = model.run_frame_nv12(frame.data.data(), frame.width, frame.height, raw);
         const uint64_t t1 = monotonic_now_ns();
@@ -244,7 +279,8 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             if (!publish_output(model_pub, model, parsed, calibration, mount,
-                                processed, monotonic_now_ns(), model_ms, 0.0f)) {
+                                processed, monotonic_now_ns(), model_ms, 0.0f, false,
+                                settings.get().calibration_use_flow)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }
@@ -306,12 +342,31 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
     if (!frame_ring.valid()) return 1;
 
     SupercomboModel model(config.axmodel_path.c_str(), config);
-    CalibrationService calibration(config);
+    ModeldSettings settings(true);
+    CalibrationService calibration(config, settings.get().calibration_use_flow);
     float initial_rpy[3] = {};
     calibration.input_rpy(initial_rpy);
     model.set_input_calibration(initial_rpy);
-    CameraMount mount(true);
+    CameraMount mount(settings.get());
     EgoStateReader ego;
+    /* 광류 보정기. 링 슬롯을 IVE가 직접 읽으므로 frame_ring보다 먼저 없어져야 한다(뒤에 선언). IVE를 쓸 수
+     * 없으면 끄고 계속 간다(저장해 둔 추정은 보정 서비스가 그대로 쓴다). 워프에 쓸지는 웹 기기 설정이다. */
+    std::unique_ptr<FlowCalibrationWorker> flow;
+    if (config.flow_calibration) {
+        try {
+            const FlowIntrinsics k{config.input_warp_fx, config.input_warp_fy, config.input_warp_cx,
+                                   config.input_warp_cy};
+            flow = std::make_unique<FlowCalibrationWorker>(k, static_cast<int>(frame_ring.width()),
+                                                           static_cast<int>(frame_ring.height()),
+                                                           &calibration.stored_flow_blocks());
+            /* 보정 서비스가 상태를 읽고 블록을 저장하고 초기화를 보낸다. 워커는 calibration보다 늦게 선언돼 먼저
+             * 없어지지만, 그 뒤에는 update를 부르지 않고 서비스의 소멸자도 측정원을 건드리지 않는다. */
+            calibration.attach_flow(flow.get());
+            std::fprintf(stderr, "modeld: flow calibration on (VPP/IVE pyramid, IVE LK)\n");
+        } catch (const std::exception &e) {
+            std::fprintf(stderr, "modeld: flow calibration off: %s\n", e.what());
+        }
+    }
     std::vector<float> raw;
     uint64_t last_frame_seq = 0;
     unsigned processed = 0;
@@ -362,9 +417,22 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
             ++errors;
             continue;
         }
+        settings.poll();
         ego.poll();
         model.set_desire(ego.desire());
-        mount.apply(model);
+        mount.apply(model, settings.get());
+        if (flow && zero_copy) {
+            // Y 평면이 슬롯 앞에 있다(NV12/NV21). IVE가 복사를 마친 뒤 슬롯이 그대로인지 seqlock으로 본다.
+            FlowCalibrationWorker::Frame job;
+            job.y_phys = slot_phys;
+            job.stride = frame_w;
+            job.frame_id = meta.frame_id;
+            job.gate = ego.flow_gate();
+            job.still_valid = [&frame_ring, slot = meta.slot, id = meta.frame_id, slot_seq] {
+                return frame_ring.read_still_valid(slot, id, slot_seq);
+            };
+            flow->push(std::move(job));
+        }
 
         // 녹화기(recordd)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
         if (!record_frame_pub.publish(&meta, sizeof(meta))) {
@@ -383,7 +451,8 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             if (!publish_output(model_pub, model, parsed, calibration, mount,
-                                meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego())) {
+                                meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego(), ego.engaged(),
+                                settings.get().calibration_use_flow)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }

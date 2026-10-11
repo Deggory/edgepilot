@@ -25,10 +25,13 @@ def number(label: str, section: str, unit: str, step: float, minimum: float, max
 
 
 def toggle(label: str, section: str, description: str, on: str, off: str, *, tab: str = "",
-           learned_role: str = "") -> Dict[str, Any]:
-    """켜고 끄는 항목. increase/decrease에 켜면·끄면의 설명을 둔다. tab·learned_role은 number와 같다."""
+           learned_role: str = "", card: str = "") -> Dict[str, Any]:
+    """켜고 끄는 항목. increase/decrease에 켜면·끄면의 설명을 둔다. tab·learned_role은 number와 같다. card는 그 탭의
+    섹션 대신 전용 카드가 바꾸는 항목의 카드 이름이다(예: tab="vehicle", card="calibration" = 차량 특성 탭의 카메라
+    캘리브레이션 카드, POST /api/calibration/source). 파라미터 API로는 바꿀 수 없고(ParamStore.update), section은
+    파일 그룹의 섹션이다."""
     return _with({"label": label, "section": section, "description": description, "increase": on, "decrease": off},
-                 tab=tab, learned_role=learned_role)
+                 tab=tab, learned_role=learned_role, card=card)
 
 
 PARAM_GROUPS: Dict[str, Dict[str, Any]] = {
@@ -51,7 +54,7 @@ PARAM_GROUPS: Dict[str, Dict[str, Any]] = {
         "label": "기기 설정", "file": "display.json", "notify": "",
         "note": "화면을 꺼도 영상 파이프라인은 계속 동작하고, 밝기 값은 다음에 켤 때 그대로 복원됩니다. 알림음 크기는 "
                 "1초 안에 반영되고 확인음이 한 번 납니다.",
-        "sections": ["백라이트", "소리", "카메라 장착", "화면 표시"],
+        "sections": ["백라이트", "소리", "카메라 장착"],
     },
 }
 
@@ -373,13 +376,15 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
             "같은 보정값의 효과가 작아집니다.",
             "같은 보정값의 효과가 커집니다.",
         ),
-        "hud_debug": toggle(
-            "HUD 진단 정보", "화면 표시",
-            "주행 화면 왼쪽에 다른 카드에 없는 진단 수치(FPS, 조향 토크, 학습기 상세)를 띄웁니다. 주행 화면 왼쪽 열을 "
-            "눌러도 잠시 켜고 끌 수 있습니다. 기어, TPMS와 카메라 보정, 보드 상태, 제어가 쓰는 학습값은 늘 보이고, "
-            "네트워크 정보는 오른쪽 위를 누르면 나옵니다.",
-            "켜면 진단 수치를 계속 보여 줍니다.",
-            "끄면 주행에 필요한 정보만 보여 줍니다.",
+        "calibration_use_flow": toggle(
+            "광류 캘리브레이션", "카메라 장착",
+            "워프 보정의 pitch·yaw를 광류 추정(영상에서 직접 잰 카메라 이동 방향)으로 바꿉니다. 광류 추정이 쓸 만할 때"
+            "(시속 40 km 이상 직진 약 25초, 3블록 이상)만 쓰고, 그 전에는 모델 포즈 보정을 씁니다. roll은 광류로 잴 수 없어 "
+            "포즈 보정 값을 그대로 씁니다. 결합 중에는 바꿀 수 없고, 바꾸면 워프를 몇 초에 걸쳐 옮깁니다. 상태와 두 추정의 "
+            "차이는 차량 특성 탭의 카메라 캘리브레이션 카드에 있습니다.",
+            "켜면 광류 추정으로 보정합니다. 모델 pose가 워프를 일부만 따라가 생기던 yaw 치우침(−0.5°로 끌려감)이 없어집니다.",
+            "끄면 모델 포즈 보정만 씁니다(예전 동작).",
+            tab="vehicle", card="calibration",
         ),
     },
 }

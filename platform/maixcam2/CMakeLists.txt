@@ -30,6 +30,13 @@ target_include_directories(maixcam2_gdc SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_ms
 target_compile_options(maixcam2_gdc PRIVATE ${PROJECT_WARNINGS})
 target_link_libraries(maixcam2_gdc PUBLIC "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
 
+# 광류 보정기용 VPP 축소 단과 IVE(코너 응답·LK). GDC와 같이 MSP SDK를 직접 쓴다(modeld 안에서 돈다).
+add_library(maixcam2_ive STATIC maix_ive_flow.cc)
+target_include_directories(maixcam2_ive PUBLIC "${PROJECT_SOURCE_DIR}/platform")
+target_include_directories(maixcam2_ive SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_msp/out/arm64_glibc/include")
+target_compile_options(maixcam2_ive PRIVATE ${PROJECT_WARNINGS})
+target_link_libraries(maixcam2_ive PUBLIC "${AX_LIB_DIR}/libax_ive.so" "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
+
 # 녹화용 하드웨어 H.264 인코더. GDC와 같이 MSP SDK를 직접 쓴다.
 add_library(maixcam2_venc STATIC maix_venc.cc)
 target_include_directories(maixcam2_venc PUBLIC "${PROJECT_SOURCE_DIR}/platform")

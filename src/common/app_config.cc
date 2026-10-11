@@ -53,6 +53,7 @@ AppConfig AppConfig::from_env_defaults()
     config.manual_yaw = deg_to_rad(env_float("EDGEPILOT_CALIB_YAW_DEG", 0.0f));
     config.log_calibration = env_flag("EDGEPILOT_LOG_CALIB");
     config.profile = env_flag("EDGEPILOT_PROFILE");
+    config.flow_calibration = env_flag("EDGEPILOT_FLOW_CALIB", true);
     return config;
 }
 

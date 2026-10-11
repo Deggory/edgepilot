@@ -114,6 +114,11 @@ struct PoseState {
     float rot_std[3] = {};
 };
 
+/* 모델 입력 워프의 보정. 모든 필드가 워프에 쓴 보정과 그 출처(calibration_source.source)의 것이다.
+ * - 포즈 출처: status·valid_blocks·spread는 포즈 보정기 그대로(5블록이면 Calibrated, spread는 블록 범위).
+ * - 광류 출처: status는 Calibrated(쓸 만할 때만 쓴다), valid_blocks는 광류 추정에 든 블록 수(3블록부터 쓴다),
+ *   spread는 roll이 포즈 보정기 범위, pitch·yaw가 광류 블록 중앙값의 표준편차다.
+ * 출처마다 블록의 크기와 통계가 다르니 출처와 함께 읽는다. */
 struct CalibrationState {
     uint32_t status = 0;
     int32_t valid_blocks = 0;
@@ -122,6 +127,49 @@ struct CalibrationState {
     float yaw = 0.0f;
     float spread[3] = {};
 };
+
+/* 광류 보정기(model/flow_calibration)의 상태. 카메라가 실제로 움직이는 방향을 영상에서 직접 잰
+ * 절대 측정이다. 웹 기기 설정이 광류이고 추정이 쓸 만하면 워프의 pitch·yaw가 된다(calibration_source).
+ * 각도는 calibration과 같은 규약(rad)이다. */
+struct FlowCalibrationState {
+    uint64_t window_frame_id = 0;  // 마지막으로 받아들인 측정 창의 끝 프레임(0이면 아직 없음)
+    uint32_t status = 0;           // 0 꺼짐, 1 모으는 중(블록 부족), 2 추정 있음
+    uint32_t windows = 0;          // 받아들인 측정 창 수
+    uint32_t blocks = 0;           // 끝난 블록 수(창 kFlowBlockWindows개마다 하나)
+    float pitch = 0.0f;            // 블록 중앙값들의 평균
+    float yaw = 0.0f;
+    float sd_pitch = 0.0f;         // 블록 중앙값의 표준편차(v10 녹화는 이 자리가 spread_*, 범위였다)
+    float sd_yaw = 0.0f;
+    float window_pitch = 0.0f;     // 마지막 창 하나의 결과
+    float window_yaw = 0.0f;
+    float window_rotation = 0.0f;  // 그 창(0.4초) 동안 카메라가 돈 각도
+    uint32_t window_tracks = 0;    // 끝까지 따라간 점
+    uint32_t window_inliers = 0;   // 그중 풀이에 맞는 점
+    // 녹화 v11부터
+    uint32_t mount_changes = 0;    // 장착 변경으로 보고 예전 블록을 버린 횟수(저장 파일과 함께 이어진다)
+    float window_parallax = 0.0f;  // 마지막으로 푼 창의 점 이동량 중앙값(px). 작으면 방향이 서지 않아 버린다
+    uint32_t estimate_blocks = 0;  // 지금 추정에 든 블록 수(최대 kFlowMaxBlocks). blocks는 누적이다
+    uint32_t rejected_windows = 0; // 끝까지 갔지만 풀이가 맞지 않거나 이동량이 작아 버린 창
+};
+static_assert(sizeof(FlowCalibrationState) == 72, "FlowCalibrationState is recorded as-is");
+
+/* 워프에 쓴 보정의 출처와 모델 포즈 보정기 자신의 추정(녹화 v11부터). calibration은 언제나 워프에 쓴
+ * 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다(upstream 루프는 모델이 자기 값으로 워프된 영상을
+ * 봤다고 가정한다). 광류가 워프를 맡는 동안 pose_*는 멈춘 마지막 추정이다. */
+struct CalibrationSourceState {
+    uint32_t source = 0;             // 0 모델 포즈, 1 광류
+    uint32_t requested = 0;          // 웹 기기 설정(display.json calibration_use_flow). 결합 중에는 바뀌어도 기다린다
+    uint32_t flags = 0;              // kCalibrationSource* 비트
+    uint32_t pose_status = 0;        // 포즈 보정기의 CalibrationStatus
+    int32_t pose_valid_blocks = 0;
+    float pose_roll = 0.0f;          // rad
+    float pose_pitch = 0.0f;
+    float pose_yaw = 0.0f;
+};
+static_assert(sizeof(CalibrationSourceState) == 32, "CalibrationSourceState is recorded as-is");
+constexpr uint32_t kCalibrationSourceFlowUsable = 1u << 0;   // 광류 추정을 워프에 쓸 수 있다
+constexpr uint32_t kCalibrationSourcePending = 1u << 1;      // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
+constexpr uint32_t kCalibrationSourceRamping = 1u << 2;      // 워프가 새 목표로 천천히 옮겨 가는 중
 
 struct ModelState {
     uint64_t frame_id = 0;
@@ -154,16 +202,23 @@ struct ModelState {
      * 출발 알림이 2초 가속 확률로 녹색 신호를 잡는다(경로보다 빨리, 경로가 안 열려도 오른다). */
     float gas_press_probs[kMetaPressHorizons] = {};
     float brake_press_probs[kMetaPressHorizons] = {};
+    // 녹화 v10부터. 광류 보정기의 상태(v11부터 끝에 네 필드가 붙었다).
+    FlowCalibrationState flow_calibration;
+    // 녹화 v11부터. 워프 보정의 출처와 포즈 보정기 자신의 추정.
+    CalibrationSourceState calibration_source;
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
  * kRecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(ModelState) == 3576 && offsetof(ModelState, plan_yaw) == 3256 &&
+static_assert(sizeof(ModelState) == 3680 && offsetof(ModelState, plan_yaw) == 3256 &&
                   offsetof(ModelState, camera_offset_m) == 3520 &&
-                  offsetof(ModelState, gas_press_probs) == 3528,
+                  offsetof(ModelState, gas_press_probs) == 3528 &&
+                  offsetof(ModelState, flow_calibration) == 3576 &&
+                  offsetof(ModelState, calibration_source) == 3648,
               "ModelState layout is shared with the recording reader");
-// 웹 콘솔(web_console/state_layout.py MODEL_CALIBRATION_AT)이 이 위치에서 보정 상태를 읽는다.
+/* 웹 콘솔(web_console/state_layout.py MODEL_CALIBRATION_AT, MODEL_FLOW_CALIBRATION_AT,
+ * MODEL_CALIBRATION_SOURCE_AT)이 이 위치에서 보정 상태를 읽는다. */
 static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationState) == 32,
               "ModelState.calibration is read by the web console");
 /* 웹 BEV 탭(scripts/web_console/static/bev_data.js)이 위치로 읽는 필드. 서버는 페이로드를 그대로 보내고

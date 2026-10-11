@@ -18,8 +18,12 @@
  * v7: ModelState 끝에 camera_offset_m/camera_height_m(8 B, 워프에 쓴 카메라 장착).
  * v8: ModelState 끝에 gas_press_probs/brake_press_probs(48 B, 모델 meta의 페달 예측).
  * v9: 파일 머리 매직을 EDGELOG1(이벤트 로그)·EDGEIDX1(프레임 인덱스)로 바꿨다. 레이아웃은 v8과
- *     같고, v8 이하 녹화는 예전 매직 그대로 읽는다. */
-constexpr uint32_t kRecordingVersion = 9;
+ *     같고, v8 이하 녹화는 예전 매직 그대로 읽는다.
+ * v10: ModelState 끝에 flow_calibration(56 B, 광류 보정기의 섀도 상태).
+ * v11: flow_calibration 끝에 mount_changes·window_parallax·estimate_blocks·rejected_windows(72 B가 됨), 그
+ *      뒤에 calibration_source(32 B,
+ *      워프 보정의 출처와 포즈 보정기 자신의 추정). calibration은 이제 출처와 상관없이 워프에 쓴 값이다. */
+constexpr uint32_t kRecordingVersion = 11;
 
 /* 파일 머리 매직. 리더는 v8 이하 녹화의 예전 매직(kLegacy*)도 받는다. */
 constexpr char kEventLogMagic[8] = {'E', 'D', 'G', 'E', 'L', 'O', 'G', '1'};

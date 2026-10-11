@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 // 단순 JSON 텍스트에서 bool 값을 읽는다.
 bool parse_json_bool_value(const std::string &text, const std::string &key, bool *out);
@@ -49,6 +50,11 @@ void parse_json_fields(const std::string &text, const JsonFloatField<T> (&fields
 bool load_json_param_file(const std::string &path,
                           const std::function<void(const std::string &)> &apply,
                           std::string *error);
+
+/* 단순 JSON 텍스트에서 길이가 정해지지 않은 float 배열을 읽는다(최대 max_count개). 키가 없으면 false, 숫자가
+ * 아니거나 max_count를 넘으면 예외. */
+bool parse_json_float_list(const std::string &text, const std::string &key, size_t max_count,
+                           std::vector<float> *out);
 
 // 단순 JSON 텍스트에서 고정 길이 float 배열을 읽는다.
 template <size_t N>
