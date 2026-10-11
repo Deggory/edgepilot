@@ -32,6 +32,21 @@ constexpr double kDisplayScaleTauS = 5.0;
 constexpr float kDisplayScaleMin = 0.97f;
 constexpr float kDisplayScaleMax = 1.25f;
 constexpr float kDisplayScaleLearnMinKph = 30.0f;
+/* 추정과 클러스터 속도의 어긋남은 크루즈가 속도를 붙잡고 있을 때만 본다: 가속 페달을 이만큼 떼고
+ * 있고 클러스터 속도가 이만큼 정착했을 때. 운전자가 페달로 달리는 동안이나 새 설정 속도로 미끄러져
+ * 가는 동안의 클러스터 속도는 설정 속도가 아니다. 예전에는 그것을 "SET-이 안 먹었다"로 읽어 추정을
+ * 페달 속도로 올리고 30초 쉬었다(2026-10-10 주행 10분에 24번, 앞차에 붙는 동안에도 SET-을 못 냈다). */
+constexpr double kHoldingPedalFreeS = 3.0;
+constexpr double kHoldingSteadyS = 2.0;
+/* 차가 이미 설정 속도 쪽으로 움직이면(감속·가속 중) 설정 속도를 실제 속도에서 이보다 멀리 보내지
+ * 않는다. 고정형 크루즈의 감속은 설정 속도가 몇 km/h만 아래여도 포화되어(K7 실측 약 0.1 m/s²) 더
+ * 낮춰도 빨라지지 않고, 상황이 바뀌면 되돌릴 버튼만 늘어난다. 차가 반응하지 않으면 계속 누른다. */
+constexpr float kResponseLeadKph = 6.0f;
+constexpr float kResponseAccelMps2 = 0.05f;
+constexpr double kSpeedTrendTauS = 1.0;
+/* 버튼 판단용 목표 속도는 초당 이만큼만 오른다(내려갈 때는 바로). 앞차 거리·속도 잡음으로 목표가
+ * 매초 몇 km/h씩 흔들려 SET-/RES+가 번갈아 나갔다(2026-10-10 18:34 주행 펄스의 36%). */
+constexpr float kTargetRiseKphPerS = 1.0f;
 
 float minimum_speed_kph(bool speed_unit_mph) {
   return speed_unit_mph ? kMinimumCruiseSpeedMph * kMphToKph : kMinimumCruiseSpeedKph;
@@ -67,7 +82,7 @@ constexpr JsonFloatField<AdaptiveCruiseConfig> kAdaptiveFloats[] = {
     {"gap_correction_gain", 0.05f, 1.0f, &AdaptiveCruiseConfig::gap_correction_gain},
     {"max_slowdown_correction_mps", 0.5f, 10.0f, &AdaptiveCruiseConfig::max_slowdown_correction_mps},
     {"max_speedup_correction_mps", 0.0f, 5.0f, &AdaptiveCruiseConfig::max_speedup_correction_mps},
-    {"deceleration_rate_kph_per_s", 0.5f, 5.0f, &AdaptiveCruiseConfig::deceleration_rate_kph_per_s},
+    {"deceleration_rate_kph_per_s", 0.2f, 5.0f, &AdaptiveCruiseConfig::deceleration_rate_kph_per_s},
     {"lead_hold_s", 0.1f, 2.0f, &AdaptiveCruiseConfig::lead_hold_s},
     {"lead_restore_delay_s", 1.0f, 10.0f, &AdaptiveCruiseConfig::lead_restore_delay_s},
     {"command_interval_s", 0.5f, 5.0f, &AdaptiveCruiseConfig::command_interval_s},
@@ -147,6 +162,19 @@ void AdaptiveCruiseController::LeadFilter::update(
   last_valid_s = input.now_s;
 }
 
+void AdaptiveCruiseController::SpeedTrend::update(float speed_kph, double dt_s) {
+  if (!std::isfinite(speed_kph)) {
+    accel_mps2 = 0.0f;
+    last_kph = -1.0f;
+    return;
+  }
+  if (last_kph >= 0.0f && dt_s > 0.0) {
+    const float raw_mps2 = (speed_kph - last_kph) / 3.6f / static_cast<float>(dt_s);
+    accel_mps2 += (raw_mps2 - accel_mps2) * static_cast<float>(std::min(1.0, dt_s / kSpeedTrendTauS));
+  }
+  last_kph = speed_kph;
+}
+
 /* 클러스터 속도가 kClusterSteadyKph 폭 안에서 kClusterSteadyHoldS 넘게 머물면 정착이다(고정형
  * 크루즈가 설정 속도에 닿았다). */
 bool AdaptiveCruiseController::ClusterSteady::update(bool valid, float speed_kph,
@@ -171,6 +199,10 @@ struct AdaptiveCruiseController::Tick {
   bool cluster_valid = false;
   bool cluster_steady = false;
   bool driver_adjusting = false;
+  // 크루즈가 속도를 붙잡고 있다: 가속 페달을 뗀 지 오래고 클러스터 속도가 정착했다
+  bool cruise_holding = false;
+  bool decelerating = false;
+  bool accelerating = false;
 };
 
 /* 세션 종료. cruise_active 는 SCC12와 CLU11 추정이 같은 필드를 쓰므로 한 틱
@@ -229,10 +261,15 @@ void AdaptiveCruiseController::reanchor_after_driver(const AdaptiveCruiseInput &
 }
 
 /* 추측 적산이 실제와 오래 어긋나면(펄스 유실, 스텝 크기 불일치) 실측으로
- * 되돌린다. 천장은 건드리지 않는다 — 운전자 의도가 아니기 때문이다. */
+ * 되돌린다. 천장은 건드리지 않는다 — 운전자 의도가 아니기 때문이다. 크루즈가 속도를
+ * 붙잡고 있을 때만 본다(kHoldingPedalFreeS). */
 void AdaptiveCruiseController::resolve_command_mismatch(const AdaptiveCruiseInput &input,
                                                         const Tick &tick) {
   Session &s = session_;
+  if (!tick.cruise_holding) {
+    s.mismatch_since_s = -1.0;
+    return;
+  }
   if (s.valid && input.cruise_active && tick.cluster_valid &&
       !tick.driver_adjusting && s.command_frames_remaining == 0 &&
       s.last_command_s >= 0.0 &&
@@ -277,11 +314,20 @@ float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input,
         1.0f, lead_.distance_m +
                   std::min(0.0f, lead_.relative_speed_mps) *
                       prediction_horizon_s);
-    const float gap_correction_mps = clamp_float(
+    float gap_correction_mps = clamp_float(
         (predicted_lead_distance_m - desired_gap_m) *
             config_.gap_correction_gain,
         -config_.max_slowdown_correction_mps,
         config_.max_speedup_correction_mps);
+    /* 다가가는 속도는 고정형 크루즈의 약한 감속으로 원하는 차간에 닿기 전에 없앨 수 있는 만큼만
+     * 허용한다(v² = 2·a·남은 거리). 비례 보정만 쓰면 10 m 밖에서 2.5 m/s로 다가가 감속이 따라오지
+     * 못하고 차간 안쪽으로 밀려 들어갔다. */
+    if (gap_correction_mps > 0.0f) {
+      const float coast_mps2 = std::max(0.01f, config_.deceleration_rate_kph_per_s / 3.6f);
+      gap_correction_mps = std::min(
+          gap_correction_mps,
+          std::sqrt(2.0f * coast_mps2 * (predicted_lead_distance_m - desired_gap_m)));
+    }
     /* 차간·상대속도는 휠 속도 기준, 설정 속도는 클러스터 표시 기준이다. K7
      * 실측으로 클러스터가 6.6% 높아, 환산 없이 비교하면 차간이 맞아도 SET-이
      * 계속 나가 설정 속도가 바닥까지 내려갔다. */
@@ -295,6 +341,22 @@ float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input,
     target_speed_kph = s.maximum_speed_kph;
   }
   return target_speed_kph;
+}
+
+/* 버튼 판단용 목표 속도. 내려갈 때는 바로 따라가 감속을 늦추지 않고, 올라갈 때는 초당
+ * kTargetRiseKphPerS만 오른다. 오르기 시작점은 명령 속도 한 스텝 아래보다 낮지 않게 잡아, 깊이
+ * 내려갔던 목표가 RES+를 오래 막지 않게 한다(그 아래에서는 어차피 SET-만 나온다). */
+float AdaptiveCruiseController::smooth_target(const Tick &tick, float target_speed_kph, double dt_s) {
+  Session &s = session_;
+  if (!s.valid) return target_speed_kph;
+  if (s.smoothed_target_kph < 0.0f || target_speed_kph <= s.smoothed_target_kph) {
+    s.smoothed_target_kph = target_speed_kph;
+  } else {
+    const float start_kph = std::max(s.smoothed_target_kph, s.commanded_speed_kph - tick.step_kph);
+    s.smoothed_target_kph =
+        std::min(target_speed_kph, start_kph + kTargetRiseKphPerS * static_cast<float>(dt_s));
+  }
+  return s.smoothed_target_kph;
 }
 
 /* 명령 게이트와 버튼 펄스. 척도를 모르면 두 척도를 비교할 수 없으므로 아예
@@ -326,33 +388,30 @@ int AdaptiveCruiseController::pace_buttons(const AdaptiveCruiseInput &input, con
     /* 데드밴드는 한 스텝. 0.75스텝이면 한 번 누른 결과가 다시 밴드 밖으로
      * 나가 SET-/RES+가 번갈아 나온다(65 km/h 추종 180초: 87회 -> 37회). */
     const float command_deadband_kph = tick.step_kph;
-    const bool wants_set =
+    bool wants_set =
         target_speed_kph <= s.commanded_speed_kph - command_deadband_kph &&
         s.commanded_speed_kph > tick.minimum_kph + 0.1f;
-    const bool wants_resume =
+    bool wants_resume =
         target_speed_kph >= s.commanded_speed_kph + command_deadband_kph &&
         s.commanded_speed_kph < s.maximum_speed_kph - 0.1f;
-    /* SET-과 RES+에 같은 간격. 감속 응답을 기다리는 긴 간격은 연속 SET- 사이
-     * 에만 쓴다. */
-    const double slowdown_interval_s = std::max(
-        static_cast<double>(config_.command_interval_s),
-        static_cast<double>(tick.step_kph) /
-            std::max(0.1, static_cast<double>(config_.deceleration_rate_kph_per_s)));
-    const double button_interval_s = s.last_auto_command_was_set
-        ? slowdown_interval_s
-        : static_cast<double>(config_.command_interval_s);
+    /* 차가 이미 그쪽으로 움직이고 설정 속도가 실제 속도에서 kResponseLeadKph 넘게 벌어져 있으면
+     * 더 누르지 않는다. 더 벌려도 고정형 크루즈는 빨리 줄이지 않고, 앞차가 바뀌면 되돌릴 버튼만 는다. */
+    if (tick.cluster_valid) {
+      wants_set = wants_set &&
+                  (s.commanded_speed_kph > input.cluster_speed_kph - kResponseLeadKph || !tick.decelerating);
+      wants_resume = wants_resume &&
+                     (s.commanded_speed_kph < input.cluster_speed_kph + kResponseLeadKph || !tick.accelerating);
+    }
     const bool interval_ready =
         s.last_command_s < 0.0 ||
-        input.now_s - s.last_command_s >= button_interval_s;
+        input.now_s - s.last_command_s >= config_.command_interval_s;
 
     if (wants_set && interval_ready) {
       s.command_button = kCruiseButtonSet;
-      s.last_auto_command_was_set = true;
       s.commanded_speed_kph =
           std::max(tick.minimum_kph, s.commanded_speed_kph - tick.step_kph);
     } else if (wants_resume && interval_ready) {
       s.command_button = kCruiseButtonResume;
-      s.last_auto_command_was_set = false;
       s.commanded_speed_kph =
           std::min(s.maximum_speed_kph, s.commanded_speed_kph + tick.step_kph);
     } else {
@@ -374,6 +433,7 @@ AdaptiveCruiseOutput AdaptiveCruiseController::update(
       ? 0.0 : std::min(0.1, input.now_s - last_update_s_);
   last_update_s_ = input.now_s;
   display_scale_.update(input, dt_s);
+  speed_trend_.update(input.ego_speed_kph, dt_s);
 
   Tick tick;
   tick.accelerator_override = input.gas_pressed || input.driver_accelerator_override;
@@ -387,6 +447,12 @@ AdaptiveCruiseOutput AdaptiveCruiseController::update(
                        input.cluster_speed_kph > 0.0f;
   tick.cluster_steady =
       cluster_steady_.update(tick.cluster_valid, input.cluster_speed_kph, input.now_s);
+  const bool pedal_free = last_accelerator_override_s_ < 0.0 ||
+                          input.now_s - last_accelerator_override_s_ >= kHoldingPedalFreeS;
+  tick.cruise_holding = pedal_free && tick.cluster_valid &&
+                        cluster_steady_.held_s(input.now_s) >= kHoldingSteadyS;
+  tick.decelerating = speed_trend_.accel_mps2 < -kResponseAccelMps2;
+  tick.accelerating = speed_trend_.accel_mps2 > kResponseAccelMps2;
 
   teardown_session(input, tick);
   track_driver_adjustment(input, &tick);
@@ -395,7 +461,7 @@ AdaptiveCruiseOutput AdaptiveCruiseController::update(
   resolve_command_mismatch(input, tick);
   lead_.update(input, config_);
   bool lead_valid = false;
-  const float target_speed_kph = target_speed(input, tick, &lead_valid);
+  const float target_speed_kph = smooth_target(tick, target_speed(input, tick, &lead_valid), dt_s);
   const bool active = input.enabled && session_.valid && input.cruise_active;
   const int output_button = pace_buttons(input, tick, target_speed_kph, active);
 

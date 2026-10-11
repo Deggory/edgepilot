@@ -9,7 +9,10 @@ struct AdaptiveCruiseConfig {
   float gap_correction_gain = 0.25f;
   float max_slowdown_correction_mps = 4.0f;
   float max_speedup_correction_mps = 2.5f;
-  float deceleration_rate_kph_per_s = 1.5f;
+  /* SET-로 설정 속도를 낮췄을 때 차가 실제로 줄이는 속도. 고정형 크루즈는 가속만 끊고 브레이크를 쓰지
+   * 않아 약하다(K7 HEV 실측: SET- 연타 뒤 중앙값 0.15 m/s², 설정 속도를 더 낮춰도 커지지 않음). 앞차에
+   * 다가가는 속도 한계와 예상 차간거리에 쓴다. */
+  float deceleration_rate_kph_per_s = 0.5f;
   float lead_hold_s = 0.6f;
   float lead_restore_delay_s = 2.0f;
   float command_interval_s = 1.0f;
@@ -81,7 +84,8 @@ private:
      * 속도가 정착하면 다시 앵커하고, 클러스터 속도와 오래 어긋나면 실측으로 되돌린다. */
     float commanded_speed_kph = 0.0f;
     double last_command_s = -1.0;
-    bool last_auto_command_was_set = false;
+    /* 버튼 판단에 쓰는 목표 속도. 내려갈 때는 바로, 올라갈 때는 천천히 따라간다(smooth_target). 음수면 없음. */
+    float smoothed_target_kph = -1.0f;
     /* 운전자가 버튼을 만지는 동안과 그 뒤 정착 시간. 이 구간에는 자동 명령을
      * 쉬고, 끝나면 실측 속도로 다시 앵커한다. */
     double driver_adjust_until_s = -1.0;
@@ -123,6 +127,15 @@ private:
     double ref_s = -1.0;
     // 정착했으면 true.
     bool update(bool valid, float speed_kph, double now_s);
+    // 지금 폭 안에 머문 시간. update 뒤에 부른다.
+    double held_s(double now_s) const { return ref_s < 0.0 ? 0.0 : now_s - ref_s; }
+  };
+
+  /* 휠 속도로 본 실제 가감속(1초 필터). 차가 이미 설정 속도 쪽으로 움직이는지 판단한다. */
+  struct SpeedTrend {
+    float accel_mps2 = 0.0f;
+    float last_kph = -1.0f;
+    void update(float speed_kph, double dt_s);
   };
 
   void teardown_session(const AdaptiveCruiseInput &input, const Tick &tick);
@@ -131,6 +144,7 @@ private:
   void reanchor_after_driver(const AdaptiveCruiseInput &input, const Tick &tick);
   void resolve_command_mismatch(const AdaptiveCruiseInput &input, const Tick &tick);
   float target_speed(const AdaptiveCruiseInput &input, const Tick &tick, bool *lead_valid) const;
+  float smooth_target(const Tick &tick, float target_speed_kph, double dt_s);
   int pace_buttons(const AdaptiveCruiseInput &input, const Tick &tick,
                    float target_speed_kph, bool active);
 
@@ -139,6 +153,7 @@ private:
   LeadFilter lead_;
   DisplayScale display_scale_;
   ClusterSteady cluster_steady_;
+  SpeedTrend speed_trend_;
   int previous_driver_main_button_ = 0;
   double last_accelerator_override_s_ = -1.0;
   double last_update_s_ = -1.0;

@@ -166,8 +166,12 @@ Libraries `control_core` and `controls`, process `controlsd`.
   - vision cruise setpoint control and departure alerting. The cruise
     controller dead-reckons the car's set speed per session (this car does not
     report it), re-anchors to the cluster speed once the driver's buttons
-    settle and after a long mismatch, and paces SET-/RES+ pulses from a
-    filtered vision lead and the learned cluster/wheel speed ratio. The
+    settle and after a long mismatch while the cruise holds speed, and paces
+    SET-/RES+ pulses from a filtered vision lead and the learned cluster/wheel
+    speed ratio. The approach to a lead is capped by the fixed cruise's weak
+    coasting deceleration, the set speed is kept near the actual speed while
+    the car responds, and the button target rises slowly so lead noise does
+    not alternate SET-/RES+. The
     departure detector runs three trackers per stop: close lead, lead
     departure and green light.
 - `control_block.h`

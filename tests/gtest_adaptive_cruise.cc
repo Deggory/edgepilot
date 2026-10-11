@@ -53,6 +53,14 @@ struct Vehicle {
   void settle(float dt_s) {
     cluster_speed_kph += (set_speed_kph - cluster_speed_kph) * dt_s * 0.8f;
   }
+  /* K7 HEV 실측에 가까운 응답: 설정 속도보다 빠르면 가속만 끊어 초당 coast_kph_s만큼 줄고(브레이크를
+   * 쓰지 않는다), 느리면 초당 accel_kph_s만큼 는다. settle보다 훨씬 느리다. */
+  void coast(float dt_s, float coast_kph_s = 0.5f, float accel_kph_s = 0.5f) {
+    if (cluster_speed_kph > set_speed_kph)
+      cluster_speed_kph = std::fmax(set_speed_kph, cluster_speed_kph - coast_kph_s * dt_s);
+    else
+      cluster_speed_kph = std::fmin(set_speed_kph, cluster_speed_kph + accel_kph_s * dt_s);
+  }
   float wheel_kph() const { return cluster_speed_kph / over_read; }
 };
 
@@ -88,7 +96,7 @@ AdaptiveCruiseOutput activate(AdaptiveCruiseController *controller,
   return tick(controller, input, vehicle);
 }
 
-TEST(AdaptiveCruise, CloseLeadFollowsMeasuredDecelerationRate) {
+TEST(AdaptiveCruise, CloseLeadSetsAndRepeatsEveryInterval) {
   AdaptiveCruiseController controller;
   Vehicle vehicle;
   AdaptiveCruiseOutput output = activate(&controller, &vehicle);
@@ -136,12 +144,7 @@ TEST(AdaptiveCruise, CloseLeadFollowsMeasuredDecelerationRate) {
       << "명령 시작은 1초에 한 번으로 제한된다";
   input.now_s = 2.0;
   output = tick(&controller, input, &vehicle);
-  // 다음 SET은 측정된 감속 응답을 기다린다
-  ASSERT_EQ(output.command_button, 0);
-  ASSERT_NEAR(output.commanded_speed_kph, 78.0f, 0.001f);
-  input.now_s = 2.34;
-  output = tick(&controller, input, &vehicle);
-  // 앞차가 계속 가까우면 응답 시간 뒤 다음 스텝을 요청한다
+  // 차가 아직 줄지 않으면(여기서는 속도 고정) 다음 간격에 다음 스텝을 요청한다
   ASSERT_EQ(output.command_button, 2);
   ASSERT_NEAR(output.commanded_speed_kph, 76.0f, 0.001f);
 }
@@ -169,19 +172,20 @@ TEST(AdaptiveCruise, ClosingLeadPredictionAndResumeDelay) {
     tick(&controller, input, &vehicle);
   }
 
-  input.now_s = 2.0;
-  input.vision_lead_updated = true;
+  /* 앞차가 멀어진다. 버튼 판단용 목표는 초당 1 km/h만 올라(앞차 잡음으로 SET-/RES+가 번갈아
+   * 나가지 않게), 명령 속도 한 스텝 아래에서 출발해 약 4초 뒤 RES를 낸다. */
   input.vision_lead_distance_m = 150.0f;
   input.vision_lead_relative_speed_mps = 40.0f;
-  output = tick(&controller, input, &vehicle);
-  // RES는 방금 낸 SET을 바로 되돌리지 않는다
-  ASSERT_GT(output.target_speed_kph, output.commanded_speed_kph);
-  ASSERT_EQ(output.command_button, 0);
-
-  input.now_s = 3.0;
-  output = tick(&controller, input, &vehicle);
-  // 설정한 회복 지연 뒤에는 RES로 속도를 되돌린다
-  ASSERT_EQ(output.command_button, 1);
+  double resume_s = -1.0;
+  for (int i = 0; i <= 600; ++i) {
+    input.now_s = 2.0 + i * 0.01;
+    input.vision_lead_updated = (i % 5 == 0);
+    output = tick(&controller, input, &vehicle);
+    if (output.command_button == 1 && resume_s < 0.0) resume_s = input.now_s;
+    if (input.now_s < 3.0) ASSERT_EQ(output.command_button, 0) << "RES는 방금 낸 SET을 바로 되돌리지 않는다";
+  }
+  ASSERT_GT(resume_s, 5.5);
+  ASSERT_LT(resume_s, 6.5) << "목표가 다 오르면 RES로 속도를 되돌린다";
   ASSERT_NEAR(output.commanded_speed_kph, 80.0f, 0.001f);
 }
 
@@ -212,10 +216,15 @@ TEST(AdaptiveCruise, LeadLossHoldsThenRestoresMaximum) {
   ASSERT_EQ(output.command_button, 0);
   ASSERT_NEAR(output.commanded_speed_kph, 78.0f, 0.001f);
 
-  input.now_s = 3.01;
-  output = tick(&controller, input, &vehicle);
-  // 앞차가 계속 없으면 잡아 둔 최대 속도 쪽으로 되돌린다
-  ASSERT_EQ(output.command_button, 1);
+  // 앞차가 계속 없으면 복원 지연(2초) 뒤 목표가 최대 속도 쪽으로 천천히 올라 RES를 낸다
+  double resume_s = -1.0;
+  for (int i = 1; i <= 800; ++i) {
+    input.now_s = 2.0 + i * 0.01;
+    output = tick(&controller, input, &vehicle);
+    if (output.command_button == 1 && resume_s < 0.0) resume_s = input.now_s;
+  }
+  ASSERT_GT(resume_s, 3.0) << "복원 지연 전에는 되돌리지 않는다";
+  ASSERT_LT(resume_s, 7.5);
   ASSERT_NEAR(output.commanded_speed_kph, 80.0f, 0.001f);
 }
 
@@ -480,7 +489,8 @@ TEST(AdaptiveCruise, BacksOffWhenTheCarIgnoresCommands) {
     previous = output.command_button;
   }
   ASSERT_GT(presses, 0) << "반응 없는 차에도 처음에는 명령을 시도한다";
-  ASSERT_LE(presses, 20) << "반응 없는 차를 끝없이 누르지 않는다";
+  // 처음 한 번 목표까지 누른 뒤(17번) 듣지 않는다고 보고 30초 물러난다
+  ASSERT_LE(presses, 25) << "반응 없는 차를 끝없이 누르지 않는다";
 }
 
 /* 클러스터/휠 비가 학습 범위를 벗어나면 두 척도를 비교할 근거가 없다.
@@ -555,6 +565,129 @@ TEST(AdaptiveCruise, SlowerLeadIsActuallyFollowed) {
       << "느린 앞차를 원하는 간격 근처에서 따라간다";
 }
 
+/* 운전자가 가속 페달로 설정 속도보다 빨리 달리는 것은 버튼 유실이 아니다. 예전에는 클러스터가 추정보다
+ * 5초 넘게 빠르면 "SET-이 안 먹었다"로 보고 30초 물러났고, 페달을 계속 밟는 동안 5초마다 다시 걸었다.
+ * 그래서 페달을 뗀 뒤 앞차에 붙는 동안에도 SET-이 나가지 않았다(2026-10-10 주행). */
+TEST(AdaptiveCruise, PedalOverrideIsNotAMissedCommand) {
+  AdaptiveCruiseController controller;
+  Vehicle vehicle;
+  activate(&controller, &vehicle);
+  double t = 0.0;
+  for (int i = 0; i < 3000; ++i) {         // 30초 동안 페달로 95까지
+    AdaptiveCruiseInput input = base_input(t += 0.01);
+    input.gas_pressed = true;
+    vehicle.cluster_speed_kph = std::fmin(95.0f, vehicle.cluster_speed_kph + 0.02f);
+    ASSERT_EQ(tick(&controller, input, &vehicle).command_button, 0);
+  }
+  const double release_s = t;
+  double first_set_s = -1.0;
+  AdaptiveCruiseOutput output;
+  for (int i = 0; i < 2000; ++i) {         // 페달을 떼자 느린 앞차가 가깝다
+    AdaptiveCruiseInput input = base_input(t += 0.01);
+    input.vision_lead_updated = true;
+    input.vision_lead_valid = true;
+    input.vision_lead_distance_m = 25.0f;
+    input.vision_lead_relative_speed_mps = -3.0f;
+    output = tick(&controller, input, &vehicle);
+    vehicle.coast(0.01f, 1.5f);
+    if (output.command_button == 2 && first_set_s < 0.0) first_set_s = t;
+  }
+  ASSERT_GT(first_set_s, 0.0) << "페달을 뗀 뒤 앞차에 SET-을 낸다";
+  ASSERT_LT(first_set_s - release_s, 10.0) << "페달 사용을 이유로 30초 물러나 있지 않는다";
+  ASSERT_NEAR(output.maximum_speed_kph, 80.0f, 0.01f) << "페달로 달린 속도를 상한으로 굳히지 않는다";
+}
+
+/* 고정형 크루즈는 SET-에 가속만 끊어 천천히 준다(K7 실측 약 0.15 m/s²). 그래서 앞차에 다가가는 속도를
+ * 그 감속으로 원하는 차간 전에 없앨 수 있는 만큼(√(2·a·남은 거리))만 허용한다. */
+TEST(AdaptiveCruise, ApproachSpeedRespectsTheCoastingDeceleration) {
+  auto target_for = [](float deceleration_kph_per_s) {
+    AdaptiveCruiseConfig config;
+    config.deceleration_rate_kph_per_s = deceleration_kph_per_s;
+    AdaptiveCruiseController controller(config);
+    Vehicle vehicle;
+    vehicle.set_speed_kph = vehicle.cluster_speed_kph = 100.0f;
+    activate(&controller, &vehicle);
+    vehicle.cluster_speed_kph = 70.0f;     // 상한(100)보다 느리게 따라가는 중
+    AdaptiveCruiseInput input = base_input(1.0);
+    input.vision_lead_updated = true;
+    input.vision_lead_valid = true;
+    input.vision_lead_distance_m = 5.0f + 1.8f * vehicle.wheel_kph() / 3.6f + 8.0f;  // 원하는 차간 + 8 m
+    input.vision_lead_relative_speed_mps = 0.0f;
+    return tick(&controller, input, &vehicle).target_speed_kph;
+  };
+  const float coasting = target_for(0.5f);   // 실측
+  const float braking = target_for(5.0f);    // 브레이크가 있는 차라면
+  // 비례 보정은 0.25·8 = 2.0 m/s, 감속 한계는 √(2·0.139·8) = 1.49 m/s다
+  const float expected = (2.0f - std::sqrt(2.0f * 0.5f / 3.6f * 8.0f)) * 3.6f * 1.066f;
+  ASSERT_NEAR(braking - coasting, expected, 0.3f)
+      << "약한 감속이면 앞차에 더 천천히 다가간다";
+}
+
+/* 차가 이미 줄고 있으면 설정 속도를 실제 속도보다 한참 아래로 보내지 않는다. 더 낮춰도 고정형 크루즈는
+ * 빨리 줄이지 않고, 앞차가 바뀌면 되돌릴 RES+만 늘어난다(2026-10-10 18:34 주행: 차 88에 설정 추정 67).
+ * 차가 줄지 않으면(내리막, 버튼 유실) 계속 누른다. */
+TEST(AdaptiveCruise, SetStaysNearTheSpeedWhileTheCarSlows) {
+  auto run = [](bool responds, float *worst_gap_kph, float *final_set_kph) {
+    AdaptiveCruiseController controller;
+    Vehicle vehicle;
+    vehicle.set_speed_kph = vehicle.cluster_speed_kph = 100.0f;
+    activate(&controller, &vehicle);
+    float gap = 45.0f;
+    const float lead_mps = 60.0f / 3.6f;
+    *worst_gap_kph = 0.0f;
+    for (int i = 1; i <= 6000; ++i) {      // 60초
+      AdaptiveCruiseInput input = base_input(i * 0.01);
+      const float ego_mps = vehicle.wheel_kph() / 3.6f;
+      gap = std::fmax(1.0f, gap + (lead_mps - ego_mps) * 0.01f);
+      input.vision_lead_updated = (i % 5 == 0);
+      input.vision_lead_valid = true;
+      input.vision_lead_distance_m = gap;
+      input.vision_lead_relative_speed_mps = lead_mps - ego_mps;
+      tick(&controller, input, &vehicle);
+      if (responds) vehicle.coast(0.01f);
+      *worst_gap_kph = std::fmax(*worst_gap_kph, vehicle.cluster_speed_kph - vehicle.set_speed_kph);
+    }
+    *final_set_kph = vehicle.set_speed_kph;
+    return vehicle.wheel_kph();
+  };
+  float worst = 0.0f, final_set = 0.0f;
+  const float final_kph = run(true, &worst, &final_set);
+  ASSERT_LE(worst, 6.0f + 2.0f + 0.5f) << "차가 줄이는 동안 설정 속도는 실제 속도에서 한두 스텝 안쪽이다";
+  ASSERT_LT(final_kph, 72.0f) << "그래도 느린 앞차 쪽으로 계속 줄인다";
+  run(false, &worst, &final_set);
+  ASSERT_LT(final_set, 100.0f - 10.0f) << "차가 줄지 않으면 계속 누른다";
+}
+
+/* 앞차 측정 잡음(거리 ±7 m, 상대속도 ±1.5 m/s)으로 목표가 매초 흔들려도 SET-/RES+를 번갈아 내지 않는다.
+ * 예전에는 2026-10-10 18:34 주행 펄스의 36%가 3초 안에 방향을 바꿨고, 그사이 차가 앞차 쪽으로 빨라졌다. */
+TEST(AdaptiveCruise, NoisyLeadDoesNotAlternateButtons) {
+  AdaptiveCruiseController controller;
+  Vehicle vehicle;
+  activate(&controller, &vehicle);
+  int flips = 0, previous = 0, last_button = 0;
+  double last_press_s = -10.0;
+  for (int i = 1; i <= 12000; ++i) {       // 120초
+    const double now = i * 0.01;
+    AdaptiveCruiseInput input = base_input(now);
+    const float wheel_mps = vehicle.wheel_kph() / 3.6f;
+    const float sign = static_cast<int>(now / 0.7) % 2 == 0 ? 1.0f : -1.0f;
+    input.vision_lead_updated = (i % 5 == 0);
+    input.vision_lead_valid = true;
+    input.vision_lead_distance_m = 5.0f + 1.8f * wheel_mps + 7.0f * sign;
+    input.vision_lead_relative_speed_mps = 1.5f * sign;
+    const AdaptiveCruiseOutput output = tick(&controller, input, &vehicle);
+    vehicle.settle(0.01f);
+    if (output.command_button != 0 && previous == 0) {
+      if (last_button != 0 && output.command_button != last_button && now - last_press_s < 3.0) ++flips;
+      last_button = output.command_button;
+      last_press_s = now;
+    }
+    previous = output.command_button;
+  }
+  ASSERT_LE(flips, 1) << "앞차 측정 잡음으로 SET-/RES+를 번갈아 내지 않는다";
+  ASSERT_LE(vehicle.set_speed_kph, 80.0f) << "잡음으로 설정 속도가 앞차 쪽으로 오르지 않는다";
+}
+
 TEST(AdaptiveCruise, RepositoryConfigLoads) {
   AdaptiveCruiseConfig config;
   std::string error;
@@ -564,7 +697,7 @@ TEST(AdaptiveCruise, RepositoryConfigLoads) {
   ASSERT_TRUE(config.enabled);
   ASSERT_NEAR(config.following_time_s, 1.8f, 0.001f);
   ASSERT_NEAR(config.standstill_gap_m, 5.0f, 0.001f);
-  ASSERT_NEAR(config.deceleration_rate_kph_per_s, 1.5f, 0.001f);
+  ASSERT_NEAR(config.deceleration_rate_kph_per_s, 0.5f, 0.001f);
   ASSERT_NEAR(config.command_interval_s, 1.0f, 0.001f);
 }
 
