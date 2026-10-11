@@ -125,10 +125,8 @@ private:
   struct ClusterSteady {
     float ref_kph = 0.0f;
     double ref_s = -1.0;
-    // 정착했으면 true.
-    bool update(bool valid, float speed_kph, double now_s);
-    // 지금 폭 안에 머문 시간. update 뒤에 부른다.
-    double held_s(double now_s) const { return ref_s < 0.0 ? 0.0 : now_s - ref_s; }
+    // 클러스터 속도가 폭 안에 머문 시간(무효면 0).
+    double update(bool valid, float speed_kph, double now_s);
   };
 
   /* 휠 속도로 본 실제 가감속(1초 필터). 차가 이미 설정 속도 쪽으로 움직이는지 판단한다. */

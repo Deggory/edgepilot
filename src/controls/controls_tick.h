@@ -189,6 +189,7 @@ public:
   const VehicleCanState &vehicle() const { return vehicle_; }
   const AdaptiveCruiseOutput &adaptive_cruise() const { return adaptive_cruise_; }
   const DepartureAlertInput &alert_input() const { return alert_input_; }
+  const AdaptiveCruiseInput &cruise_input() const { return cruise_input_; }
   const LateralLearners &learners() const { return learners_; }
   LateralController &controller() { return controller_; }
   const LateralController &controller() const { return controller_; }
@@ -212,6 +213,7 @@ private:
   LateralControlResult last_result_;
   PandaGateOutput panda_;
   DepartureAlertInput alert_input_;
+  AdaptiveCruiseInput cruise_input_;
   /* 마지막으로 온전히 읽은 locationd 상태. 쓰기와 겹쳐 읽지 못한 틱은 상류 SubMaster처럼 이 값을 쓴다. */
   LocalizationState localization_{};
   bool localization_seen_ = false;

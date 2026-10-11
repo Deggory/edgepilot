@@ -58,6 +58,20 @@ VisionLead observe_vision_lead(const ModelState &model, uint64_t now_ns,
   return lead;
 }
 
+/* 비전 크루즈의 앞차. modeld의 앞차 추적(model/lead_tracker: 모델 거리와 광류 확대율을 섞은 값)이 있으면
+ * 거리와 상대 속도를 그것으로 바꾼다. 모델 거리는 프레임마다 0.6~1.6 m 흔들리고 상대 속도는 25 m 밖에서
+ * 실제의 절반쯤만 읽는데, 추적은 흔들림을 1/4 안팎으로 줄이고 접근 속도를 기울기 0.8로 읽는다(대신 0.35초
+ * 늦다, docs/flow-calibration.md). 쓸지 말지(확률 문턱)는 모델 앞차 그대로 정한다. 출발 알림은 늦으면 안
+ * 되고 정차 중 모델 앞차가 이미 고르므로 observe_vision_lead를 그대로 쓴다. */
+VisionLead observe_cruise_lead(VisionLead lead, const LeadTrackState &track) {
+  if (lead.signal_valid && track.valid != 0 && std::isfinite(track.distance_m) &&
+      std::isfinite(track.relative_speed_mps)) {
+    lead.distance_m = track.distance_m - kRadarToCameraDistanceM;
+    lead.relative_speed_mps = track.relative_speed_mps;
+  }
+  return lead;
+}
+
 DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicle,
                                      const LateralControlResult &result,
                                      const ModelState &model, bool model_updated,
@@ -521,8 +535,9 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
   const VisionLead lead = observe_vision_lead(model_, now_ns, ego_speed_mps);
   alert_input_ = make_alert_input(
       now_s, vehicle_, last_result_, model_, model_updated_, lead, ego_speed_mps);
-  adaptive_cruise_ = adaptive_cruise_controller_.update(make_adaptive_input(
-      now_s, cruise_.enabled, vehicle_, last_result_, panda_, model_updated_, lead, ego_speed_kph));
+  cruise_input_ = make_adaptive_input(now_s, cruise_.enabled, vehicle_, last_result_, panda_, model_updated_,
+                                      observe_cruise_lead(lead, model_.lead_track), ego_speed_kph);
+  adaptive_cruise_ = adaptive_cruise_controller_.update(cruise_input_);
 
   if (adaptive_cruise_.command_button != 0) {
     last_result_.frames.push_back(

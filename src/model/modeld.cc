@@ -1,6 +1,7 @@
 #include "common/app_config.h"
 #include "model/calibration_service.h"
 #include "model/flow_worker.h"
+#include "model/lead_tracker.h"
 #include "model/replay_source.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
@@ -21,6 +22,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -127,6 +129,7 @@ public:
         engaged_ = control_state.engaged != 0;
     }
     float v_ego() const { return v_ego_; }
+    bool vehicle_fresh() const { return gate_.vehicle_fresh; }
     int desire() const { return desire_; }
     bool engaged() const { return engaged_; }
     const FlowGateInput &flow_gate() const { return gate_; }
@@ -215,13 +218,20 @@ private:
     float height_m_ = 0.0f;
 };
 
+// 앞차 쪽 입출력
+struct LeadIo {
+    LeadFlowState flow{};                // 광류 작업이 마지막으로 낸 확대율
+    LeadFlowInput *next = nullptr;       // 광류 작업이 다음 카메라 프레임에서 따라갈 앞차(채운다)
+    LeadTracker *tracker = nullptr;      // 앞차 추적기(ModelState.lead_track)
+    float ego_mps = std::numeric_limits<float>::quiet_NaN();  // 자차 속도, 모르면 NaN(추적 시작에만 쓴다)
+};
+
 /* engaged는 controlsd 결합 상태, use_flow는 보정 출처 설정. 워프에 쓴 보정(출처와 상관없이)이 calibration,
  * 출처와 포즈 보정기 자신의 추정이 calibration_source, 광류 상태가 flow_calibration이다. */
 bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
                     CalibrationService &calibration, const CameraMount &mount,
                     uint64_t frame_id, uint64_t capture_timestamp_ns, float model_ms,
-                    float v_ego, bool engaged, bool use_flow, const LeadFlowState &lead_flow,
-                    LeadFlowInput *next_lead)
+                    float v_ego, bool engaged, bool use_flow, const LeadIo &lead)
 {
     calibration.update(parsed, v_ego, engaged, use_flow);
     float input_rpy[3];
@@ -237,15 +247,28 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
     state.camera_height_m = mount.height_m();
     state.flow_calibration = calibration.flow_state();
     state.calibration_source = calibration.source_state();
-    state.lead_flow = lead_flow;
-    if (next_lead) {  // 광류 작업이 다음 카메라 프레임에서 따라갈 앞차
-        next_lead->valid = state.lead.valid != 0;
-        next_lead->probability = state.lead.probability;
-        next_lead->x = state.lead.x;
-        next_lead->y = state.lead.y;
-        std::copy(input_rpy, input_rpy + 3, next_lead->rpy);
-        next_lead->camera_height_m = mount.height_m();
-        next_lead->camera_offset_m = mount.offset_m();
+    state.lead_flow = lead.flow;
+    if (lead.tracker) {  // 모델 앞차 거리와 확대율을 섞는다(비전 크루즈가 쓴다)
+        LeadTrackInput in;
+        in.t_s = static_cast<double>(capture_timestamp_ns) * 1e-9;
+        in.lead_valid = state.lead.valid != 0 && state.lead.probability >= kLeadProbabilityThreshold &&
+                        std::isfinite(state.lead.x) && std::isfinite(state.lead.velocity);
+        in.distance_m = state.lead.x;
+        in.relative_speed_mps = state.lead.velocity - lead.ego_mps;
+        in.flow_valid = state.lead_flow.valid != 0;
+        in.flow_frame_id = state.lead_flow.frame_id;
+        in.flow_rate = state.lead_flow.expansion_rate;
+        lead.tracker->update(in);
+        state.lead_track = lead.tracker->state();
+    }
+    if (lead.next) {  // 광류 작업이 다음 카메라 프레임에서 따라갈 앞차
+        lead.next->valid = state.lead.valid != 0;
+        lead.next->probability = state.lead.probability;
+        lead.next->x = state.lead.x;
+        lead.next->y = state.lead.y;
+        std::copy(input_rpy, input_rpy + 3, lead.next->rpy);
+        lead.next->camera_height_m = mount.height_m();
+        lead.next->camera_offset_m = mount.offset_m();
     }
     return model_pub.publish(&state, sizeof(state));
 }
@@ -289,9 +312,11 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
             raw_dump.append(raw);
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
+            // 재생은 처리 시각으로 찍으므로 앞차 추적(시간 간격이 필요하다)은 돌리지 않는다
+            const LeadIo lead;
             if (!publish_output(model_pub, model, parsed, calibration, mount,
                                 processed, monotonic_now_ns(), model_ms, 0.0f, false,
-                                settings.get().calibration_use_flow, LeadFlowState{}, nullptr)) {
+                                settings.get().calibration_use_flow, lead)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }
@@ -364,9 +389,10 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
     RingSlotMaps slot_maps;
     /* 광류 작업(보정 창과 앞차 확대율). 링 슬롯을 IVE가 직접 읽으므로 frame_ring보다 먼저 없어져야 한다(뒤에
      * 선언). IVE를 쓸 수 없으면 끄고 계속 간다(저장해 둔 보정 추정은 보정 서비스가 그대로 쓴다). 보정을 워프에
-     * 쓸지는 웹 기기 설정이고, 앞차 확대율은 ModelState.lead_flow에 기록만 한다. */
+     * 쓸지는 웹 기기 설정이고, 앞차 확대율은 ModelState.lead_flow에 기록하고 앞차 추적에 넣는다. */
     std::unique_ptr<FlowWorker> flow;
     LeadFlowInput last_lead;  // 직전 모델 출력의 앞차(다음 카메라 프레임에서 따라간다)
+    LeadTracker lead_tracker;  // ModelState.lead_track
     if (config.flow_calibration) {
         try {
             const FlowIntrinsics k{config.input_warp_fx, config.input_warp_fy, config.input_warp_cx,
@@ -379,7 +405,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
             calibration.attach_flow(flow.get());
             std::fprintf(stderr, "modeld: flow calibration and lead flow on (VPP/IVE pyramid, IVE LK)\n");
         } catch (const std::exception &e) {
-            std::fprintf(stderr, "modeld: flow calibration off: %s\n", e.what());
+            std::fprintf(stderr, "modeld: flow calibration and lead flow off: %s\n", e.what());
         }
     }
     std::vector<float> raw;
@@ -468,10 +494,14 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
         if (ok) {
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
+            LeadIo lead;
+            lead.flow = flow ? flow->lead_state() : LeadFlowState{};
+            lead.next = &last_lead;
+            lead.tracker = &lead_tracker;
+            if (ego.vehicle_fresh()) lead.ego_mps = ego.v_ego();
             if (!publish_output(model_pub, model, parsed, calibration, mount,
                                 meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego(), ego.engaged(),
-                                settings.get().calibration_use_flow, flow ? flow->lead_state() : LeadFlowState{},
-                                &last_lead)) {
+                                settings.get().calibration_use_flow, lead)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }

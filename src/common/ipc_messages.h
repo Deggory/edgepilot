@@ -177,13 +177,29 @@ constexpr uint32_t kCalibrationSourceRamping = 1u << 2;      // 워프가 새 �
 struct LeadFlowState {
     uint64_t frame_id = 0;          // 창의 끝 프레임
     uint32_t valid = 0;             // 1이면 expansion_rate가 있다
-    uint32_t points = 0;            // 창 내내 따라간 점
+    uint32_t points = 0;            // 창 내내 따라가 다듬은 점(맞춤에 넣은 수)
     uint32_t inliers = 0;           // 그중 같은 확대·이동에 맞는 점
     float expansion_rate = 0.0f;    // 1/s, ln(크기 비) / window_s. +면 가까워진다
     float window_s = 0.0f;          // 창 길이(s)
     float lead_x = 0.0f;            // 창 끝 프레임의 모델 앞차 거리(m, 카메라 기준)
 };
 static_assert(sizeof(LeadFlowState) == 32, "LeadFlowState is recorded as-is");
+
+/* 앞차 추적(녹화 v13부터, model/lead_tracker). 모델 앞차 거리와 광류 확대율을 칼만 필터로 섞은 거리와
+ * 상대 속도. 비전 크루즈가 쓴다(controls_tick observe_cruise_lead). */
+constexpr uint32_t kLeadTrackFlowUsed = 1u << 0;          // 이 프레임에 확대율을 넣었다
+constexpr uint32_t kLeadTrackFlowRejected = 1u << 1;      // 확대율이 문 밖이라 버렸다
+constexpr uint32_t kLeadTrackDistanceRejected = 1u << 2;  // 모델 거리가 문 밖이라 버렸다
+constexpr uint32_t kLeadTrackStarted = 1u << 3;           // 이 프레임에 (다시) 시작했다
+struct LeadTrackState {
+    uint32_t valid = 0;                 // 1이면 아래 값이 있다
+    uint32_t flags = 0;                 // kLeadTrack*
+    float distance_m = 0.0f;            // 앞차 거리(m, 카메라 기준: lead.x와 같다)
+    float relative_speed_mps = 0.0f;    // 앞차 - 자차(m/s, 음수면 가까워진다)
+    float distance_std_m = 0.0f;        // 필터의 표준편차
+    float relative_speed_std_mps = 0.0f;
+};
+static_assert(sizeof(LeadTrackState) == 24, "LeadTrackState is recorded as-is");
 
 struct ModelState {
     uint64_t frame_id = 0;
@@ -222,17 +238,19 @@ struct ModelState {
     CalibrationSourceState calibration_source;
     // 녹화 v12부터. 광류로 잰 앞차 확대율.
     LeadFlowState lead_flow;
+    // 녹화 v13부터. 모델 앞차와 확대율을 섞은 앞차 추적.
+    LeadTrackState lead_track;
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
  * kRecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(ModelState) == 3712 && offsetof(ModelState, plan_yaw) == 3256 &&
+static_assert(sizeof(ModelState) == 3736 && offsetof(ModelState, plan_yaw) == 3256 &&
                   offsetof(ModelState, camera_offset_m) == 3520 &&
                   offsetof(ModelState, gas_press_probs) == 3528 &&
                   offsetof(ModelState, flow_calibration) == 3576 &&
                   offsetof(ModelState, calibration_source) == 3648 &&
-                  offsetof(ModelState, lead_flow) == 3680,
+                  offsetof(ModelState, lead_flow) == 3680 && offsetof(ModelState, lead_track) == 3712,
               "ModelState layout is shared with the recording reader");
 /* 웹 콘솔(web_console/state_layout.py MODEL_CALIBRATION_AT, MODEL_FLOW_CALIBRATION_AT,
  * MODEL_CALIBRATION_SOURCE_AT)이 이 위치에서 보정 상태를 읽는다. */
@@ -253,11 +271,19 @@ EDGEPILOT_MODEL_STATE_AT(road_edges, 2316);
 EDGEPILOT_MODEL_STATE_AT(road_edge_stds, 3108);
 EDGEPILOT_MODEL_STATE_AT(lead, 3148);
 EDGEPILOT_MODEL_STATE_AT(gas_press_probs, 3528);
+EDGEPILOT_MODEL_STATE_AT(lead_flow, 3680);
+EDGEPILOT_MODEL_STATE_AT(lead_track, 3712);
 #undef EDGEPILOT_MODEL_STATE_AT
 static_assert(sizeof(IpcPoint) == 12 && sizeof(LeadState) == 24 && offsetof(LeadState, probability) == 4 &&
                   offsetof(LeadState, x) == 8 && offsetof(LeadState, velocity) == 16 &&
                   offsetof(LeadState, acceleration) == 20,
               "web BEV reads IpcPoint and LeadState by position");
+static_assert(offsetof(LeadFlowState, valid) == 8 && offsetof(LeadFlowState, expansion_rate) == 20 &&
+                  offsetof(LeadFlowState, lead_x) == 28,
+              "web BEV reads LeadFlowState by position");
+static_assert(offsetof(LeadTrackState, valid) == 0 && offsetof(LeadTrackState, distance_m) == 8 &&
+                  offsetof(LeadTrackState, relative_speed_mps) == 12,
+              "web BEV reads LeadTrackState by position");
 
 struct ProcessState {
     char name[16] = {};

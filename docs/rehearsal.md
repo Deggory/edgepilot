@@ -25,27 +25,61 @@ play, and the rehearsal can itself be recorded and compared with the original.
 ## Routes
 
 Routes record H.264 (`road.h264`), which the hardware decoder replays as it is.
-Keep the clip in tmpfs (`/tmp`) on the board and short (about a minute): it is
-read at 20 fps, and the SD card is the component that failed under sustained
-load. Record the rehearsal on the SD card, since the recorder requires 5 GB and
-10% free space at its root.
+A clip is a directory with `segments/NNN/` and `events/NNN.bin` from one route:
+
+- **Pick the event chunks by time, not by number.** Event chunks rotate every
+  60 s and video segments every 1220 frames (about 61 s), so the two drift
+  apart along a route. On the 2026-10-10 19:32 route, `events/138.bin` ended
+  before `segments/138` began (109 s apart). `replayd` only replays the CAN that
+  falls inside the video's time. A clip with the same-numbered chunks then ran
+  out of wheel speed after 11 s, and the ego speed went missing. Take the chunks
+  whose CAN times cover the clip's frames, usually the same number and the next
+  two late in a route.
+- **Keep it short.** `replayd` holds the clip's CAN and panda records in memory,
+  about 34 MB per event chunk. Linux has 447 MB, so two segments with three
+  event chunks fit.
+- **Symlinks are enough.** A clip can link to the route on the SD card. The video
+  is read at about 1 MB/s. A copy in tmpfs (`/tmp`) also costs RAM, about 90 MB
+  per segment with its chunk.
+- Record a rehearsal on the SD card, since the recorder requires 5 GB and 10%
+  free space at its root.
+- `replayd` reads the `EDGEIDX1` frame index (recording v9 and later). The board
+  kept a 2026-10-04 `replayd` until 2026-10-11, which found no frames in newer
+  routes ("no video frames").
 
 ## Running
 
-Stop the service and start the manager in rehearsal mode:
+Stop the service and start the manager in rehearsal mode, on a copy of the
+parameters:
 
     systemctl stop edgepilot
-    EDGEPILOT_LOG_DIR=/run/edgepilot \
-    EDGEPILOT_REPLAY_ROUTE=/tmp/rehearsal/<route> EDGEPILOT_REPLAY_START=0 EDGEPILOT_REPLAY_DURATION=58 \
+    W=$(mktemp -d /run/edgepilot-rehearsal.XXXXXX)
+    cp -a /root/edgepilot/params $W/params && cp -a /root/edgepilot/params.defaults $W/params.defaults
+    EDGEPILOT_LOG_DIR=$W EDGEPILOT_PARAMS_DIR=$W/params \
+    EDGEPILOT_REPLAY_ROUTE=/root/rehearsal/<clip> EDGEPILOT_REPLAY_START=0 EDGEPILOT_REPLAY_DURATION=58 \
     EDGEPILOT_FORCE_ENGAGED=1 EDGEPILOT_RECORD_ROOT=/root/rehearsal_out \
     python3 /root/edgepilot/manager.py
 
-- `EDGEPILOT_REPLAY_START`/`_DURATION` are seconds from the first frame of the
-  copied segments (duration 0 = to the end).
+- **The copy keeps the learners off the real parameters.** In a rehearsal they
+  learn from the replayed drive as if it were driven again, and save it:
+  - the pose and flow calibration in `modeld`, and `paramsd` in `controlsd`;
+  - `torqued` too while lateral control is active, as with
+    `EDGEPILOT_FORCE_ENGAGED=1`. Its points are wrong then, because the recorded
+    car answered the original controller.
+  - `lagd` runs in `locationd`, which a rehearsal leaves out.
+
+  On 2026-10-11 the first rehearsals ran on the real `params/`, and left five
+  flow-calibration blocks from the replayed drive in it.
+- **The logs survive** in `$W`. `/run/edgepilot` is emptied when the service
+  starts again.
+- **The web console runs too**, so the BEV tab shows the replay live. Settings
+  changed there go to the copy.
+- `EDGEPILOT_REPLAY_START`/`_DURATION` are seconds from the clip's first frame
+  (duration 0 = to the end).
 - `EDGEPILOT_FORCE_ENGAGED=1` because a clip cut from the middle of a drive has no
-  engage button edge; nothing is transmitted anyway.
-- Turn on `params/recording.json` `enabled` to record the rehearsal, then
-  `systemctl start edgepilot` when done.
+  engage button edge. Nothing is transmitted anyway.
+- To record the rehearsal, turn on `enabled` in the copy's `recording.json`.
+- Run `systemctl start edgepilot` when done.
 
 ## Comparing
 

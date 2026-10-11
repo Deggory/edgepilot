@@ -248,7 +248,7 @@ The BEV tab shows what the model sees from above: lane lines, road edges, the
 planned path and the lead, round the ego car, with the HUD's colours and limits
 (`hud_renderer.cc`). The browser does all the work. The board copies the
 `ModelState` and `ControlState` payloads, unparsed, into one streamed response
-(`/api/bev/stream`, a frame per new model frame, 3.8 kB at up to 20 Hz). It
+(`/api/bev/stream`, a frame per new model frame, 4.0 kB at up to 20 Hz). It
 sleeps until the next model frame is due, so a viewer costs about 3% of one
 core at nice 10, and nothing once the tab is closed or hidden. `/api/bev` says
 where the fields sit. `ipc_messages.h` pins those offsets, and
@@ -265,7 +265,10 @@ grille, lamps, chrome, plates and wheels. Its tail lamps are lit. It costs the
 browser 26k triangles in 22 meshes, and is made once when the tab opens. The lead
 is the generic car (`web_console/static/bev_car.js`).
 
-Beyond the HUD, the BEV shows the following:
+Beyond the HUD, the BEV shows the following. Its cards (lead, departure) sit in
+a column beside the view, or under it below 900 px wide, so they never cover the
+road. Over the view are only the view and layer buttons and the chips along the
+bottom.
 
 - **Planned slowdown.** The inside of the path turns amber, then red, where the
   model plans to slow down. The `PLAN` chip gives the slowest planned speed and
@@ -289,6 +292,24 @@ Beyond the HUD, the BEV shows the following:
   on and a red glow lights the road behind it, while the pedal is pressed or
   AUTO HOLD holds the car
   (`kHudFlagBrakeLights`; see [the K7 brake signals](k7-panda-port.md#brake-signals)).
+- **Lead track.** `modeld` fuses the model's lead distance with the optical
+  flow's measure of how fast the lead's image grows (`ModelState.lead_track`;
+  see [Lead track](flow-calibration.md#lead-track)). While it
+  has a value:
+  - The lead car stands at the tracked distance, and its arrow and the `LEAD`
+    chip give the tracked relative speed.
+  - A gray bar across the lane marks the model's own distance, so its jitter
+    shows.
+  - A label beside the car gives the time to contact under 10 s.
+  - A `LEAD` card shows, over the last 20 s (its title folds the charts away,
+    remembered in that browser):
+    - the distance and the relative speed of the track (green), the model's
+      own (gray) and the flow's (cyan, speed only);
+    - the trend of the model's distance (amber): a straight line over ±2 s,
+      so it ends 2 s back;
+    - its badge, the time to contact.
+
+  The vision cruise takes the track. The departure alert keeps the model's lead.
 - **Departure card.** While the car stands in D, a card shows the departure
   alert's inputs (`departure_alert.cc`):
   - the 2 s gas press probability against the 0.3 that fires it, with its last

@@ -9,7 +9,9 @@
 // threshold and risk colour; lines also in laneless mode.
 // Beyond the HUD: the path is tinted amber to red where the model plans to slow down, with the
 // slowest speed (or STOP) where it is; arcs of the curvature controlsd asks for and the one it gets;
-// the lead's brake lights; and, standing, what the departure alert decides from.
+// the lead's brake lights; the lead where modeld's lead track puts it (the model distance and optical flow
+// fused, model/lead_tracker; the vision cruise takes it) with the model's own distance as a bar, and a card of the lead's
+// distance and speed over time; and, standing, what the departure alert decides from.
 //
 // Drag to orbit, right-drag or two fingers to pan and zoom; view("behind") and view("top") set the
 // camera. The scene graph is made once: a frame writes itself into the same buffers and instanced
@@ -20,7 +22,7 @@ import * as THREE from "three";
 import {OrbitControls} from "./three/OrbitControls.js";
 import {CSS2DRenderer, CSS2DObject} from "./three/CSS2DRenderer.js";
 import {carModel, fit, wheel} from "./bev_car.js";
-import {BevStream} from "./bev_data.js";
+import {BevStream, LEAD_HISTORY_S} from "./bev_data.js";
 import {EGO_SIZE, makeEgo} from "./bev_ego.js";
 
 // The ground: 5 m and 20 m grid lines, GRID.ahead in front and GRID.side to each side.
@@ -50,6 +52,15 @@ const ARC = {seconds: 2.5, min: 10, max: 70, width: 0.16, tick: 0.7, speed: 3};
 // departure_alert.cc: standing at 0.1 m/s or less until moving above 0.5, the 2 s gas press
 // probability that fires at 0.3, the plan at 10 s that arms within ±5 m and fires above 10 m
 const DEPART = {stopped: 0.1, moving: 0.5, gas: 0.3, open: 10, arm: 5, planMax: 20, history: 10};
+// The lead card: the lead's distance and relative speed over the last LEAD_HISTORY_S (bev_data.js keeps
+// them), the speed chart at least ±minScale km/h and the distance chart at least minSpan m tall; the time to
+// contact shown below ttc s, amber below warn and red below alarm. The vision cruise takes the lead track
+// (controls_tick observe_cruise_lead); the departure alert keeps the model's lead.
+const LEAD_CARD = {minScale: 10, minSpan: 10, ttc: 10, warn: 6, alarm: 3};
+// each chart's lines: line name (its CSS class) -> lead card row field
+const LEAD_CHARTS = {distance: {model: "x", trend: "level", fused: "fx"}, speed: {model: "v", flow: "flow", trend: "trend", fused: "fv"}};
+// the lead card's folded state, remembered in this browser only
+const LEAD_FOLD_KEY = "edgepilot.bev.leadCardFolded"
 const MAX_PIXEL_RATIO = 1.5;
 const THEME = {
   background: "#0a0d12", ground: "#0e1217", road: "#131820", gridLine: "#c8d2e0", axis: "#3f74e0",
@@ -344,6 +355,11 @@ const GROUND = [`
   }`];
 
 const STYLE_SHEET = `
+.bev-layout { display: grid; grid-template-columns: minmax(0, 1fr) 252px; gap: 10px; align-items: start; }
+.bev-side { display: flex; flex-direction: column; gap: 10px; max-height: calc(100dvh - 230px); min-height: 340px;
+  overflow-y: auto; }
+.bev-side-empty { padding: 12px; border: 1px dashed var(--line, #353b40); border-radius: 7px; color: #6c7684;
+  font: 500 12px/1.5 system-ui, sans-serif; }
 .bev-panel { position: relative; height: calc(100dvh - 230px); min-height: 340px; overflow: hidden;
   border: 1px solid var(--line, #353b40); border-radius: 7px; background: ${THEME.background}; touch-action: none; }
 .bev-panel.stale canvas { filter: grayscale(1) brightness(0.6); }
@@ -355,8 +371,7 @@ const STYLE_SHEET = `
 .bev-labels .bev-tag em { font-style: normal; color: #8f9aa8; }
 .bev-labels.far .bev-tag em { display: none; }
 .bev-labels.far .bev-tag { padding: 1px 5px 1px 4px; font-size: 9px; line-height: 11px; }
-.bev-labels .bev-tag.gap { color: #fff; font-weight: 700; border-radius: 4px; }
-.bev-labels .bev-tag.speed { font-weight: 700; border-radius: 4px; }
+.bev-labels .bev-tag.gap, .bev-labels .bev-tag.speed { font-weight: 700; border-radius: 4px; }
 .bev-labels .bev-dist { font: 500 10px ui-monospace, Consolas, monospace; color: #566170; }
 .bev-hud { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .bev-hud span { display: flex; align-items: center; gap: 6px; font: 600 11px/1 ui-monospace, Consolas, monospace; color: #c9d1db;
@@ -366,23 +381,24 @@ const STYLE_SHEET = `
 .bev-hud span i { width: 8px; height: 8px; border-radius: 50%; }
 .bev-hud span.warn { color: ${HUD.amber}; }
 .bev-hud span:empty { display: none; }
-.bev-top { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; flex-direction: column; align-items: flex-end;
-  gap: 6px; pointer-events: none; }
-.bev-tools { align-self: stretch; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; }
+.bev-tools { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap;
+  justify-content: space-between; gap: 6px; pointer-events: none; }
 .bev-tools div { display: flex; flex-wrap: wrap; gap: 6px; pointer-events: auto; }
 .bev-tools button { height: 32px; padding: 0 11px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px;
   background: rgba(10, 13, 18, 0.82); color: #dde3ea; font: 650 12px system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
 .bev-tools button:hover { background: rgba(38, 43, 47, 0.92); }
 .bev-tools button[aria-pressed="false"] { color: #6c7684; border-style: dashed; }
-.bev-card { width: 214px; padding: 8px 10px 9px; border-radius: 7px;
-  background: rgba(10, 13, 18, 0.86); border: 1px solid rgba(255, 255, 255, 0.09);
+.bev-card { padding: 9px 11px 10px; border-radius: 7px;
+  background: ${THEME.background}; border: 1px solid var(--line, #353b40);
   font: 600 11px/1.2 ui-monospace, Consolas, monospace; color: #c9d1db; }
-.bev-card[hidden] { display: none; }
-.bev-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.bev-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
 .bev-card-head b { color: #8f9aa8; font-weight: 650; letter-spacing: 0.04em; }
+.bev-card-head button { padding: 0; border: 0; background: none; color: #8f9aa8; letter-spacing: 0.04em; cursor: pointer; }
+.bev-card-head button::before { content: "▾ "; }
+.bev-card.collapsed .bev-card-head button::before { content: "▸ "; }
+.bev-card.collapsed .bev-chart, .bev-card.collapsed .bev-card-foot { display: none; }
 .bev-badge { padding: 2px 7px; border-radius: 9px; font-weight: 700; color: #0a0d12; background: #566170; }
-.bev-badge.armed { background: ${HUD.amber}; }
-.bev-badge.go { background: ${HUD.green}; }
+.bev-badge.armed, .bev-badge.go { background: ${HUD.green}; }
 .bev-row { display: grid; grid-template-columns: 62px 1fr 44px; align-items: center; gap: 7px; margin-top: 6px; }
 .bev-row span { color: #8f9aa8; }
 .bev-row em { font-style: normal; text-align: right; color: #fff; }
@@ -396,22 +412,38 @@ const STYLE_SHEET = `
 .bev-spark .limit { stroke: rgba(255, 255, 255, 0.45); stroke-dasharray: 3 3; }
 .bev-spark .gas { stroke: ${HUD.green}; fill: none; stroke-width: 1.6; }
 .bev-spark .plan { stroke: #8f9aa8; fill: none; stroke-width: 1; stroke-dasharray: 2 2; }
-.bev-spark line, .bev-spark polyline { vector-effect: non-scaling-stroke; }
-.bev-card-foot { margin-top: 5px; display: flex; gap: 10px; color: #6c7684; font-size: 10px; }
+.bev-spark line, .bev-spark polyline, .bev-spark.tall { height: 56px; }
+.bev-spark .zero { stroke: rgba(255, 255, 255, 0.3); }
+.bev-spark .model { stroke: ${HUD.gray}; fill: none; stroke-width: 1.1; }
+.bev-spark .flow { stroke: ${HUD.cyan}; fill: none; stroke-width: 1; opacity: 0.8; }
+.bev-spark .fused { stroke: ${HUD.green}; fill: none; stroke-width: 1.9; }
+.bev-spark .trend { stroke: ${HUD.amber}; fill: none; stroke-width: 1.2; stroke-dasharray: 3 2; }
+.bev-chart-title { margin-top: 7px; color: #6c7684; font-size: 10px; }
+.bev-value { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 6px; margin-top: 4px; }
+.bev-value i { width: 8px; height: 8px; border-radius: 50%; }
+.bev-value span { color: #8f9aa8; }
+.bev-value em { font-style: normal; color: #fff; }
+.bev-badge.alarm { background: ${HUD.red}; color: #fff; }
+.bev-card-foot { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: #6c7684; font-size: 10px; }
 .bev-card-foot i { display: inline-block; width: 10px; height: 2px; margin-right: 4px; vertical-align: middle; }
+@media (max-width: 900px) {
+  .bev-layout { grid-template-columns: minmax(0, 1fr); }
+  .bev-side { max-height: none; min-height: 0; flex-direction: row; flex-wrap: wrap; overflow: visible; }
+  .bev-side > * { flex: 1 1 260px; }
+}
 @media (max-width: 460px) {
   .bev-panel { height: calc(100dvh - 250px); }
   .bev-tools { gap: 4px; }
   .bev-tools div { gap: 4px; }
   .bev-tools button { height: 28px; padding: 0 6px; font-size: 11px; }
   .bev-hud span { padding: 5px 6px; font-size: 10px; }
-  .bev-top { gap: 4px; }
-  .bev-card { width: 184px; padding: 7px 8px 8px; }
+  .bev-card { padding: 7px 8px 8px; }
   .bev-row { grid-template-columns: 56px 1fr 38px; gap: 5px; }
 }`;
 
 export class BevView {
-  constructor(container) {
+  // container: the 3D panel; side: the column beside (or under) it for the cards, so they do not cover the view
+  constructor(container, side) {
     this.container = container;
     if (!document.getElementById("bev-style")) {
       document.head.appendChild(Object.assign(document.createElement("style"), {id: "bev-style", textContent: STYLE_SHEET}));
@@ -428,10 +460,12 @@ export class BevView {
     this.hud = container.appendChild(el("div", "bev-hud"));
     this.chips = {};
     for (const name of ["mode", "speed", "plan", "lane", "lat", "lead", "model"]) this.chips[name] = this.hud.appendChild(el("span"));
-    // the toolbar, and the departure card under it however many rows the toolbar wraps to
-    const top = container.appendChild(el("div", "bev-top"));
-    this.tools(top.appendChild(el("div", "bev-tools")));
-    this.departureCard(top);
+    // the toolbar over the view; the cards in the side column
+    this.tools(container.appendChild(el("div", "bev-tools")));
+    this.sideEmpty = side.appendChild(el("div", "bev-side-empty",
+      "앞차가 보이면 거리와 상대 속도를, 정차해 있으면 출발 알림의 판단 근거를 여기 보여 줍니다."));
+    this.leadCard(side);
+    this.departureCard(side);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(THEME.background);
@@ -509,7 +543,9 @@ export class BevView {
       lines: put("lead", new Batch("color", 4, overlayMaterial(), 5)),
       tag: this.tag("lead_labels", "", true),
       gap: this.tag("lead_labels", "gap"),
+      ttc: this.tag("lead_labels", "ttc"),
     };
+    this.lead.ttc.center.set(1, 0.5);            // beside the car, to its left
   }
 
   // A label in group, hidden until place()d: a pill with a dot and a kind (dotted), or plain text.
@@ -643,6 +679,8 @@ export class BevView {
     this.drawEgo(scene);
     this.drawHud(scene);
     this.drawDeparture(scene);
+    this.drawLeadCard(scene);
+    this.sideEmpty.hidden = !(this.card.hidden && this.leadPanel.hidden);
   }
 
   // Lane lines as bands, as sure as the HUD draws them; the ego lane faintly filled between its
@@ -712,8 +750,10 @@ export class BevView {
     b.end();
   }
 
-  // The model's lead as a car turned along the path, ringed in the HUD's risk colour, with the gap
-  // from our bumper to its rear and an arrow of its speed relative to ours.
+  // The lead as a car turned along the path, ringed in the HUD's risk colour, with the gap from our bumper
+  // to its rear and an arrow of its speed relative to ours: where the lead track puts it when it has one,
+  // with a gray bar across the lane at the model's own distance, else the model's lead. Beside it, the time
+  // to contact while closing in.
   drawLead(scene) {
     const lead = scene.lead, parts = this.lead, model = carModel();
     // brake lights with hysteresis, so they do not flicker round the threshold
@@ -723,7 +763,7 @@ export class BevView {
     parts.wheels.begin(lead ? model.wheels.length : 0);
     parts.prints.begin(lead ? (braking ? 3 : 2) : 0);
     parts.lines.begin();
-    parts.tag.visible = parts.gap.visible = false;
+    parts.tag.visible = parts.gap.visible = parts.ttc.visible = false;
     if (lead) {
       const [l, w, h] = LEAD, scale = fit(LEAD), yaw = headingAt(scene.path, lead.x);
       const c = Math.cos(yaw), s = Math.sin(yaw), x = lead.x + c * l / 2, y = lead.y + s * l / 2;
@@ -748,6 +788,13 @@ export class BevView {
       }
       if (lead.relative !== null && Math.abs(lead.relative) >= ARROW.slowest) {
         arrow(parts.lines, x, y, x + c * lead.relative * ARROW.seconds, y + s * lead.relative * ARROW.seconds, color);
+      }
+      if (lead.tracked && Math.abs(lead.raw.x - lead.x) > 0.05) {     // the model's own distance
+        const ahead = lead.raw.x - lead.x, rx = lead.x + c * ahead, ry = lead.y + s * ahead, half = w / 2 + 0.2;
+        band(parts.lines, [[rx + s * half, ry - c * half], [rx - s * half, ry + c * half]], 0.14, 0.035, ink(HUD.gray), 0.85);
+      }
+      if (lead.ttc < LEAD_CARD.ttc) {
+        this.place(parts.ttc, x - s * (w / 2 + 1.2), y + c * (w / 2 + 1.2), 0.3, ttcText(lead.ttc), "", TTC_COLOR[ttcTone(lead.ttc)]);
       }
       this.place(parts.tag, x, y, h + 0.3, `${Math.round(lead.speed * 3.6)} km/h`, braking ? "BRAKE" : "LEAD", braking ? HUD.red : hex);
     }
@@ -786,7 +833,8 @@ export class BevView {
   // The chips along the bottom: mode, speed, lane width, the gap, and how old the model frame is.
   drawHud(scene) {
     const lead = scene.lead;
-    const relative = lead && lead.relative !== null && lead.relative * 3.6 <= -3 ? ` ${Math.round(lead.relative * 3.6)} km/h` : "";
+    // the lead track's relative speed always, the model's own only while closing in
+    const relative = lead && lead.relative !== null && (lead.tracked || lead.relative * 3.6 <= -3) ? ` ${kph(lead.relative)}` : "";
     this.chip("mode", `<i style="background:${stateColor(scene.state) || "#566170"}"></i>${modeText(scene.state)}`);
     this.chip("speed", Number.isFinite(scene.speedKph) ? `${Math.round(scene.speedKph)} km/h` : "");
     const plan = this.plan;
@@ -820,11 +868,6 @@ export class BevView {
       return {fill, value};
     };
     this.gasRow = row("GAS 2s", DEPART.gas * 100);
-    const svg = (tag, attributes) => {
-      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-      for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
-      return node;
-    };
     const spark = card.appendChild(svg("svg", {class: "bev-spark", viewBox: "0 0 100 30", preserveAspectRatio: "none"}));
     spark.appendChild(svg("line", {class: "limit", x1: 0, x2: 100, y1: 30 * (1 - DEPART.gas), y2: 30 * (1 - DEPART.gas)}));
     this.planLine = spark.appendChild(svg("polyline", {class: "plan"}));
@@ -858,6 +901,100 @@ export class BevView {
     this.planLine.setAttribute("points", line(2, DEPART.planMax));
   }
 
+  // -- with a lead: its distance and relative speed over time ----------------------------------------------
+  // A card while a lead was in view within LEAD_HISTORY_S (and the 앞차 layer is on): the lead track (green:
+  // the model distance and optical flow fused), the model's own distance and relative speed (gray), the flow's
+  // relative speed (cyan) and the trend of the model's distance (amber, dashed: a straight line over ±2 s, so it
+  // ends 2 s back), as values and over time. The badge is the time to contact.
+  leadCard(parent) {
+    const card = this.leadPanel = parent.appendChild(el("div", "bev-card"));
+    card.hidden = true;
+    const head = card.appendChild(el("div", "bev-card-head"));
+    // the head folds the charts away; the choice is remembered in this browser
+    const fold = head.appendChild(el("button", "", "LEAD"));
+    fold.type = "button";
+    const setFolded = (folded) => {
+      card.classList.toggle("collapsed", folded);
+      fold.setAttribute("aria-expanded", String(!folded));
+    };
+    setFolded(readFlag(LEAD_FOLD_KEY));
+    fold.addEventListener("click", () => {
+      const folded = !card.classList.contains("collapsed");
+      setFolded(folded);
+      writeFlag(LEAD_FOLD_KEY, folded);
+    });
+    this.ttcBadge = head.appendChild(el("span", "bev-badge"));
+    const value = (title, color) => {
+      const line = card.appendChild(el("div", "bev-value"));
+      line.appendChild(el("i")).style.background = color;
+      line.appendChild(el("span", "", title));
+      return line.appendChild(el("em"));
+    };
+    this.leadValues = {fused: value("추적", HUD.green), model: value("모델", HUD.gray), flow: value("광류", HUD.cyan),
+                       trend: value("거리 추세 2 s 전", HUD.amber)};
+    // the values above name the colours, so the charts need no legend
+    const chart = (title, lines, zero) => {
+      const box = card.appendChild(el("div", "bev-chart"));
+      box.appendChild(el("div", "bev-chart-title", title));
+      const spark = box.appendChild(svg("svg", {class: "bev-spark tall", viewBox: "0 0 100 60", preserveAspectRatio: "none"}));
+      if (zero) spark.appendChild(svg("line", {class: "zero", x1: 0, x2: 100, y1: 30, y2: 30}));
+      return Object.fromEntries(Object.keys(lines).map((name) => [name, spark.appendChild(svg("path", {class: name}))]));
+    };
+    this.distanceLines = chart("거리", LEAD_CHARTS.distance, false);
+    this.speedLines = chart("상대 속도", LEAD_CHARTS.speed, true);
+    this.leadScale = card.appendChild(el("div", "bev-card-foot")).appendChild(el("span"));
+  }
+
+  drawLeadCard(scene) {
+    const card = this.leadPanel, rows = scene.leads, lead = scene.lead;   // rows: the last LEAD_HISTORY_S
+    card.hidden = !(this.layers.lead.visible && rows.some((row) => row.segment >= 0));
+    if (card.hidden) return;
+    const start = rows[rows.length - 1].t - LEAD_HISTORY_S;
+    // the newest fitted trend (NaN once that row has no lead)
+    let fitted = rows.length - 1;
+    while (fitted >= 0 && rows[fitted].trend === undefined) fitted--;
+    const show = (em, v) => { const text = Number.isFinite(v) ? kph(v) : "–"; if (em.textContent !== text) em.textContent = text; };
+    show(this.leadValues.fused, lead && lead.tracked ? lead.relative : NaN);
+    show(this.leadValues.model, lead ? lead.raw.relative : NaN);
+    show(this.leadValues.flow, lead && lead.flow ? lead.flow.relative : NaN);
+    show(this.leadValues.trend, fitted >= 0 ? rows[fitted].trend : NaN);
+    const ttc = lead ? lead.ttc : Infinity, tone = ttcTone(ttc);
+    const text = ttc < LEAD_CARD.ttc ? ttcText(ttc) : "TTC –";
+    if (this.ttcBadge.textContent !== text) this.ttcBadge.textContent = text;
+    if (this.ttcBadge.className !== `bev-badge ${tone}`.trim()) this.ttcBadge.className = `bev-badge ${tone}`.trim();
+    // each series as a path broken where it has no value, value mapped to the chart's height
+    const draw = (lines, fields, y) => {
+      for (const [name, key] of Object.entries(fields)) {
+        let d = "", gap = true;
+        for (const row of rows) {
+          const v = row[key];
+          if (!Number.isFinite(v)) { gap = true; continue; }
+          d += `${gap ? "M" : "L"}${((row.t - start) / LEAD_HISTORY_S * 100).toFixed(1)},${y(v).toFixed(1)}`;
+          gap = false;
+        }
+        lines[name].setAttribute("d", d);
+      }
+    };
+    // distance: from the lowest to the highest value in view (some row has a lead), at least LEAD_CARD.minSpan m
+    let lo = Infinity, hi = -Infinity;
+    for (const row of rows) {
+      for (const key of Object.values(LEAD_CHARTS.distance)) {
+        if (Number.isFinite(row[key])) { lo = Math.min(lo, row[key]); hi = Math.max(hi, row[key]); }
+      }
+    }
+    const middle = (lo + hi) / 2, span = Math.max(LEAD_CARD.minSpan, hi - lo) * 1.1;
+    draw(this.distanceLines, LEAD_CHARTS.distance, (v) => 30 - clamp((v - middle) / span, -0.5, 0.5) * 56);
+    // relative speed: symmetric, at least LEAD_CARD.minScale km/h, in steps of 10
+    let peak = LEAD_CARD.minScale;
+    for (const row of rows) {
+      for (const key of Object.values(LEAD_CHARTS.speed)) if (Number.isFinite(row[key])) peak = Math.max(peak, Math.abs(row[key]) * 3.6);
+    }
+    const scale = Math.ceil(peak / 10) * 10;
+    draw(this.speedLines, LEAD_CHARTS.speed, (v) => 30 - clamp(v * 3.6 / scale, -1, 1) * 28);
+    const note = `${(middle - span / 2).toFixed(0)}–${(middle + span / 2).toFixed(0)} m · ±${scale} km/h · ${LEAD_HISTORY_S} s · −는 접근`;
+    if (this.leadScale.textContent !== note) this.leadScale.textContent = note;
+  }
+
   chip(name, html, warn = false) {
     const span = this.chips[name];
     if (span.dataset.html === html) return;
@@ -866,6 +1003,35 @@ export class BevView {
     span.classList.toggle("warn", warn);
   }
 }
+
+// A flag remembered in this browser only (storage may be missing or refuse).
+function readFlag(key) {
+  try { return window.localStorage.getItem(key) === "1"; } catch { return false; }
+}
+function writeFlag(key, on) {
+  try { window.localStorage.setItem(key, on ? "1" : "0"); } catch { /* not remembered */ }
+}
+
+// An SVG element with attributes.
+function svg(tag, attributes) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+
+// A relative speed (m/s) in signed km/h, as the LEAD chip and card show it.
+function kph(v) {
+  const k = Math.round(v * 3.6);
+  return `${k > 0 ? "+" : k < 0 ? "−" : ""}${Math.abs(k)} km/h`;
+}
+
+// The time to contact's tier (the badge's class): "alarm" below LEAD_CARD.alarm s, "warn" below LEAD_CARD.warn s,
+// and its label's colour.
+function ttcTone(ttc) {
+  return ttc < LEAD_CARD.alarm ? "alarm" : ttc < LEAD_CARD.warn ? "warn" : "";
+}
+const TTC_COLOR = {alarm: HUD.red, warn: HUD.amber, "": HUD.gray};
+const ttcText = (ttc) => `TTC ${ttc.toFixed(1)} s`;
 
 // -- the HUD's rules --------------------------------------------------------------------------------
 // Where the plan slows down most ahead (STOP where it stops), or, speeding up instead, what it
@@ -1032,8 +1198,8 @@ function normalAt(points, i) {
 // The BEV tab: the view and its stream, made once; start() and stop() follow the tab and the
 // page's visibility. onStatus({live, text}) says how the stream is doing.
 export function createBev(onStatus) {
-  const element = el("div", "bev-panel");
-  const view = new BevView(element);
+  const element = el("div", "bev-layout");
+  const view = new BevView(element.appendChild(el("div", "bev-panel")), element.appendChild(el("div", "bev-side")));
   const stream = new BevStream({onScene: (scene) => view.update(scene), onStatus});
   return {element, start: () => stream.start(), stop: () => stream.stop()};
 }

@@ -183,11 +183,15 @@ keeps the AX system open.
   (`car/speed_filter`); the controller, the planner, the learners and the
   published `ego_speed_kph` (read by modeld's calibration and locationd) all
   use it
-- uses the vision lead distance and relative speed to adjust the stock
+- uses the vision lead distance and relative speed (`modeld`'s lead track when
+  it has one, see [Lead track](flow-calibration.md#lead-track)) to adjust the stock
   fixed-speed cruise setting with rate-limited `SET-`/`RES+` CLU11 pulses; the
-  first driver SET speed remains the maximum. Closing distance is projected
-  through the measured 1.5 km/h/s vehicle response, repeated `SET-` pulses wait
-  for that response, and `RES+` cannot immediately reverse a recent slowdown
+  first driver SET speed remains the maximum. A lower set speed only makes the
+  car coast (about 0.5 km/h/s, no braking), so the speed at which it closes in on
+  a lead is capped to what that coast can take off before the desired gap, and
+  the set speed is not pushed more than 6 km/h past the actual speed while the
+  car is already moving that way. The target the buttons follow drops at once
+  but rises at only 1 km/h/s, so lead noise does not alternate `SET-` and `RES+`
 - publishes generated raw `sendcan` batches for `pandad`
 - publishes compact `controlState` diagnostics for the display HUD
 - does not transmit by itself; actual TX still requires `pandad` with
@@ -310,13 +314,16 @@ replay tools, `lane_bias.py`). `gtest_recording` covers
 
 The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
 an 8-byte `EDGELOG1` magic, a version word, and fixed 16-byte record headers;
-each segment's `frames.bin` starts with `EDGEIDX1`. The current version is `11`:
-the optical-flow calibrator's state grew by four fields, its spread became the
-standard deviation of the block medians (`sd_pitch`, `sd_yaw`), and `ModelState`
-gained `calibration_source`, the warp calibration's source and the pose loop's
-own estimate (3680 B). `calibration` is now the value the warp used, with the
-status, block count and spread of that source. Version 10 had appended the flow
-calibrator's shadow state
+each segment's `frames.bin` starts with `EDGEIDX1`. The current version is `13`:
+`ModelState` gained `lead_track`, the lead's fused distance and relative speed
+(3736 B; see [Lead track](flow-calibration.md#lead-track)). Version 12 had added
+`lead_flow`, the lead's expansion rate from the optical flow (3712 B). Version 11
+grew the optical-flow calibrator's state by four fields, made its spread the
+standard deviation of the block medians (`sd_pitch`, `sd_yaw`), and gave
+`ModelState` `calibration_source`, the warp calibration's source and the pose
+loop's own estimate (3680 B). `calibration` is now the value the warp used, with
+the status, block count and spread of that source. Version 10 had appended the
+flow calibrator's shadow state
 (`flow_calibration`, 3632 B; see [Flow calibration](flow-calibration.md)).
 Version 9 only changed those two magics: recordings up to version 8 carry the
 earlier ones, and every reader still accepts them. Version 8 gave `ModelState`
@@ -327,15 +334,15 @@ Version 7 added the camera mount the warp used for that frame
 (`camera_offset_m`, `camera_height_m`, 3528 B), so the HUD and the analysis
 tools use exactly what modeld applied. Version 6 added the plan yaw and yaw
 rate (`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode steers from.
-Readers take version 10 and older payloads as before, with the missing fields
+Readers take version 12 and older payloads as before, with the missing fields
 zeroed (`src/recording/recorded_model_state.h`, `recording_reader.model_state_layout`;
-`recording_reader.flow_calibration` and `calibration_source` read those two
-fields from any version).
+`recording_reader.flow_calibration`, `calibration_source`, `lead_flow` and
+`lead_track` read those fields from any version).
 
 | Record type | Payload |
 | --- | ---: |
 | `CanRx` / `CanTx` | variable CAN batch |
-| `ModelState` | 3680 B |
+| `ModelState` | 3736 B |
 | `ControlState` | 240 B |
 | `PandaState` | 96 B |
 | `LearnerState` | 128 B |
@@ -350,7 +357,7 @@ Version 2 also kept a single route-level `events.bin`; CAN logging alone
 (~0.5 MB/s) filled the 988 MB tmpfs staging in about 30 minutes on long drives
 and silently killed the rest of the recording, which is why version 3 rotates
 event chunks alongside video segments. `tools/model/recording_reader.py` reads
-the v2 to v12 layouts; `lane_bias.py`, `hud_tools.py`,
+the v2 to v13 layouts; `lane_bias.py`, `hud_tools.py`,
 `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event log
 through its `iter_event_records`.
 

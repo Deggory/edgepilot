@@ -26,12 +26,19 @@ const PLAN_NOW_INDEX = 2;               // the plan's speed now: at 0.04 s, past
 const GAS_PRESS_HORIZON = 1;            // controls_tick.cc feeds the departure alert gas_press_probs[1], 2 s ahead
 const DRIVE_GEAR = 5;                   // can_frame.h kGearDrive: the departure alert only watches in D
 const HISTORY_S = 10;                   // how much of the departure inputs the card keeps
+// The lead card: the lead's distance and speed relative to ours over the last LEAD_HISTORY_S, from the
+// model, from optical flow (speed only) and from modeld's lead track (the two fused), against the trend
+// of the model's own distance: a straight line fitted over ±half s of one lead (no gap, no jump of more
+// than jump m, at least points frames reaching within edge s of both ends), as docs/flow-calibration.md
+// validates them. It is known half s late.
+export const LEAD_HISTORY_S = 20;
+const TREND = {half: 2, jump: 4, points: 60, edge: 0.1};
 const MODEL_STALE_S = 0.5, CONTROL_STALE_S = 1.0;
 const RETRY_MS = [500, 5000];
 // the fields this page reads; a server that does not say where one is is older or newer than the page
 const NEEDS = {
   model: ["size", "model_timestamp_ns", "valid", "plan", "lanes", "lane_probabilities", "road_edges", "road_edge_stds",
-          "lead", "gas_press_probs"],
+          "lead", "gas_press_probs", "lead_flow", "lead_track"],
   control: ["size", "timestamp_ns", "enabled", "engaged", "active", "left_blinker", "right_blinker", "gear",
             "desired_curvature", "actual_curvature",
             "normalized_output", "departure_alert_type", "green_light_alert_armed", "hud_flags", "ego_speed_kph"],
@@ -75,7 +82,7 @@ function readModel(at, bytes) {
   const lanes = [0, 1, 2, 3].map((i) => ({probability: f32(at.lane_probabilities + 4 * i),
                                           points: polyline(view, at.lanes + 12 * TRAJECTORY * i, reach)}));
   const left = at.lanes + 12 * (TRAJECTORY + LANE_WIDTH_INDEX) + 4, right = left + 12 * TRAJECTORY;
-  const lead = at.lead;
+  const lead = at.lead, flow = at.lead_flow, track = at.lead_track;
   return {
     stamp: view.getBigUint64(at.model_timestamp_ns, true),
     valid: view.getUint32(at.valid, true) !== 0,
@@ -88,6 +95,11 @@ function readModel(at, bytes) {
     laneWidth: lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE ? f32(right) - f32(left) : NaN,
     lead: view.getUint32(lead, true)
       ? {probability: f32(lead + 4), x: f32(lead + 8), y: f32(lead + 12), speed: f32(lead + 16), accel: f32(lead + 20)} : null,
+    // LeadFlowState: the lead's expansion rate (1/s, + closing in) over about 0.5 s, and the model distance
+    // it came from (m, from the camera)
+    flow: view.getUint32(flow + 8, true) ? {rate: f32(flow + 20), x: f32(flow + 28)} : null,
+    // LeadTrackState: the model distance and the flow fused (m from the camera, m/s, - closing)
+    track: view.getUint32(track, true) ? {x: f32(track + 8), relative: f32(track + 12)} : null,
   };
 }
 
@@ -115,7 +127,11 @@ const ageOf = (now, stamp) => stamp ? Number(now - stamp) / 1e9 : Infinity;
 //   path [[x, y, planned speed m/s]], planNow (m/s), lanes [{probability, points}] ×4 (far left,
 //   left, right, far right), edges [{std, points}] ×2, laneWidth (m, NaN unless both ego lines are
 //   sure)
-//   lead {x: its rear, y, gap, speed, accel, relative (m/s, null without our speed), probability} or null
+//   lead {x: its rear, y, gap, speed, accel, relative (m/s, null without our speed), ttc (s, Infinity unless
+//     closing in), tracked (x, gap, relative and speed come from the lead track), raw {x, relative} (the
+//     model's own), flow {relative: -x · rate (m/s, from optical flow)} or null} or null
+//   leads [{t s, x, v (the model's), flow, fx, fv (the lead track's), trend, level, segment}, ...]: the lead
+//     card's last LEAD_HISTORY_S, distances from our bumper; set by BevStream (BevStream.addLead)
 //   state {enabled, engaged, active, steering, laneless, output}, speedKph (NaN without controlsd)
 //   curvature {desired, actual} (1/m, + to the right as in controlsd) or null without controlsd
 //   blinkers {left, right} (both: hazard lights) or null without controlsd. controlsd holds each on
@@ -132,14 +148,20 @@ export function scene(model, control, now, history = []) {
   const shown = model && model.valid ? model : null;
   const lead = shown && shown.lead;
   const seen = lead && lead.probability >= LEAD_PROBABILITY && Number.isFinite(lead.x) && Number.isFinite(lead.speed);
+  const flow = seen && shown.flow && Number.isFinite(shown.flow.rate) && Number.isFinite(shown.flow.x) ? shown.flow : null;
+  const track = seen && shown.track && Number.isFinite(shown.track.x) && Number.isFinite(shown.track.relative) ? shown.track : null;
+  const raw = seen ? {x: lead.x - RADAR_TO_CAMERA, relative: Number.isFinite(speed) ? lead.speed - speed : null} : null;
+  const x = track ? track.x - RADAR_TO_CAMERA : raw && raw.x, relative = track ? track.relative : raw && raw.relative;
   return {
     modelAge, controlAge, stale: modelAge > MODEL_STALE_S,
     path: shown ? shown.path : [], planNow: shown ? shown.planNow : NaN,
     lanes: shown ? shown.lanes : [], edges: shown ? shown.edges : [],
     laneWidth: shown ? shown.laneWidth : NaN,
-    lead: seen ? {x: lead.x - RADAR_TO_CAMERA, y: -lead.y, gap: Math.max(0, lead.x - RADAR_TO_CAMERA), speed: lead.speed,
-                  accel: lead.accel, relative: Number.isFinite(speed) ? lead.speed - speed : null,
-                  probability: lead.probability} : null,
+    lead: seen ? {x, y: -lead.y, gap: Math.max(0, x), accel: lead.accel, relative,
+                  speed: track ? (Number.isFinite(speed) ? speed + track.relative : lead.speed) : lead.speed,
+                  ttc: relative !== null && relative < -0.1 ? Math.max(0, x) / -relative : Infinity,
+                  tracked: !!track, raw, flow: flow ? {relative: -flow.x * flow.rate} : null} : null,
+    leads: [],
     state: {enabled: !!live && live.enabled, engaged: !!live && live.engaged, active: !!live && live.active,
             steering: !!live && live.active && !live.paused, laneless: !!live && live.laneless, output: live ? live.output : 0},
     speedKph: live ? live.speedKph : NaN,
@@ -149,6 +171,26 @@ export function scene(model, control, now, history = []) {
     departure: {drive: !!live && live.drive, armed: !!live && live.armed, alert: live ? live.alert : 0, gas: shown ? shown.gas : [],
                 plan10: shown ? shown.planEnd : NaN, history},
   };
+}
+
+// A straight line fitted to the model distance of rows[i]'s lead over ±TREND.half s: [slope m/s, level m at
+// rows[i]'s time], NaN where that lead does not cover the window (scene().leads).
+function trendAt(rows, i) {
+  const {t, segment} = rows[i];
+  let a = i, b = i;
+  while (a > 0 && rows[a - 1].segment === segment && rows[a - 1].t >= t - TREND.half) a--;
+  while (b + 1 < rows.length && rows[b + 1].segment === segment && rows[b + 1].t <= t + TREND.half) b++;
+  const n = b - a + 1, reach = TREND.half - TREND.edge;
+  if (n < TREND.points || rows[a].t > t - reach || rows[b].t < t + reach) return [NaN, NaN];
+  let st = 0, sx = 0, stt = 0, stx = 0;
+  for (let j = a; j <= b; j++) {
+    const dt = rows[j].t - t, x = rows[j].x;
+    st += dt; sx += x; stt += dt * dt; stx += dt * x;
+  }
+  const d = n * stt - st * st;
+  if (!(d > 0)) return [NaN, NaN];
+  const slope = (n * stx - st * sx) / d;
+  return [slope, (sx - slope * st) / n];
 }
 
 function concat(a, b) {
@@ -169,6 +211,8 @@ export class BevStream {
     this.abort = null;
     this.arrivals = [];                 // when the model frames of the last second came, ms
     this.history = [];                  // [t s, gas 2 s, plan10] of the last HISTORY_S of model frames
+    this.leads = [];                    // the lead card's rows (scene().leads), one per model frame
+    this.segment = 0;                   // which lead a row belongs to (trend fits stay within one)
     this.said = "";
   }
 
@@ -238,18 +282,40 @@ export class BevStream {
     }
   }
 
+  // One model frame's lead for the lead card (scene().leads). A row's trend and level are filled once the
+  // rows TREND.half s past it are in; the rows still waiting are always the newest ones.
+  addLead(t, lead) {
+    const rows = this.leads, last = rows[rows.length - 1];
+    if (last && t < last.t) rows.length = 0;                     // another boot
+    const x = lead ? lead.raw.x : NaN;
+    if (!lead || !last || !Number.isFinite(last.x) || Math.abs(x - last.x) > TREND.jump) this.segment++;
+    rows.push({t, x, v: lead && lead.raw.relative !== null ? lead.raw.relative : NaN, flow: lead && lead.flow ? lead.flow.relative : NaN,
+               fx: lead && lead.tracked ? lead.x : NaN, fv: lead && lead.tracked ? lead.relative : NaN,
+               trend: undefined, level: undefined, segment: lead ? this.segment : -1});
+    let i = rows.length - 1;
+    while (i > 0 && rows[i - 1].trend === undefined) i--;
+    for (; i < rows.length && rows[i].t <= t - TREND.half; i++) {
+      [rows[i].trend, rows[i].level] = rows[i].segment < 0 ? [NaN, NaN] : trendAt(rows, i);
+    }
+    while (rows.length && rows[0].t < t - LEAD_HISTORY_S) rows.shift();
+  }
+
   frame(model, control, now) {
-    const layout = this.layout;
-    if (model.length >= layout.model.size) {
+    const layout = this.layout, fresh = model.length >= layout.model.size;
+    let t = 0;
+    if (fresh) {
       this.model = readModel(layout.model, model);
       this.arrivals.push(performance.now());
-      const t = Number(this.model.stamp) / 1e9, history = this.history;
+      t = Number(this.model.stamp) / 1e9;
+      const history = this.history;
       if (history.length && t < history[history.length - 1][0]) history.length = 0;     // another boot
       history.push([t, this.model.gas[GAS_PRESS_HORIZON], this.model.planEnd]);
       while (history.length && history[0][0] < t - HISTORY_S) history.shift();
     }
     this.control = control.length >= layout.control.size ? readControl(layout.control, layout.hud_flags, control) : null;
     const shown = scene(this.model, this.control, now, this.history);
+    if (fresh) this.addLead(t, shown.lead);
+    shown.leads = this.leads;
     this.onScene(shown);
     const since = performance.now() - 1000;
     while (this.arrivals.length && this.arrivals[0] < since) this.arrivals.shift();

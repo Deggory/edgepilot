@@ -54,12 +54,12 @@ struct Vehicle {
     cluster_speed_kph += (set_speed_kph - cluster_speed_kph) * dt_s * 0.8f;
   }
   /* K7 HEV 실측에 가까운 응답: 설정 속도보다 빠르면 가속만 끊어 초당 coast_kph_s만큼 줄고(브레이크를
-   * 쓰지 않는다), 느리면 초당 accel_kph_s만큼 는다. settle보다 훨씬 느리다. */
-  void coast(float dt_s, float coast_kph_s = 0.5f, float accel_kph_s = 0.5f) {
+   * 쓰지 않는다), 느리면 초당 0.5 km/h만큼 는다. settle보다 훨씬 느리다. */
+  void coast(float dt_s, float coast_kph_s = 0.5f) {
     if (cluster_speed_kph > set_speed_kph)
       cluster_speed_kph = std::fmax(set_speed_kph, cluster_speed_kph - coast_kph_s * dt_s);
     else
-      cluster_speed_kph = std::fmin(set_speed_kph, cluster_speed_kph + accel_kph_s * dt_s);
+      cluster_speed_kph = std::fmin(set_speed_kph, cluster_speed_kph + 0.5f * dt_s);
   }
   float wheel_kph() const { return cluster_speed_kph / over_read; }
 };

@@ -2,8 +2,9 @@
 #define RECORDED_MODEL_STATE_H
 
 /* 녹화된 ModelState 페이로드를 현재 구조체로 읽는다(진단 도구 공용).
- *   v12: 현재 구조체 그대로
- *   v11: lead_flow가 없다(0 = 확대율 없음)
+ *   v13: 현재 구조체 그대로
+ *   v12: lead_track이 없다(0 = 추적 없음)
+ *   v11: lead_flow도 없다(0 = 확대율 없음)
  *   v10: flow_calibration이 56 B(v11 끝의 네 필드가 없다)이고 calibration_source가 없다
  *        (0 = 모델 포즈 출처)
  *   v8~v9: flow_calibration도 없다(0 = 꺼짐)
@@ -31,6 +32,7 @@ inline bool decode_recorded_model_state(const char *src, uint32_t payload_size, 
                         : version <= 9 ? offsetof(ModelState, flow_calibration)
                         : version == 10 ? offsetof(ModelState, flow_calibration) + 56
                         : version == 11 ? offsetof(ModelState, lead_flow)
+                        : version == 12 ? offsetof(ModelState, lead_track)
                                         : sizeof(ModelState);
     if (payload_size < body + plan_extra + lead_extra) return false;
     const size_t lanes_off = offsetof(ModelState, lanes);

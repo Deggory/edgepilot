@@ -11,16 +11,29 @@ namespace {
 const FlowIntrinsics kK{754.16, 753.9, 626.7533, 368.4};  // MaixCAM2 1280x720
 constexpr int kW = 1280, kH = 720;
 
-LeadFlowInput lead_at(float x, float y = 0.0f)
+LeadFlowInput lead_at(float x)
 {
     LeadFlowInput in;
     in.valid = true;
     in.probability = 0.9f;
     in.x = x;
-    in.y = y;
     in.camera_height_m = 1.22f;
     return in;
 }
+
+// 균등 잡음 ±amp(고정 씨앗)
+class Noise {
+public:
+    explicit Noise(uint32_t seed = 11) : rng_(seed) {}
+    float operator()(float amp)
+    {
+        rng_ = rng_ * 1103515245u + 12345u;
+        return (static_cast<float>((rng_ >> 8) & 0xffff) / 65535.0f - 0.5f) * 2.0f * amp;
+    }
+
+private:
+    uint32_t rng_;
+};
 
 TEST(LeadFlow, BoxIsThePinholeProjectionOfTheLeadsRear)
 {
@@ -73,19 +86,15 @@ TEST(LeadFlow, CornersComeFromTheBoxTexture)
 TEST(LeadFlow, SimilarityScaleIgnoresBackgroundPoints)
 {
     std::vector<float> a, b;
-    uint32_t rng = 7;
-    auto noise = [&rng] {
-        rng = rng * 1103515245u + 12345u;
-        return (static_cast<float>((rng >> 8) & 0xffff) / 65535.0f - 0.5f) * 0.2f;  // ±0.1 px
-    };
+    Noise noise(7);
     const float cx = 630.0f, cy = 380.0f, s = 1.05f;
     for (int i = 0; i < 30; ++i) {  // 앞차: 5% 커지고 (2, -1) 옮겨 간다
         const float x = cx - 20.0f + 40.0f * static_cast<float>(i % 6) / 5.0f;
         const float y = cy - 15.0f + 30.0f * static_cast<float>(i / 6) / 4.0f;
         a.push_back(x);
         a.push_back(y);
-        b.push_back(cx + s * (x - cx) + 2.0f + noise());
-        b.push_back(cy + s * (y - cy) - 1.0f + noise());
+        b.push_back(cx + s * (x - cx) + 2.0f + noise(0.1f));
+        b.push_back(cy + s * (y - cy) - 1.0f + noise(0.1f));
     }
     for (int i = 0; i < 10; ++i) {  // 배경: 제멋대로 움직인다
         a.push_back(cx + 3.0f * static_cast<float>(i));
@@ -142,18 +151,6 @@ private:
     float x0_, closing_;
 };
 
-// 균등 잡음 ±amp(고정 씨앗)
-class Noise {
-public:
-    float operator()(float amp)
-    {
-        rng_ = rng_ * 1103515245u + 12345u;
-        return (static_cast<float>((rng_ >> 8) & 0xffff) / 65535.0f - 0.5f) * 2.0f * amp;
-    }
-
-private:
-    uint32_t rng_ = 11;
-};
 
 /* 한 프레임: begin → (점이 있으면) 이동 + 잡음으로 따라가고, 되돌린 위치는 back_err만큼 어긋나게 → top_up.
  * back_err(점 번호, 위치)가 0이면 앞뒤 검사를 통과한다. */

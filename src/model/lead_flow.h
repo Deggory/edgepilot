@@ -8,13 +8,14 @@
  *
  * 1프레임씩 이어 붙인 위치만 쓰면 걸음마다의 오차가 쌓이고(창 10걸음이면 √10배), 불빛·번호판 둘레에서
  * 미끄러지는 점이 남는다. 그래서 세 가지를 더한다(2026-10-11, OpenCV로 이 알고리즘을 흉내 내 고름).
- *  - 걸음마다 앞뒤 검사: 되돌려 따라간 위치가 직전 위치에서 kLeadFbPx 안이어야 산다.
+ *  - 걸음마다 앞뒤 검사: 되돌려 따라간 위치가 직전 위치에서 0.3 px 안이어야 산다.
  *  - 살아 있는 점이 kLeadTopUpPoints보다 적으면 상자에서 새로 골라 채운다(창은 끊지 않는다).
  *  - 창이 찬 점은 10프레임 전 그 자리의 템플릿(9x9)을 지금 프레임에 맞춰 위치를 다듬는다. 쌓인 오차가 없어진다.
  * 보드 재생에서 모델 거리 추세(±2초)와의 상관(25~40 m)은 밤 0.86, 낮 0.69였다(이어 붙이기만 0.29/0.49, 모델
  * 앞차 속도 0.39/0.43, docs/flow-calibration.md). 이 파일은 하드웨어와 무관한 부분(투영, 점 고르기, 맞춤, 창)이다. */
 
 #include "common/ipc_messages.h"  // LeadFlowState
+#include "common/model_output.h"  // kLeadProbabilityThreshold
 #include "model/flow_calibration.h"  // FlowIntrinsics
 
 #include <cstdint>
@@ -22,14 +23,10 @@
 
 constexpr int kLeadMaxPoints = 64;       // 따라가는 점
 constexpr int kLeadTopUpPoints = 32;     // 살아 있는 점이 이보다 적으면 새로 골라 채운다
-constexpr int kLeadMinPoints = 8;        // 확대율을 내는 최소 점 쌍(창 내내 산 점)
-constexpr int kLeadMinInliers = 6;       // 확대율을 내는 최소 맞는 점
 constexpr int kLeadWindowSteps = 10;     // 창 길이(프레임). 20 fps에서 0.5초
 constexpr float kLeadMinDistanceM = 8.0f;
 constexpr float kLeadMaxDistanceM = 80.0f;
-constexpr float kLeadMinProbability = 0.5f;  // controlsd의 앞차 문턱과 같다
 constexpr double kLeadInlierPx = 0.7;    // 유사변환 잔차 문턱
-constexpr double kLeadFbPx = 0.3;        // 한 걸음 앞뒤 검사 문턱
 constexpr int kLeadTemplateHalf = 4;     // 다듬기 템플릿 9x9
 
 // 원본 영상의 화소 상자 [x0, x1) x [y0, y1)
@@ -37,6 +34,7 @@ struct LeadBox {
     int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     bool empty() const { return x1 <= x0 || y1 <= y0; }
     int width() const { return x1 - x0; }
+    int height() const { return y1 - y0; }
 };
 
 /* 모델 앞차(x 앞, y 오른쪽이 +, 카메라 기준 m)의 뒷면(폭 1.8 m, 도로 위 0.3~1.4 m)을 원본 영상에 투영하고
@@ -71,6 +69,13 @@ struct LeadFlowInput {
     float camera_height_m = 0.0f;
     float camera_offset_m = 0.0f;
 };
+
+// 따라갈 만한 앞차인지: 있고, 확률 문턱(controlsd와 같다) 이상이고, 거리가 범위 안이다
+inline bool lead_flow_wanted(const LeadFlowInput &lead)
+{
+    return lead.valid && lead.probability >= kLeadProbabilityThreshold && lead.x >= kLeadMinDistanceM &&
+           lead.x <= kLeadMaxDistanceM;
+}
 
 /* 앞차 점의 창. 프레임마다 begin → (점이 있으면) points를 LK에 넣고, 그 결과를 거꾸로 LK에 넣어 둘 다
  * advance에 → top_up 순으로 부른다. 점마다 최근 kLeadWindowSteps+1 프레임의 위치와 템플릿을 기억해, 창 내내
@@ -116,8 +121,7 @@ private:
 
     FlowIntrinsics k_;
     int width_, height_;
-    LeadBox box_;
-    bool have_lead_ = false;
+    LeadBox box_;                     // 이 프레임의 앞차 상자. 비어 있으면 앞차가 없다
     float last_x_ = 0.0f, last_y_ = 0.0f;
     int head_ = 0;                    // 지금 프레임의 슬롯
     std::vector<float> hist_;         // 점 x 슬롯 x (x, y)
@@ -128,7 +132,8 @@ private:
     std::vector<uint8_t> roi_;        // 이 프레임의 상자 둘레 복사본
     int roi_x0_ = 0, roi_y0_ = 0, roi_w_ = 0, roi_h_ = 0;
     std::vector<int> live_;           // points()가 내보낸 점의 번호
-    std::vector<float> fit_a_, fit_b_, seed_;
+    std::vector<float> fit_a_, fit_b_;
+    std::vector<float> corners_;      // top_up이 상자에서 고른 점(복사본 좌표)
     LeadFlowState state_{};
 };
 

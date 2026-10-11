@@ -3,8 +3,10 @@
  * 플래너는 그 자리에서 계산하고(SyncPlanner) 시계는 틱 시각이라, 같은 입력이면 출력이 비트 단위로
  * 같다. controlsd 리팩토링 전후 비교와, 녹화된 실제 출력과의 대조에 쓴다.
  * 사용: replay_controls [--steering s.json] [--cruise c.json] [--vehicle-json j]
- *                       [--force-engaged] [--dump out.txt] <events.bin...>
+ *                       [--force-engaged] [--lead-track track.txt] [--dump out.txt] <events.bin...>
  *   --force-engaged는 EDGEPILOT_FORCE_ENGAGED처럼 버튼 없이 결합한다(녹화 전에 결합해 둔 route용).
+ *   --lead-track은 녹화 v13 전 route의 ModelState.lead_track을 프레임 번호로 채운다(오프라인으로 만든 앞차
+ *   추적, 줄마다 "frame_id valid flags distance relative_speed distance_std speed_std"). 없는 프레임은 0이다.
  *   마지막 줄에 출력 전체의 FNV-1a 다이제스트와, 녹화된 ControlState와의 일치율을 쓴다. */
 #include "controls/adaptive_cruise.h"
 #include "controls/control_params.h"
@@ -23,6 +25,7 @@
 #include <cstring>
 #include <deque>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -50,6 +53,7 @@ struct Digest {
 int main(int argc, char **argv) {
   std::string steering_path, cruise_path, vehicle_json_path, dump_path;
   bool force_engaged = false;
+  std::string lead_track_path;
   std::vector<std::string> events;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -59,12 +63,13 @@ int main(int argc, char **argv) {
     else if (arg == "--vehicle-json") vehicle_json_path = next();
     else if (arg == "--dump") dump_path = next();
     else if (arg == "--force-engaged") force_engaged = true;
+    else if (arg == "--lead-track") lead_track_path = next();
     else if (arg.rfind("--", 0) == 0) events.clear(), i = argc;
     else events.push_back(arg);
   }
   if (events.empty()) {
-    std::fprintf(stderr, "usage: %s [--steering s.json] [--cruise c.json] "
-                         "[--vehicle-json live_parameters.json] [--force-engaged] [--dump out.txt] <events.bin...>\n", argv[0]);
+    std::fprintf(stderr, "usage: %s [--steering s.json] [--cruise c.json] [--vehicle-json live_parameters.json] "
+                         "[--force-engaged] [--lead-track track.txt] [--dump out.txt] <events.bin...>\n", argv[0]);
     return 2;
   }
 
@@ -76,6 +81,20 @@ int main(int argc, char **argv) {
     return 1;
   }
   const std::string vehicle_json = vehicle_json_path.empty() ? std::string() : read_text_file(vehicle_json_path);
+  std::unordered_map<uint64_t, LeadTrackState> lead_tracks;
+  if (!lead_track_path.empty()) {
+    std::FILE *f = std::fopen(lead_track_path.c_str(), "r");
+    if (!f) {
+      std::fprintf(stderr, "cannot read %s\n", lead_track_path.c_str());
+      return 1;
+    }
+    unsigned long long id = 0;
+    LeadTrackState t;
+    while (std::fscanf(f, "%llu %u %u %f %f %f %f", &id, &t.valid, &t.flags, &t.distance_m, &t.relative_speed_mps,
+                       &t.distance_std_m, &t.relative_speed_std_mps) == 7)
+      lead_tracks[id] = t;
+    std::fclose(f);
+  }
 
   std::deque<Record> records;
   for (const std::string &path : events) {
@@ -127,8 +146,13 @@ int main(int argc, char **argv) {
         case RecordType::ModelState: {
           ModelState model{};
           if (decode_recorded_model_state(r.payload.data(), static_cast<uint32_t>(r.payload.size()), r.version,
-                                          &model))
+                                          &model)) {
+            if (!lead_track_path.empty()) {
+              const auto it = lead_tracks.find(model.frame_id);
+              model.lead_track = it != lead_tracks.end() ? it->second : LeadTrackState{};
+            }
             tick.on_model(model);
+          }
           break;
         }
         case RecordType::PandaState: {

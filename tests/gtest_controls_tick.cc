@@ -270,6 +270,41 @@ TEST(ControlsTick, VisionLeadNeedsTheFixedProbability) {
   ASSERT_TRUE(tick.alert_input().lead_valid);
 }
 
+/* 비전 크루즈는 modeld의 앞차 추적(모델 거리와 광류를 섞은 값)이 있으면 그 거리와 상대 속도를 받고, 출발
+ * 알림은 모델 앞차를 그대로 받는다(늦으면 안 된다). 추적이 없으면 크루즈도 모델 앞차다. */
+TEST(ControlsTick, CruiseTakesTheLeadTrackAndTheAlertTheModelLead) {
+  ControlParams params;
+  SyncPlanner planner(params.steering);
+  ControlsTick tick(params, false, planner, std::string(), std::string(), 1);
+  const uint64_t now_ns = 2'000'000'000ULL;
+  ModelState model = straight_model(now_ns);
+  model.lead.valid = 1;
+  model.lead.x = 30.0f;
+  model.lead.velocity = 15.0f;
+  model.lead.probability = 0.9f;
+  model.lead_track.valid = 1;
+  model.lead_track.distance_m = 32.0f;
+  model.lead_track.relative_speed_mps = -2.0f;
+  tick.on_model(model);
+  tick.step(2.0, now_ns);
+  ASSERT_TRUE(tick.cruise_input().vision_lead_valid);
+  EXPECT_FLOAT_EQ(tick.cruise_input().vision_lead_distance_m, 32.0f - kRadarToCameraDistanceM);
+  EXPECT_FLOAT_EQ(tick.cruise_input().vision_lead_relative_speed_mps, -2.0f);
+  ASSERT_TRUE(tick.alert_input().lead_valid);
+  EXPECT_FLOAT_EQ(tick.alert_input().lead_distance_m, 30.0f - kRadarToCameraDistanceM) << "출발 알림은 모델 앞차";
+
+  model.lead_track.valid = 0;  // 추적이 없으면 크루즈도 모델 앞차
+  tick.on_model(model);
+  tick.step(2.0, now_ns);
+  EXPECT_FLOAT_EQ(tick.cruise_input().vision_lead_distance_m, 30.0f - kRadarToCameraDistanceM);
+
+  model.lead_track.valid = 1;  // 모델 앞차가 확률 문턱 밑이면 추적이 있어도 쓰지 않는다
+  model.lead.probability = kLeadProbabilityThreshold - 0.05f;
+  tick.on_model(model);
+  tick.step(2.0, now_ns);
+  EXPECT_FALSE(tick.cruise_input().vision_lead_valid);
+}
+
 // Lane 모드 모델: 차선 둘과 직진 plan. 차선 중심이 차에서 offset_m만큼 떨어져 있다.
 ModelState lane_model(uint64_t now_ns, float offset_m) {
   const float v = 20.0f;

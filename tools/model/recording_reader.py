@@ -16,6 +16,8 @@ from typing import Iterator
 
 import numpy as np
 
+# recording_format.h kRecordingVersion: the layout recordd writes now (check_recording_reader.py pins it)
+RECORDING_VERSION = 13
 # v9 magics first; recordings up to v8 carry the earlier ones (recording_format.h kLegacy*)
 FRAME_INDEX_MAGICS = (b"EDGEIDX1", b"K230IDX1")
 EVENT_LOG_MAGICS = (b"EDGELOG1", b"K230LOG1")
@@ -166,6 +168,17 @@ LEAD_FLOW_STATE = np.dtype([
 ])
 assert LEAD_FLOW_STATE.itemsize == 32
 
+# ModelState.lead_track (v13+): the model lead's distance and the flow expansion fused by a Kalman filter
+# (model/lead_tracker); the vision cruise uses it.
+LEAD_TRACK_FLOW_USED, LEAD_TRACK_FLOW_REJECTED, LEAD_TRACK_DISTANCE_REJECTED, LEAD_TRACK_STARTED = 1, 2, 4, 8
+LEAD_TRACK_STATE = np.dtype([
+    ("valid", "<u4"), ("flags", "<u4"),
+    ("distance_m", "<f4"),               # from the camera, like lead.x
+    ("relative_speed_mps", "<f4"),       # lead - ego, negative = closing
+    ("distance_std_m", "<f4"), ("relative_speed_std_mps", "<f4"),
+])
+assert LEAD_TRACK_STATE.itemsize == 24
+
 TRAJECTORY_SIZE = 33
 IPC_POINT = 12  # IpcPoint: three float32
 
@@ -189,6 +202,7 @@ def model_state_layout(version: int) -> dict[str, int]:
       v11 grew flow_calibration to 72 bytes and appended calibration_source
          (3680); calibration is the value the warp used, whichever its source
       v12 appended lead_flow (3712), the lead's expansion rate from optical flow
+      v13 appended lead_track (3736), the model lead fused with that expansion
     Callers should check ``layout["__size__"]`` against the payload size they
     actually saw so a future layout change fails loudly instead of decoding
     garbage.
@@ -218,6 +232,8 @@ def model_state_layout(version: int) -> dict[str, int]:
         fields += [("flow_calibration", 72), ("calibration_source", 32)]
     if version >= 12:
         fields += [("lead_flow", 32)]
+    if version >= 13:
+        fields += [("lead_track", 24)]
 
     layout, offset = {}, 0
     for name, size in fields:
@@ -254,11 +270,22 @@ def calibration_source(payload: bytes, version: int):
     out["pose_roll"], out["pose_pitch"], out["pose_yaw"] = cal["roll"], cal["pitch"], cal["yaw"]
     return out
 
+def _model_record(payload: bytes, version: int, name: str, dtype: np.dtype):
+    """One ModelState field as a dtype record, zeros where that version does not have it."""
+    layout = model_state_layout(version)
+    if name not in layout:
+        return np.zeros((), dtype)
+    return np.frombuffer(payload, dtype, count=1, offset=layout[name])[0]
+
+
 def lead_flow(payload: bytes, version: int):
     """ModelState.lead_flow as one LEAD_FLOW_STATE record (zeros before v12: no expansion rate)."""
-    if version < 12:
-        return np.zeros((), LEAD_FLOW_STATE)
-    return np.frombuffer(payload, LEAD_FLOW_STATE, count=1, offset=model_state_layout(version)["lead_flow"])[0]
+    return _model_record(payload, version, "lead_flow", LEAD_FLOW_STATE)
+
+
+def lead_track(payload: bytes, version: int):
+    """ModelState.lead_track as one LEAD_TRACK_STATE record (zeros before v13: no track)."""
+    return _model_record(payload, version, "lead_track", LEAD_TRACK_STATE)
 
 @dataclass
 class SegmentInfo:

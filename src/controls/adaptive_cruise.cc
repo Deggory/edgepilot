@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -39,7 +40,7 @@ constexpr float kDisplayScaleLearnMinKph = 30.0f;
 constexpr double kHoldingPedalFreeS = 3.0;
 constexpr double kHoldingSteadyS = 2.0;
 /* 차가 이미 설정 속도 쪽으로 움직이면(감속·가속 중) 설정 속도를 실제 속도에서 이보다 멀리 보내지
- * 않는다. 고정형 크루즈의 감속은 설정 속도가 몇 km/h만 아래여도 포화되어(K7 실측 약 0.1 m/s²) 더
+ * 않는다. 고정형 크루즈의 감속은 설정 속도가 몇 km/h만 아래여도 포화되어(K7 실측 중앙값 약 0.15 m/s²) 더
  * 낮춰도 빨라지지 않고, 상황이 바뀌면 되돌릴 버튼만 늘어난다. 차가 반응하지 않으면 계속 누른다. */
 constexpr float kResponseLeadKph = 6.0f;
 constexpr float kResponseAccelMps2 = 0.05f;
@@ -177,21 +178,21 @@ void AdaptiveCruiseController::SpeedTrend::update(float speed_kph, double dt_s) 
 
 /* 클러스터 속도가 kClusterSteadyKph 폭 안에서 kClusterSteadyHoldS 넘게 머물면 정착이다(고정형
  * 크루즈가 설정 속도에 닿았다). */
-bool AdaptiveCruiseController::ClusterSteady::update(bool valid, float speed_kph,
-                                                     double now_s) {
-  if (valid) {
-    if (ref_s < 0.0 || std::fabs(speed_kph - ref_kph) > kClusterSteadyKph) {
-      ref_kph = speed_kph;
-      ref_s = now_s;
-    }
-  } else {
+double AdaptiveCruiseController::ClusterSteady::update(bool valid, float speed_kph,
+                                                       double now_s) {
+  if (!valid) {
     ref_s = -1.0;
+    return 0.0;
   }
-  return valid && ref_s >= 0.0 && now_s - ref_s >= kClusterSteadyHoldS;
+  if (ref_s < 0.0 || std::fabs(speed_kph - ref_kph) > kClusterSteadyKph) {
+    ref_kph = speed_kph;
+    ref_s = now_s;
+  }
+  return now_s - ref_s;
 }
 
 struct AdaptiveCruiseController::Tick {
-  bool accelerator_override = false;
+  bool accelerator_released = false;
   bool driver_main_pressed = false;
   float minimum_kph = 0.0f;
   float step_kph = 0.0f;
@@ -270,7 +271,7 @@ void AdaptiveCruiseController::resolve_command_mismatch(const AdaptiveCruiseInpu
     s.mismatch_since_s = -1.0;
     return;
   }
-  if (s.valid && input.cruise_active && tick.cluster_valid &&
+  if (s.valid && input.cruise_active &&
       !tick.driver_adjusting && s.command_frames_remaining == 0 &&
       s.last_command_s >= 0.0 &&
       input.now_s - s.last_command_s >= kMismatchHoldS) {
@@ -306,8 +307,8 @@ float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input,
         std::max(0.0f, ego_speed_mps + lead_.relative_speed_mps);
     const float desired_gap_m =
         config_.standstill_gap_m + config_.following_time_s * ego_speed_mps;
-    const float slowdown_response_s =
-        tick.step_kph / std::max(0.1f, config_.deceleration_rate_kph_per_s);
+    const float decel_kph_per_s = std::max(0.1f, config_.deceleration_rate_kph_per_s);
+    const float slowdown_response_s = tick.step_kph / decel_kph_per_s;
     const float prediction_horizon_s =
         std::min(2.0f, config_.command_interval_s + 0.5f * slowdown_response_s);
     const float predicted_lead_distance_m = std::max(
@@ -323,7 +324,7 @@ float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input,
      * 허용한다(v² = 2·a·남은 거리). 비례 보정만 쓰면 10 m 밖에서 2.5 m/s로 다가가 감속이 따라오지
      * 못하고 차간 안쪽으로 밀려 들어갔다. */
     if (gap_correction_mps > 0.0f) {
-      const float coast_mps2 = std::max(0.01f, config_.deceleration_rate_kph_per_s / 3.6f);
+      const float coast_mps2 = decel_kph_per_s / 3.6f;
       gap_correction_mps = std::min(
           gap_correction_mps,
           std::sqrt(2.0f * coast_mps2 * (predicted_lead_distance_m - desired_gap_m)));
@@ -364,14 +365,9 @@ float AdaptiveCruiseController::smooth_target(const Tick &tick, float target_spe
 int AdaptiveCruiseController::pace_buttons(const AdaptiveCruiseInput &input, const Tick &tick,
                                            float target_speed_kph, bool active) {
   Session &s = session_;
-  const bool accelerator_released =
-      !tick.accelerator_override &&
-      (last_accelerator_override_s_ < 0.0 ||
-       input.now_s - last_accelerator_override_s_ >=
-           kAcceleratorReleaseDelayS);
   const bool command_allowed = active && tick.speed_valid && display_scale_.valid &&
                                input.controls_ready && !input.brake_pressed &&
-                               accelerator_released && !tick.driver_adjusting &&
+                               tick.accelerator_released && !tick.driver_adjusting &&
                                (s.ineffective_until_s < 0.0 ||
                                 input.now_s >= s.ineffective_until_s) &&
                                input.driver_button == 0 && !tick.driver_main_pressed;
@@ -388,20 +384,18 @@ int AdaptiveCruiseController::pace_buttons(const AdaptiveCruiseInput &input, con
     /* 데드밴드는 한 스텝. 0.75스텝이면 한 번 누른 결과가 다시 밴드 밖으로
      * 나가 SET-/RES+가 번갈아 나온다(65 km/h 추종 180초: 87회 -> 37회). */
     const float command_deadband_kph = tick.step_kph;
-    bool wants_set =
-        target_speed_kph <= s.commanded_speed_kph - command_deadband_kph &&
-        s.commanded_speed_kph > tick.minimum_kph + 0.1f;
-    bool wants_resume =
-        target_speed_kph >= s.commanded_speed_kph + command_deadband_kph &&
-        s.commanded_speed_kph < s.maximum_speed_kph - 0.1f;
     /* 차가 이미 그쪽으로 움직이고 설정 속도가 실제 속도에서 kResponseLeadKph 넘게 벌어져 있으면
      * 더 누르지 않는다. 더 벌려도 고정형 크루즈는 빨리 줄이지 않고, 앞차가 바뀌면 되돌릴 버튼만 는다. */
-    if (tick.cluster_valid) {
-      wants_set = wants_set &&
-                  (s.commanded_speed_kph > input.cluster_speed_kph - kResponseLeadKph || !tick.decelerating);
-      wants_resume = wants_resume &&
-                     (s.commanded_speed_kph < input.cluster_speed_kph + kResponseLeadKph || !tick.accelerating);
-    }
+    const bool set_far_below = tick.cluster_valid && tick.decelerating &&
+                               s.commanded_speed_kph <= input.cluster_speed_kph - kResponseLeadKph;
+    const bool set_far_above = tick.cluster_valid && tick.accelerating &&
+                               s.commanded_speed_kph >= input.cluster_speed_kph + kResponseLeadKph;
+    const bool wants_set =
+        target_speed_kph <= s.commanded_speed_kph - command_deadband_kph &&
+        s.commanded_speed_kph > tick.minimum_kph + 0.1f && !set_far_below;
+    const bool wants_resume =
+        target_speed_kph >= s.commanded_speed_kph + command_deadband_kph &&
+        s.commanded_speed_kph < s.maximum_speed_kph - 0.1f && !set_far_above;
     const bool interval_ready =
         s.last_command_s < 0.0 ||
         input.now_s - s.last_command_s >= config_.command_interval_s;
@@ -436,8 +430,10 @@ AdaptiveCruiseOutput AdaptiveCruiseController::update(
   speed_trend_.update(input.ego_speed_kph, dt_s);
 
   Tick tick;
-  tick.accelerator_override = input.gas_pressed || input.driver_accelerator_override;
-  if (tick.accelerator_override) last_accelerator_override_s_ = input.now_s;
+  if (input.gas_pressed || input.driver_accelerator_override) last_accelerator_override_s_ = input.now_s;
+  const double pedal_free_s = last_accelerator_override_s_ < 0.0
+      ? std::numeric_limits<double>::infinity() : input.now_s - last_accelerator_override_s_;
+  tick.accelerator_released = pedal_free_s >= kAcceleratorReleaseDelayS;
   tick.driver_main_pressed =
       input.driver_main_button != 0 && previous_driver_main_button_ == 0;
   tick.minimum_kph = minimum_speed_kph(input.speed_unit_mph);
@@ -445,12 +441,10 @@ AdaptiveCruiseOutput AdaptiveCruiseController::update(
   tick.speed_valid = std::isfinite(input.ego_speed_kph);
   tick.cluster_valid = std::isfinite(input.cluster_speed_kph) &&
                        input.cluster_speed_kph > 0.0f;
-  tick.cluster_steady =
+  const double cluster_held_s =
       cluster_steady_.update(tick.cluster_valid, input.cluster_speed_kph, input.now_s);
-  const bool pedal_free = last_accelerator_override_s_ < 0.0 ||
-                          input.now_s - last_accelerator_override_s_ >= kHoldingPedalFreeS;
-  tick.cruise_holding = pedal_free && tick.cluster_valid &&
-                        cluster_steady_.held_s(input.now_s) >= kHoldingSteadyS;
+  tick.cluster_steady = cluster_held_s >= kClusterSteadyHoldS;
+  tick.cruise_holding = pedal_free_s >= kHoldingPedalFreeS && cluster_held_s >= kHoldingSteadyS;
   tick.decelerating = speed_trend_.accel_mps2 < -kResponseAccelMps2;
   tick.accelerating = speed_trend_.accel_mps2 > kResponseAccelMps2;
 

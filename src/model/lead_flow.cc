@@ -1,5 +1,7 @@
 #include "model/lead_flow.h"
 
+#include "common/projection.h"  // rotation_from_rpy
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -18,6 +20,9 @@ constexpr double kCornerQuality = 0.01;
 constexpr int kCornerMinDist2 = 9;  // 고른 점끼리 3화소
 constexpr double kKeepMargin = 0.4; // 점이 상자에서 폭·높이의 이만큼 벗어나면 버린다
 constexpr double kMinWindowS = 0.2;
+constexpr int kMinPoints = 8;          // 확대율을 내는 최소 점 쌍(창 내내 산 점)
+constexpr int kMinInliers = 6;         // 확대율을 내는 최소 맞는 점
+constexpr double kFbPx = 0.3;          // 한 걸음 앞뒤 검사 문턱
 constexpr double kRefineMaxPx = 2.0;   // 다듬기가 이어 따라간 위치에서 이만큼 넘게 옮기면 버린다
 constexpr int kRefineIterations = 10;
 constexpr double kRefineMinDet = 1e-3; // 템플릿 기울기 행렬이 이보다 작으면(평평하다) 다듬지 않는다
@@ -36,21 +41,17 @@ bool project_lead_box(const FlowIntrinsics &k, const float rpy[3], float camera_
         return false;
     // tools/model/model_warp.py projection_matrix와 같다: 도로(x 앞, y 왼쪽, z 위, 원점은 카메라 밑 도로) ->
     // 장치(x 앞, y 오른쪽, z 아래, 보정 회전) -> 영상(x 오른쪽, y 아래, z 앞, 카메라 높이만큼 아래로 옮김)
-    const double cr = std::cos(rpy[0]), sr = std::sin(rpy[0]);
-    const double cp = std::cos(rpy[1]), sp = std::sin(rpy[1]);
-    const double cy = std::cos(rpy[2]), sy = std::sin(rpy[2]);
-    const double r[3][3] = {{cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr},
-                            {sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr},
-                            {-sp, cp * sr, cp * cr}};
+    float r[9];
+    rotation_from_rpy(rpy[0], rpy[1], rpy[2], r);
     // 모델은 오프셋만큼 오른쪽인 가상 카메라에서 본다(common/projection.cc와 같다)
     const double center_left = -(static_cast<double>(lead_y) + camera_offset_m);
     double u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
     for (const double dy : {-kLeadHalfWidthM, kLeadHalfWidthM}) {
         for (const double z : {kLeadBottomM, kLeadTopM}) {
             const double px = lead_x, py = -(center_left + dy), pz = -z;  // 장치 축으로 뒤집은 도로 점
-            const double dx = r[0][0] * px + r[0][1] * py + r[0][2] * pz;
-            const double dyv = r[1][0] * px + r[1][1] * py + r[1][2] * pz;
-            const double dz = r[2][0] * px + r[2][1] * py + r[2][2] * pz;
+            const double dx = r[0] * px + r[1] * py + r[2] * pz;
+            const double dyv = r[3] * px + r[4] * py + r[5] * pz;
+            const double dz = r[6] * px + r[7] * py + r[8] * pz;
             const double vx = dyv, vy = dz + camera_height_m, vz = dx;
             if (vz < 1.0) return false;
             const double u = k.fx * vx / vz + k.cx, v = k.fy * vy / vz + k.cy;
@@ -66,7 +67,7 @@ bool project_lead_box(const FlowIntrinsics &k, const float rpy[3], float camera_
     b.x1 = static_cast<int>(std::ceil(u1 - kShrinkX * w));
     b.y0 = static_cast<int>(std::floor(v0 + kShrinkY * h));
     b.y1 = static_cast<int>(std::ceil(v1 - kShrinkY * h));
-    if (b.width() < kBoxMinWidthPx || b.y1 - b.y0 < kBoxMinHeightPx) return false;
+    if (b.width() < kBoxMinWidthPx || b.height() < kBoxMinHeightPx) return false;
     if (b.x0 < kBorderPx || b.y0 < kBorderPx || b.x1 > width - kBorderPx || b.y1 > height - kBorderPx) return false;
     *box = b;
     return true;
@@ -75,14 +76,11 @@ bool project_lead_box(const FlowIntrinsics &k, const float rpy[3], float camera_
 int pick_lead_corners(const uint8_t *y, int stride, const LeadBox &box, int max_points, float *xy)
 {
     if (!y || box.empty() || max_points <= 0) return 0;
-    // 상자와 테두리 2화소를 옮겨 둔다(링 슬롯은 캐시 없는 매핑이라 행 단위로 한 번만 읽는다)
-    const int rx0 = box.x0 - 2, ry0 = box.y0 - 2, rw = box.width() + 4, rh = box.y1 - box.y0 + 4;
-    std::vector<uint8_t> roi(static_cast<size_t>(rw) * rh);
-    for (int r = 0; r < rh; ++r)
-        std::memcpy(&roi[static_cast<size_t>(r) * rw], y + static_cast<size_t>(ry0 + r) * stride + rx0,
-                    static_cast<size_t>(rw));
-    auto at = [&](int r, int c) { return static_cast<int>(roi[static_cast<size_t>(r) * rw + c]); };
-    std::vector<float> gxx(roi.size(), 0.0f), gyy(roi.size(), 0.0f), gxy(roi.size(), 0.0f);
+    // 상자와 테두리 2화소(rw x rh)에서 기울기를 낸다
+    const int rx0 = box.x0 - 2, ry0 = box.y0 - 2, rw = box.width() + 4, rh = box.height() + 4;
+    auto at = [&](int r, int c) { return static_cast<int>(y[static_cast<size_t>(ry0 + r) * stride + rx0 + c]); };
+    const size_t area = static_cast<size_t>(rw) * rh;
+    std::vector<float> gxx(area, 0.0f), gyy(area, 0.0f), gxy(area, 0.0f);
     for (int r = 1; r < rh - 1; ++r) {
         for (int c = 1; c < rw - 1; ++c) {
             const int gx = (at(r - 1, c + 1) + 2 * at(r, c + 1) + at(r + 1, c + 1)) -
@@ -96,7 +94,7 @@ int pick_lead_corners(const uint8_t *y, int stride, const LeadBox &box, int max_
         }
     }
     // 상자 안 화소의 최소 고유값(3x3 창)
-    const int bw = box.width(), bh = box.y1 - box.y0;
+    const int bw = box.width(), bh = box.height();
     std::vector<float> lambda(static_cast<size_t>(bw) * bh, 0.0f);
     float lmax = 0.0f;
     for (int r = 0; r < bh; ++r) {
@@ -264,7 +262,7 @@ ScaleFit fit_similarity_scale(const float *a, const float *b, int n, double inli
 LeadFlowTracker::LeadFlowTracker(const FlowIntrinsics &k, int width, int height)
     : k_(k), width_(width), height_(height), hist_(static_cast<size_t>(kLeadMaxPoints) * kSlots * 2),
       tmpl_(static_cast<size_t>(kLeadMaxPoints) * kSlots * kTemplateSize), age_(kLeadMaxPoints),
-      alive_(kLeadMaxPoints), seed_(2 * kLeadMaxPoints)
+      alive_(kLeadMaxPoints), corners_(2 * kLeadMaxPoints)
 {
     live_.reserve(kLeadMaxPoints);
     fit_a_.reserve(2 * kLeadMaxPoints);
@@ -279,10 +277,7 @@ void LeadFlowTracker::drop_points()
 void LeadFlowTracker::reset()
 {
     drop_points();
-    have_lead_ = false;
     box_ = LeadBox{};
-    roi_.clear();
-    roi_w_ = roi_h_ = 0;
     state_ = LeadFlowState{};
 }
 
@@ -297,7 +292,7 @@ int LeadFlowTracker::alive_points() const
 void LeadFlowTracker::copy_roi(const uint8_t *y, int stride)
 {
     const int mx = static_cast<int>(std::ceil(kKeepMargin * box_.width())) + kRoiMarginPx;
-    const int my = static_cast<int>(std::ceil(kKeepMargin * (box_.y1 - box_.y0))) + kRoiMarginPx;
+    const int my = static_cast<int>(std::ceil(kKeepMargin * box_.height())) + kRoiMarginPx;
     roi_x0_ = std::max(0, box_.x0 - mx);
     roi_y0_ = std::max(0, box_.y0 - my);
     roi_w_ = std::min(width_, box_.x1 + mx) - roi_x0_;
@@ -375,7 +370,7 @@ bool LeadFlowTracker::begin(const LeadFlowInput &lead, uint64_t frame_id, double
 {
     if (!consecutive) drop_points();  // 이전 위치가 이 프레임 바로 앞이 아니다
     LeadBox box;
-    const bool usable = y && lead.valid && lead.probability >= kLeadMinProbability &&
+    const bool usable = y && lead_flow_wanted(lead) &&
                         project_lead_box(k_, lead.rpy, lead.camera_height_m, lead.camera_offset_m, lead.x, lead.y,
                                          width_, height_, &box);
     if (!usable) {
@@ -385,11 +380,10 @@ bool LeadFlowTracker::begin(const LeadFlowInput &lead, uint64_t frame_id, double
     }
     state_ = LeadFlowState{};
     state_.frame_id = frame_id;
-    // 끼어들기·차선 변경으로 앞차가 바뀌면 거리나 옆 위치가 한 프레임에 튄다
-    if (have_lead_ && (std::fabs(lead.x - last_x_) > std::max(4.0f, 0.15f * lead.x) ||
-                       std::fabs(lead.y - last_y_) > 1.5f))
+    // 끼어들기·차선 변경으로 앞차가 바뀌면 거리나 옆 위치가 한 프레임에 튄다(box_는 직전 프레임의 상자다)
+    if (!box_.empty() && (std::fabs(lead.x - last_x_) > std::max(4.0f, 0.15f * lead.x) ||
+                          std::fabs(lead.y - last_y_) > 1.5f))
         drop_points();
-    have_lead_ = true;
     last_x_ = lead.x;
     last_y_ = lead.y;
     state_.lead_x = lead.x;
@@ -416,7 +410,7 @@ int LeadFlowTracker::points(float *xy)
 
 void LeadFlowTracker::advance(const float *xy, const uint8_t *ok, const float *back, const uint8_t *back_ok)
 {
-    const double mx = kKeepMargin * box_.width(), my = kKeepMargin * (box_.y1 - box_.y0);
+    const double mx = kKeepMargin * box_.width(), my = kKeepMargin * box_.height();
     for (size_t j = 0; j < live_.size(); ++j) {
         const int i = live_[j];
         const float *prev = pos(i, 1);
@@ -424,7 +418,7 @@ void LeadFlowTracker::advance(const float *xy, const uint8_t *ok, const float *b
         const bool inside = px >= box_.x0 - mx && px <= box_.x1 + mx && py >= box_.y0 - my && py <= box_.y1 + my;
         // 되돌려 따라간 위치가 직전 위치와 어긋나면 미끄러진 점이다(불빛 번짐, 가장자리)
         const bool tracks_back =
-            back_ok[j] && std::hypot(back[2 * j] - prev[0], back[2 * j + 1] - prev[1]) < kLeadFbPx;
+            back_ok[j] && std::hypot(back[2 * j] - prev[0], back[2 * j + 1] - prev[1]) < kFbPx;
         // 놓쳤거나 앞차를 벗어난 점(배경)도 버린다. 산 점은 이 프레임의 템플릿을 남긴다.
         if (!ok[j] || !tracks_back || !inside || !sample_patch(px, py, kLeadTemplateHalf + 1, tmpl(i, 0))) {
             alive_[static_cast<size_t>(i)] = 0;
@@ -449,12 +443,12 @@ void LeadFlowTracker::advance(const float *xy, const uint8_t *ok, const float *b
     }
     const int m = static_cast<int>(fit_a_.size() / 2);
     state_.points = static_cast<uint32_t>(m);
-    if (m < kLeadMinPoints) return;
+    if (m < kMinPoints) return;
     const double window_s = times_[slot(0)] - times_[slot(kLeadWindowSteps)];
     if (window_s < kMinWindowS) return;
     const ScaleFit fit = fit_similarity_scale(fit_a_.data(), fit_b_.data(), m, kLeadInlierPx);
     state_.inliers = static_cast<uint32_t>(fit.inliers);
-    if (!fit.valid || fit.inliers < kLeadMinInliers) return;
+    if (!fit.valid || fit.inliers < kMinInliers) return;
     state_.valid = 1;
     state_.window_s = static_cast<float>(window_s);
     state_.expansion_rate = static_cast<float>(std::log(fit.scale) / window_s);
@@ -462,14 +456,14 @@ void LeadFlowTracker::advance(const float *xy, const uint8_t *ok, const float *b
 
 void LeadFlowTracker::top_up()
 {
-    if (box_.empty() || roi_.empty()) return;
+    if (box_.empty()) return;
     int alive = alive_points();
     if (alive >= kLeadTopUpPoints) return;
     const LeadBox local{box_.x0 - roi_x0_, box_.y0 - roi_y0_, box_.x1 - roi_x0_, box_.y1 - roi_y0_};
-    const int n = pick_lead_corners(roi_.data(), roi_w_, local, kLeadMaxPoints, seed_.data());
+    const int n = pick_lead_corners(roi_.data(), roi_w_, local, kLeadMaxPoints, corners_.data());
     int free_slot = 0;
     for (int c = 0; c < n && alive < kLeadMaxPoints; ++c) {
-        const float x = seed_[2 * c] + static_cast<float>(roi_x0_), y = seed_[2 * c + 1] + static_cast<float>(roi_y0_);
+        const float x = corners_[2 * c] + static_cast<float>(roi_x0_), y = corners_[2 * c + 1] + static_cast<float>(roi_y0_);
         bool far = true;
         for (int i = 0; i < kLeadMaxPoints && far; ++i) {
             if (!alive_[static_cast<size_t>(i)]) continue;
@@ -477,8 +471,7 @@ void LeadFlowTracker::top_up()
             far = (p[0] - x) * (p[0] - x) + (p[1] - y) * (p[1] - y) >= kCornerMinDist2;
         }
         if (!far) continue;
-        while (free_slot < kLeadMaxPoints && alive_[static_cast<size_t>(free_slot)]) ++free_slot;
-        if (free_slot >= kLeadMaxPoints) break;
+        while (alive_[static_cast<size_t>(free_slot)]) ++free_slot;  // alive < kLeadMaxPoints: 빈자리가 있다
         if (!sample_patch(x, y, kLeadTemplateHalf + 1, tmpl(free_slot, 0))) continue;
         float *p = pos(free_slot, 0);
         p[0] = x;

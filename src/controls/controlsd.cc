@@ -82,7 +82,7 @@ struct TickStats {
     const VehicleCanState &vehicle = tick.vehicle();
     const float road_bank_lat_accel = tick.controller().road_bank_lat_accel();
     const AdaptiveCruiseOutput &adaptive_cruise = tick.adaptive_cruise();
-    const DepartureAlertInput &alert_input = tick.alert_input();
+    const AdaptiveCruiseInput &cruise_input = tick.cruise_input();  // 크루즈가 받은 앞차(추적이 있으면 그것)
     std::fprintf(stderr,
                  "controlsd: hz=%.3f work_avg_us=%.1f work_max_us=%.1f "
                  "misses=%u can=%u generated=%u errors=%u txFull=%u rxStale=%u "
@@ -118,7 +118,7 @@ struct TickStats {
                  adaptive_cruise.maximum_speed_kph, adaptive_cruise.commanded_speed_kph,
                  adaptive_cruise.target_speed_kph,
                  adaptive_cruise.lead_valid ? 1U : 0U,
-                 alert_input.lead_distance_m, alert_input.lead_relative_speed_mps,
+                 cruise_input.vision_lead_distance_m, cruise_input.vision_lead_relative_speed_mps,
                  adaptive_cruise.command_button,
                  vehicle.gas, vehicle.driver_override,
                  block_reason_name(result.active_block));

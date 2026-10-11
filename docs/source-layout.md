@@ -73,7 +73,7 @@ Libraries `common` and `utils_json`.
 - `ipc_messages.h`
   - every message that crosses `/dev/shm`: topic names, magics, channel headers,
     the state snapshots (`ModelState`, `ControlState`, `PandaState`, …) with
-    their `static_assert`s. Recording v12 stores the state snapshots as-is, so
+    their `static_assert`s. Recording v13 stores the state snapshots as-is, so
     their layouts are pinned here and tied to `kRecordingVersion` (that assert
     sits in `state_recorder.cc`). Code that
     only reads or fills a message includes this and nothing else.
@@ -167,7 +167,8 @@ Libraries `control_core` and `controls`, process `controlsd`.
     controller dead-reckons the car's set speed per session (this car does not
     report it), re-anchors to the cluster speed once the driver's buttons
     settle and after a long mismatch while the cruise holds speed, and paces
-    SET-/RES+ pulses from a filtered vision lead and the learned cluster/wheel
+    SET-/RES+ pulses from the vision lead (`modeld`'s lead track when it has
+    one) and the learned cluster/wheel
     speed ratio. The approach to a lead is capped by the fixed cruise's weak
     coasting deceleration, the set speed is kept near the actual speed while
     the car responds, and the button target rises slowly so lead noise does
@@ -304,6 +305,12 @@ Libraries `model` and (board) `replay`, process `modeld`.
     (forward-backward check, top-up, template refinement, the 0.5 s window).
     Host-tested by `gtest_lead_flow`
     ([Lead expansion](flow-calibration.md#lead-expansion)).
+- `lead_tracker.*`
+  - `LeadTracker`, the Kalman filter that fuses the model's lead distance
+    with the flow's expansion rate into `ModelState.lead_track`. It gates
+    outliers and starts again on another lead. `modeld` runs it once per
+    model frame. Host-tested by `gtest_lead_tracker`
+    ([Lead track](flow-calibration.md#lead-track)).
 - `model_state_fill.*`
   - `fill_model_state`, which modeld calls to pack a frame's outputs into
     `ModelState`, and `compute_lane_t` (the openpilot plan→lane time mapping).
@@ -412,7 +419,7 @@ Library `recording`, processes `recordd` and `replayd`.
     over 1 MiB, or a short header or payload), which `truncated()` reports.
 - `recorded_can.h`, `recorded_model_state.h`
   - the recorded CAN payload (written by `recordd`, read back by `replayd` and
-    the tools, whole frames only) and the reader that turns a v3 to v11
+    the tools, whole frames only) and the reader that turns a v3 to v13
     `ModelState` payload into the current struct.
 - `recordd.cc`
   - the drive recorder: encodes the frames `modeld` used and writes the CAN

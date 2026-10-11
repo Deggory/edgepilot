@@ -68,7 +68,8 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(rr.IMU_BATCH_HEAD.size, pinned(r"sizeof\(ImuBatch\) == (\d+) \+"), "ImuBatch 머리")
 
     def test_model_state(self):
-        layout = rr.model_state_layout(pinned(r"kRecordingVersion = (\d+)", FORMAT))
+        self.assertEqual(rr.RECORDING_VERSION, pinned(r"kRecordingVersion = (\d+)", FORMAT))
+        layout = rr.model_state_layout(rr.RECORDING_VERSION)
         self.assertEqual(layout["__size__"], size_of("ModelState"))
         offsets = pinned_offsets("EDGEPILOT_MODEL_STATE_AT")
         self.assertGreater(len(offsets), 5)
@@ -79,11 +80,14 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(layout["flow_calibration"], pinned(r"offsetof\(ModelState, flow_calibration\) == (\d+)"))
         self.assertEqual(layout["calibration_source"], pinned(r"offsetof\(ModelState, calibration_source\) == (\d+)"))
         self.assertEqual(layout["lead_flow"], pinned(r"offsetof\(ModelState, lead_flow\) == (\d+)"))
+        self.assertEqual(layout["lead_track"], pinned(r"offsetof\(ModelState, lead_track\) == (\d+)"))
         self.assertEqual(rr.CALIBRATION_STATE.itemsize, size_of("CalibrationState"))
         self.assertEqual(rr.FLOW_CALIBRATION_STATE.itemsize, size_of("FlowCalibrationState"))
         self.assertEqual(rr.CALIBRATION_SOURCE_STATE.itemsize, size_of("CalibrationSourceState"))
         self.assertEqual(rr.LEAD_FLOW_STATE.itemsize, size_of("LeadFlowState"))
-        # v11 녹화는 lead_flow 앞에서 끝난다
+        self.assertEqual(rr.LEAD_TRACK_STATE.itemsize, size_of("LeadTrackState"))
+        # v12 녹화는 lead_track 앞에서, v11 녹화는 lead_flow 앞에서 끝난다
+        self.assertEqual(rr.model_state_layout(12)["__size__"], layout["lead_track"])
         self.assertEqual(rr.model_state_layout(11)["__size__"], layout["lead_flow"])
         # v10 녹화는 FlowCalibrationState의 앞 56 B만 담았다(v11이 끝에 덧붙였다)
         self.assertEqual(rr.model_state_layout(10)["__size__"], layout["flow_calibration"] + 56)
@@ -131,6 +135,21 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual((int(got["valid"]), int(got["inliers"])), (1, 21))
         self.assertAlmostEqual(float(-got["lead_x"] * got["expansion_rate"]), -3.0, places=4)
         self.assertEqual(int(rr.lead_flow(bytes(v12[:rr.model_state_layout(11)["__size__"]]), 11)["valid"]), 0)
+
+    def test_lead_track_helper(self):
+        import numpy as np
+        v13 = bytearray(rr.model_state_layout(13)["__size__"])
+        track = np.zeros((), rr.LEAD_TRACK_STATE)
+        track["valid"], track["flags"], track["distance_m"], track["relative_speed_mps"] = 1, rr.LEAD_TRACK_FLOW_USED, 31.5, -2.25
+        at = rr.model_state_layout(13)["lead_track"]
+        v13[at:at + track.itemsize] = track.tobytes()
+        got = rr.lead_track(bytes(v13), 13)
+        self.assertEqual((int(got["valid"]), int(got["flags"])), (1, rr.LEAD_TRACK_FLOW_USED))
+        self.assertAlmostEqual(float(got["relative_speed_mps"]), -2.25, places=5)
+        self.assertEqual(int(rr.lead_track(bytes(v13[:rr.model_state_layout(12)["__size__"]]), 12)["valid"]), 0)
+        flags = {name: 1 << int(bit) for name, bit in re.findall(r"constexpr uint32_t kLeadTrack(\w+) = 1u << (\d+);", IPC)}
+        self.assertEqual(flags, {"FlowUsed": rr.LEAD_TRACK_FLOW_USED, "FlowRejected": rr.LEAD_TRACK_FLOW_REJECTED,
+                                 "DistanceRejected": rr.LEAD_TRACK_DISTANCE_REJECTED, "Started": rr.LEAD_TRACK_STARTED})
 
     def test_magics(self):
         def magic(name: str) -> bytes:

@@ -211,8 +211,8 @@ gets rechecked afterwards. The pose loop's pitch matched the flow pitch within 0
 
 ## Lead expansion
 
-The flow worker also measures the lead car's expansion rate. It runs in shadow mode: `ModelState.lead_flow` is
-recorded, and nothing reads it yet.
+The flow worker also measures the lead car's expansion rate (`ModelState.lead_flow`). The [lead track](#lead-track)
+fuses it with the model's lead distance, and the vision cruise uses that track.
 
 ### Why
 
@@ -293,8 +293,80 @@ Night is 2026-10-10 19:32 (4 segments, 1633 frames every column covers). Day is 
   of wall time per lead frame, against 0.7 ms and 6.6 ms for the first version. The backward call adds 1-2 ms
   of IVE time.
 
+### Lead track
+
+On its own, the flow rate is right in size but noisy from frame to frame. The model distance jumps 0.6-1.6 m
+from frame to frame. `model/lead_tracker` fuses the two into the lead's distance and relative speed,
+`ModelState.lead_track`. `modeld` runs it once per model frame.
+
+- **State and measurements.** The state is [distance from the camera, relative speed], at constant velocity:
+  - The process noise is 4 (m/s²)²·s of relative acceleration.
+  - The model distance has a noise of 0.5 + 0.025·d m. Around the ±2 s trend it scatters 0.7-1.9 m, or 3-7%.
+  - The flow rate enters as a measurement of -v/d (an extended Kalman filter update). Its noise is 0.03/s,
+    taken three times larger because one frame's 0.5 s window overlaps the next nine.
+  - A flow value is used once, by its frame id: the flow worker can lag a model frame.
+- **Gates.** Both measurements pass a 3σ gate, so single spikes are dropped. The filter starts again only when
+  the lead drops out, when frames stop for over 0.5 s, or when 5 model distances in a row fall outside the
+  gate (another car).
+  - An offline version that started again at every 4 m jump of the model distance spiked: most such jumps
+    are the model's noise, not a new lead.
+- **Start.** It starts from the model's distance and its relative speed (0 when `controlsd` has no fresh
+  vehicle speed).
+
+Against the same reference, on the 11 segments above (night 034/039/040/041 and 138/139, day 10-04), 8-40 m
+pooled, settings as in the runtime:
+
+| | Speed error | Corr / slope | Speed jitter per frame | Distance jitter per frame | Lag |
+| --- | --- | --- | --- | --- | --- |
+| Model lead (raw) | 3.8 km/h | 0.47 / 0.41 | 2.2 km/h | 0.91 m | 0.25 s |
+| Flow rate alone | 3.1 km/h | 0.71 / 0.76 | 2.6 km/h | (model's) | 0.40 s |
+| Model distance filtered alone | 4.2 km/h | 0.71 / 1.06 | 1.4 km/h | 0.24 m | 0.55 s |
+| Lead track (model distance and flow) | 2.3 km/h | 0.82 / 0.81 | 0.7 km/h | 0.26 m | 0.60 s |
+
+- At about the same lag, the flow halves the speed error of a filter on the model distance alone, and halves
+  its jitter. So the gain is more than smoothing.
+- The price is lag: 0.6 s against the reference, 0.35 s more than the raw model lead.
+  - Measuring the flow as a change of log distance over its window (a cloned state) could take some of that
+    back.
+  - A constant-acceleration variant that placed the flow at its window's centre overshot.
+- The flow for 138/139 came from the OpenCV emulation of the board algorithm, which matched the board. The
+  scripts are in `eval/lead_flow_20261011/fusion` (outside the repository).
+
+`ModelState.lead_track` (`LeadTrackState`, recording v13, 24 B):
+- `valid` and `flags`: the flow was used, the flow or the model distance was gated out, the track started.
+- `distance_m` (from the camera, like `lead.x`) and `relative_speed_mps` (negative while closing).
+- `distance_std_m` and `relative_speed_std_mps`: the filter's standard deviations.
+
+The web BEV draws the lead where the track puts it, with the model's own distance as a gray bar across the
+lane, and a card of both over time ([Runtime options](runtime-options.md#web-console)).
+
+### The vision cruise takes the track
+
+`controlsd` gives the vision cruise the track's distance and relative speed whenever the track has a value
+(`observe_cruise_lead`). Whether there is a lead at all is still the model's call, through its 0.5 probability
+threshold. The departure alert keeps the model's lead: it has to be quick, and at a standstill the model's lead
+is already steady (about 3 cm per frame).
+
+Before the switch, the real `controlsd` code was replayed on 9 segments where the vision cruise had pressed
+buttons behind a lead (2026-10-10 18:34: 042, 066, 069, 075; 19:32: 034, 039-042, 082):
+- `diagnostics/replay_controls --lead-track` fed in the track, computed offline with the emulated flow.
+- Each replay starts before its cruise session, because `controlsd` estimates the cruise state from the
+  driver's SET/RES presses.
+- The replay is open loop: the recorded car does not answer the replayed buttons.
+
+| | Model lead | Lead track |
+| --- | --- | --- |
+| Cruise target vs the target from the reference lead (3545 frames): RMS / median error | 6.9 / 4.3 km/h | 4.2 / 2.0 km/h |
+| Target bias / jitter per frame | -2.2 / 3.2 km/h | +0.0 / 1.3 km/h |
+| Button presses (SET- / RES+) | 85 (68 / 17) | 72 (55 / 17) |
+| Presses against the reference (SET- while the lead pulls away, RES+ while it closes) | 35 | 23 |
+| First SET- after a closing episode starts (3 of 14 answered) / first RES+ after an opening (2-3 of 10) | 0.8 s / 4.3 s | 0.4 s / 2.5 s |
+
+- The target is the formula of `AdaptiveCruiseController::target_speed`, fed each lead with the same ego speed
+  and parameters.
+- The reference target jitters 0.83 km/h per frame.
+
 ### Next
 
-Drive with recording on and check `lead_flow` live. Then fuse it into `controlsd`'s vision-lead relative
-speed for the vision cruise, where the model reports about half the closing speed beyond 25 m. A time-to-
-collision warning could follow.
+Drive with recording on. Check `lead_flow` and `lead_track` live, and how the vision cruise now follows slower
+leads. A time-to-collision warning could follow.

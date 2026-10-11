@@ -309,7 +309,8 @@ bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool bac
         pq[i].y = static_cast<AX_U32>(std::lround(std::max(0.0f, xy[2 * i + 1]) / top * kQ20));
     }
     flush(m.pts);
-    const Impl::Frame &prev = m.frames[backward ? m.cur : 1 - m.cur], &next = m.frames[backward ? 1 - m.cur : m.cur];
+    const int from = backward ? m.cur : 1 - m.cur;  // 점이 있는 프레임(앞으로면 이전, 거꾸로면 현재)
+    const Impl::Frame &prev = m.frames[from], &next = m.frames[1 - from];
     AX_IVE_SRC_IMAGE_T a[kLevels], b[kLevels];
     a[0] = image(prev.l0_phys, nullptr, m.w, m.h, prev.l0_stride, AX_IVE_IMAGE_TYPE_U8C1);
     b[0] = image(next.l0_phys, nullptr, m.w, m.h, next.l0_stride, AX_IVE_IMAGE_TYPE_U8C1);

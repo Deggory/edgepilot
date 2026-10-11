@@ -19,6 +19,9 @@ constexpr double kCornerQuality = 0.002;
 constexpr size_t kQueueDepth = 3;
 constexpr uint64_t kLeadLogFrames = 1200;
 constexpr double kRadToDeg = 57.29577951308232;
+// 보정 점과 앞차 점을 한 번의 LK로 따라간다
+constexpr int kStepPoints = kFlowMaxPoints + kLeadMaxPoints;
+static_assert(kStepPoints <= IveFlow::kMaxPoints, "one IVE LK call tracks both point sets");
 
 double now_ms()
 {
@@ -33,10 +36,6 @@ double thread_cpu_ms()
 }
 
 } // namespace
-
-// 보정 점과 앞차 점을 한 번의 LK로 따라간다(IVE 한계 500점)
-static_assert(kFlowMaxPoints + kLeadMaxPoints <= 500, "one IVE LK call tracks both point sets");
-constexpr int kStepPoints = kFlowMaxPoints + kLeadMaxPoints;
 
 FlowTracker::FlowTracker(const FlowIntrinsics &k, int width, int height)
     : k_(k), ive_(std::make_unique<IveFlow>(width, height)), lead_(k, width, height), start_(2 * kFlowMaxPoints),
@@ -115,11 +114,10 @@ void FlowTracker::process(const FlowFrame &f)
         in_window_ = false;
     };
     const bool gate_open = flow_gate_open(f.gate);
-    const bool lead_wanted = f.y_virt != nullptr && f.lead.valid && f.lead.probability >= kLeadMinProbability &&
-                             f.lead.x >= kLeadMinDistanceM && f.lead.x <= kLeadMaxDistanceM;
+    const bool lead_wanted = f.y_virt != nullptr && lead_flow_wanted(f.lead);
     if (!gate_open) lose();
+    if (!lead_wanted) lead_.reset();
     if (!gate_open && !lead_wanted) {  // 곧은 길도 앞차도 아니면 IVE를 쓰지 않는다
-        lead_.reset();
         have_last_ = false;
         return;
     }
@@ -137,11 +135,7 @@ void FlowTracker::process(const FlowFrame &f)
     last_valid_ = f.still_valid;
     ++stats_.frames;
     if (in_window_ && !consecutive) lose();  // 이동이 8 px 한계를 넘을 수 있다
-    bool lead_points = false;
-    if (lead_wanted)
-        lead_points = lead_.begin(f.lead, f.frame_id, f.t_s, consecutive, f.y_virt, f.stride);
-    else
-        lead_.reset();
+    const bool lead_points = lead_wanted && lead_.begin(f.lead, f.frame_id, f.t_s, consecutive, f.y_virt, f.stride);
 
     // 살아 있는 보정 점 다음에 앞차 점을 모아 한 번에 따라간다
     live_.clear();

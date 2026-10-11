@@ -3,8 +3,8 @@
 
   hud_tools.py inputs <route_dir> <out_dir> [--time SECONDS]
       Extract hud_snapshot inputs from a recordd route: model.bin (raw
-      ModelState in the current v12 layout, 3712 bytes; older records are
-      zero-filled at the end), control.bin (raw
+      ModelState in the current layout; older records are zero-filled at
+      the end), control.bin (raw
       ControlState padded to 240 bytes) and camera.png (the matching road
       frame). Without --time the moment is chosen automatically: controller
       active, 40-95 km/h, all lane lines confident, a lead if any.
@@ -29,11 +29,11 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
-from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa: E402
+from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE, RECORDING_VERSION,  # noqa: E402
                               iter_event_records, model_state_layout,
                               route_event_files, route_segments, segment_video)
 
-MODEL_STATE_SIZE = model_state_layout(12)["__size__"]  # hud_snapshot reads the current struct
+MODEL_STATE_SIZE = model_state_layout(RECORDING_VERSION)["__size__"]  # hud_snapshot reads the current struct
 CONTROL_STATE_SIZE = 240
 FRAME_MAGIC = b"EDGEARGB"
 
