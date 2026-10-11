@@ -1,6 +1,6 @@
 #include "common/app_config.h"
 #include "model/calibration_service.h"
-#include "model/flow_calibration_worker.h"
+#include "model/flow_worker.h"
 #include "model/replay_source.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
@@ -220,7 +220,8 @@ private:
 bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
                     CalibrationService &calibration, const CameraMount &mount,
                     uint64_t frame_id, uint64_t capture_timestamp_ns, float model_ms,
-                    float v_ego, bool engaged, bool use_flow)
+                    float v_ego, bool engaged, bool use_flow, const LeadFlowState &lead_flow,
+                    LeadFlowInput *next_lead)
 {
     calibration.update(parsed, v_ego, engaged, use_flow);
     float input_rpy[3];
@@ -236,6 +237,16 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
     state.camera_height_m = mount.height_m();
     state.flow_calibration = calibration.flow_state();
     state.calibration_source = calibration.source_state();
+    state.lead_flow = lead_flow;
+    if (next_lead) {  // 광류 작업이 다음 카메라 프레임에서 따라갈 앞차
+        next_lead->valid = state.lead.valid != 0;
+        next_lead->probability = state.lead.probability;
+        next_lead->x = state.lead.x;
+        next_lead->y = state.lead.y;
+        std::copy(input_rpy, input_rpy + 3, next_lead->rpy);
+        next_lead->camera_height_m = mount.height_m();
+        next_lead->camera_offset_m = mount.offset_m();
+    }
     return model_pub.publish(&state, sizeof(state));
 }
 
@@ -280,7 +291,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub)
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             if (!publish_output(model_pub, model, parsed, calibration, mount,
                                 processed, monotonic_now_ns(), model_ms, 0.0f, false,
-                                settings.get().calibration_use_flow)) {
+                                settings.get().calibration_use_flow, LeadFlowState{}, nullptr)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }
@@ -349,20 +360,24 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
     model.set_input_calibration(initial_rpy);
     CameraMount mount(settings.get());
     EgoStateReader ego;
-    /* 광류 보정기. 링 슬롯을 IVE가 직접 읽으므로 frame_ring보다 먼저 없어져야 한다(뒤에 선언). IVE를 쓸 수
-     * 없으면 끄고 계속 간다(저장해 둔 추정은 보정 서비스가 그대로 쓴다). 워프에 쓸지는 웹 기기 설정이다. */
-    std::unique_ptr<FlowCalibrationWorker> flow;
+    // 링 슬롯의 CPU 매핑(CPU 워프 복사, 광류 작업의 앞차 점 고르기). 광류 작업보다 먼저 선언해 나중에 없앤다.
+    RingSlotMaps slot_maps;
+    /* 광류 작업(보정 창과 앞차 확대율). 링 슬롯을 IVE가 직접 읽으므로 frame_ring보다 먼저 없어져야 한다(뒤에
+     * 선언). IVE를 쓸 수 없으면 끄고 계속 간다(저장해 둔 보정 추정은 보정 서비스가 그대로 쓴다). 보정을 워프에
+     * 쓸지는 웹 기기 설정이고, 앞차 확대율은 ModelState.lead_flow에 기록만 한다. */
+    std::unique_ptr<FlowWorker> flow;
+    LeadFlowInput last_lead;  // 직전 모델 출력의 앞차(다음 카메라 프레임에서 따라간다)
     if (config.flow_calibration) {
         try {
             const FlowIntrinsics k{config.input_warp_fx, config.input_warp_fy, config.input_warp_cx,
                                    config.input_warp_cy};
-            flow = std::make_unique<FlowCalibrationWorker>(k, static_cast<int>(frame_ring.width()),
-                                                           static_cast<int>(frame_ring.height()),
-                                                           &calibration.stored_flow_blocks());
+            flow = std::make_unique<FlowWorker>(k, static_cast<int>(frame_ring.width()),
+                                                static_cast<int>(frame_ring.height()),
+                                                &calibration.stored_flow_blocks());
             /* 보정 서비스가 상태를 읽고 블록을 저장하고 초기화를 보낸다. 워커는 calibration보다 늦게 선언돼 먼저
              * 없어지지만, 그 뒤에는 update를 부르지 않고 서비스의 소멸자도 측정원을 건드리지 않는다. */
             calibration.attach_flow(flow.get());
-            std::fprintf(stderr, "modeld: flow calibration on (VPP/IVE pyramid, IVE LK)\n");
+            std::fprintf(stderr, "modeld: flow calibration and lead flow on (VPP/IVE pyramid, IVE LK)\n");
         } catch (const std::exception &e) {
             std::fprintf(stderr, "modeld: flow calibration off: %s\n", e.what());
         }
@@ -377,7 +392,6 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
     bool have_last_frame_id = false;
     RateWindow window;
     std::vector<uint8_t> frame_copy(frame_ring.frame_bytes());
-    RingSlotMaps slot_maps;
 
     std::fprintf(stderr, "modeld: live frame ring slots=%u frame=%ux%u, every frame\n",
                  frame_ring.slot_count(), frame_ring.width(), frame_ring.height());
@@ -423,11 +437,15 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
         mount.apply(model, settings.get());
         if (flow && zero_copy) {
             // Y 평면이 슬롯 앞에 있다(NV12/NV21). IVE가 복사를 마친 뒤 슬롯이 그대로인지 seqlock으로 본다.
-            FlowCalibrationWorker::Frame job;
+            slot_maps.attach(frame_ring, meta.slot);  // 슬롯마다 한 번 매핑한다
+            FlowFrame job;
             job.y_phys = slot_phys;
+            job.y_virt = slot_maps.virt[meta.slot];
             job.stride = frame_w;
             job.frame_id = meta.frame_id;
+            job.t_s = static_cast<double>(meta.timestamp_ns) * 1e-9;
             job.gate = ego.flow_gate();
+            job.lead = last_lead;
             job.still_valid = [&frame_ring, slot = meta.slot, id = meta.frame_id, slot_seq] {
                 return frame_ring.read_still_valid(slot, id, slot_seq);
             };
@@ -452,7 +470,8 @@ int run_live(const AppConfig &config, LatestChannel &model_pub,
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             if (!publish_output(model_pub, model, parsed, calibration, mount,
                                 meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego(), ego.engaged(),
-                                settings.get().calibration_use_flow)) {
+                                settings.get().calibration_use_flow, flow ? flow->lead_state() : LeadFlowState{},
+                                &last_lead)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }

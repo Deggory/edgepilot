@@ -1245,7 +1245,7 @@ AppConfig auto_calibration()
     return config;
 }
 
-// 광류 측정원 흉내(보드에서는 FlowCalibrationWorker). 초기화를 받으면 바로 처리한 것으로 센다.
+// 광류 측정원 흉내(보드에서는 FlowWorker). 초기화를 받으면 바로 처리한 것으로 센다.
 struct FakeFlowSource : FlowSource {
     FlowCalibrationState current;
     FlowBlocks blocks;

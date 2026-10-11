@@ -155,6 +155,17 @@ CALIBRATION_SOURCE_STATE = np.dtype([
 ])
 assert CALIBRATION_SOURCE_STATE.itemsize == 32
 
+# ModelState.lead_flow (v12+): the lead's expansion rate from optical flow (model/lead_flow). The relative speed is
+# -lead_x * expansion_rate (m/s, negative = closing) and the time to contact 1 / expansion_rate.
+LEAD_FLOW_STATE = np.dtype([
+    ("frame_id", "<u8"),
+    ("valid", "<u4"), ("points", "<u4"), ("inliers", "<u4"),
+    ("expansion_rate", "<f4"),   # 1/s, ln(scale ratio) / window_s, positive = closing
+    ("window_s", "<f4"),
+    ("lead_x", "<f4"),           # model lead distance at the window end (m, from the camera)
+])
+assert LEAD_FLOW_STATE.itemsize == 32
+
 TRAJECTORY_SIZE = 33
 IPC_POINT = 12  # IpcPoint: three float32
 
@@ -177,6 +188,7 @@ def model_state_layout(version: int) -> dict[str, int]:
          shadow state (v9 only changed the file magics)
       v11 grew flow_calibration to 72 bytes and appended calibration_source
          (3680); calibration is the value the warp used, whichever its source
+      v12 appended lead_flow (3712), the lead's expansion rate from optical flow
     Callers should check ``layout["__size__"]`` against the payload size they
     actually saw so a future layout change fails loudly instead of decoding
     garbage.
@@ -204,6 +216,8 @@ def model_state_layout(version: int) -> dict[str, int]:
         fields += [("flow_calibration", 56)]
     if version >= 11:
         fields += [("flow_calibration", 72), ("calibration_source", 32)]
+    if version >= 12:
+        fields += [("lead_flow", 32)]
 
     layout, offset = {}, 0
     for name, size in fields:
@@ -239,6 +253,12 @@ def calibration_source(payload: bytes, version: int):
     out["pose_status"], out["pose_valid_blocks"] = cal["status"], cal["valid_blocks"]
     out["pose_roll"], out["pose_pitch"], out["pose_yaw"] = cal["roll"], cal["pitch"], cal["yaw"]
     return out
+
+def lead_flow(payload: bytes, version: int):
+    """ModelState.lead_flow as one LEAD_FLOW_STATE record (zeros before v12: no expansion rate)."""
+    if version < 12:
+        return np.zeros((), LEAD_FLOW_STATE)
+    return np.frombuffer(payload, LEAD_FLOW_STATE, count=1, offset=model_state_layout(version)["lead_flow"])[0]
 
 @dataclass
 class SegmentInfo:

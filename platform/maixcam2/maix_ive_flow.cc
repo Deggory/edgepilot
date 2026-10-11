@@ -295,7 +295,7 @@ const int16_t *IveFlow::corner_response()
     return reinterpret_cast<const int16_t *>(m.resp.virt);
 }
 
-bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok)
+bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool backward)
 {
     Impl &m = *impl_;
     if (n <= 0) return true;
@@ -309,7 +309,7 @@ bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok)
         pq[i].y = static_cast<AX_U32>(std::lround(std::max(0.0f, xy[2 * i + 1]) / top * kQ20));
     }
     flush(m.pts);
-    const Impl::Frame &prev = m.frames[1 - m.cur], &next = m.frames[m.cur];
+    const Impl::Frame &prev = m.frames[backward ? m.cur : 1 - m.cur], &next = m.frames[backward ? 1 - m.cur : m.cur];
     AX_IVE_SRC_IMAGE_T a[kLevels], b[kLevels];
     a[0] = image(prev.l0_phys, nullptr, m.w, m.h, prev.l0_stride, AX_IVE_IMAGE_TYPE_U8C1);
     b[0] = image(next.l0_phys, nullptr, m.w, m.h, next.l0_stride, AX_IVE_IMAGE_TYPE_U8C1);

@@ -6,7 +6,7 @@
  * 푼다. 모델 pose를 거치지 않는 절대 측정이라 지금 보정 루프와 달리 피드백이 없다. 지금 루프는 모델이
  * 워프 yaw를 18%만 따라가서 고정점이 치우친다(2026-10 분석, docs/flow-calibration.md).
  * 이 파일은 하드웨어와 무관한 부분(풀이, 코너 고르기, 조건, 블록 집계)이다. 피라미드·코너 응답·LK는
- * IVE가 맡는다(platform/maixcam2/maix_ive_flow, model/flow_calibration_worker). 추정은
+ * IVE가 맡는다(platform/maixcam2/maix_ive_flow, model/flow_worker). 추정은
  * ModelState.flow_calibration에 기록되고, 웹 기기 설정이 광류면 워프의 pitch·yaw가 된다
  * (model/calibration_source). */
 
@@ -82,7 +82,7 @@ struct FlowBlocks {
     uint32_t mount_changes = 0;
 };
 
-/* 광류 측정원(보드: model/flow_calibration_worker의 FlowCalibrationWorker, 시험: 가짜). 보정 서비스
+/* 광류 측정원(보드: model/flow_worker의 FlowWorker, 시험: 가짜). 보정 서비스
  * (model/calibration_service)가 모델 프레임마다 상태를 읽고, 끝난 블록을 받아 저장하고, 초기화를 요청한다.
  * 측정원은 자기 스레드에서 돌아도 되고, 세 함수는 다른 스레드에서 불러도 안전해야 한다. */
 class FlowSource {

@@ -1,4 +1,4 @@
-#include "model/flow_calibration_worker.h"
+#include "model/flow_worker.h"
 
 #include "maixcam2/maix_ive_flow.h"
 
@@ -17,6 +17,7 @@ namespace {
  * (2026-10 보드 재생). 칸마다 하나만 고르므로 문턱을 낮춰도 점은 고르게 퍼진다. */
 constexpr double kCornerQuality = 0.002;
 constexpr size_t kQueueDepth = 3;
+constexpr uint64_t kLeadLogFrames = 1200;
 constexpr double kRadToDeg = 57.29577951308232;
 
 double now_ms()
@@ -33,25 +34,29 @@ double thread_cpu_ms()
 
 } // namespace
 
-FlowWindowTracker::FlowWindowTracker(const FlowIntrinsics &k, int width, int height)
-    : k_(k), ive_(std::make_unique<IveFlow>(width, height)), start_(2 * kFlowMaxPoints), cur_(2 * kFlowMaxPoints),
-      alive_(kFlowMaxPoints), step_in_(2 * kFlowMaxPoints), step_out_(2 * kFlowMaxPoints), step_ok_(kFlowMaxPoints)
+// 보정 점과 앞차 점을 한 번의 LK로 따라간다(IVE 한계 500점)
+static_assert(kFlowMaxPoints + kLeadMaxPoints <= 500, "one IVE LK call tracks both point sets");
+constexpr int kStepPoints = kFlowMaxPoints + kLeadMaxPoints;
+
+FlowTracker::FlowTracker(const FlowIntrinsics &k, int width, int height)
+    : k_(k), ive_(std::make_unique<IveFlow>(width, height)), lead_(k, width, height), start_(2 * kFlowMaxPoints),
+      cur_(2 * kFlowMaxPoints), alive_(kFlowMaxPoints), step_in_(2 * kStepPoints), step_out_(2 * kStepPoints),
+      step_ok_(kStepPoints), back_(2 * kLeadMaxPoints), back_ok_(kLeadMaxPoints)
 {
     live_.reserve(kFlowMaxPoints);
     fit_a_.reserve(2 * kFlowMaxPoints);
     fit_b_.reserve(2 * kFlowMaxPoints);
 }
 
-FlowWindowTracker::~FlowWindowTracker() = default;
+FlowTracker::~FlowTracker() = default;
 
-const char *FlowWindowTracker::pyramid_engine() const
+const char *FlowTracker::pyramid_engine() const
 {
     return ive_->pyramid_engine();
 }
 
-void FlowWindowTracker::start_window(uint64_t frame_id)
+void FlowTracker::start_window()
 {
-    (void)frame_id;
     const int16_t *resp = ive_->corner_response();
     n_ = resp ? pick_flow_corners(resp, ive_->width() / 2, IveFlow::kBandRows, 2, IveFlow::kBandTop, kCornerQuality,
                                   kFlowMaxPoints, start_.data())
@@ -62,35 +67,85 @@ void FlowWindowTracker::start_window(uint64_t frame_id)
     in_window_ = n_ >= kFlowMinTracks;
 }
 
-void FlowWindowTracker::process(unsigned long long y_phys, int stride, uint64_t frame_id, const FlowGateInput &gate,
-                                const std::function<bool()> &still_valid)
+/* 이번 걸음에 따라간 보정 점(step_out_ 앞쪽 tracked개)으로 창을 잇고, 창이 차면 이동 방향을 푼다. */
+void FlowTracker::advance_window(uint64_t frame_id, int tracked)
+{
+    int alive = 0;
+    for (int j = 0; j < tracked; ++j) {
+        const int i = live_[j];
+        if (step_ok_[j]) {
+            cur_[2 * i] = step_out_[2 * j];
+            cur_[2 * i + 1] = step_out_[2 * j + 1];
+            ++alive;
+        } else {
+            alive_[i] = 0;
+        }
+    }
+    ++steps_;
+    if (alive < kFlowMinTracks) {
+        ++stats_.windows_lost;
+        in_window_ = false;
+        return;
+    }
+    if (steps_ < kFlowWindowSteps) return;
+    fit_a_.clear();
+    fit_b_.clear();
+    for (int i = 0; i < n_; ++i) {
+        if (!alive_[i]) continue;
+        fit_a_.push_back(start_[2 * i]);
+        fit_a_.push_back(start_[2 * i + 1]);
+        fit_b_.push_back(cur_[2 * i]);
+        fit_b_.push_back(cur_[2 * i + 1]);
+    }
+    const FlowSolution s = solve_flow_direction(k_, fit_a_.data(), fit_b_.data(), alive);
+    if (s.valid) {
+        calibrator_.add(s, alive, frame_id);
+        ++stats_.windows_done;
+    } else {
+        calibrator_.note_rejected(s);
+        ++stats_.rejected;
+    }
+    in_window_ = false;
+}
+
+void FlowTracker::process(const FlowFrame &f)
 {
     auto lose = [this] {
         if (in_window_) ++stats_.windows_lost;
         in_window_ = false;
     };
-    if (!flow_gate_open(gate)) {  // 곧고 빠르지 않으면 IVE를 쓰지 않는다
-        lose();
+    const bool gate_open = flow_gate_open(f.gate);
+    const bool lead_wanted = f.y_virt != nullptr && f.lead.valid && f.lead.probability >= kLeadMinProbability &&
+                             f.lead.x >= kLeadMinDistanceM && f.lead.x <= kLeadMaxDistanceM;
+    if (!gate_open) lose();
+    if (!gate_open && !lead_wanted) {  // 곧은 길도 앞차도 아니면 IVE를 쓰지 않는다
+        lead_.reset();
         have_last_ = false;
         return;
     }
     const double wall0 = now_ms(), cpu0 = thread_cpu_ms();
-    const bool consecutive = have_last_ && frame_id == last_frame_ + 1;
-    if (!ive_->push(y_phys, stride) || (still_valid && !still_valid())) {
+    const bool consecutive = have_last_ && f.frame_id == last_frame_ + 1;
+    if (!ive_->push(f.y_phys, f.stride) || (f.still_valid && !f.still_valid())) {
         lose();
+        lead_.reset();
         have_last_ = false;
         return;
     }
     const std::function<bool()> prev_valid = consecutive ? last_valid_ : std::function<bool()>();
     have_last_ = true;
-    last_frame_ = frame_id;
-    last_valid_ = still_valid;
+    last_frame_ = f.frame_id;
+    last_valid_ = f.still_valid;
     ++stats_.frames;
     if (in_window_ && !consecutive) lose();  // 이동이 8 px 한계를 넘을 수 있다
+    bool lead_points = false;
+    if (lead_wanted)
+        lead_points = lead_.begin(f.lead, f.frame_id, f.t_s, consecutive, f.y_virt, f.stride);
+    else
+        lead_.reset();
 
+    // 살아 있는 보정 점 다음에 앞차 점을 모아 한 번에 따라간다
+    live_.clear();
     if (in_window_) {
-        // 살아 있는 점만 모아 따라간다
-        live_.clear();
         for (int i = 0; i < n_; ++i) {
             if (!alive_[i]) continue;
             const size_t m = live_.size();
@@ -98,64 +153,45 @@ void FlowWindowTracker::process(unsigned long long y_phys, int stride, uint64_t 
             step_in_[2 * m + 1] = cur_[2 * i + 1];
             live_.push_back(i);
         }
-        const int m = static_cast<int>(live_.size());
+    }
+    const int cal = static_cast<int>(live_.size());
+    const int lead = lead_points ? lead_.points(&step_in_[2 * static_cast<size_t>(cal)]) : 0;
+    if (cal + lead > 0) {
+        const float *lead_out = &step_out_[2 * static_cast<size_t>(cal)];
+        bool tracked = ive_->track(step_in_.data(), cal + lead, step_out_.data(), step_ok_.data());
+        // 앞차 점은 거꾸로도 따라가 본다(앞뒤 검사, LeadFlowTracker::advance)
+        if (tracked && lead > 0) tracked = ive_->track(lead_out, lead, back_.data(), back_ok_.data(), true);
         // 원본 단은 링 슬롯을 그대로 읽었으므로 LK 동안 두 슬롯이 덮어써지지 않았어야 한다
-        if (!ive_->track(step_in_.data(), m, step_out_.data(), step_ok_.data()) || (prev_valid && !prev_valid()) ||
-            (still_valid && !still_valid())) {
+        if (!tracked || (prev_valid && !prev_valid()) || (f.still_valid && !f.still_valid())) {
             lose();
+            lead_.reset();
         } else {
-            int alive = 0;
-            for (int j = 0; j < m; ++j) {
-                const int i = live_[j];
-                if (step_ok_[j]) {
-                    cur_[2 * i] = step_out_[2 * j];
-                    cur_[2 * i + 1] = step_out_[2 * j + 1];
-                    ++alive;
-                } else {
-                    alive_[i] = 0;
-                }
-            }
-            ++steps_;
-            if (alive < kFlowMinTracks) {
-                lose();
-            } else if (steps_ >= kFlowWindowSteps) {
-                fit_a_.clear();
-                fit_b_.clear();
-                for (int i = 0; i < n_; ++i) {
-                    if (!alive_[i]) continue;
-                    fit_a_.push_back(start_[2 * i]);
-                    fit_a_.push_back(start_[2 * i + 1]);
-                    fit_b_.push_back(cur_[2 * i]);
-                    fit_b_.push_back(cur_[2 * i + 1]);
-                }
-                const FlowSolution s = solve_flow_direction(k_, fit_a_.data(), fit_b_.data(), alive);
-                if (s.valid) {
-                    calibrator_.add(s, alive, frame_id);
-                    ++stats_.windows_done;
-                } else {
-                    calibrator_.note_rejected(s);
-                    ++stats_.rejected;
-                }
-                in_window_ = false;
+            if (cal > 0) advance_window(f.frame_id, cal);
+            if (lead > 0) {
+                lead_.advance(lead_out, &step_ok_[static_cast<size_t>(cal)], back_.data(), back_ok_.data());
+                ++stats_.lead_frames;
+                if (lead_.state().valid) ++stats_.lead_rates;
             }
         }
     }
     // 창이 없으면(방금 끝났어도) 이 프레임에서 새 창을 연다
-    if (!in_window_) start_window(frame_id);
+    if (gate_open && !in_window_) start_window();
+    if (lead_wanted) {
+        lead_.top_up();
+        // begin이 상자 둘레를 복사한 뒤 슬롯이 덮어써졌으면 새 점과 템플릿을 믿을 수 없다
+        if (f.still_valid && !f.still_valid()) lead_.reset();
+    }
     stats_.wall_ms += now_ms() - wall0;
     stats_.cpu_ms += thread_cpu_ms() - cpu0;
 }
 
-void FlowWindowTracker::reset_calibration()
+void FlowTracker::reset_calibration()
 {
     calibrator_.reset();
     in_window_ = false;
-    have_last_ = false;
-    last_valid_ = nullptr;
 }
 
-FlowCalibrationWorker::FlowCalibrationWorker(const FlowIntrinsics &k, int width, int height,
-                                             const FlowBlocks *restore)
+FlowWorker::FlowWorker(const FlowIntrinsics &k, int width, int height, const FlowBlocks *restore)
     : tracker_(k, width, height)
 {
     if (restore && !restore->yaw.empty()) {
@@ -166,10 +202,10 @@ FlowCalibrationWorker::FlowCalibrationWorker(const FlowIntrinsics &k, int width,
     }
     state_ = tracker_.calibrator().state();
     blocks_ = tracker_.calibrator().blocks();
-    thread_ = std::thread(&FlowCalibrationWorker::run, this);
+    thread_ = std::thread(&FlowWorker::run, this);
 }
 
-void FlowCalibrationWorker::request_reset()
+void FlowWorker::request_reset()
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -178,7 +214,7 @@ void FlowCalibrationWorker::request_reset()
     cv_.notify_one();
 }
 
-bool FlowCalibrationWorker::take_blocks(FlowBlocks *out)
+bool FlowWorker::take_blocks(FlowBlocks *out)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!blocks_changed_) return false;
@@ -187,7 +223,7 @@ bool FlowCalibrationWorker::take_blocks(FlowBlocks *out)
     return true;
 }
 
-FlowCalibrationWorker::~FlowCalibrationWorker()
+FlowWorker::~FlowWorker()
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -197,7 +233,7 @@ FlowCalibrationWorker::~FlowCalibrationWorker()
     if (thread_.joinable()) thread_.join();
 }
 
-void FlowCalibrationWorker::push(Frame frame)
+void FlowWorker::push(FlowFrame frame)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -210,21 +246,28 @@ void FlowCalibrationWorker::push(Frame frame)
     cv_.notify_one();
 }
 
-FlowCalibrationState FlowCalibrationWorker::state(uint32_t *resets_applied) const
+FlowCalibrationState FlowWorker::state(uint32_t *resets_applied) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (resets_applied) *resets_applied = resets_applied_;
     return state_;
 }
 
-void FlowCalibrationWorker::run()
+LeadFlowState FlowWorker::lead_state() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lead_state_;
+}
+
+void FlowWorker::run()
 {
     // modeld는 nice -15로 돈다. 이 스레드는 IVE를 기다리는 시간이 대부분이라 보통 우선순위면 된다.
     setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 0);
     uint32_t logged_blocks = tracker_.calibrator().state().blocks;
     uint32_t logged_mount_changes = tracker_.calibrator().state().mount_changes;
+    uint64_t logged_lead_frames = 0;
     for (;;) {
-        Frame f;
+        FlowFrame f;
         bool reset = false;
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -250,18 +293,32 @@ void FlowCalibrationWorker::run()
             std::fprintf(stderr, "\nflowcal: reset, collecting from scratch\n");
             continue;
         }
-        tracker_.process(f.y_phys, f.stride, f.frame_id, f.gate, f.still_valid);
+        tracker_.process(f);
         const FlowCalibrationState st = tracker_.calibrator().state();
+        const LeadFlowState lead = tracker_.lead_state();
         const bool block_done = st.blocks != logged_blocks;
         uint64_t dropped = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             state_ = st;
+            lead_state_ = lead;
             dropped = dropped_;
             if (block_done) {
                 blocks_ = tracker_.calibrator().blocks();
                 blocks_changed_ = true;
             }
+        }
+        const FlowTracker::Stats &s = tracker_.stats();
+        const double frames = static_cast<double>(std::max<uint64_t>(s.frames, 1));
+        if (s.lead_frames >= logged_lead_frames + kLeadLogFrames) {  // 앞차를 따라간 1분마다
+            logged_lead_frames = s.lead_frames;
+            std::fprintf(stderr,
+                         "\nleadflow: frames %llu with rate %llu (%.0f%%) | last rate %+.3f/s relative %+.2f m/s at "
+                         "%.1f m, %u/%u points | %.1f ms wall %.2f ms cpu per frame\n",
+                         static_cast<unsigned long long>(s.lead_frames), static_cast<unsigned long long>(s.lead_rates),
+                         100.0 * static_cast<double>(s.lead_rates) / static_cast<double>(s.lead_frames),
+                         lead.expansion_rate, -lead.lead_x * lead.expansion_rate, lead.lead_x, lead.inliers,
+                         lead.points, s.wall_ms / frames, s.cpu_ms / frames);
         }
         if (!block_done) continue;
         logged_blocks = st.blocks;
@@ -270,8 +327,6 @@ void FlowCalibrationWorker::run()
             std::fprintf(stderr, "\nflowcal: mount change detected (%u so far), kept the last %u blocks\n",
                          st.mount_changes, st.estimate_blocks);
         }
-        const FlowWindowTracker::Stats &s = tracker_.stats();
-        const double frames = static_cast<double>(std::max<uint64_t>(s.frames, 1));
         std::fprintf(stderr,
                      "\nflowcal: block %u windows %u yaw %+.3f pitch %+.3f deg (sd %.3f/%.3f, %u blocks, %s) | "
                      "last yaw %+.3f pitch %+.3f rot %.3f deg tracks %u inliers %u parallax %.1f px | frames %llu "

@@ -78,9 +78,13 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(layout["plan_yaw"], pinned(r"offsetof\(ModelState, plan_yaw\) == (\d+)"))
         self.assertEqual(layout["flow_calibration"], pinned(r"offsetof\(ModelState, flow_calibration\) == (\d+)"))
         self.assertEqual(layout["calibration_source"], pinned(r"offsetof\(ModelState, calibration_source\) == (\d+)"))
+        self.assertEqual(layout["lead_flow"], pinned(r"offsetof\(ModelState, lead_flow\) == (\d+)"))
         self.assertEqual(rr.CALIBRATION_STATE.itemsize, size_of("CalibrationState"))
         self.assertEqual(rr.FLOW_CALIBRATION_STATE.itemsize, size_of("FlowCalibrationState"))
         self.assertEqual(rr.CALIBRATION_SOURCE_STATE.itemsize, size_of("CalibrationSourceState"))
+        self.assertEqual(rr.LEAD_FLOW_STATE.itemsize, size_of("LeadFlowState"))
+        # v11 녹화는 lead_flow 앞에서 끝난다
+        self.assertEqual(rr.model_state_layout(11)["__size__"], layout["lead_flow"])
         # v10 녹화는 FlowCalibrationState의 앞 56 B만 담았다(v11이 끝에 덧붙였다)
         self.assertEqual(rr.model_state_layout(10)["__size__"], layout["flow_calibration"] + 56)
         for name in rr.MODEL_STATE_HEAD.names:
@@ -115,6 +119,18 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(int(src["source"]), 0)
         self.assertAlmostEqual(float(src["pose_yaw"]), -0.008, places=6)
         self.assertEqual(int(rr.flow_calibration(bytes(v10), 9)["status"]), 0)
+
+    def test_lead_flow_helper(self):
+        import numpy as np
+        v12 = bytearray(rr.model_state_layout(12)["__size__"])
+        lead = np.zeros((), rr.LEAD_FLOW_STATE)
+        lead["valid"], lead["expansion_rate"], lead["lead_x"], lead["inliers"] = 1, 0.08, 37.5, 21
+        at = rr.model_state_layout(12)["lead_flow"]
+        v12[at:at + lead.itemsize] = lead.tobytes()
+        got = rr.lead_flow(bytes(v12), 12)
+        self.assertEqual((int(got["valid"]), int(got["inliers"])), (1, 21))
+        self.assertAlmostEqual(float(-got["lead_x"] * got["expansion_rate"]), -3.0, places=4)
+        self.assertEqual(int(rr.lead_flow(bytes(v12[:rr.model_state_layout(11)["__size__"]]), 11)["valid"]), 0)
 
     def test_magics(self):
         def magic(name: str) -> bytes:

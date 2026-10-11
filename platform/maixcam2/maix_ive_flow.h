@@ -1,10 +1,10 @@
 #ifndef MAIXCAM2_IVE_FLOW_H
 #define MAIXCAM2_IVE_FLOW_H
 
-/* 광류 보정기(model/flow_calibration)의 하드웨어 부분. 프레임마다 축소 단(1/2, 1/4)을 VPP 한 번으로 만들고
- * (modeld가 GDC 때문에 쥐고만 있던 VPP 작업 큐), 측정 창 시작 프레임에서 IVE로 Shi-Tomasi 응답을 내고, IVE
- * 피라미드 LK로 점을 한 프레임씩 따라간다. 원본 단은 링 슬롯을 복사하지 않고 그대로 읽는다. CPU는 호출과
- * 좌표 변환만 한다(프레임당 약 1 ms).
+/* 광류 작업(model/flow_worker: 광류 보정과 앞차 확대율)의 하드웨어 부분. 프레임마다 축소 단(1/2, 1/4)을 VPP
+ * 한 번으로 만들고(modeld가 GDC 때문에 쥐고만 있던 VPP 작업 큐), 측정 창 시작 프레임에서 IVE로 Shi-Tomasi
+ * 응답을 내고, IVE 피라미드 LK로 점을 한 프레임씩(앞뒤 검사는 거꾸로도) 따라간다. 원본 단은 링 슬롯을 복사하지
+ * 않고 그대로 읽는다. CPU는 호출과 좌표 변환만 한다(프레임당 약 1 ms).
  *
  * IVE는 헤더 문서와 다르게 동작한다(2026-10 보드 실측, docs/flow-calibration.md).
  *  - LK 시작점은 가장 거친 단의 좌표로 준다(원본 좌표 / 2^(단 수 - 1)). 출력은 원본 좌표다.
@@ -45,9 +45,9 @@ public:
     const char *pyramid_engine() const;
     /* 현재 프레임 1/2 단 띠(kBandRows행, 폭 width/2)의 코너 응답. 다음 호출까지 유효하다. 실패하면 nullptr. */
     const int16_t *corner_response();
-    /* 이전 프레임의 점 n개(원본 좌표)를 현재 프레임으로 따라간다. ok[i]가 0이면 놓쳤거나 한계를 넘었다.
-     * IVE 호출이 실패하면 false. */
-    bool track(const float *xy, int n, float *out_xy, uint8_t *ok);
+    /* 이전 프레임의 점 n개(원본 좌표)를 현재 프레임으로 따라간다. backward면 거꾸로 현재 프레임의 점을 이전
+     * 프레임으로 따라간다(앞뒤 검사). ok[i]가 0이면 놓쳤거나 한계를 넘었다. IVE 호출이 실패하면 false. */
+    bool track(const float *xy, int n, float *out_xy, uint8_t *ok, bool backward = false);
 
     int width() const { return width_; }
     int height() const { return height_; }

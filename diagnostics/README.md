@@ -40,7 +40,7 @@ cmake --build build-host --target replay_closed_loop -j2
 
 | 도구 | 사용 | 하는 일 |
 | --- | --- | --- |
-| `flow_calibration_replay` | `<segment_dir> [--open frames.txt]` | 녹화 구간 하나를 VDEC로 디코딩해 `modeld`와 같은 광류 보정기(`FlowWindowTracker`, IVE)에 흘리고, 받아들인 창마다 결과와 끝의 추정·시간을 출력한다. `--open`은 조건이 열린 프레임 번호 목록(없으면 전부 곧은 길로 본다). IVPS를 쓰지 않아 런타임이 도는 중에도 된다 |
+| `flow_calibration_replay` | `<segment_dir> [--open frames.txt] [--leads leads.txt]` | 녹화 구간 하나를 VDEC로 디코딩해 `modeld`와 같은 광류 작업(`FlowTracker`, IVE)에 흘리고, 받아들인 보정 창마다 결과, 앞차 확대율을 낸 프레임마다 한 줄, 끝의 추정·시간을 출력한다. `--open`은 조건이 열린 프레임 번호 목록(없으면 전부 곧은 길로 본다, 빈 파일이면 보정을 돌리지 않는다). `--leads`는 프레임마다 직전 모델 출력의 앞차와 워프 보정("번호 시각 유효 확률 x y roll pitch yaw 카메라높이 오프셋")이다. IVPS를 쓰지 않아 런타임이 도는 중에도 되지만, 런타임과 함께 여러 번 돌린 끝에 VDEC 생성이 커널 메모리 할당(order 4)에 실패하고 그 뒤 `imud`의 I2C 호출이 커널 Oops로 보드를 재부팅시킨 적이 있다(2026-10-11). 길게 돌릴 때는 edgepilot을 멈춘다 |
 
 재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다.
 

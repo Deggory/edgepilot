@@ -171,6 +171,20 @@ constexpr uint32_t kCalibrationSourceFlowUsable = 1u << 0;   // 광류 추정을
 constexpr uint32_t kCalibrationSourcePending = 1u << 1;      // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
 constexpr uint32_t kCalibrationSourceRamping = 1u << 2;      // 워프가 새 목표로 천천히 옮겨 가는 중
 
+/* 앞차 확대율(녹화 v12부터, model/lead_flow). 모델 앞차 상자 안의 점을 광류로 따라가 창(약 0.5초) 동안의 크기
+ * 비를 잰다. 상대 속도(거리 변화율)는 -lead_x * expansion_rate(m/s, 음수면 가까워진다), 충돌까지 시간은 1 / expansion_rate다.
+ * 모델이 내는 앞차 속도는 25 m 밖에서 실제 접근 속도를 거의 따라가지 못해 따로 잰다. */
+struct LeadFlowState {
+    uint64_t frame_id = 0;          // 창의 끝 프레임
+    uint32_t valid = 0;             // 1이면 expansion_rate가 있다
+    uint32_t points = 0;            // 창 내내 따라간 점
+    uint32_t inliers = 0;           // 그중 같은 확대·이동에 맞는 점
+    float expansion_rate = 0.0f;    // 1/s, ln(크기 비) / window_s. +면 가까워진다
+    float window_s = 0.0f;          // 창 길이(s)
+    float lead_x = 0.0f;            // 창 끝 프레임의 모델 앞차 거리(m, 카메라 기준)
+};
+static_assert(sizeof(LeadFlowState) == 32, "LeadFlowState is recorded as-is");
+
 struct ModelState {
     uint64_t frame_id = 0;
     uint64_t capture_timestamp_ns = 0;
@@ -206,16 +220,19 @@ struct ModelState {
     FlowCalibrationState flow_calibration;
     // 녹화 v11부터. 워프 보정의 출처와 포즈 보정기 자신의 추정.
     CalibrationSourceState calibration_source;
+    // 녹화 v12부터. 광류로 잰 앞차 확대율.
+    LeadFlowState lead_flow;
 };
 
 /* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
  * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
  * kRecordingVersion도 함께 올려야 한다. */
-static_assert(sizeof(ModelState) == 3680 && offsetof(ModelState, plan_yaw) == 3256 &&
+static_assert(sizeof(ModelState) == 3712 && offsetof(ModelState, plan_yaw) == 3256 &&
                   offsetof(ModelState, camera_offset_m) == 3520 &&
                   offsetof(ModelState, gas_press_probs) == 3528 &&
                   offsetof(ModelState, flow_calibration) == 3576 &&
-                  offsetof(ModelState, calibration_source) == 3648,
+                  offsetof(ModelState, calibration_source) == 3648 &&
+                  offsetof(ModelState, lead_flow) == 3680,
               "ModelState layout is shared with the recording reader");
 /* 웹 콘솔(web_console/state_layout.py MODEL_CALIBRATION_AT, MODEL_FLOW_CALIBRATION_AT,
  * MODEL_CALIBRATION_SOURCE_AT)이 이 위치에서 보정 상태를 읽는다. */

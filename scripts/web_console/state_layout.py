@@ -7,7 +7,7 @@ from typing import Any
 
 MODEL_STATE_TOPIC = "/edgepilot_model_state"
 CONTROL_STATE_TOPIC = "/edgepilot_control_state"
-MODEL_STATE_SIZE = 3680
+MODEL_STATE_SIZE = 3712
 CONTROL_STATE_SIZE = 240
 
 MODEL_STATE_AT = {

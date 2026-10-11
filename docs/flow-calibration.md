@@ -6,7 +6,8 @@
 (`model/calibration_online`, a port of openpilot's `calibrationd`) learns it from the model's own pose
 output. The flow calibrator measures the same angles straight from the image instead. It always runs and is
 recorded; the device setting `calibration_use_flow` (web console, default off) makes the warp take its pitch
-and yaw ([Using the estimate](#using-the-estimate)).
+and yaw ([Using the estimate](#using-the-estimate)). The same flow worker also measures how fast the lead car's
+image grows ([Lead expansion](#lead-expansion)).
 
 ## Why
 
@@ -184,7 +185,7 @@ Offline, the own solver matched OpenCV's essential matrix within 0.03° on the s
 three times less between one-minute segments.
 
 On the board, `diagnostics/flow_calibration_replay` decodes a recorded segment with the VDEC and feeds it
-through the same `FlowWindowTracker` that `modeld` runs. Over six night segments and four day segments of
+through the same `FlowTracker` that `modeld` runs. Over six night segments and four day segments of
 2026-10-10:
 
 | Route | Flow calibrator on the board (median of accepted windows) | OpenCV reference (0.2 s pairs with a forward-backward check) |
@@ -207,3 +208,93 @@ The setting stays off until a drive with recording shows a stable flow estimate.
 console, drive, and compare lane-relative position with the earlier drives. Because our images make the
 model follow the warp only partly, fixing the yaw moves the car only a few centimetres, so `camera_offset_m`
 gets rechecked afterwards. The pose loop's pitch matched the flow pitch within 0.07°, so mainly yaw changes.
+
+## Lead expansion
+
+The flow worker also measures the lead car's expansion rate. It runs in shadow mode: `ModelState.lead_flow` is
+recorded, and nothing reads it yet.
+
+### Why
+
+supercombo's lead velocity barely follows the closing speed beyond 25 m. The reference here is a linear fit
+of the model's own lead distance over ±2 s:
+- At 25-40 m the lead velocity correlates 0.43 with it in the day and 0.39 at night.
+- Its slope is 0.3-0.5, so it reports about half the closing speed.
+- The vision cruise therefore slows down late for a slower lead.
+
+The image expansion of the lead's rear is a direct measurement:
+- a scale ratio s over a window of T seconds gives the expansion rate r = ln(s) / T;
+- the relative speed (range rate) is -x·r, with x the model distance, negative while closing;
+- the time to collision is 1/r.
+
+### How
+
+| Step | Where | Notes |
+| --- | --- | --- |
+| Box | `project_lead_box` | the previous model frame's lead (x, y) with the warp calibration, camera height and mount offset. The rear is 1.8 m wide and 0.3-1.4 m above the road; the box is shrunk 12% at each side and 8% at top and bottom. Leads at 8-80 m with probability ≥ 0.5 |
+| Corners | `pick_lead_corners` | full-resolution Shi-Tomasi (3x3 Sobel, 3x3 window) in the box, ≥ 1% of the strongest, 3 px apart, up to 64. The calibrator's 640x360 response leaves only a few points in a 25 px box |
+| Tracking | IVE pyramidal LK | one frame at a time, in the same call as the calibration points (300 + 64 ≤ 500); then the lead points once more, backward |
+| Forward-backward | `LeadFlowTracker::advance` | a point dies when tracking it back lands 0.3 px or more from where it started, when the LK loses it, or when it leaves the box by more than 40% |
+| Top-up | `LeadFlowTracker::top_up` | below 32 live points, new corners fill the free slots, 3 px away from live points. The window keeps going |
+| Refinement | `LeadFlowTracker::refine` | every point keeps a 9x9 template per frame. A point alive for 10 frames is matched against its template from 10 frames ago: translation-only inverse-compositional LK, starting from the chained position, within 2 px |
+| Fit | `fit_similarity_scale` | similarity transform from the positions 10 frames ago to the refined ones; RANSAC at 0.7 px, then a least-squares refit. At least 8 pairs and 6 inliers |
+
+The ring slot is an uncached mapping. So the CPU copies the box's neighbourhood once per frame and picks the
+corners, cuts the templates and refines on that copy.
+
+Each step was checked by emulating the board algorithm with OpenCV on the same frames. Correlation at 25-40 m,
+night / day:
+- **Chained tracking alone:** 0.29 / 0.49. This was the first board version. It reseeded only below 8 points,
+  so most windows ran on about 10.
+- **Forward-backward check:** removes points that slide on taillight blooms and edges. Night: about 0.3 → 0.8.
+- **Top-up:** keeps the point count up.
+- **Refinement:** removes the error that piles up over 10 chained steps (√10 times one step). Day, 40-60 m:
+  0.27 → 0.56.
+- **CPU-only alternatives** to the backward IVE call stayed near 0.7 at night: a correlation gate, or matching
+  the refined window back.
+
+### Output
+
+- `ModelState.lead_flow` (`LeadFlowState`, recording v12, 32 B):
+  - `frame_id`, `valid`;
+  - `points` (pairs in the fit) and `inliers`;
+  - `expansion_rate` (1/s, positive while closing in), `window_s` (about 0.5 s);
+  - `lead_x`, the model distance the box came from.
+- The `modeld` log gets a `leadflow:` line per 1200 lead frames (about a minute).
+- `tools/model/recording_reader.py` reads it with `lead_flow(payload, version)`.
+
+### Validation
+
+`diagnostics/flow_calibration_replay --leads leads.txt` feeds the recorded leads through the same
+`FlowTracker` on the board. Against the reference above, correlation / slope / residual (m/s):
+
+| Range | Model lead velocity | Board, first version | Board, now | OpenCV prototype |
+| --- | --- | --- | --- | --- |
+| Night 8-25 m | 0.34 / 0.26 / 1.2 | 0.26 / 0.66 / 2.8 | 0.80 / 0.80 / 0.7 | 0.67 / 0.59 / 0.9 |
+| Night 25-40 m | 0.39 / 0.29 / 1.5 | 0.29 / 0.44 / 2.3 | 0.86 / 0.83 / 0.8 | 0.69 / 0.59 / 1.1 |
+| Night 40-60 m | -0.25 / -0.15 / 1.9 | 0.21 / 0.28 / 2.2 | 0.42 / 0.43 / 1.6 | 0.38 / 0.32 / 1.5 |
+| Day 8-25 m | 0.65 / 0.77 / 0.6 | 0.26 / 0.63 / 1.6 | 0.64 / 0.75 / 0.7 | 0.73 / 0.76 / 0.5 |
+| Day 25-40 m | 0.43 / 0.48 / 1.0 | 0.49 / 0.88 / 1.4 | 0.69 / 1.05 / 1.0 | 0.81 / 1.06 / 0.7 |
+| Day 40-60 m | 0.06 / 0.06 / 1.0 | 0.36 / 0.93 / 1.7 | 0.38 / 0.80 / 1.4 | 0.48 / 0.95 / 1.3 |
+
+Night is 2026-10-10 19:32 (4 segments, 1633 frames every column covers). Day is 2026-10-04 12:32 (5 segments,
+4425 frames); its first-version column is the OpenCV emulation of that version.
+
+- **The prototype** picks fresh corners at every window start and tracks them straight to the window end,
+  with a forward-backward check. The board cannot do that: the IVE LK clips at ±8 px, and the old frames are
+  gone.
+- **Day:** the board is a little under the emulation (25-40 m: 0.69 against 0.75), because the IVE LK keeps
+  slightly different points.
+- **Timing:** the value covers the last 0.5 s. Stamped when it is available, at the window end, it trails the
+  reference by 0.15 s (night) and 0.30 s (day). The model's velocity trails by 0.10 and 0.15 s. The gain is
+  accuracy, not latency.
+- **Coverage:** a rate on 84-92% of lead frames at night and 92-99% in the day.
+- **Cost:** the replay runs on the IVE pyramid with the runtime up. It took 1.4-2.0 ms of CPU and 8.4-10.3 ms
+  of wall time per lead frame, against 0.7 ms and 6.6 ms for the first version. The backward call adds 1-2 ms
+  of IVE time.
+
+### Next
+
+Drive with recording on and check `lead_flow` live. Then fuse it into `controlsd`'s vision-lead relative
+speed for the vision cruise, where the model reports about half the closing speed beyond 25 m. A time-to-
+collision warning could follow.

@@ -265,8 +265,8 @@ Per camera frame (20 Hz), from `/proc/ax_proc/ivps` on the board (2026-10):
 | `overlayd` | TDP, sync queue 3 | ring slot centre 4:3 to 640x480 | 1.5 ms |
 | `overlayd` | TDP + VPP, VO pipeline (group 1) | 90° rotation and mirror for the portrait panel | 2.8 + 0.8 ms |
 | `modeld` | GDC | two 512x256 model views | 2 × 0.3 ms |
-| `modeld` | VPP, sync queue 1 | flow calibrator pyramid, NV12 out (straight and fast only) | see below |
-| `modeld` | IVE | flow calibrator corners and LK (straight and fast only) | about 5 ms |
+| `modeld` | VPP, sync queue 1 | flow pyramid, NV12 out (straight and fast, or a model lead) | see below |
+| `modeld` | IVE | flow calibrator corners and LK (straight and fast only); lead points LK, also backward (with a model lead) | about 5 ms; lead 1-2 ms |
 | `recordd` | TDP, sync queue 2 | ring slot into the encoder's pool block (while recording) | 2.0 ms |
 
 At home (not recording, flow calibrator idle) the engines run at TDP 12%, VPP 17% and GDC 1% duty. None of
@@ -350,7 +350,7 @@ Version 2 also kept a single route-level `events.bin`; CAN logging alone
 (~0.5 MB/s) filled the 988 MB tmpfs staging in about 30 minutes on long drives
 and silently killed the rest of the recording, which is why version 3 rotates
 event chunks alongside video segments. `tools/model/recording_reader.py` reads
-the v2 to v11 layouts; `lane_bias.py`, `hud_tools.py`,
+the v2 to v12 layouts; `lane_bias.py`, `hud_tools.py`,
 `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event log
 through its `iter_event_records`.
 
