@@ -177,7 +177,8 @@ keeps the AX system open.
 - enabled by default (`EDGEPILOT_ENABLE_CONTROL=1`)
 - runs the openpilot-compatible lane planner and lateral MPC in a worker,
   with the KIA K7 YG HEV torque controller and `LKAS11`/`CLU11`/`MDPS12` packer
-  at 100 Hz
+  at 100 Hz; the planner smooths the ego lane lines over time first
+  ([Lane-line filter](lane-line-filter.md))
 - consumes model path, lane, road-edge, and vehicle-state IPC
 - filters the wheel-speed average into `vEgo` as openpilot does
   (`car/speed_filter`); the controller, the planner, the learners and the

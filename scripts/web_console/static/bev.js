@@ -11,7 +11,8 @@
 // slowest speed (or STOP) where it is; arcs of the curvature controlsd asks for and the one it gets;
 // the lead's brake lights; the lead where modeld's lead track puts it (the model distance and optical flow
 // fused, model/lead_tracker; the vision cruise takes it) with the model's own distance as a bar, and a card of the lead's
-// distance and speed over time; and, standing, what the departure alert decides from.
+// distance and speed over time; the ego lines as the planner's lane filter steadies them (lane_filter.js), the
+// model's own thin beneath; and, standing, what the departure alert decides from.
 //
 // Drag to orbit, right-drag or two fingers to pan and zoom; view("behind") and view("top") set the
 // camera. The scene graph is made once: a frame writes itself into the same buffers and instanced
@@ -30,6 +31,7 @@ const GRID = {ahead: 160, behind: 8, side: 25, major: 20};
 const EGO = [EGO_SIZE.length, EGO_SIZE.width, EGO_SIZE.height];
 const LEAD = [4.5, 1.8, 1.5];            // the model gives the lead no size: a typical car
 const LANE_WIDTH = 0.15;                 // a lane line as a band as wide as its paint
+const RAW_LANE = {width: 0.05, alpha: [0.15, 0.35]};  // the model's own ego line under the filtered one
 const CURB = {width: 0.2, height: 0.12};
 const PATH_WIDTH = 1.8;                  // hud_scene.cc kPathHalfWidth, both sides
 // hud_scene.cc: lines below this probability and edges below this confidence are not drawn
@@ -72,9 +74,10 @@ const HUD = {white: "#ffffff", green: "#30d158", blue: "#409cff", gray: "#969ca5
              cyan: "#5ac8fa"};
 
 // The toolbar's layer buttons, and the groups each one shows or hides.
-const LAYERS = {path: "경로", lanes: "차선", edges: "도로 경계", lead: "앞차", curvature: "곡률", labels: "라벨"};
-const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], edges: ["edges"], lead: ["lead"], curvature: ["curvature"],
-                      labels: ["lead_labels", "path_labels"]};
+const LAYERS = {path: "경로", lanes: "차선", rawLanes: "원시 차선", edges: "도로 경계", lead: "앞차", curvature: "곡률",
+                labels: "라벨"};
+const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], rawLanes: ["rawLanes"], edges: ["edges"], lead: ["lead"],
+                      curvature: ["curvature"], labels: ["lead_labels", "path_labels"]};
 const VIEWS = {behind: "뒤에서", top: "위에서"};
 
 // -- colours ---------------------------------------------------------------------------------------
@@ -486,6 +489,7 @@ export class BevView {
     for (const name of ["path", "lanes", "edges", "lead", "curvature"]) this.scene.add(this.layers[name] = new THREE.Group());
     this.layers.lead.add(this.layers.lead_labels = new THREE.Group());
     this.layers.path.add(this.layers.path_labels = new THREE.Group());
+    this.layers.lanes.add(this.layers.rawLanes = new THREE.Group());
     this.tags = [];
     this.makeParts();
     this.scene.add(this.staticParts());
@@ -520,6 +524,7 @@ export class BevView {
     const plane = new THREE.PlaneGeometry(1, 1), print = {iSize: 3, iStyle: 4};
     const put = (layer, part) => { this.layers[layer].add(part.object || part.mesh); return part; };
     this.lanes = put("lanes", new Batch("color", 4, overlayMaterial(), 2));
+    this.rawLanes = put("rawLanes", new Batch("color", 4, overlayMaterial(), 1));
     this.curbs = put("edges", new Batch("color", 4, new THREE.MeshStandardMaterial({
       vertexColors: true, flatShading: true, roughness: 0.8, side: THREE.DoubleSide, transparent: true, depthWrite: false}), 1));
     this.corridorMaterial = shader(...CORRIDOR, {uColor: {value: new THREE.Color()}, uSlow: {value: ink(HUD.amber)},
@@ -685,15 +690,19 @@ export class BevView {
 
   // Lane lines as bands, as sure as the HUD draws them; the ego lane faintly filled between its
   // lines while both are sure. Unlike the HUD, in laneless mode too (with the edges): the model
-  // still sees them, and the 차선 button hides them.
+  // still sees them, and the 차선 button hides them. The ego lines are the planner's, through its lane
+  // filter; the model's own ones run thin and gray under them (원시 차선 hides those).
   drawLanes(lanes) {
-    const b = this.lanes, color = ink(THEME.lane);
+    const b = this.lanes, raw = this.rawLanes, color = ink(THEME.lane), gray = ink(HUD.gray);
     b.begin();
+    raw.begin();
     if (lanes.length === 4 && lanes[1].probability >= 0.5 && lanes[2].probability >= 0.5) egoLane(b, lanes[1].points, lanes[2].points);
     for (const lane of lanes) {
       if (lane.probability < LANE_MIN_PROBABILITY) continue;
       band(b, lane.points, LANE_WIDTH, 0.03, color, 0.25 + 0.65 * lane.probability);
+      if (lane.raw) band(raw, lane.raw, RAW_LANE.width, 0.025, gray, RAW_LANE.alpha[0] + RAW_LANE.alpha[1] * lane.probability);
     }
+    raw.end();
     b.end();
   }
 

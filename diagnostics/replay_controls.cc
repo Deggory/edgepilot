@@ -3,10 +3,12 @@
  * 플래너는 그 자리에서 계산하고(SyncPlanner) 시계는 틱 시각이라, 같은 입력이면 출력이 비트 단위로
  * 같다. controlsd 리팩토링 전후 비교와, 녹화된 실제 출력과의 대조에 쓴다.
  * 사용: replay_controls [--steering s.json] [--cruise c.json] [--vehicle-json j]
- *                       [--force-engaged] [--lead-track track.txt] [--dump out.txt] <events.bin...>
+ *                       [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt]
+ *                       <events.bin...>
  *   --force-engaged는 EDGEPILOT_FORCE_ENGAGED처럼 버튼 없이 결합한다(녹화 전에 결합해 둔 route용).
  *   --lead-track은 녹화 v13 전 route의 ModelState.lead_track을 프레임 번호로 채운다(오프라인으로 만든 앞차
  *   추적, 줄마다 "frame_id valid flags distance relative_speed distance_std speed_std"). 없는 프레임은 0이다.
+ *   --lane-filter는 차선선 시간 필터의 새 측정 가중이다(planning/lane_line_filter, 1이면 끈다).
  *   마지막 줄에 출력 전체의 FNV-1a 다이제스트와, 녹화된 ControlState와의 일치율을 쓴다. */
 #include "controls/adaptive_cruise.h"
 #include "controls/control_params.h"
@@ -54,6 +56,7 @@ int main(int argc, char **argv) {
   std::string steering_path, cruise_path, vehicle_json_path, dump_path;
   bool force_engaged = false;
   std::string lead_track_path;
+  double lane_filter = 0.0;  // 0이면 코드 기본값
   std::vector<std::string> events;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -64,12 +67,14 @@ int main(int argc, char **argv) {
     else if (arg == "--dump") dump_path = next();
     else if (arg == "--force-engaged") force_engaged = true;
     else if (arg == "--lead-track") lead_track_path = next();
+    else if (arg == "--lane-filter") lane_filter = std::atof(next().c_str());
     else if (arg.rfind("--", 0) == 0) events.clear(), i = argc;
     else events.push_back(arg);
   }
-  if (events.empty()) {
+  if (events.empty() || lane_filter < 0.0 || lane_filter > 1.0) {
     std::fprintf(stderr, "usage: %s [--steering s.json] [--cruise c.json] [--vehicle-json live_parameters.json] "
-                         "[--force-engaged] [--lead-track track.txt] [--dump out.txt] <events.bin...>\n", argv[0]);
+                         "[--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt] "
+                         "<events.bin...>\n", argv[0]);
     return 2;
   }
 
@@ -121,6 +126,7 @@ int main(int argc, char **argv) {
                    [](const Record &a, const Record &b) { return a.timestamp_ns < b.timestamp_ns; });
 
   SyncPlanner planner(params.steering);
+  if (lane_filter > 0.0) planner.set_lane_filter_weight(lane_filter);
   ControlsTick tick(params, force_engaged, planner, vehicle_json, std::string(), 1);
   uint64_t tick_ns = first_record_ns;
   tick.controller().set_clock([&tick_ns] { return tick_ns; });

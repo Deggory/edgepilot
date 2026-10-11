@@ -14,7 +14,8 @@
  *                              학습값(paramsd·torqued)은 controlsd처럼 매번 컨트롤러에 넣는다.
  *   --torque F,O,R             torqued 학습값(배율·절편·마찰)을 이 값으로 바꿔 쓴다(유효해진 뒤를 본다)
  *   --camera-shift D           카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다
- *                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08). */
+ *                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08).
+ *   --lane-filter W            차선선 시간 필터의 새 측정 가중(planning/lane_line_filter, 1이면 끈다). */
 #include "controls/control_params.h"
 #include "recording/event_log_reader.h"
 #include "car/hyundai_can.h"
@@ -51,6 +52,7 @@ struct Options {
   const char *gain_pts = nullptr;
   const char *steering_path = nullptr;
   const char *torque = nullptr;
+  std::optional<double> lane_filter;
   float camera_shift = 0.0f;
   float wn = 10.0f, zeta = 4.0f;
   int delay = 0, driver_high = 150, driver_low = 60, driver_release = 50;
@@ -62,7 +64,7 @@ struct Options {
                "usage: %s [--open-loop] [--wn W] [--zeta Z] [--delay N] [--gain G | --gain-pts a,b,c,d]\n"
                "       [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T] [--driver-low T]\n"
                "       [--driver-release N] [--steering steering.json] [--camera-shift D]\n"
-               "       [--torque factor,offset,friction]\n"
+               "       [--torque factor,offset,friction] [--lane-filter W]\n"
                "       <out.csv|-> <events.bin...>\n",
                argv0);
   std::exit(2);
@@ -92,6 +94,7 @@ Options parse_options(int argc, char **argv) {
     else if (arg == "--steering") o.steering_path = value();
     else if (arg == "--torque") o.torque = value();
     else if (arg == "--camera-shift") o.camera_shift = static_cast<float>(std::atof(value()));
+    else if (arg == "--lane-filter") o.lane_filter = std::atof(value());
     else if (arg.rfind("--", 0) == 0) usage(argv[0]);
     else o.positional.push_back(argv[i]);
   }
@@ -219,6 +222,10 @@ int main(int argc, char **argv) {
   Plant plant(opt.wn, opt.zeta, gain_curve, opt.delay);
 
   LateralPlanner planner(steering);
+  if (opt.lane_filter) {
+    if (!(*opt.lane_filter > 0.0 && *opt.lane_filter <= 1.0)) usage(argv[0]);
+    planner.set_lane_filter_weight(*opt.lane_filter);
+  }
   LateralControllerConfig cfg;
   cfg.force_engaged = true;
   cfg.steering_params = steering;

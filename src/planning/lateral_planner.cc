@@ -2,6 +2,7 @@
 
 #include "controls/control_params.h"
 #include "planning/desire_helper.h"
+#include "planning/lane_line_filter.h"
 #include "common/ipc_messages.h"
 #include "planning/lateral_mpc.h"
 
@@ -81,12 +82,28 @@ public:
     path_offset_m_ = path_offset_m;
   }
 
-  void parse(const ModelState &model) {
+  void set_filter_weight(double weight) {
+    left_filter_.set_measurement_weight(weight);
+    right_filter_.set_measurement_weight(weight);
+  }
+
+  // 자차 차로의 좌우 선을 읽어 시간 필터(planning/lane_line_filter)에 거른다. v_ego와 곡률은 직전 프레임 뒤 자차 움직임이다.
+  void parse(const ModelState &model, double v_ego, double curvature) {
+    const double t_s = static_cast<double>(model.capture_timestamp_ns) * 1e-9;
+    std::array<float, kTrajectorySize> left_x{}, right_x{}, left{}, right{};
     for (int i = 0; i < kTrajectorySize; ++i) {
       lane_t_[i] = model.lane_t[i];
       lane_x_[i] = model.lanes[1][i].x;
-      left_y_[i] = model.lanes[1][i].y;
-      right_y_[i] = model.lanes[2][i].y;
+      left_x[i] = model.lanes[1][i].x;
+      right_x[i] = model.lanes[2][i].x;
+      left[i] = model.lanes[1][i].y;
+      right[i] = model.lanes[2][i].y;
+    }
+    left_filter_.update(t_s, left_x.data(), left.data(), v_ego, curvature, left.data());
+    right_filter_.update(t_s, right_x.data(), right.data(), v_ego, curvature, right.data());
+    for (int i = 0; i < kTrajectorySize; ++i) {
+      left_y_[i] = left[i];
+      right_y_[i] = right[i];
     }
     left_prob_ = model.lane_probabilities[1];
     right_prob_ = model.lane_probabilities[2];
@@ -227,6 +244,7 @@ private:
   double lane_width_ = 3.7;
   double d_prob_ = 0.0;
   double path_offset_m_ = 0.0;
+  LaneLineFilter left_filter_, right_filter_;
 };
 
 // MPC 노드 시각의 기준 횡위치와 heading.
@@ -308,7 +326,7 @@ struct LateralPlanner::Impl {
     LateralTarget target;
     if (!model.valid) return target;
 
-    lane_planner.parse(model);
+    lane_planner.parse(model, v_ego, measured_curvature);
     update_desire(model, vehicle, v_ego, active);
     std::array<std::array<double, 3>, kTrajectorySize> path{};
     std::array<double, kTrajectorySize> path_t{};
@@ -532,6 +550,10 @@ LateralPlanner::~LateralPlanner() = default;
 
 void LateralPlanner::update_params(const SteeringParams &params) {
   impl_->update_params(params);
+}
+
+void LateralPlanner::set_lane_filter_weight(double weight) {
+  impl_->lane_planner.set_filter_weight(weight);
 }
 
 LateralTarget LateralPlanner::update(const ModelState &model,

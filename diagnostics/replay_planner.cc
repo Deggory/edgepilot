@@ -1,13 +1,14 @@
 /* 녹화된 ModelState/ControlState로 LateralPlanner를 재실행한다.
  * 녹화된 인지 결과에 대해 플래너가 무엇을 요구했는지 오프라인으로 재현한다.
- * 사용: replay_planner [--laneless|--lane] [--exact] [--vehicle] [--steering s.json]
+ * 사용: replay_planner [--laneless|--lane] [--exact] [--vehicle] [--steering s.json] [--lane-filter W]
  *                      <out.csv> <events.bin...>
  *   --exact     LateralTarget의 모든 필드와 지연 보정 곡률을 %a(비트 그대로)로 쓴다. 리팩토링 전후
  *               출력이 비트 단위로 같은지 비교할 때 쓴다.
  *   --vehicle   녹화한 CAN(깜빡이·운전자 토크·사각지대)과 ControlState의 active를 플래너에 준다.
  *               없으면 깜빡이·개입 없음, active로 돌려 차선 변경이 돌지 않는다.
  *   --steering  조향 파라미터 파일(예: route의 params 스냅샷). 없으면 기본값.
- *   --laneless, --lane     파라미터 파일과 상관없이 Laneless 또는 Lane 모드로 돌린다. */
+ *   --laneless, --lane     파라미터 파일과 상관없이 Laneless 또는 Lane 모드로 돌린다.
+ *   --lane-filter  차선선 시간 필터의 새 측정 가중(planning/lane_line_filter, 1이면 끈다). */
 #include "controls/control_params.h"
 #include "recording/event_log_reader.h"
 #include "common/ipc_messages.h"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -52,6 +54,7 @@ int main(int argc, char **argv) {
   SteeringParams steering;
   bool force_laneless = false, force_lane = false, exact = false, use_vehicle = false, usage_error = false;
   std::string steering_path;
+  double lane_filter = 0.0;  // 0이면 코드 기본값
   std::vector<const char *> positional;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -60,12 +63,14 @@ int main(int argc, char **argv) {
     else if (arg == "--exact") exact = true;
     else if (arg == "--vehicle") use_vehicle = true;
     else if (arg == "--steering" && i + 1 < argc) steering_path = argv[++i];
+    else if (arg == "--lane-filter" && i + 1 < argc) lane_filter = std::atof(argv[++i]);
     else if (arg.rfind("--", 0) == 0) usage_error = true;
     else positional.push_back(argv[i]);
   }
-  if (usage_error || (force_laneless && force_lane) || positional.size() < 2) {
+  if (usage_error || (force_laneless && force_lane) || positional.size() < 2 || lane_filter < 0.0 ||
+      lane_filter > 1.0) {
     std::fprintf(stderr, "usage: %s [--laneless|--lane] [--exact] [--vehicle] [--steering s.json] "
-                         "<out.csv> <events.bin...>\n", argv[0]);
+                         "[--lane-filter W] <out.csv> <events.bin...>\n", argv[0]);
     return 2;
   }
   std::string error;
@@ -76,6 +81,7 @@ int main(int argc, char **argv) {
   if (force_laneless) steering.laneless_mode = true;
   if (force_lane) steering.laneless_mode = false;
   LateralPlanner planner(steering);
+  if (lane_filter > 0.0) planner.set_lane_filter_weight(lane_filter);
 
   VehicleCanState vehicle{};   // --vehicle이 아니면 깜빡이·개입 없음
   std::FILE *out = std::fopen(positional[0], "w");

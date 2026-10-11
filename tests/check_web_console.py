@@ -6,7 +6,9 @@ import gzip
 import json
 import os
 import re
+import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -736,6 +738,43 @@ class BevTest(unittest.TestCase):
             value = float(re.search(rf"constexpr float {cpp_name} = ([\d.]+)f;", source).group(1))
             page = float(re.search(rf"const {page_name} = ([\d.]+);", text).group(1))
             self.assertEqual(page, value, page_name)
+
+    def test_lane_filter_constants_match_cpp(self):
+        """BEV의 차선 필터 사본(lane_filter.js)의 가중·끊김·다시 시작 기준은 플래너의 lane_line_filter와 같아야 한다."""
+        header = cpp(ROOT / "src" / "planning" / "lane_line_filter.h")
+        source = cpp(ROOT / "src" / "planning" / "lane_line_filter.cc")
+        page = (STATIC_DIR / "lane_filter.js").read_text(encoding="utf-8")
+        for cpp_text, cpp_name, page_name in ((header, "kLaneLineFilterWeight", "LANE_FILTER_WEIGHT"),
+                                              (source, "kMaxGapS", "MAX_GAP_S"),
+                                              (source, "kRestartReachM", "RESTART_REACH_M"),
+                                              (source, "kRestartM", "RESTART_M")):
+            value = float(re.search(rf"constexpr double {cpp_name} = ([\d.]+);", cpp_text).group(1))
+            ours = float(re.search(rf"const {page_name} = ([\d.]+);", page).group(1))
+            self.assertEqual(ours, value, page_name)
+
+    def test_lane_filter_golden_is_shared(self):
+        """C++ 필터가 내는 기준 출력(gtest_lane_line_filter)과 JS 사본이 맞추는 값(check_bev_lane_filter.mjs)이 같아야 한다."""
+        def golden(path):
+            text = path.read_text(encoding="utf-8")
+            block = re.search(r"GOLDEN BEGIN(.*?)GOLDEN END", text, re.S).group(1)
+            return [float(v) for v in re.findall(r"-?\d+\.\d+", block)]
+        cpp_golden = golden(ROOT / "tests" / "gtest_lane_line_filter.cc")
+        self.assertEqual(len(cpp_golden), 36)
+        self.assertEqual(golden(ROOT / "tests" / "check_bev_lane_filter.mjs"), cpp_golden)
+
+    def test_lane_filter_copy_matches_cpp(self):
+        """JS 사본을 jsc(macOS)나 node로 돌려 C++ 기준 출력과 맞춘다. 둘 다 없으면 건너뛴다."""
+        jsc = Path("/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc")
+        script = ROOT / "tests" / "check_bev_lane_filter.mjs"
+        if jsc.is_file():
+            command = [str(jsc), "-m", str(script)]
+        elif shutil.which("node"):
+            command = ["node", str(script)]
+        else:
+            self.skipTest("no JavaScript engine (jsc or node)")
+        run = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("all passed", run.stdout)
 
     def test_page_reads_what_the_server_says(self):
         """bev_data.js NEEDS의 필드가 /api/bev 레이아웃에 다 있어야 한다(빠지면 페이지가 그리지 않는다). ControlState

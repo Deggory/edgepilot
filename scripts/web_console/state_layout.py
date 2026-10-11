@@ -11,7 +11,7 @@ MODEL_STATE_SIZE = 3736
 CONTROL_STATE_SIZE = 240
 
 MODEL_STATE_AT = {
-    "model_timestamp_ns": 16, "valid": 28, "plan": 304, "lanes": 700, "lane_probabilities": 2284,
+    "capture_timestamp_ns": 8, "model_timestamp_ns": 16, "valid": 28, "plan": 304, "lanes": 700, "lane_probabilities": 2284,
     "road_edges": 2316, "road_edge_stds": 3108, "lead": 3148, "gas_press_probs": 3528, "lead_flow": 3680,
     "lead_track": 3712,
 }

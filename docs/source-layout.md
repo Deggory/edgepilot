@@ -205,6 +205,10 @@ Library `planning`.
     (Lane mode), or the plan yaw (Laneless mode and Lane mode's model-path
     stretches), to produce curvature targets. This is the only producer of
     `LateralTarget`.
+- `lane_line_filter.*`
+  - smooths the two ego lane lines over time for the planner: the last
+    filtered lines moved by the car's own motion, blended with the new frame.
+    See [Lane-line filter](lane-line-filter.md).
 - `desire_helper.*`
   - the openpilot desire_helper port the planner runs each model frame: lane
     change states (`LaneChangeState`), the blinker/torque/blind-spot/road-edge
@@ -538,7 +542,8 @@ only in the board build, against `deps/ax630` from
     `bev.js` (three.js view, ported from sv_recorder_bev), `bev_ego.js` (the
     ego car; today a black 2017 K7 made in code), `bev_car.js` (the lead's car
     model), `bev_data.js` (reads the ModelState and ControlState bytes the
-    console streams), and three.js 0.186.1 in `three/`.
+    console streams), `lane_filter.js` (the planner's lane-line filter, for
+    the ego lines the BEV draws), and three.js 0.186.1 in `three/`.
 
 ## Tools and tests
 

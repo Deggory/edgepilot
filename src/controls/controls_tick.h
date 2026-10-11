@@ -124,6 +124,8 @@ public:
   }
   void update_params(const SteeringParams &params) override { planner_.update_params(params); }
   LateralTarget latest() const override { return latest_; }
+  // 재생 도구의 --lane-filter(LateralPlanner::set_lane_filter_weight)
+  void set_lane_filter_weight(double weight) { planner_.set_lane_filter_weight(weight); }
 
 private:
   LateralPlanner planner_;

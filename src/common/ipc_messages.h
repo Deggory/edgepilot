@@ -262,6 +262,7 @@ static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationSta
 #define EDGEPILOT_MODEL_STATE_AT(field, expected) \
     static_assert(offsetof(ModelState, field) == (expected), \
                   "ModelState." #field " moved: web BEV")
+EDGEPILOT_MODEL_STATE_AT(capture_timestamp_ns, 8);
 EDGEPILOT_MODEL_STATE_AT(model_timestamp_ns, 16);
 EDGEPILOT_MODEL_STATE_AT(valid, 28);
 EDGEPILOT_MODEL_STATE_AT(plan, 304);

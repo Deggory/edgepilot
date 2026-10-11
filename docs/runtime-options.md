@@ -270,6 +270,14 @@ a column beside the view, or under it below 900 px wide, so they never cover the
 road. Over the view are only the view and layer buttons and the chips along the
 bottom.
 
+- **Steadied ego lines.** The two ego lines are drawn as the planner sees them:
+  `web_console/static/lane_filter.js` runs the planner's lane-line filter on the
+  capture times and on `controlsd`'s speed and measured curvature
+  ([Lane-line filter](lane-line-filter.md)). The model's own lines run thin and
+  gray beneath them; the `원시 차선` button hides those. On the 2026-10 drives
+  the drawn lines tremble about 60% less from frame to frame, but still sway:
+  the slower swing over a second drops only 13-26%. The `LANE W` chip measures
+  the drawn lines. Without `controlsd` the model's lines are drawn as they are.
 - **Planned slowdown.** The inside of the path turns amber, then red, where the
   model plans to slow down. The `PLAN` chip gives the slowest planned speed and
   where it is, or `STOP`, or the speed the plan reaches when moving off. The

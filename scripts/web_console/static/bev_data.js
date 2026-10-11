@@ -10,6 +10,12 @@
 // to the left. The model's points are from the camera, y to the right; the camera sits
 // RADAR_TO_CAMERA behind the bumper, as controlsd and the HUD take it. The model already sees from
 // the car's centre line (modeld warps by camera_offset_m), so y needs no shift.
+//
+// The two ego lines are drawn as controlsd's planner sees them: through the same lane-line filter
+// (lane_filter.js), on the capture times and controlsd's speed and measured curvature. The model's own
+// lines stay alongside (scene().lanes raw).
+
+import {LaneLineFilter} from "./lane_filter.js";
 
 const MAGIC = 0x31564542;
 const HEADER = 16;
@@ -37,7 +43,7 @@ const MODEL_STALE_S = 0.5, CONTROL_STALE_S = 1.0;
 const RETRY_MS = [500, 5000];
 // the fields this page reads; a server that does not say where one is is older or newer than the page
 const NEEDS = {
-  model: ["size", "model_timestamp_ns", "valid", "plan", "lanes", "lane_probabilities", "road_edges", "road_edge_stds",
+  model: ["size", "capture_timestamp_ns", "model_timestamp_ns", "valid", "plan", "lanes", "lane_probabilities", "road_edges", "road_edge_stds",
           "lead", "gas_press_probs", "lead_flow", "lead_track"],
   control: ["size", "timestamp_ns", "enabled", "engaged", "active", "left_blinker", "right_blinker", "gear",
             "desired_curvature", "actual_curvature",
@@ -47,18 +53,32 @@ const NEEDS = {
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-// [[x, y(, speed)], ...] of the IpcPoint array at offset, as the HUD draws a ribbon of it: finite
-// points, x growing, no farther than reach (model x).
-function polyline(view, offset, reach, speeds = null) {
+// [[x, y(, speed)], ...] of model points xs, ys, as the HUD draws a ribbon of them: finite points, x
+// growing, no farther than reach (model x).
+function linePoints(xs, ys, reach, speeds = null) {
   const points = [];
   let last = -Infinity;
-  for (let i = 0; i < TRAJECTORY; i++) {
-    const x = view.getFloat32(offset + 12 * i, true), y = view.getFloat32(offset + 12 * i + 4, true);
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i], y = ys[i];
     if (!Number.isFinite(x) || !Number.isFinite(y) || x > reach || x <= last) break;
     points.push(speeds ? [x - RADAR_TO_CAMERA, -y, speeds[i]] : [x - RADAR_TO_CAMERA, -y]);
     last = x;
   }
   return points;
+}
+
+// The x and y of the IpcPoint array at offset.
+function pointsAt(view, offset) {
+  const xs = [], ys = [];
+  for (let i = 0; i < TRAJECTORY; i++) {
+    xs.push(view.getFloat32(offset + 12 * i, true));
+    ys.push(view.getFloat32(offset + 12 * i + 4, true));
+  }
+  return [xs, ys];
+}
+
+function polyline(view, offset, reach, speeds = null) {
+  return linePoints(...pointsAt(view, offset), reach, speeds);
 }
 
 // The plan's speed at each point, m/s, from its positions over T_IDXS. Against the model's own
@@ -79,20 +99,21 @@ function readModel(at, bytes) {
   const planEnd = f32(at.plan + 12 * (TRAJECTORY - 1));
   const reach = Number.isFinite(planEnd) ? clamp(planEnd, DRAW.min, DRAW.max) : DRAW.max;
   const speeds = planSpeeds(view, at.plan);
-  const lanes = [0, 1, 2, 3].map((i) => ({probability: f32(at.lane_probabilities + 4 * i),
-                                          points: polyline(view, at.lanes + 12 * TRAJECTORY * i, reach)}));
-  const left = at.lanes + 12 * (TRAJECTORY + LANE_WIDTH_INDEX) + 4, right = left + 12 * TRAJECTORY;
+  const lines = [0, 1, 2, 3].map((i) => pointsAt(view, at.lanes + 12 * TRAJECTORY * i));
+  const lanes = lines.map(([xs, ys], i) => ({probability: f32(at.lane_probabilities + 4 * i), points: linePoints(xs, ys, reach)}));
   const lead = at.lead, flow = at.lead_flow, track = at.lead_track;
   return {
     stamp: view.getBigUint64(at.model_timestamp_ns, true),
+    captured: Number(view.getBigUint64(at.capture_timestamp_ns, true)) * 1e-9,
     valid: view.getUint32(at.valid, true) !== 0,
     path: polyline(view, at.plan, reach, speeds),
     planNow: speeds[PLAN_NOW_INDEX],
     planEnd,
     gas: Array.from({length: 6}, (_, i) => f32(at.gas_press_probs + 4 * i)),
-    lanes,
+    lanes, reach,
+    egoLines: [lines[1], lines[2]],     // the ego lines' model points, for the lane filter (BevStream)
     edges: [0, 1].map((i) => ({std: f32(at.road_edge_stds + 4 * i), points: polyline(view, at.road_edges + 12 * TRAJECTORY * i, reach)})),
-    laneWidth: lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE ? f32(right) - f32(left) : NaN,
+    laneWidth: laneWidth(lanes, lines[1][1], lines[2][1]),
     lead: view.getUint32(lead, true)
       ? {probability: f32(lead + 4), x: f32(lead + 8), y: f32(lead + 12), speed: f32(lead + 16), accel: f32(lead + 20)} : null,
     // LeadFlowState: the lead's expansion rate (1/s, + closing in) over about 0.5 s, and the model distance
@@ -101,6 +122,12 @@ function readModel(at, bytes) {
     // LeadTrackState: the model distance and the flow fused (m from the camera, m/s, - closing)
     track: view.getUint32(track, true) ? {x: f32(track + 8), relative: f32(track + 12)} : null,
   };
+}
+
+// The width between the ego lines at LANE_WIDTH_INDEX, NaN unless both are sure.
+function laneWidth(lanes, left, right) {
+  return lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE
+    ? right[LANE_WIDTH_INDEX] - left[LANE_WIDTH_INDEX] : NaN;
 }
 
 // One ControlState payload.
@@ -124,9 +151,10 @@ function readControl(at, flags, bytes) {
 const ageOf = (now, stamp) => stamp ? Number(now - stamp) / 1e9 : Infinity;
 
 // The scene of the latest model and control state (either may be null) at board time now:
-//   path [[x, y, planned speed m/s]], planNow (m/s), lanes [{probability, points}] ×4 (far left,
-//   left, right, far right), edges [{std, points}] ×2, laneWidth (m, NaN unless both ego lines are
-//   sure)
+//   path [[x, y, planned speed m/s]], planNow (m/s), lanes [{probability, points, raw}] ×4 (far left,
+//   left, right, far right; the ego lines' points filtered as the planner filters them while controlsd
+//   runs, raw the model's own, only on the ego lines), edges [{std, points}] ×2, laneWidth (m, between
+//   the lines drawn, NaN unless both ego lines are sure)
 //   lead {x: its rear, y, gap, speed, accel, relative (m/s, null without our speed), ttc (s, Infinity unless
 //     closing in), tracked (x, gap, relative and speed come from the lead track), raw {x, relative} (the
 //     model's own), flow {relative: -x · rate (m/s, from optical flow)} or null} or null
@@ -213,6 +241,7 @@ export class BevStream {
     this.history = [];                  // [t s, gas 2 s, plan10] of the last HISTORY_S of model frames
     this.leads = [];                    // the lead card's rows (scene().leads), one per model frame
     this.segment = 0;                   // which lead a row belongs to (trend fits stay within one)
+    this.laneFilters = [new LaneLineFilter(), new LaneLineFilter()];   // the ego lines, as the planner's
     this.said = "";
   }
 
@@ -300,11 +329,33 @@ export class BevStream {
     while (rows.length && rows[0].t < t - LEAD_HISTORY_S) rows.shift();
   }
 
+  /* The ego lines through the planner's lane filter, on controlsd's speed and measured curvature (as the
+   * planner gets them, ControlState ego_speed_kph and actual_curvature). Like the planner, an invalid model
+   * frame leaves the filters alone. Without controlsd the model's lines stand and the filters start again. */
+  filterLanes(model, now) {
+    if (!model.valid) return;
+    const control = this.control && ageOf(now, this.control.stamp) <= CONTROL_STALE_S ? this.control : null;
+    const speed = control ? control.speedKph / 3.6 : NaN, curvature = control ? control.actual : NaN;
+    if (!Number.isFinite(speed) || !Number.isFinite(curvature)) {
+      for (const filter of this.laneFilters) filter.reset();
+      return;
+    }
+    const filtered = model.egoLines.map(([xs, ys], side) =>
+      this.laneFilters[side].update(model.captured, xs, ys, speed, curvature));
+    model.egoLines.forEach(([xs], side) => {
+      const lane = model.lanes[1 + side];
+      model.lanes[1 + side] = {...lane, raw: lane.points, points: linePoints(xs, filtered[side], model.reach)};
+    });
+    model.laneWidth = laneWidth(model.lanes, filtered[0], filtered[1]);
+  }
+
   frame(model, control, now) {
     const layout = this.layout, fresh = model.length >= layout.model.size;
     let t = 0;
+    this.control = control.length >= layout.control.size ? readControl(layout.control, layout.hud_flags, control) : null;
     if (fresh) {
       this.model = readModel(layout.model, model);
+      this.filterLanes(this.model, now);
       this.arrivals.push(performance.now());
       t = Number(this.model.stamp) / 1e9;
       const history = this.history;
@@ -312,7 +363,6 @@ export class BevStream {
       history.push([t, this.model.gas[GAS_PRESS_HORIZON], this.model.planEnd]);
       while (history.length && history[0][0] < t - HISTORY_S) history.shift();
     }
-    this.control = control.length >= layout.control.size ? readControl(layout.control, layout.hud_flags, control) : null;
     const shown = scene(this.model, this.control, now, this.history);
     if (fresh) this.addLead(t, shown.lead);
     shown.leads = this.leads;
