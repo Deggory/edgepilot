@@ -938,6 +938,21 @@ TEST(LateralController, SteeringJsonMatchesDefaults) {
     ASSERT_NE(error.find("torque_kf_raw"), std::string::npos);
 }
 
+// 스스로 가는 최대 조향각은 고장 각도 아래에서 멈춰야 뜻이 있다: 파일이 더 큰 값을 줘도 그 아래로 자른다.
+TEST(LateralController, HoldAngleStaysBelowTheFaultAngle) {
+    const std::string path = "/tmp/gtest_lateral_controller_hold_angle.json";
+    std::FILE *f = std::fopen(path.c_str(), "w");
+    ASSERT_NE(f, nullptr) << "픽스처 쓰기";
+    std::fputs("{\"avoid_lkas_fault_hold_angle_deg\": 120}\n", f);
+    std::fclose(f);
+    SteeringParams params;
+    std::string error;
+    const bool loaded = load_steering_params_json(path, &params, &error);
+    std::remove(path.c_str());
+    ASSERT_TRUE(loaded) << error;
+    EXPECT_LT(params.avoid_lkas_fault_hold_angle_deg, params.avoid_lkas_fault_max_angle_deg);
+}
+
 // 상류 controlsd: 비활성 중 목표 곡률은 실제 곡률을 따라가고, 재활성 때 거기서 한계 안으로 출발한다.
 TEST(LateralController, InactiveDesiredTracksActual) {
     LateralControllerConfig config;
@@ -1130,9 +1145,12 @@ TEST(LateralController, ParamsdInvalidBlocksOnlyWhenUsed) {
     ASSERT_TRUE(controller.update(replay_path(), replay_target(), vehicle, 1.01, 1).active)
         << "보정 전 무효 학습값은 막지 않는다(상류 cal_status 검사)";
     controller.set_live_params(odd_live_params(), false, true);
-    ASSERT_EQ(controller.update(replay_path(), replay_target(), vehicle, 1.02, 2).active_block,
-              BlockReason::ParamsdInvalid)
-        << "보정 뒤 무효 학습값은 막는다";
+    const LateralControlResult invalid = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2);
+    ASSERT_EQ(invalid.active_block, BlockReason::ParamsdInvalid) << "보정 뒤 무효 학습값은 막는다";
+    // 상류 paramsdTemporaryError처럼 SOFT_DISABLE: 결합 중이면 경고하며 3초 더 조향한 뒤 해제한다
+    EXPECT_EQ(block_kind(BlockReason::ParamsdInvalid), BlockKind::SoftDisable);
+    EXPECT_TRUE(invalid.soft_disabling);
+    EXPECT_TRUE(invalid.active);
     LiveLateralParams unseen = odd_live_params();
     unseen.use_vehicle = false;
     controller.set_live_params(unseen, false, true);

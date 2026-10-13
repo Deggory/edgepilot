@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .param_store import ParamStore
+from .refusal import Refusal
 from .shm_channel import IpcReader, age_s, topic_path
 from .state_layout import (CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, MODEL_CALIBRATION_AT, MODEL_CALIBRATION_SOURCE_AT,
                            MODEL_FLOW_CALIBRATION_AT, MODEL_STATE_TOPIC, control_value)
@@ -111,7 +112,7 @@ class CalibrationControl:
 
     def request_reset(self) -> Dict[str, Any]:
         if self.engaged():
-            raise PermissionError("결합 중에는 초기화할 수 없습니다. 먼저 해제하세요.")
+            raise Refusal("error.calibration_reset_engaged")
         self.request_path.parent.mkdir(parents=True, exist_ok=True)
         self.request_path.touch()
         return self.status()
@@ -120,6 +121,6 @@ class CalibrationControl:
         """modeld도 결합 중에는 해제를 기다리지만(CalibrationSourceSelector), 바꾼 줄 아는데 적용이 늦는 일이 없게
         여기서도 받지 않는다."""
         if self.engaged():
-            raise PermissionError("결합 중에는 보정 출처를 바꿀 수 없습니다. 먼저 해제하세요.")
+            raise Refusal("error.calibration_source_engaged")
         self.store.update(SOURCE_GROUP, {SOURCE_KEY: bool(use_flow)}, allow_managed=True)
         return self.status()

@@ -1,7 +1,8 @@
-// 웹 콘솔 페이지: 머리 줄(런타임 상태, 다시 불러오기)과 탭(파라미터 그룹들과 차량 특성, BEV). 주소의 #탭 이름이
-// 지금 탭이라 새로고침해도 그 탭에 머문다. 탭 화면은 처음 열 때 만들고, 보이는 탭만(페이지가 가려지지 않은
+// 웹 콘솔 페이지: 머리 줄(런타임 상태, 언어, 다시 불러오기)과 탭(파라미터 그룹들과 차량 특성, BEV). 주소의 #탭
+// 이름이 지금 탭이라 새로고침해도 그 탭에 머문다. 탭 화면은 처음 열 때 만들고, 보이는 탭만(페이지가 가려지지 않은
 // 동안만) 폴링·스트림을 돌린다.
 import {createBevView} from "./bev_view.js";
+import {LANGUAGES, lang, setLanguage, t} from "./i18n.js";
 import {createPandaCard} from "./panda_card.js";
 import {loadParams, params} from "./param_state.js";
 import {createParamView} from "./param_view.js";
@@ -14,6 +15,20 @@ const PARAM_EXTRAS = {display: () => [createPandaCard()]};
 
 const main = document.getElementById("main");
 const nav = document.getElementById("tabs");
+
+// index.html의 글자: data-i18n은 내용, data-i18n-title·data-i18n-aria-label은 그 속성의 문구 키
+for (const node of document.querySelectorAll("[data-i18n]")) node.textContent = t(node.dataset.i18n);
+for (const node of document.querySelectorAll("[data-i18n-title]")) node.title = t(node.dataset.i18nTitle);
+for (const node of document.querySelectorAll("[data-i18n-aria-label]")) node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
+
+// 언어 버튼: 다른 언어의 코드를 보이고, 누르면 그 언어로 다시 연다
+const other = Object.keys(LANGUAGES).find(code => code !== lang);
+const languageButton = document.getElementById("language");
+languageButton.textContent = other.toUpperCase();
+languageButton.title = LANGUAGES[other];
+languageButton.setAttribute("aria-label", LANGUAGES[other]);
+languageButton.lang = other;
+languageButton.addEventListener("click", () => setLanguage(other));
 let tabs = [];
 const views = new Map();
 let current = null;
@@ -73,8 +88,8 @@ async function start() {
   } catch (error) {
     main.replaceChildren(el("div.empty",
       {},
-      el("p", {text: `파라미터를 읽지 못했습니다: ${error.message}`}),
-      el("button.button", {type: "button", text: "다시 시도", onclick: start})));
+      el("p", {text: t("app.load_failed", {error: error.message})}),
+      el("button.button", {type: "button", text: t("app.retry"), onclick: start})));
   }
 }
 
@@ -96,7 +111,7 @@ function commonBuild(processes) {
 
 function versionNote(process, common) {
   if (process.running && process.installed_version && process.installed_version !== process.version)
-    return `설치본 ${process.installed_version} · 다시 띄우면 바뀜`;
+    return t("app.installed_differs", {version: process.installed_version});
   return process.running && process.version && process.version !== common ? process.version : "";
 }
 
@@ -104,7 +119,7 @@ function versionNote(process, common) {
 function showRuntime(status, failure = "") {
   if (failure) {
     runtime.dataset.state = "bad";
-    runtimeText.textContent = "웹 콘솔 연결 끊김";
+    runtimeText.textContent = t("app.console_offline");
     runtimePanel.replaceChildren(el("p.runtime-note", {text: failure}));
     return;
   }
@@ -112,24 +127,28 @@ function showRuntime(status, failure = "") {
   const running = processes.filter(process => process.running).length;
   runtime.dataset.state = !status.available ? "bad" : running === processes.length ? "good" : "warn";
   runtimeText.textContent = !status.available
-    ? (processes.length ? `매니저 응답 없음 · ${Math.round(status.age_s)}초` : "매니저 없음")
-    : `프로세스 ${running}/${processes.length}`;
+    ? (processes.length ? t("app.manager_stale", {seconds: Math.round(status.age_s)}) : t("app.manager_missing"))
+    : t("app.processes", {running, total: processes.length});
   const backlight = status.backlight;
   const build = commonBuild(processes);
-  runtimePanel.replaceChildren(
+  // replaceChildren은 null도 글자로 넣으므로 빈 줄은 거른다
+  runtimePanel.replaceChildren(...[
     processes.length
       ? el("ul.process-list", {}, processes.map(process => {
         const note = versionNote(process, build.common);
         return el(`li${process.running ? ".running" : ""}`, {}, el("span.dot"), el("code", {text: process.name}),
-          el("span", {text: process.running ? "실행 중" : "멈춤"}), note && el("span.process-version", {text: note}));
+          el("span", {text: process.running ? t("app.running") : t("app.stopped")}),
+          note && el("span.process-version", {text: note}));
       }))
-      : el("p.runtime-note", {text: "매니저가 프로세스 상태를 내지 않습니다."}),
-    build.common && el("p.runtime-note", {text: `빌드 ${build.common}${build.mixed ? " · 다른 빌드가 섞여 있음" : ""}`}),
+      : el("p.runtime-note", {text: t("app.no_process_state")}),
+    !status.available && processes.length ? el("p.runtime-note", {text: t("app.last_known")}) : null,
+    build.common && el("p.runtime-note", {text: t(build.mixed ? "app.build_mixed" : "app.build", {version: build.common})}),
     el("p.runtime-note", {
-      text: backlight.error ? `백라이트 오류: ${backlight.error}`
-        : !backlight.available ? "백라이트 제어 없음"
-        : `백라이트 ${backlight.enabled ? `켜짐 · ${backlight.brightness_percent}%` : "꺼짐"}`,
-    }));
+      text: backlight.error ? t("app.backlight_error", {error: backlight.error})
+        : !backlight.available ? t("app.backlight_missing")
+        : backlight.enabled ? t("app.backlight_on", {percent: backlight.brightness_percent}) : t("app.backlight_off"),
+    }),
+  ].filter(Boolean));
 }
 
 const statusPolling = poller(async isCurrent => {
@@ -157,9 +176,9 @@ document.addEventListener("visibilitychange", () => {
 document.getElementById("reload").addEventListener("click", async () => {
   try {
     await load();
-    toast("최신 값을 불러왔습니다");
+    toast(t("app.reloaded"));
   } catch (error) {
-    toast(`읽기 실패: ${error.message}`, {failed: true});
+    toast(t("app.reload_failed", {error: error.message}), {failed: true});
   }
 });
 window.addEventListener("hashchange", () => {

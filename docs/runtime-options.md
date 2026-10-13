@@ -220,11 +220,15 @@ at the next start:
 | `flow_calibration.json` | `modeld` | the first estimate and a mount change at once, otherwise every minute and on exit | at `modeld` start |
 | `live_parameters.json` | `controlsd` (paramsd) | every minute | at `controlsd` start |
 | `live_torque_parameters.bin` | `controlsd` (torqued) | every 12 s | at `controlsd` start |
-| `live_delay.json` | `locationd` (lagd) | every 60 s and on exit | at `locationd` start, if `steer_actuator_delay` is unchanged |
+| `live_delay.json` | `locationd` (lagd) | every 60 s and on exit | at `locationd` start, unless the saved estimate is invalid; a changed `steer_actuator_delay` does not discard it |
 
 A saved learner state that fails to restore is deleted (for torqued, only a
-corrupt cache). The web console's calibration reset deletes `calibration.json`
-and `flow_calibration.json`.
+corrupt cache). paramsd's state also fails when the mass, wheelbase, centre of
+gravity or tyre stiffness changed, or when its steering ratio is outside
+0.5-2x the manual one. torqued starts over when its prior (torque factor,
+friction) changed, and keeps only the factor and friction when the learner
+input source changed. The web console's calibration reset deletes
+`calibration.json` and `flow_calibration.json`.
 
 ## Web console
 
@@ -235,30 +239,19 @@ directly, from the install directory:
 cd /root/edgepilot && python3 -m web_console --host 0.0.0.0 --port 8080
 ```
 
-The page is in Korean; the documents name its tabs and buttons in English:
+The page is in Korean or English. It follows the browser's language at first;
+the language button in the header (`EN` / `KO`) switches it, and that browser
+remembers the choice (`?lang=en` or `?lang=ko` in the address also picks one).
+The documents name the tabs and buttons by their English labels.
 
-| On screen | In the documents |
-| --- | --- |
-| `조향` | Steering tab |
-| `차량 특성` | Vehicle tab |
-| `비전 크루즈` | Vision cruise tab |
-| `주행 기록` | Recording tab |
-| `기기 설정` | Device settings tab |
-| `BEV` | BEV tab |
-| `항목 검색`, `바꾼 항목만`, `↺ 기본값으로` | search, show only the changed items, put the default back |
-| `차량 모델`, `토크 모델`, `조향 지연` | the paramsd, torqued and lagd groups |
-| `자동 학습` / `수동` | Auto-learn / Manual |
-| `⤓ 학습값을 수동값으로` | the button that copies the learned value into the manual one |
-| `카메라 캘리브레이션` | camera calibration card |
-| `캘리브레이션 초기화` | Reset calibration |
-| `광류 (없으면 포즈)` / `모델 포즈만` | calibration source: flow / pose |
-| `최근 10분 추이` | the learners' last ten minutes |
-| `학습 입력` | learner input source |
-| `고정 제원` | fixed specs |
-| `Panda 펌웨어` | Panda firmware card |
-| `펌웨어 플래싱` | flash button |
-| `뒤에서` / `위에서` | BEV view buttons: behind / from above |
-| `원시 차선` | raw lines (a BEV layer button) |
+Every text on screen, in both languages, is in
+`web_console/static/i18n/ko.json` and `en.json`. The server sends only
+structure and codes: the parameters' sections, units and ranges, the Panda's
+reasons and steps, and a catalogue key when it refuses a request (for example
+a calibration reset while engaged). `check_web_console.py` checks that the two
+files have the same keys and placeholders, that every key the page or the
+server uses exists and none goes unused, and that no screen text is left in
+the code.
 
 > [!WARNING]
 > The web console has no authentication and writes steering parameters that
@@ -320,9 +313,17 @@ Manual choice (the `use_live_*` switches). Each value's card shows the value
 control uses now and where it comes from (controlsd's LearnerState says
 whether the learned values are in use), the learned value, the manual value
 with what it does while learning is on, and a button that copies the learned
-value into the manual one. Below are the camera calibration, the learners'
-last ten minutes, the learner input source and the fixed specs (mass,
-wheelbase, centre of gravity).
+value into the manual one (tyre stiffness and road roll have none: their
+learned value is a factor and a roll). Below are the camera calibration, the
+learners' last ten minutes, the learner input source and the fixed specs
+(mass, wheelbase, centre of gravity).
+
+The manual values reach the learners as priors when `controlsd` starts
+(`locationd` for the steering delay), so a prior changed while auto-learning
+reaches the learner at the next start. The cards of the values that reset a
+learner say so: tyre stiffness and the fixed specs make the next start delete
+paramsd's saved state, and the torque factor and friction make torqued
+relearn from the new prior.
 
 The camera calibration card resets the calibration and chooses its source,
 pose or flow (`calibration_use_flow`); it refuses both while engaged.
@@ -332,7 +333,8 @@ pose or flow (`calibration_use_flow`); it refuses both while engaged.
 The tab edits the backlight, the alert volume and the camera mount in
 `display.json`. Its Panda firmware card shows the Panda's link and firmware,
 and asks `pandad` to flash the installed image (`EDGEPILOT_PANDA_FIRMWARE`)
-only while the car is parked ([Panda firmware](../firmware/panda/README.md)).
+only while the car is parked, or at any time for a Panda stuck in its
+bootstub ([Panda firmware](../firmware/panda/README.md)).
 
 ### BEV tab
 

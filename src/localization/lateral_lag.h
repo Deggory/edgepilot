@@ -69,7 +69,7 @@ public:
     bool update_estimate();
     LateralLagOutput output() const;
 
-    // 저장·복원(재시작 사이에 추정을 이어 간다). 초기값이 다르면 복원하지 않는다.
+    // 저장·복원(재시작 사이에 추정을 이어 간다). 무효로 저장된 추정은 복원하지 않는다(초기값이 달라도 복원한다).
     std::string cache_json() const;
     bool restore(const std::string &json);
     void reset(double initial_lag, int valid_blocks);

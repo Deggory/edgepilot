@@ -12,6 +12,7 @@
 // 두 자차 차선선은 controlsd의 플래너가 보는 대로 그린다: 같은 차선선 필터(lane_filter.js)에 캡처 시각과
 // controlsd의 속도·측정 곡률로 거른다. 모델 자체의 차선선도 함께 남는다(scene().lanes raw).
 
+import {t} from "./i18n.js";
 import {LaneLineFilter} from "./lane_filter.js";
 
 const MAGIC = 0x31564542;
@@ -263,23 +264,23 @@ export class BevStream {
     while (run === this.run) {
       const abort = this.abort = new AbortController();
       try {
-        this.status(false, "연결 중");
+        this.status(false, t("bev.connecting"));
         if (!this.layout) {
           const response = await fetch("/api/bev", {cache: "no-store", signal: abort.signal});
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const layout = await response.json();
           const missing = Object.entries(NEEDS).flatMap(([part, keys]) => keys.filter((key) => !(key in (layout[part] || {}))));
-          if (missing.length) throw new Error(`서버와 페이지 버전이 다릅니다(${missing.join(", ")}): web_console/을 통째로 다시 올리세요`);
+          if (missing.length) throw new Error(t("bev.version_mismatch", {fields: missing.join(", ")}));
           this.layout = layout;
         }
         const response = await fetch(`/api/bev/stream?hz=${this.hz}`, {cache: "no-store", signal: abort.signal});
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
         await this.read(response.body.getReader(), run);
         wait = RETRY_MS[0];
-        if (run === this.run) this.status(false, "연결 끊김 · 다시 연결 중");
+        if (run === this.run) this.status(false, t("bev.reconnecting"));
       } catch (error) {
         if (run !== this.run) return;
-        this.status(false, `연결 끊김 · ${error.message || error}`);
+        this.status(false, t("bev.disconnected", {error: error.message || error}));
       }
       if (run !== this.run) return;
       await new Promise((resolve) => setTimeout(resolve, wait));
@@ -296,7 +297,7 @@ export class BevStream {
       let at = 0;
       while (pending.length - at >= HEADER) {
         const head = new DataView(pending.buffer, pending.byteOffset + at, HEADER);
-        if (head.getUint32(0, true) !== MAGIC) throw new Error("잘못된 프레임");
+        if (head.getUint32(0, true) !== MAGIC) throw new Error(t("bev.bad_frame"));
         const model = head.getUint16(4, true), control = head.getUint16(6, true), end = at + HEADER + model + control;
         if (end > pending.length) break;
         this.frame(pending.subarray(at + HEADER, at + HEADER + model), pending.subarray(at + HEADER + model, end),
@@ -365,9 +366,11 @@ export class BevStream {
     this.onScene(shown);
     const since = performance.now() - 1000;
     while (this.arrivals.length && this.arrivals[0] < since) this.arrivals.shift();
-    const note = this.control ? "" : " · controlsd 없음";
-    if (!this.model) this.status(false, `모델 상태 없음${note}`);
-    else if (shown.stale) this.status(false, `모델 멈춤 · ${Math.round(shown.modelAge)}초 전${note}`);
-    else this.status(true, `모델 ${this.arrivals.length} Hz${note}`);
+    // 서버는 controlsd가 멈춰도 마지막 ControlState를 계속 보낸다: 오래된 것은 멈춤으로 알린다
+    const note = !this.control ? ` · ${t("bev.no_controlsd")}`
+      : shown.controlAge > CONTROL_STALE_S ? ` · ${t("bev.controlsd_stalled")}` : "";
+    if (!this.model) this.status(false, t("bev.no_model") + note);
+    else if (shown.stale) this.status(false, t("bev.model_stalled", {seconds: Math.round(shown.modelAge)}) + note);
+    else this.status(true, t("bev.model_rate", {hz: this.arrivals.length}) + note);
   }
 }

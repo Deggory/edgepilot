@@ -41,6 +41,7 @@ from .learner_monitor import LearnerMonitor, LocalizationReader
 from .panda_update import PandaUpdate
 from .param_store import ParamStore
 from .process_status import ProcessStatus
+from .refusal import Refusal
 from .static_assets import StaticAssets
 
 
@@ -82,9 +83,11 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
     application = FastAPI(title="edgepilot web console", docs_url="/docs", lifespan=lifespan)
 
     def refuse(call: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-        """요청을 받지 않을 상태면(PermissionError) 409, 파일 오류면 500."""
+        """요청을 받지 않을 상태면 409(Refusal이면 페이지가 문구로 바꾸는 {"code", 자리 값...}), 파일 오류면 500."""
         try:
             return call()
+        except Refusal as exc:
+            raise HTTPException(status_code=409, detail=exc.detail()) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except OSError as exc:

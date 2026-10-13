@@ -27,7 +27,8 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
     {"steer_ratio", 8.0f, 25.0f, &SteeringParams::steer_ratio},
     {"tire_stiffness_factor", 0.2f, 2.0f, &SteeringParams::tire_stiffness_factor},
     {"steer_actuator_delay", 0.01f, 1.0f, &SteeringParams::steer_actuator_delay},
-    {"avoid_lkas_fault_hold_angle_deg", 0.0f, 180.0f, &SteeringParams::avoid_lkas_fault_hold_angle_deg},
+    // 고장 각도(avoid_lkas_fault_max_angle_deg, 85도) 아래에서 멈춰야 뜻이 있다
+    {"avoid_lkas_fault_hold_angle_deg", 0.0f, 84.0f, &SteeringParams::avoid_lkas_fault_hold_angle_deg},
     {"angle_offset_deg", -10.0f, 10.0f, &SteeringParams::angle_offset_deg},
     {"torque_lat_accel_offset", -1.0f, 1.0f, &SteeringParams::torque_lat_accel_offset},
     {"mass_kg", 1000.0f, 2600.0f, &SteeringParams::mass_kg},

@@ -520,7 +520,6 @@ BlockReason LateralController::active_block_reason(const LateralPath &path, cons
     if (vehicle_state.park_brake) return BlockReason::ParkBrake;
     if (vehicle_state.brake_error) return BlockReason::BrakeError;
     if (vehicle_state.gear != kGearDrive) return BlockReason::GearNotDrive;
-    if (live_params().use_vehicle && !live_vehicle_valid_ && live_calibrated_) return BlockReason::ParamsdInvalid;
     // Panda 핸드셰이크는 차량 결함 뒤에 온다. 앞에 두면 시동 직후 health가
     // 도착하기 전의 engage 요청이 panda_not_ready(일시적)로 분류되어 유예되고,
     // 안전벨트/기어 같은 하드 결함이 가려진 채 engage 톤이 울린 뒤 해제된다.
@@ -539,12 +538,14 @@ BlockReason LateralController::active_block_reason(const LateralPath &path, cons
         plan_age_s > static_cast<float>(config_.timing.model_timeout_ms) / 1000.0f) {
         return BlockReason::LateralPlanStale;
     }
-    // openpilot steerTempUnavailable과 calibrationIncomplete/Recalibrating/Invalid. SoftDisable이라 맨 끝에
-    // 둔다. MDPS 고장 동안 조향을 쉬는 것은 이 사유와 따로 update가 정한다(조용한 경고일 때도 쉰다).
+    // openpilot steerTempUnavailable, calibrationIncomplete/Recalibrating/Invalid, paramsdTemporaryError.
+    // SoftDisable이라 맨 끝에 둔다. MDPS 고장 동안 조향을 쉬는 것은 이 사유와 따로 update가 정한다(조용한
+    // 경고일 때도 쉰다). paramsd는 쓰는 중이고 보정이 끝났을 때만 본다(상류 sm.seen·cal_status 검사).
     if (steer_fault_alert) return BlockReason::SteerTempUnavailable;
     if (calibration_status_ == 0) return BlockReason::CalibrationIncomplete;
     if (calibration_status_ == 3) return BlockReason::CalibrationRecalibrating;
     if (calibration_status_ != 1) return BlockReason::CalibrationInvalid;
+    if (live_params().use_vehicle && !live_vehicle_valid_ && live_calibrated_) return BlockReason::ParamsdInvalid;
     return BlockReason::None;
 }
 

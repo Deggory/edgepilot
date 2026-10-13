@@ -48,7 +48,7 @@ struct SteeringParams {
     float avoid_lkas_fault_max_angle_deg = 85.0f;
     int avoid_lkas_fault_max_frames = 89;
     // 운전자가 핸들을 잡지 않았을 때 컨트롤러가 스스로 가는 최대 핸들 각도. 고장 각도(85도) 아래에서
-    // 멈춰 토크를 끊김 없이 유지한다. 0이면 끈다.
+    // 멈춰 토크를 끊김 없이 유지한다. 0이면 끄고, 파일 값은 84도까지로 자른다.
     float avoid_lkas_fault_hold_angle_deg = 80.0f;
     // avoid_lkas_fault_enabled를 끈 경우에만: 85도 위에서 요청을 max_frames 낸 뒤 끊는 프레임 수. 상류
     // MAX_ANGLE_CONSECUTIVE_FRAMES와 같은 값이고 파일에서 읽지 않는다. 켠 경우 85도 위에서는 짧게 끊지 않고
@@ -59,8 +59,8 @@ struct SteeringParams {
     // openpilot latAccelOffset(m/s^2). 상수 횡가속 편향을 FF에서 뺀다.
     // +y=오른쪽 관례라 양수 = 우측 쏠림 보정. fit 도구 출력을 그대로 넣는다.
     float torque_lat_accel_offset = -0.06f;  // torqued 학습값(2026-09-27)
-    // ESP12 실측으로 추정한 도로 편경사(뱅크)를 FF에서 실시간 보정한다.
-    // 켜면 상수 offset이 커버 못 하는 커브별 편경사까지 잡는다.
+    // ESP12 실측으로 직선에서 추정한 도로 편경사(뱅크)를 FF에서 보정한다. 커브에서는 직전 값을
+    // 유지하고 30초 넘게 갱신이 없으면 0으로 줄인다(LateralController::update_road_bank).
     bool live_bank_compensation = true;
     // paramsd·torqued 학습값 사용. 끄면 학습기는 계산·기록만 한다. 차량 값을 켜면
     // 롤 보정이 live_bank_compensation을 대신한다.

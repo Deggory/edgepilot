@@ -1,6 +1,6 @@
-"""페이지 파일(이 패키지의 static/: HTML, CSS, JS 모듈, three.js 0.186.1). 처음 요청 때 한 번 gzip해 메모리에
-두고(three.js 800 KB가 200 KB로), ETag가 같으면 304로 끝낸다. 파일이 바뀌면(mtime·크기) 다시 읽는다.
-static/ 밖과 아래 형식이 아닌 파일, 숨김 파일은 내주지 않는다."""
+"""페이지 파일(이 패키지의 static/: HTML, CSS, JS 모듈, 문구 묶음 i18n/*.json, three.js 0.186.1). 처음 요청 때
+한 번 gzip해 메모리에 두고(three.js 800 KB가 200 KB로), ETag가 같으면 304로 끝낸다. 파일이 바뀌면(mtime·크기) 다시
+읽는다. static/ 밖과 아래 형식이 아닌 파일, 숨김 파일은 내주지 않는다."""
 from __future__ import annotations
 
 import gzip
@@ -13,6 +13,7 @@ MEDIA_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
 }
 

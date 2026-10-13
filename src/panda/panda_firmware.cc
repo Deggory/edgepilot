@@ -140,10 +140,13 @@ const char *panda_hw_type_name(uint8_t hw_type) {
     }
 }
 
-bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, std::string *reason) {
+bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, bool panda_in_bootstub, std::string *reason) {
     const char *code = nullptr;
     const uint64_t age = now_ns >= control.timestamp_ns ? now_ns - control.timestamp_ns : 0;
-    if (control.timestamp_ns == 0 || age > kControlMaxAgeNs) {
+    const bool control_fresh = control.timestamp_ns != 0 && age <= kControlMaxAgeNs;
+    if (panda_in_bootstub) {
+        if (control_fresh && (control.engaged || control.active)) code = "engaged";
+    } else if (!control_fresh) {
         code = "control_stale";
     } else if (!control.vehicle_fresh) {
         code = "vehicle_stale";

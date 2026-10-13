@@ -12,8 +12,11 @@ before a change that adds a file, a document or a diagram.
 - Identifiers, log and error messages, and commit messages are English.
   Commit subjects read `<area>: <what changed>`.
 - Documents are English: the root README, `docs/` and the READMEs in folders.
-  Korean text that appears on a screen, such as the web console's tab names,
-  is quoted as inline code next to its English name (`차량 특성`, Vehicle).
+  They name the web console's tabs and buttons by its English labels. Text
+  that appears on a screen only in Korean is quoted as inline code next to
+  its English name.
+- Text on the web console's screen is in its text catalogues, in Korean and
+  English ([JavaScript](#javascript)); the code holds keys, not text.
 - Some parts of a comment stay as they are: identifiers and field lists
   (`dlc=8, bus=2`), formulas and ranges, the command after `사용:`, file paths,
   linter directives (`# noqa`) and shebangs. Comments inside GLSL shader
@@ -78,6 +81,24 @@ docstring that says what it is for.
 The web console's page is plain ES modules with no build step. It uses 2-space
 indent and `//` comments. No formatter is applied, so follow the code around
 the change. `static/three/` is vendored.
+
+Every text on screen goes through `t(key, values)` from `static/i18n.js`, and
+lives in `static/i18n/ko.json` and `en.json` under the same key:
+
+- Keys are dotted, by where they show: `app.*`, `params.*`, `vehicle.*`,
+  `calibration.*`, `panda.*`, `bev.*`. The parameters' texts are
+  `param.<group>.<key>.label`, `.description`, `.increase`, `.decrease` and
+  `.learned_role`, next to `group.*`, `section.*`, `unit.*` and `caution.*`;
+  `param_metadata.py` holds only their structure.
+- Values fill `{name}` placeholders. An English text that changes with a count
+  is `{"one": ..., "other": ...}` and is picked by `{count}`.
+- The server sends codes, never text: Panda reasons and steps, and a refusal
+  (`refusal.py`) is a catalogue key the page turns into text.
+- Add the Korean and the English text in the same change.
+  `check_web_console.py` fails when the files differ in keys or placeholders,
+  when a key is missing or unused, or when Korean is left in the code outside
+  comments. A line that must keep it, such as a language's own name, carries
+  an `i18n-allow` comment.
 
 ## Documents
 

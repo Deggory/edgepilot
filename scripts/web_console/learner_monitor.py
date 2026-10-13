@@ -29,7 +29,7 @@ LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
     "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
     "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored", "use_delay",
-    "localizer_inputs",
+    "localizer_inputs", "torque_partly_restored",
 )
 LEARNER_HISTORY_S = 600
 GRAVITY = 9.81

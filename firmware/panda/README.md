@@ -88,6 +88,10 @@ the Panda runs, the installed image, and a flash button.
 - **Parked only.** The button works only with the car parked: a fresh control
   state, the vehicle state alive, steering and engagement off, in P and
   standing still.
+- **Except a Panda in its bootstub.** Such a Panda forwards no CAN, so the
+  car state is always stale, and the harness is on the stock wiring already.
+  Like upstream `pandad`, the card rewrites it whatever the car state, unless
+  a fresh control state says steering is engaged.
 - **Checked twice.** The web console checks that and writes the image's
   version to `/dev/shm/edgepilot_panda_flash`. `pandad` checks it again,
   closes its own Panda connection and flashes, reporting progress through
@@ -135,7 +139,9 @@ from a shell: without `--yes` it only shows the image and the Panda.
 The bootstub never erases sector 0, where it lives. So a flash that stops
 halfway, or an image whose signature it rejects, leaves the Panda in its
 bootstub and still flashable: the card then shows `bootstub` and offers to
-write the firmware again.
+write the firmware again. An image the bootstub rejects stays rejected, so a
+Panda whose bootstub does not accept debug signatures (one that ran `-RELEASE`
+firmware) does not come back with this image.
 
 ## Related
 

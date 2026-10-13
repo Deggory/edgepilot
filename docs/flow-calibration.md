@@ -191,7 +191,8 @@ shaped the design (`platform/maixcam2/maix_ive_flow.h`):
   by 1/5 of the remaining difference per second, but at least 0.05°/s.
   - The model sees two frames and a 4.8 s feature history, so a step would jerk
     the path.
-  - A 0.3° switch takes about 6 s and a 2° mount change about 10 s.
+  - A 0.3° switch takes about 6 s, 1° about 12 s and a 2° mount change about
+    15 s (within 0.25° after 10 s).
   - Back on the pose source, once caught up, the warp follows the pose loop
     directly again.
 
@@ -242,7 +243,7 @@ deviations, so engagement is not held back by the pose loop.
 
 The blocks are saved to `params/flow_calibration.json`:
 
-- the first estimate and every mount change are saved at once, otherwise once a
+- the first block and every mount change are saved at once, otherwise once a
   minute and at exit;
 - they are restored at start, so the flow estimate is used from the first frame.
 

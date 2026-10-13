@@ -2,7 +2,8 @@
 // 묶음 머리에서 제어에 학습값을 쓸지(자동 학습) 수동값을 쓸지(수동) 고른다. 값마다 카드 하나에 지금 제어에 쓰는 값과
 // 그 출처, 학습값, 수동값(바로 고친다)과 자동 학습 중 그 쓰임을 함께 둔다. 그 아래 카메라 보정, 최근 10분 추이, 학습
 // 입력, 고정 제원. 1초마다 /api/learners를 읽는다.
-import {clampToMeta, defaultOf, metaFor, params, saveParam, valueOf} from "./param_state.js";
+import {locale, t} from "./i18n.js";
+import {clampToMeta, defaultOf, metaFor, params, saveParam, sectionName, valueOf} from "./param_state.js";
 import {effectsDetails, formatValue, paramCard, paramEditor} from "./param_editor.js";
 import {
   actionButton, api, badges, clock, confirmAction, deg, el, infoTable, liveCard, ms, note, num, poller, section, sgn, svg,
@@ -11,15 +12,18 @@ import {
 
 const GRAVITY = 9.81;
 const steering = () => params().params.steering;
-const restored = flag => (flag ? "이번 시동에 복원" : "새로 시작");
+const restored = flag => (flag ? t("vehicle.restored") : t("vehicle.fresh"));
 const lagConfirmed = localization => Boolean(localization) && localization.state.lag_status === 1;
+// lagd 유효 블록 수: 5개부터 확정이고 50개까지 는다
+const lagBlocks = blocks => t(blocks >= 5 ? "vehicle.blocks_confirmed" : "vehicle.blocks", {blocks});
 const torqueCalculable = s => s.bucket_points.every(n => n > 0) && s.lat_accel_factor_raw !== 0;
 
 // torqued 값의 원시값(필터 전)과 허용 폭. 원시값이 폭 밖이면 주의 톤.
 function torqueDetail(s, raw, prior, width, digits) {
   const calculable = torqueCalculable(s);
   const outside = calculable && (raw < prior * (1 - width) || raw > prior * (1 + width));
-  return [`원시 ${calculable ? num(raw, digits) : "–"} · 허용 ${num(prior * (1 - width), digits)}~${num(prior * (1 + width), digits)}`,
+  return [t("vehicle.torque_detail", {raw: calculable ? num(raw, digits) : "–", low: num(prior * (1 - width), digits),
+                                       high: num(prior * (1 + width), digits)}),
           outside ? "warn" : ""];
 }
 
@@ -29,20 +33,22 @@ function torqueDetail(s, raw, prior, width, digits) {
 //   digits, signed           학습값과 지금 쓰는 값의 자릿수·부호. 학습값을 수동값으로 저장할 때도 이 자릿수
 //   using(live, manual)      자동 학습 중 실제로 쓰는 값(없으면 학습값). both면 수동값도 함께 쓰인다
 //   learnedText, manualText  값 대신 보여 줄 글씨
-//   adopt                    수동값으로 저장할 값(없으면 학습값), false면 버튼 없음. adoptLabel은 그 값의 이름
+//   adopt                    수동값으로 저장할 값(없으면 학습값), false면 버튼 없음. adoptLabel()은 그 값의 이름
+//   title()                  카드 제목(없으면 항목 이름)
 const LIVE = {
   steer_ratio: {
     digits: 2,
     learned: ({learner: s}) => s.steer_ratio,
     valid: ({learner: s}) => s.flags.steer_ratio_valid,
-    detail: ({learner: s}) => `±${num(s.steer_ratio_std, 2)} · 범위 ${num(s.prior_steer_ratio * 0.5, 1)}~${num(s.prior_steer_ratio * 2, 1)}`,
+    detail: ({learner: s}) => t("vehicle.ratio_detail", {std: num(s.steer_ratio_std, 2), low: num(s.prior_steer_ratio * 0.5, 1),
+                                                         high: num(s.prior_steer_ratio * 2, 1)}),
   },
   tire_stiffness_factor: {
     digits: 2,
     learned: ({learner: s}) => s.stiffness_factor,
     learnedText: value => `×${num(value, 3)}`,
     valid: ({learner: s}) => s.flags.stiffness_valid,
-    detail: ({learner: s}) => `배율 ±${num(s.stiffness_factor_std, 3)} · 0.2~5`,
+    detail: ({learner: s}) => t("vehicle.stiffness_detail", {std: num(s.stiffness_factor_std, 3)}),
     using: ({learner: s}, manual) => manual * s.stiffness_factor,
     both: true,
     adopt: false,
@@ -52,20 +58,22 @@ const LIVE = {
     signed: true,
     learned: ({learner: s}) => s.angle_offset_deg,
     valid: ({learner: s}) => s.flags.offset_valid,
-    detail: ({learner: s}) => `평균 ${sgn(s.angle_offset_average_deg, 2)} ±${num(deg(s.angle_offset_average_std), 2)} · `
-      + `빠른 성분 ±${num(deg(s.angle_offset_fast_std), 2)}`,
+    detail: ({learner: s}) => t("vehicle.offset_detail", {average: sgn(s.angle_offset_average_deg, 2),
+                                                          std: num(deg(s.angle_offset_average_std), 2),
+                                                          fast: num(deg(s.angle_offset_fast_std), 2)}),
     adopt: ({learner: s}) => s.angle_offset_average_deg,
-    adoptLabel: "평균",
+    adoptLabel: () => t("vehicle.adopt_average"),
   },
   live_bank_compensation: {
-    title: "도로 기울기 보정",
+    title: () => t("vehicle.bank_title"),
     digits: 2,
     signed: true,
     learned: ({learner: s}) => deg(s.roll_rad),
-    learnedText: value => `롤 ${sgn(value, 2)}°`,
+    learnedText: value => t("vehicle.roll_value", {roll: sgn(value, 2)}),
     valid: ({learner: s}) => s.flags.vehicle_valid,
-    detail: () => "학습한 도로 롤",
-    manualText: ({learner: s}, on) => (on ? `편경사 ${sgn(deg(-s.road_bank_lat_accel / GRAVITY), 2)}°` : "보정 안 함"),
+    detail: () => t("vehicle.roll_detail"),
+    manualText: ({learner: s}, on) => (on ? t("vehicle.bank_value", {bank: sgn(deg(-s.road_bank_lat_accel / GRAVITY), 2)})
+      : t("vehicle.bank_off")),
     adopt: false,
   },
   torque_lat_accel_factor: {
@@ -85,67 +93,74 @@ const LIVE = {
     signed: true,
     learned: ({learner: s}) => s.lat_accel_offset,
     valid: ({learner: s}) => s.flags.torque_valid,
-    detail: ({learner: s}) => `원시 ${torqueCalculable(s) ? sgn(s.lat_accel_offset_raw, 3) : "–"}`,
+    detail: ({learner: s}) => t("vehicle.raw_detail", {raw: torqueCalculable(s) ? sgn(s.lat_accel_offset_raw, 3) : "–"}),
   },
   steer_actuator_delay: {
     digits: 3,
     learned: ({localization}) => (lagConfirmed(localization) ? localization.state.lateral_delay_s : NaN),
-    learnedText: (value, {localization}) => (Number.isFinite(value) ? num(value, 3) : localization ? "추정 전" : "–"),
+    learnedText: (value, {localization}) => (Number.isFinite(value) ? num(value, 3) : localization ? t("vehicle.lag_pending") : "–"),
     valid: ({localization}) => lagConfirmed(localization),
-    detail: ({localization}) => (!localization ? "locationd 상태 없음"
-      : `진행 평균 ${num(localization.state.lag_estimate_s, 3)} ±${ms(localization.state.lag_estimate_std_s)} · `
-        + `블록 ${localization.state.lag_valid_blocks}/5`),
+    detail: ({localization}) => (!localization ? t("vehicle.no_locationd_state")
+      : t("vehicle.lag_detail", {estimate: num(localization.state.lag_estimate_s, 3), std: ms(localization.state.lag_estimate_std_s),
+                                 blocks: lagBlocks(localization.state.lag_valid_blocks)})),
     using: ({learner: s}, manual) => (s.plan_delay_s > 0 ? s.plan_delay_s : manual),  // 실제로 쓴 경로 지연
   },
 };
 
-const LAG_STATUS = {0: ["추정 전", "warn"], 1: ["추정됨", "good"], 2: ["무효", "bad"]};
+const LAG_STATUS = {0: ["vehicle.lag_pending", "warn"], 1: ["vehicle.lag_estimated", "good"], 2: ["vehicle.invalid", "bad"]};
 // 학습기마다: 지금 제어에 학습값을 쓰고 있는가(controlsd가 LearnerState 플래그로 알린다), 쓰기 전의 상태 이름, 상태
 // 배지, 한 줄 요약.
 const LEARNERS = {
   paramsd: {
     inUse: ({learner: s}) => s.flags.use_vehicle,
-    waiting: "학습 대기 · 수동값",
+    waiting: () => t("vehicle.waiting"),
     status: ({learner: s}) => [
-      s.flags.vehicle_valid ? ["유효", "good"] : ["무효", "bad"],
-      s.flags.vehicle_inputs_ok ? null : ["입력 끊김", "warn"],
-      s.flags.sensor_valid ? null : ["센서 불일치", "warn"],
-      s.flags.localizer_inputs ? ["입력 locationd", "muted"] : ["입력 ESP12", "muted"],
+      s.flags.vehicle_valid ? [t("vehicle.valid"), "good"] : [t("vehicle.invalid"), "bad"],
+      s.flags.vehicle_inputs_ok ? null : [t("vehicle.inputs_lost"), "warn"],
+      s.flags.sensor_valid ? null : [t("vehicle.sensor_mismatch"), "warn"],
+      [t("vehicle.input_source", {source: s.flags.localizer_inputs ? "locationd" : "ESP12"}), "muted"],
     ],
-    summary: ({learner: s}) => `자이로 바이어스 ${sgn(deg(s.yaw_bias_rad_s), 3)}°/s · 1분마다 저장 · ${restored(s.flags.vehicle_restored)}`,
+    summary: ({learner: s}) => t("vehicle.paramsd_summary", {bias: sgn(deg(s.yaw_bias_rad_s), 3),
+                                                             restored: restored(s.flags.vehicle_restored)}),
   },
   torqued: {
     inUse: ({learner: s}) => s.flags.use_torque,
-    waiting: "학습 대기 · 수동값",
+    waiting: () => t("vehicle.waiting"),
     status: ({learner: s}) => [
-      s.flags.torque_valid ? ["유효", "good"] : [`학습 중 ${s.cal_perc}%`, "warn"],
-      s.flags.torque_inputs_ok ? null : ["입력 끊김", "warn"],
+      s.flags.torque_valid ? [t("vehicle.valid"), "good"] : [t("vehicle.learning", {percent: s.cal_perc}), "warn"],
+      s.flags.torque_inputs_ok ? null : [t("vehicle.inputs_lost"), "warn"],
     ],
-    summary: ({learner: s}) => `점 ${s.total_bucket_points.toLocaleString("ko-KR")} · decay ${num(s.decay, 1)} · `
-      + `초기화 ${Math.max(0, Math.round(s.max_resets) - 1)}회 · 12초마다 저장 · ${restored(s.flags.torque_restored)}`,
+    summary: ({learner: s}) => t("vehicle.torqued_summary", {
+      points: s.total_bucket_points.toLocaleString(locale), decay: num(s.decay, 1),
+      count: Math.max(0, Math.round(s.max_resets) - 1),
+      restored: s.flags.torque_partly_restored ? t("vehicle.partly_restored") : restored(s.flags.torque_restored),
+    }),
   },
   lagd: {
     inUse: ({learner: s}) => s.flags.use_delay,
-    waiting: "확정 전 · 수동값",
+    waiting: () => t("vehicle.lag_waiting"),
     status: ({localization}) => {
-      if (!localization) return [["locationd 없음", "bad"]];
+      if (!localization) return [[t("vehicle.no_locationd"), "bad"]];
       const s = localization.state, f = s.flags, inputs = s.input_flags;
+      const lag = LAG_STATUS[s.lag_status];
       return [
-        LAG_STATUS[s.lag_status] || [String(s.lag_status), "muted"],
-        [`블록 ${s.lag_valid_blocks}/5`, s.lag_valid_blocks >= 5 ? "accent" : "muted"],
-        f.filter_valid && f.inputs_ok && f.sensors_ok && f.posenet_ok ? ["자세 정상", "good"] : ["자세 무효", "bad"],
-        inputs.accel_invalid ? ["가속도 거부", "warn"] : null,
-        inputs.gyro_invalid ? ["자이로 거부", "warn"] : null,
-        inputs.camera_invalid ? ["카메라 거부", "warn"] : null,
-        inputs.camera_guarded ? ["카메라≠차속", "muted"] : null,
-        localization.age_s > 2 ? [`${Math.round(localization.age_s)}초 전`, "bad"] : null,
+        lag ? [t(lag[0]), lag[1]] : [String(s.lag_status), "muted"],
+        [lagBlocks(s.lag_valid_blocks), s.lag_valid_blocks >= 5 ? "accent" : "muted"],
+        f.filter_valid && f.inputs_ok && f.sensors_ok && f.posenet_ok ? [t("vehicle.pose_ok"), "good"] : [t("vehicle.pose_invalid"), "bad"],
+        inputs.accel_invalid ? [t("vehicle.accel_rejected"), "warn"] : null,
+        inputs.gyro_invalid ? [t("vehicle.gyro_rejected"), "warn"] : null,
+        inputs.camera_invalid ? [t("vehicle.camera_rejected"), "warn"] : null,
+        inputs.camera_guarded ? [t("vehicle.camera_guarded"), "muted"] : null,
+        localization.age_s > 2 ? [t("vehicle.ago", {seconds: Math.round(localization.age_s)}), "bad"] : null,
       ];
     },
     summary: ({localization}) => {
-      if (!localization) return "locationd가 발행하지 않습니다(IMU·locationd 확인).";
+      if (!localization) return t("vehicle.locationd_silent");
       const s = localization.state;
-      return `요레이트 ${sgn(deg(s.angular_velocity_calib[2]), 2)}°/s · 도로 롤 ${sgn(deg(s.orientation_calib[0]), 2)}° · `
-        + `피치 ${sgn(deg(s.orientation_calib[1]), 2)}° · 창 안 점 ${s.lag_points} · 1분마다 저장 · ${restored(s.flags.lag_restored)}`;
+      return t("vehicle.lagd_summary", {
+        yaw_rate: sgn(deg(s.angular_velocity_calib[2]), 2), roll: sgn(deg(s.orientation_calib[0]), 2),
+        pitch: sgn(deg(s.orientation_calib[1]), 2), points: s.lag_points, restored: restored(s.flags.lag_restored),
+      });
     },
   },
 };
@@ -153,9 +168,9 @@ const LEARNERS = {
 // ------------------------------------------------------------ 학습기 묶음
 // 묶음 머리의 출처 선택: 자동 학습(학습 스위치 켬) | 수동(끔). 고르면 곧바로 저장하고 onChange를 부른다.
 function sourceControl(switchKey, label, onChange) {
-  const auto = el("button", {type: "button", text: "자동 학습"});
-  const manual = el("button", {type: "button", text: "수동"});
-  const element = el("div.segmented", {role: "group", "aria-label": `${label} 값 출처`}, auto, manual);
+  const auto = el("button", {type: "button", text: t("vehicle.auto")});
+  const manual = el("button", {type: "button", text: t("vehicle.manual")});
+  const element = el("div.segmented", {role: "group", "aria-label": t("vehicle.source_of", {label})}, auto, manual);
   const sync = () => {
     const on = steering()[switchKey] === true;
     auto.setAttribute("aria-pressed", String(on));
@@ -166,7 +181,7 @@ function sourceControl(switchKey, label, onChange) {
     auto.disabled = manual.disabled = true;
     try {
       await saveParam("steering", switchKey, on);
-      toast(`${label}: ${on ? "자동 학습" : "수동"} · ${clock()}`);
+      toast(`${label}: ${on ? t("vehicle.auto") : t("vehicle.manual")} · ${clock()}`);
     } catch (error) {
       toast(`${label}: ${error.message}`, {failed: true});
     } finally {
@@ -193,14 +208,14 @@ function quantityCard(key, switchKey, learner) {
   const now = el("span.quantity-now");
   const learnedValue = el("span.quantity-value");
   const learnedDetail = el("span.quantity-detail");
-  const learnedRow = el("div.quantity-row", {}, el("span.quantity-label", {text: "학습값"}), learnedValue, learnedDetail);
+  const learnedRow = el("div.quantity-row", {}, el("span.quantity-label", {text: t("vehicle.learned")}), learnedValue, learnedDetail);
   const fallback = defaultOf("steering", key);
   const manualRow = el("div.quantity-row.manual",
     {},
-    el("span.quantity-label", {text: "수동값"}),
+    el("span.quantity-label", {text: t("vehicle.manual_value")}),
     el("span.quantity-foot",
       {},
-      fallback === undefined ? null : el("span", {text: `기본 ${formatValue(fallback, meta)}`}),
+      fallback === undefined ? null : el("span", {text: t("params.default", {value: formatValue(fallback, meta)})}),
       editor.modifiedBadge, editor.resetButton, editor.status),
     editor.control.element);
   const role = el("p.card-note.prior");
@@ -210,7 +225,7 @@ function quantityCard(key, switchKey, learner) {
   // 수동값을 쓰는 중일 때의 큰 글씨: manualText가 있으면 그것, 켜고 끄는 값이면 켜짐·꺼짐, 숫자면 단위와 함께
   const showManual = manual => {
     if (spec.manualText && live) showNow(spec.manualText(live, manual));
-    else if (typeof manual === "boolean") showNow(manual ? "켜짐" : "꺼짐");
+    else if (typeof manual === "boolean") showNow(manual ? t("common.on") : t("common.off"));
     else showNow(String(manual), meta.unit);
   };
 
@@ -220,9 +235,9 @@ function quantityCard(key, switchKey, learner) {
     const target = live ? clampToMeta(adoptValue(), meta, spec.digits) : NaN;
     const same = Number(current) === Number(target);
     adopt.replaceChildren(
-      el("span", {text: `⤓ 학습값${spec.adoptLabel ? `(${spec.adoptLabel})` : ""}을 수동값으로`}),
-      el("small", {text: !live || !valid || !Number.isFinite(target) ? "학습값이 유효해지면 쓸 수 있습니다"
-        : same ? "수동값과 같습니다" : `${current} → ${target}`}));
+      el("span", {text: spec.adoptLabel ? t("vehicle.adopt_named", {name: spec.adoptLabel()}) : t("vehicle.adopt")}),
+      el("small", {text: !live || !valid || !Number.isFinite(target) ? t("vehicle.adopt_when_valid")
+        : same ? t("vehicle.adopt_same") : `${current} → ${target}`}));
     adopt.disabled = !live || !valid || same || !Number.isFinite(target);
   };
 
@@ -232,7 +247,7 @@ function quantityCard(key, switchKey, learner) {
     const target = clampToMeta(adoptValue(), meta, spec.digits);
     const auto = steering()[switchKey] === true;
     if (!confirmAction([`${meta.label} (${key})`, `${current} → ${target}`, "",
-                        auto ? `자동 학습 중에는 ${meta.learned_role}` : "수동이라 지금 바로 제어에 반영됩니다.",
+                        auto ? t("vehicle.role", {role: meta.learned_role}) : t("vehicle.adopt_manual_now"),
                         meta.caution || null])) return;
     await editor.save(target);
   };
@@ -240,16 +255,16 @@ function quantityCard(key, switchKey, learner) {
   function render() {
     const auto = steering()[switchKey] === true;
     const manual = valueOf("steering", key);
-    role.textContent = auto && meta.learned_role ? `자동 학습 중에는 ${meta.learned_role}` : "";
+    role.textContent = auto && meta.learned_role ? t("vehicle.role", {role: meta.learned_role}) : "";
     role.hidden = !role.textContent;
     if (!live) {
       source.className = "badge muted";
-      source.textContent = auto ? "상태 없음" : "수동값";
+      source.textContent = auto ? t("vehicle.no_state") : t("vehicle.manual_value");
       if (auto) showNow("–");
       else showManual(manual);
       learnedValue.textContent = "–";
       learnedValue.className = "quantity-value";
-      learnedDetail.textContent = "controlsd 상태 없음";
+      learnedDetail.textContent = t("vehicle.no_controlsd_state");
       learnedRow.classList.remove("in-use");
       manualRow.classList.toggle("in-use", !auto);
       updateAdopt(false);
@@ -269,11 +284,11 @@ function quantityCard(key, switchKey, learner) {
       if (spec.learnedText && !spec.using) showNow(spec.learnedText(value, live));
       else showNow(format(value), meta.unit);
       source.className = "badge good";
-      source.textContent = spec.both ? "수동값 × 학습 배율" : "학습값";
+      source.textContent = spec.both ? t("vehicle.manual_times_learned") : t("vehicle.learned");
     } else {
       showManual(manual);
       source.className = `badge ${auto ? "warn" : "muted"}`;
-      source.textContent = auto ? learner.waiting : "수동값";
+      source.textContent = auto ? learner.waiting() : t("vehicle.manual_value");
     }
     learnedRow.classList.toggle("in-use", inUse);
     manualRow.classList.toggle("in-use", !inUse || Boolean(spec.both));
@@ -281,15 +296,15 @@ function quantityCard(key, switchKey, learner) {
   }
 
   card.append(...[
-    el("header.card-head", {}, el("h3.card-title", {text: spec.title || meta.label}), source),
-    el("div.quantity-now-row", {}, now, el("span.quantity-caption", {text: "지금 쓰는 값"})),
+    el("header.card-head", {}, el("h3.card-title", {text: spec.title ? spec.title() : meta.label}), source),
+    el("div.quantity-now-row", {}, now, el("span.quantity-caption", {text: t("vehicle.now")})),
     learnedRow,
     manualRow,
     role,
     meta.caution ? note(meta.caution, "warn") : null,
     adopt,
     effectsDetails(meta, typeof valueOf("steering", key) === "boolean",
-                   {summary: "설명", lead: el("p.param-description", {text: meta.description})}),
+                   {summary: t("vehicle.description"), lead: el("p.param-description", {text: meta.description})}),
   ].filter(Boolean));
   render();
   return {
@@ -306,7 +321,8 @@ function quantityCard(key, switchKey, learner) {
 }
 
 // 학습기 묶음 하나: 이름·학습기·설명, 출처 선택, 상태 배지, 값 카드들, 한 줄 요약.
-function learnerGroup(name, spec, keys) {
+function learnerGroup(id, spec, keys) {
+  const name = sectionName(id);
   const learner = LEARNERS[spec.learner];
   const cards = keys.map(key => quantityCard(key, spec.switch, learner));
   const statusRow = el("div.badge-row");
@@ -316,12 +332,12 @@ function learnerGroup(name, spec, keys) {
     live = next;
     const auto = steering()[spec.switch] === true;
     statusRow.replaceChildren(...badges([
-      !live ? ["상태 없음", "muted"]
-        : !auto ? ["제어에 수동값", "muted"]
-        : learner.inUse(live) ? ["제어에 학습값", "accent"] : [learner.waiting, "warn"],
+      !live ? [t("vehicle.no_state"), "muted"]
+        : !auto ? [t("vehicle.using_manual"), "muted"]
+        : learner.inUse(live) ? [t("vehicle.using_learned"), "accent"] : [learner.waiting(), "warn"],
       ...(live ? learner.status(live) : []),
     ]));
-    summary.textContent = live ? learner.summary(live) : "controlsd가 학습 상태를 내지 않습니다.";
+    summary.textContent = live ? learner.summary(live) : t("vehicle.no_learner_state");
     cards.forEach(card => card.update(live));
   };
   const source = sourceControl(spec.switch, name, () => update(live));
@@ -348,11 +364,15 @@ function learnerGroup(name, spec, keys) {
 }
 
 // ------------------------------------------------------------ 카메라 보정
+// 보정 상태마다 [배지 문구 키, 톤]. 포즈 보정기의 상태는 표에 calibration.pose.<상태>로 쓴다.
 const CALIBRATION_STATUS = {
-  calibrated: ["보정 완료", "good"], uncalibrated: ["수렴 중", "warn"], invalid: ["범위 밖", "bad"],
-  recalibrating: ["장착 변경 · 재보정 중", "warn"],
+  calibrated: ["calibration.status.calibrated", "good"], uncalibrated: ["calibration.status.uncalibrated", "warn"],
+  invalid: ["calibration.status.invalid", "bad"], recalibrating: ["calibration.status.recalibrating", "warn"],
 };
-const POSE_STATUS_TEXT = {calibrated: "보정 완료", uncalibrated: "수렴 중", invalid: "범위 밖", recalibrating: "재보정 중"};
+const statusBadge = status => (CALIBRATION_STATUS[status] ? [t(CALIBRATION_STATUS[status][0]), CALIBRATION_STATUS[status][1]]
+  : [status, "muted"]);
+const poseStatus = status => (status in CALIBRATION_STATUS ? t(`calibration.pose.${status}`) : status);
+const sourceText = source => (source === "flow" ? t("calibration.flow") : t("calibration.pose_source"));
 
 // 워프 보정(modeld calibration)과 그 출처. 출처 버튼은 display.json의 calibration_use_flow를 바꾼다(결합 중에는 서버가
 // 막고 modeld도 해제를 기다린다). 표는 워프에 쓴 값, 광류 추정, 모델 포즈 보정기 자신의 추정과 둘의 차이(모델 pose의
@@ -361,10 +381,10 @@ function calibrationCard() {
   let latest = null;
   let saving = false;
   const button = actionButton({icon: "↺", danger: true, onclick: () => reset()});
-  const flowButton = el("button", {type: "button", text: "광류 (없으면 포즈)"});
-  const poseButton = el("button", {type: "button", text: "모델 포즈만"});
-  const sourceControl = el("div.segmented", {role: "group", "aria-label": "워프 보정 출처"}, flowButton, poseButton);
-  const card = liveCard("카메라 캘리브레이션", {control: sourceControl, actions: [button]});
+  const flowButton = el("button", {type: "button", text: t("calibration.use_flow")});
+  const poseButton = el("button", {type: "button", text: t("calibration.use_pose")});
+  const sourceControl = el("div.segmented", {role: "group", "aria-label": t("calibration.source")}, flowButton, poseButton);
+  const card = liveCard(t("calibration.card"), {control: sourceControl, actions: [button]});
 
   const choose = async useFlow => {
     const c = latest;
@@ -373,9 +393,9 @@ function calibrationCard() {
     update(c);
     try {
       latest = await api.post("/api/calibration/source", {use_flow: useFlow});
-      toast(`보정 출처: ${useFlow ? "광류(없으면 포즈)" : "모델 포즈만"} · ${clock()}`);
+      toast(`${t("calibration.source")}: ${useFlow ? t("calibration.use_flow") : t("calibration.use_pose")} · ${clock()}`);
     } catch (error) {
-      toast(`보정 출처: ${error.message}`, {failed: true});
+      toast(`${t("calibration.source")}: ${error.message}`, {failed: true});
     } finally {
       saving = false;
       update(latest);
@@ -386,16 +406,17 @@ function calibrationCard() {
 
   const reset = async () => {
     const c = latest;
-    if (!confirmAction(["카메라 캘리브레이션을 초기화할까요?",
-                        c && c.available ? `현재 pitch ${sgn(c.rpy_deg[1], 2)}° · yaw ${sgn(c.rpy_deg[2], 2)}° (${c.source === "flow" ? "광류" : "모델 포즈"})` : "현재 상태 없음",
-                        "", "저장된 값(calibration.json, flow_calibration.json)을 지우고 포즈 보정은 0°에서, 광류는 처음부터 다시 모읍니다.",
-                        "수렴할 때까지(직진 약 30초) 조향이 부정확할 수 있습니다. 학습값은 그대로 둡니다."])) return;
+    if (!confirmAction([t("calibration.confirm"),
+                        c && c.available
+                          ? t("calibration.confirm_now", {pitch: sgn(c.rpy_deg[1], 2), yaw: sgn(c.rpy_deg[2], 2), source: sourceText(c.source)})
+                          : t("calibration.confirm_no_state"),
+                        "", t("calibration.confirm_effect"), t("calibration.confirm_after")])) return;
     button.disabled = true;
     try {
       update(await api.post("/api/calibration/reset"));
-      toast("캘리브레이션 초기화를 요청했습니다");
+      toast(t("calibration.reset_requested"));
     } catch (error) {
-      toast(`초기화 실패: ${error.message}`, {failed: true});
+      toast(t("calibration.reset_failed", {error: error.message}), {failed: true});
       button.disabled = false;
     }
   };
@@ -406,9 +427,9 @@ function calibrationCard() {
     flowButton.setAttribute("aria-pressed", String(Boolean(c && c.available && c.use_flow)));
     poseButton.setAttribute("aria-pressed", String(Boolean(c && c.available && !c.use_flow)));
     flowButton.disabled = poseButton.disabled = saving || blocked || !(c && c.available);
-    sourceControl.title = blocked ? "결합 중에는 바꿀 수 없습니다" : "";
+    sourceControl.title = blocked ? t("calibration.blocked_source") : "";
     if (!c || !c.available) {
-      card.update([["상태 없음", "muted"]], [note("modeld가 보정 상태를 발행하지 않습니다.")]);
+      card.update([[t("vehicle.no_state"), "muted"]], [note(t("calibration.no_state"))]);
     } else {
       const [r, p, y] = c.rpy_deg;
       const flow = c.flow || {status: "off", sd_deg: [0, 0], window: {}};
@@ -417,47 +438,46 @@ function calibrationCard() {
       const estimate = flow.status === "estimate";
       const dp = pose.rpy_deg[1] - flow.pitch_deg, dy = pose.rpy_deg[2] - flow.yaw_deg;
       const w = flow.window;
-      card.update([CALIBRATION_STATUS[c.status] || [c.status, "muted"],
-                   c.source === "flow" ? ["광류 적용 중", "accent"] : ["모델 포즈 적용", "muted"],
-                   c.switch_pending ? ["해제하면 바꿈", "warn"] : null,
-                   c.ramping ? ["워프 옮기는 중", "accent"] : null,
-                   flow.status === "collecting" ? [`광류 ${flow.estimate_blocks}/3블록`, "warn"]
-                     : estimate ? [`광류 블록 ${flow.estimate_blocks}/30`, "muted"] : null,
-                   c.age_s > 2 ? [`${Math.round(c.age_s)}초 전`, "bad"] : null], [
+      card.update([statusBadge(c.status),
+                   c.source === "flow" ? [t("calibration.flow_applied"), "accent"] : [t("calibration.pose_applied"), "muted"],
+                   c.switch_pending ? [t("calibration.switch_pending"), "warn"] : null,
+                   c.ramping ? [t("calibration.ramping"), "accent"] : null,
+                   flow.status === "collecting" ? [t("calibration.flow_collecting", {blocks: flow.estimate_blocks}), "warn"]
+                     : estimate ? [t("calibration.flow_blocks", {blocks: flow.estimate_blocks}), "muted"] : null,
+                   c.age_s > 2 ? [t("vehicle.ago", {seconds: Math.round(c.age_s)}), "bad"] : null], [
         infoTable(["", "pitch (°)", "yaw (°)", ""], [
-          ["워프에 적용", sgn(p, 2), sgn(y, 2), `roll ${sgn(r, 2)}° · ${c.source === "flow" ? "광류" : "모델 포즈"}`],
-          ["광류 추정", hasFlow ? sgn(flow.pitch_deg, 2) : "—", hasFlow ? sgn(flow.yaw_deg, 2) : "—",
-           hasFlow ? `${flow.estimate_blocks}/30블록 · 표준편차 ${num(flow.sd_deg[0], 2)}/${num(flow.sd_deg[1], 2)}°`
-                   : flow.status === "off" ? "꺼짐" : "모으는 중"],
-          ["모델 포즈 (참고)", sgn(pose.rpy_deg[1], 2), sgn(pose.rpy_deg[2], 2),
-           `${pose.valid_blocks}/50블록 · ${c.source === "flow" || c.ramping ? "멈춤" : POSE_STATUS_TEXT[pose.status] || pose.status}`],
-          ["포즈 − 광류", estimate ? sgn(dp, 2) : "—", estimate ? [sgn(dy, 2), Math.abs(dy) > 0.2 ? "warn" : ""] : "—", "모델 pose의 치우침"],
+          [t("calibration.row_warp"), sgn(p, 2), sgn(y, 2), t("calibration.row_warp_note", {roll: sgn(r, 2), source: sourceText(c.source)})],
+          [t("calibration.row_flow"), hasFlow ? sgn(flow.pitch_deg, 2) : "—", hasFlow ? sgn(flow.yaw_deg, 2) : "—",
+           hasFlow ? t("calibration.row_flow_note", {blocks: flow.estimate_blocks, pitch_sd: num(flow.sd_deg[0], 2), yaw_sd: num(flow.sd_deg[1], 2)})
+                   : flow.status === "off" ? t("calibration.flow_off") : t("calibration.collecting")],
+          [t("calibration.row_pose"), sgn(pose.rpy_deg[1], 2), sgn(pose.rpy_deg[2], 2),
+           t("calibration.row_pose_note", {blocks: pose.valid_blocks,
+                                           status: c.source === "flow" || c.ramping ? t("calibration.paused") : poseStatus(pose.status)})],
+          [t("calibration.row_bias"), estimate ? sgn(dp, 2) : "—", estimate ? [sgn(dy, 2), Math.abs(dy) > 0.2 ? "warn" : ""] : "—",
+           t("calibration.row_bias_note")],
         ]),
-        c.use_flow && !c.flow_usable
-          ? note("광류 추정이 아직 쓸 만하지 않아 모델 포즈를 씁니다(시속 40 km 이상 직진 약 25초면 3블록이 모입니다).", "warn") : null,
+        c.use_flow && !c.flow_usable ? note(t("calibration.flow_not_usable"), "warn") : null,
         flow.windows > 0
-          ? note(`광류 창 ${flow.windows}개(버린 창 ${flow.rejected_windows}) · 마지막 창: 점 ${w.tracks} · inlier ${w.inliers} · `
-                 + `회전 ${num(w.rotation_deg, 3)}° · 시차 ${num(w.parallax_px, 1)} px · 장착 변경 ${flow.mount_changes}회`) : null,
-        note("광류: 시속 40 km 이상 직진에서 0.4초 창 20개가 한 블록(약 8초), 3블록이면 추정이 생기고 최근 30블록을 평균합니다. "
-             + "최근 3블록이 1° 넘게 같은 쪽으로 바뀌면 장착 변경으로 보고 다시 모읍니다. 모델 포즈: 시속 24 km 이상 직진 "
-             + "100프레임이 한 블록, 5블록이면 보정 완료입니다. 모델 포즈 보정은 자기 값으로 워프한 영상을 봐야 맞으므로 광류가 "
-             + "워프를 맡는 동안(옮기는 중 포함) 멈추고 마지막 값을 둡니다. 출처는 결합 중에는 바꿀 수 없고, 바꾸면 워프를 몇 초에 "
-             + "걸쳐 옮깁니다."),
+          ? note(t("calibration.windows", {windows: flow.windows, rejected: flow.rejected_windows, tracks: w.tracks, inliers: w.inliers,
+                                           rotation: num(w.rotation_deg, 3), parallax: num(w.parallax_px, 1),
+                                           changes: flow.mount_changes})) : null,
+        note(t("calibration.how")),
       ]);
     }
-    button.setContent(c && c.reset_pending ? "초기화 요청됨 · modeld 대기 중" : "캘리브레이션 초기화",
-                      blocked ? "결합 중에는 초기화할 수 없습니다" : "두 보정을 지우고 처음부터 다시 모읍니다");
+    button.setContent(c && c.reset_pending ? t("calibration.reset_pending") : t("calibration.reset"),
+                      blocked ? t("calibration.blocked_reset") : t("calibration.reset_note"));
     button.disabled = blocked;
   };
   return {element: card.element, update};
 }
 
 // ------------------------------------------------------------ 추이
+// title은 문구 키
 const TREND_CHARTS = [
-  {title: "조향비", series: [[1, "main"]], ref: m => [m.steer_ratio], span: 0.2, digits: 2},
-  {title: "조향각 영점 (°) · 평균 / 합계", series: [[2, "main"], [3, "thin"]], ref: m => [m.angle_offset_deg], span: 0.2, digits: 2},
-  {title: "도로 롤 (°) · 학습 / 편경사 환산", series: [[4, "main"], [5, "dash"]], ref: () => [], span: 0.5, digits: 2},
-  {title: "토크 배율 · 필터 / 원시", series: [[7, "main"], [6, "raw"]],
+  {title: "vehicle.trend_ratio", series: [[1, "main"]], ref: m => [m.steer_ratio], span: 0.2, digits: 2},
+  {title: "vehicle.trend_offset", series: [[2, "main"], [3, "thin"]], ref: m => [m.angle_offset_deg], span: 0.2, digits: 2},
+  {title: "vehicle.trend_roll", series: [[4, "main"], [5, "dash"]], ref: () => [], span: 0.5, digits: 2},
+  {title: "vehicle.trend_torque", series: [[7, "main"], [6, "raw"]],
    ref: (m, s) => [s.prior_lat_accel_factor, s.prior_lat_accel_factor * 0.7, s.prior_lat_accel_factor * 1.3], span: 0.2, digits: 2},
 ];
 
@@ -480,7 +500,8 @@ function trendChart(chart, rows, windowS, manual, state) {
   const W = 300, H = 90;
   const x = t => ((t - (end - windowS)) / windowS) * W;
   const y = v => H - ((v - lo) / (hi - lo)) * H;
-  const plot = svg("svg", {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": chart.title});
+  const title = t(chart.title);
+  const plot = svg("svg", {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": title});
   refs.forEach((value, i) => plot.append(svg("line", {
     x1: 0, x2: W, y1: y(value), y2: y(value), stroke: i === 0 ? "#8a949b" : "#5b646b", "stroke-dasharray": i === 0 ? "5 4" : "2 4",
     "vector-effect": "non-scaling-stroke",
@@ -497,11 +518,11 @@ function trendChart(chart, rows, windowS, manual, state) {
   const last = shown.length ? shown[shown.length - 1] : null;
   return el("article.card.trend",
     {},
-    el("div.trend-head", {}, el("span", {text: chart.title}),
+    el("div.trend-head", {}, el("span", {text: title}),
        el("span.trend-now", {text: last ? chart.series.map(([index, style]) => (valid(last, index, style) ? num(last[index], chart.digits) : "–")).join(" / ") : "–"})),
     plot,
     el("div.trend-range", {}, el("span", {text: `${num(lo, chart.digits)} ~ ${num(hi, chart.digits)}`}),
-       el("span", {text: refs.length ? `점선 ${num(refs[0], chart.digits)}` : "최근 10분"})));
+       el("span", {text: refs.length ? t("vehicle.trend_dashed", {value: num(refs[0], chart.digits)}) : t("vehicle.trend_window")})));
 }
 
 // ------------------------------------------------------------ 탭
@@ -511,11 +532,11 @@ export function createVehicleView() {
     const meta = metaFor("steering", key);
     return meta.tab === "vehicle" && meta.section === name;
   });
-  const groups = tab.sections.filter(name => tab.learners[name]).map(name => {
-    const spec = tab.learners[name];
-    return learnerGroup(name, spec, keysOf(name).filter(key => key !== spec.switch));
+  const groups = tab.sections.filter(id => tab.learners[id]).map(id => {
+    const spec = tab.learners[id];
+    return learnerGroup(id, spec, keysOf(id).filter(key => key !== spec.switch));
   });
-  const plain = tab.sections.filter(name => !tab.learners[name]).map(name => ({name, cards: keysOf(name).map(key => paramCard("steering", key))}));
+  const plain = tab.sections.filter(id => !tab.learners[id]).map(id => ({id, cards: keysOf(id).map(key => paramCard("steering", key))}));
   const calibration = calibrationCard();
   const notice = el("div");
   const trends = el("div.card-grid");
@@ -526,12 +547,12 @@ export function createVehicleView() {
   const update = data => {
     calibration.update(data.calibration);
     if (!data.available) {
-      notice.replaceChildren(el("p.group-note.warn", {text: "학습 상태가 없습니다. controlsd가 실행 중인지 확인하세요."}));
+      notice.replaceChildren(el("p.group-note.warn", {text: t("vehicle.no_learners")}));
       groups.forEach(group => group.update(null));
       return;
     }
     notice.replaceChildren(data.age_s > 2
-      ? el("p.group-note.warn", {text: `학습 상태가 ${Math.round(data.age_s)}초째 갱신되지 않습니다. controlsd를 확인하세요.`}) : "");
+      ? el("p.group-note.warn", {text: t("vehicle.learners_stale", {seconds: Math.round(data.age_s)})}) : "");
     const live = {learner: data.state, localization: data.localization && data.localization.available ? data.localization : null};
     groups.forEach(group => group.update(live));
     const row = data.trend_row;
@@ -554,7 +575,7 @@ export function createVehicleView() {
       const data = await api.get("/api/learners");
       if (isCurrent()) update(data);
     } catch (error) {
-      if (isCurrent()) notice.replaceChildren(el("p.group-note.warn", {text: `학습 상태 읽기 실패: ${error.message}`}));
+      if (isCurrent()) notice.replaceChildren(el("p.group-note.warn", {text: t("vehicle.learners_failed", {error: error.message})}));
     }
   }, 1000);
 
@@ -564,10 +585,10 @@ export function createVehicleView() {
       el("p.group-note", {text: tab.note}),
       notice,
       groups.map(group => group.element),
-      section("카메라 보정", [calibration.element]),
-      el("section.section", {}, el("h2.section-title", {text: "최근 10분 추이"}), trends),
-      plain.map(({name, cards}) => section(name, cards, {count: cards.length})),
-      el("p.file-path", {text: `파일: ${params().paths.steering}`})),
+      section(t("calibration.section"), [calibration.element]),
+      el("section.section", {}, el("h2.section-title", {text: t("vehicle.trends")}), trends),
+      plain.map(({id, cards}) => section(sectionName(id), cards, {count: cards.length})),
+      el("p.file-path", {text: t("params.file", {path: params().paths.steering})})),
     start() {
       // 가려져 있던 동안의 추이는 서버에서 다시 받는다
       trendLoaded = false;

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -13,16 +13,18 @@
   <script type="module" src="/static/console.js"></script>
 </head>
 <body>
+  <!-- 글자는 console.js가 고른 언어의 문구(data-i18n*의 키)로 바꾼다 -->
   <header class="app-header">
-    <div class="brand"><h1>edgepilot</h1><span>웹 콘솔</span></div>
+    <div class="brand"><h1>edgepilot</h1><span data-i18n="app.subtitle">web console</span></div>
     <details class="runtime" id="runtime" data-state="unknown">
-      <summary title="런타임 상태"><span class="dot"></span><span class="runtime-text">연결 확인 중</span></summary>
+      <summary data-i18n-title="app.runtime"><span class="dot"></span><span class="runtime-text" data-i18n="app.connecting">Connecting</span></summary>
       <div class="runtime-panel" id="runtime-panel"></div>
     </details>
-    <button id="reload" class="icon-button" type="button" title="다시 불러오기" aria-label="다시 불러오기">↻</button>
+    <button id="language" class="icon-button language-button" type="button"></button>
+    <button id="reload" class="icon-button" type="button" data-i18n-title="app.reload" data-i18n-aria-label="app.reload">↻</button>
   </header>
-  <nav class="tabs" id="tabs" aria-label="탭"></nav>
-  <main id="main"><div class="empty">불러오는 중</div></main>
+  <nav class="tabs" id="tabs" data-i18n-aria-label="app.tabs"></nav>
+  <main id="main"><div class="empty" data-i18n="app.loading">Loading</div></main>
   <div class="toasts" id="toasts" aria-live="polite"></div>
 </body>
 </html>

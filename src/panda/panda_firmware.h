@@ -30,7 +30,11 @@ const char *panda_hw_type_name(uint8_t hw_type);
 // 돌아가고 조향 제어가 끊기므로 주차 중에만 쓴다: 제어 상태가 1초 안에 나왔고, 차 상태가 살아
 // 있고, 조향·결합이 꺼져 있고, P단에 서 있어야 한다. 아니면 reason에 이유 코드를 둔다
 // (control_stale, vehicle_stale, engaged, not_park, moving).
-bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, std::string *reason);
+// 판다가 bootstub에 머물러 있으면(panda_in_bootstub) 차 상태는 보지 않는다: 그 판다는 CAN을 넘기지 않아
+// 차 상태를 알 수 없고(늘 vehicle_stale), 하네스는 이미 순정 카메라 배선이며 조향 제어도 없다. 상류
+// pandad도 bootstub 판다는 차 상태와 무관하게 다시 쓴다. 그래도 제어 상태가 살아 있고 결합 중이라고 하면
+// 막는다.
+bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, bool panda_in_bootstub, std::string *reason);
 
 enum class PandaFlashState { Idle, Flashing, Done, Failed };
 

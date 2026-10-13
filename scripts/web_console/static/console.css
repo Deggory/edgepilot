@@ -91,6 +91,7 @@ code { font-family: var(--mono); }
   background: var(--btn-bg); font-size: 21px; line-height: 1; cursor: pointer;
 }
 .icon-button:hover { background: var(--btn-bg-hover); }
+.language-button { font-size: 13px; font-weight: 650; letter-spacing: 0.02em; color: var(--text-soft); }
 .tabs {
   position: sticky; top: var(--header-h); z-index: 19;
   display: flex; gap: 2px; height: var(--tabs-h); overflow-x: auto; scrollbar-width: none;

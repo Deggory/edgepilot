@@ -22,6 +22,7 @@ import {CSS2DRenderer, CSS2DObject} from "./three/CSS2DRenderer.js";
 import {carModel, fit, wheel} from "./bev_car.js";
 import {BevStream, LEAD_HISTORY_S} from "./bev_data.js";
 import {EGO_SIZE, makeEgo} from "./bev_ego.js";
+import {t} from "./i18n.js";
 
 // 바닥: 5 m와 20 m 격자선, 앞으로 GRID.ahead, 양옆으로 GRID.side.
 const GRID = {ahead: 160, behind: 8, side: 25, major: 20};
@@ -69,12 +70,11 @@ const THEME = {
 const HUD = {white: "#ffffff", green: "#30d158", blue: "#409cff", gray: "#969ca5", amber: "#ffb020", red: "#ff453a",
              cyan: "#5ac8fa"};
 
-// 도구 막대의 레이어 버튼과, 버튼마다 보이거나 숨기는 그룹.
-const LAYERS = {path: "경로", lanes: "차선", rawLanes: "원시 차선", edges: "도로 경계", lead: "앞차", curvature: "곡률",
-                labels: "라벨"};
+// 도구 막대의 레이어 버튼(이름은 bev.layer.<이름> 문구)과, 버튼마다 보이거나 숨기는 그룹.
+const LAYERS = ["path", "lanes", "rawLanes", "edges", "lead", "curvature", "labels"];
 const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], rawLanes: ["rawLanes"], edges: ["edges"], lead: ["lead"],
                       curvature: ["curvature"], labels: ["lead_labels", "path_labels"]};
-const VIEWS = {behind: "뒤에서", top: "위에서"};
+const VIEWS = ["behind", "top"];   // 시점 버튼, bev.view.<이름> 문구
 
 // -- 색 --------------------------------------------------------------------------------------------
 const BLACK = new THREE.Color(0, 0, 0);
@@ -459,8 +459,7 @@ export class BevView {
     for (const name of ["mode", "speed", "plan", "lane", "lat", "lead", "model"]) this.chips[name] = this.hud.appendChild(el("span"));
     // 화면 위의 도구 막대, 옆 열의 카드
     this.tools(container.appendChild(el("div", "bev-tools")));
-    this.sideEmpty = side.appendChild(el("div", "bev-side-empty",
-      "앞차가 보이면 거리와 상대 속도를, 정차해 있으면 출발 알림의 판단 근거를 여기 보여 줍니다."));
+    this.sideEmpty = side.appendChild(el("div", "bev-side-empty", t("bev.side_empty")));
     this.leadCard(side);
     this.departureCard(side);
 
@@ -495,13 +494,13 @@ export class BevView {
   // 왼쪽에 시점 버튼, 오른쪽에 레이어 버튼.
   tools(bar) {
     const views = bar.appendChild(el("div")), layers = bar.appendChild(el("div"));
-    for (const [name, title] of Object.entries(VIEWS)) {
-      const button = views.appendChild(el("button", "", title));
+    for (const name of VIEWS) {
+      const button = views.appendChild(el("button", "", t(`bev.view.${name}`)));
       button.type = "button";
       button.addEventListener("click", () => this.view(name));
     }
-    for (const [name, title] of Object.entries(LAYERS)) {
-      const button = layers.appendChild(el("button", "", title));
+    for (const name of LAYERS) {
+      const button = layers.appendChild(el("button", "", t(`bev.layer.${name}`)));
       button.type = "button";
       button.setAttribute("aria-pressed", "true");
       button.addEventListener("click", () => {
@@ -845,7 +844,7 @@ export class BevView {
       ? `<b>LAT</b><i style="background:${HUD.white}"></i>${Math.abs(curvature.desired * speed * speed).toFixed(2)}`
         + `<i style="background:${HUD.cyan}"></i>${Math.abs(curvature.actual * speed * speed).toFixed(2)} m/s²` : "");
     this.chip("lead", lead ? `<b>LEAD</b>${lead.gap.toFixed(1)} m${relative}` : "");
-    this.chip("model", scene.stale ? `<b>MODEL</b>${Number.isFinite(scene.modelAge) ? scene.modelAge.toFixed(1) + " s" : "없음"}` : "", true);
+    this.chip("model", scene.stale ? `<b>MODEL</b>${Number.isFinite(scene.modelAge) ? scene.modelAge.toFixed(1) + " s" : t("bev.none")}` : "", true);
   }
 
   // -- 정차: 출발 알림의 판단 근거 --------------------------------------------------------------------
@@ -929,8 +928,8 @@ export class BevView {
       line.appendChild(el("span", "", title));
       return line.appendChild(el("em"));
     };
-    this.leadValues = {fused: value("추적", HUD.green), model: value("모델", HUD.gray), flow: value("광류", HUD.cyan),
-                       trend: value("거리 추세 2 s 전", HUD.amber)};
+    this.leadValues = {fused: value(t("bev.lead_track"), HUD.green), model: value(t("bev.lead_model"), HUD.gray),
+                       flow: value(t("bev.lead_flow"), HUD.cyan), trend: value(t("bev.lead_trend"), HUD.amber)};
     // 위의 값들이 색의 이름을 알려 주므로 차트에는 범례가 필요 없다
     const chart = (title, lines, zero) => {
       const box = card.appendChild(el("div", "bev-chart"));
@@ -939,8 +938,8 @@ export class BevView {
       if (zero) spark.appendChild(svg("line", {class: "zero", x1: 0, x2: 100, y1: 30, y2: 30}));
       return Object.fromEntries(Object.keys(lines).map((name) => [name, spark.appendChild(svg("path", {class: name}))]));
     };
-    this.distanceLines = chart("거리", LEAD_CHARTS.distance, false);
-    this.speedLines = chart("상대 속도", LEAD_CHARTS.speed, true);
+    this.distanceLines = chart(t("bev.distance"), LEAD_CHARTS.distance, false);
+    this.speedLines = chart(t("bev.relative_speed"), LEAD_CHARTS.speed, true);
     this.leadScale = card.appendChild(el("div", "bev-card-foot")).appendChild(el("span"));
   }
 
@@ -990,7 +989,8 @@ export class BevView {
     }
     const scale = Math.ceil(peak / 10) * 10;
     draw(this.speedLines, LEAD_CHARTS.speed, (v) => 30 - clamp(v * 3.6 / scale, -1, 1) * 28);
-    const note = `${(middle - span / 2).toFixed(0)}–${(middle + span / 2).toFixed(0)} m · ±${scale} km/h · ${LEAD_HISTORY_S} s · −는 접근`;
+    const note = t("bev.lead_scale", {low: (middle - span / 2).toFixed(0), high: (middle + span / 2).toFixed(0), scale,
+                                      seconds: LEAD_HISTORY_S});
     if (this.leadScale.textContent !== note) this.leadScale.textContent = note;
   }
 

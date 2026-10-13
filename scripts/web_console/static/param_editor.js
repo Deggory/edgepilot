@@ -1,10 +1,11 @@
 // 파라미터 항목 하나를 고치는 부품: 컨트롤(켜고 끄기, −/+, 슬라이더), 저장(그동안 막고 결과를 상태 줄에), 바뀜 표시와
 // 기본값으로 되돌리기, 그리고 이것들로 짠 기본 항목 카드. 파라미터 탭과 차량 특성 탭이 같이 쓴다.
+import {t} from "./i18n.js";
 import {clampToMeta, defaultOf, isModified, metaFor, params, saveParam, valueOf} from "./param_state.js";
-import {clock, el, toast} from "./ui.js";
+import {clock, el, note, toast} from "./ui.js";
 
 export function formatValue(value, meta) {
-  if (typeof value === "boolean") return value ? "켜짐" : "꺼짐";
+  if (typeof value === "boolean") return value ? t("common.on") : t("common.off");
   return `${value}${meta.unit ? ` ${meta.unit}` : ""}`;
 }
 
@@ -14,8 +15,8 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
   const meta = metaFor(group, key);
   const notify = params().groups[group].notify;
   const status = el("span.param-status");
-  const modifiedBadge = el("span.badge.warn", {text: "바뀜", title: "기본값과 다릅니다"});
-  const resetButton = el("button.link-button", {type: "button", text: "↺ 기본값으로"});
+  const modifiedBadge = el("span.badge.warn", {text: t("params.changed"), title: t("params.changed_title")});
+  const resetButton = el("button.link-button", {type: "button", text: t("params.reset")});
   let control = null;
 
   const refresh = () => {
@@ -29,19 +30,19 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
     card?.classList.add("busy");
     control.setDisabled(true);
     status.className = "param-status";
-    status.textContent = "적용 중";
+    status.textContent = t("params.applying");
     try {
       const {notified} = await saveParam(group, key, next);
       const waiting = notify && !notified.length;
       status.className = `param-status ${waiting ? "warn" : "ok"}`;
-      status.textContent = waiting ? `저장됨 · ${notify} 미실행` : `적용됨 ${clock()}`;
+      status.textContent = waiting ? t("params.saved_not_running", {process: notify}) : t("params.applied", {time: clock()});
       if (card) {
         card.classList.add("saved");
         window.setTimeout(() => card.classList.remove("saved"), 900);
       }
     } catch (error) {
       status.className = "param-status fail";
-      status.textContent = "적용 실패";
+      status.textContent = t("params.apply_failed");
       toast(`${meta.label}: ${error.message}`, {failed: true});
     } finally {
       card?.classList.remove("busy");
@@ -60,18 +61,18 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
 }
 
 // 접힌 "바꾸면": 값을 줄이거나 끄면, 키우거나 켜면 어떻게 되는지. lead가 있으면 그 앞에 둔다(설명 등).
-export function effectsDetails(meta, boolean, {summary = "바꾸면", lead = null} = {}) {
+export function effectsDetails(meta, boolean, {summary = t("params.effects"), lead = null} = {}) {
   return el("details.param-effects",
     {},
     el("summary", {text: summary}),
     lead,
     el("div.effects",
       {},
-      el("div.effect.down", {}, el("b", {text: boolean ? "끄면" : "값을 줄이면"}), meta.decrease),
-      el("div.effect.up", {}, el("b", {text: boolean ? "켜면" : "값을 키우면"}), meta.increase)));
+      el("div.effect.down", {}, el("b", {text: boolean ? t("params.when_off") : t("params.when_lower")}), meta.decrease),
+      el("div.effect.up", {}, el("b", {text: boolean ? t("params.when_on") : t("params.when_higher")}), meta.increase)));
 }
 
-// 항목 카드: 이름·키·기본값, 설명(눌러 펼침), 컨트롤, 바꾸면, 되돌리기, 상태. 파라미터 탭의 검색이 쓰는 search와
+// 항목 카드: 이름·키·기본값, 설명(눌러 펼침), 주의, 컨트롤, 바꾸면, 되돌리기, 상태. 파라미터 탭의 검색이 쓰는 search와
 // isModified, 다시 그리는 refresh를 단다.
 export function paramCard(group, key) {
   const card = el("article.card.param", {dataset: {key}});
@@ -89,10 +90,11 @@ export function paramCard(group, key) {
         el("div.param-key",
           {},
           el("code", {text: key}),
-          fallback === undefined ? null : el("span", {text: ` · 기본 ${formatValue(fallback, meta)}`}))),
+          fallback === undefined ? null : el("span", {text: ` · ${t("params.default", {value: formatValue(fallback, meta)})}`}))),
       editor.modifiedBadge,
       meta.unit ? el("span.param-unit", {text: meta.unit}) : null),
     description,
+    meta.caution ? note(meta.caution, "warn") : "",
     editor.control.element,
     el("footer.param-foot",
       {},
@@ -116,7 +118,7 @@ function switchControl(meta, save) {
     element: button,
     show(value) {
       button.setAttribute("aria-checked", String(value));
-      text.textContent = value ? "켜짐" : "꺼짐";
+      text.textContent = value ? t("common.on") : t("common.off");
     },
     setDisabled(disabled) {
       button.disabled = disabled;
@@ -128,11 +130,11 @@ function stepperControl(meta, save) {
   const unit = meta.unit ? ` ${meta.unit}` : "";
   const input = el("input.stepper-value",
     {type: "number", inputMode: "decimal", step: String(meta.step), min: String(meta.min), max: String(meta.max),
-     "aria-label": `${meta.label} 값`});
+     "aria-label": t("params.value_of", {label: meta.label})});
   let shown = null;
   const commit = next => {
     if (!Number.isFinite(next)) {
-      toast("숫자를 입력하세요.", {failed: true});
+      toast(t("params.enter_number"), {failed: true});
       input.value = String(shown);
       return;
     }
@@ -140,10 +142,11 @@ function stepperControl(meta, save) {
     input.value = String(value);
     if (value !== shown) save(value);
   };
-  const stepButton = (direction, label) => el("button.stepper-button",
-    {type: "button", text: label, title: `${meta.step}${unit} ${direction < 0 ? "감소" : "증가"}`,
-     "aria-label": `${meta.step}${unit} ${direction < 0 ? "감소" : "증가"}`,
-     onclick: () => commit(Number(input.value) + direction * meta.step)});
+  const stepButton = (direction, label) => {
+    const title = t(direction < 0 ? "params.step_down" : "params.step_up", {step: `${meta.step}${unit}`});
+    return el("button.stepper-button",
+      {type: "button", text: label, title, "aria-label": title, onclick: () => commit(Number(input.value) + direction * meta.step)});
+  };
   const minus = stepButton(-1, "−");
   const plus = stepButton(1, "+");
   input.addEventListener("keydown", event => {
@@ -164,7 +167,7 @@ function stepperControl(meta, save) {
 
 function sliderControl(meta, save) {
   const input = el("input.slider", {type: "range", min: String(meta.min), max: String(meta.max), step: String(meta.step),
-                                   "aria-label": `${meta.label} 값`});
+                                   "aria-label": t("params.value_of", {label: meta.label})});
   const output = el("output.slider-value");
   let shown = null;
   input.addEventListener("input", () => {

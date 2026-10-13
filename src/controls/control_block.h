@@ -39,7 +39,6 @@ enum class BlockKind : uint8_t {
     X(ParkBrake, "park_brake", "PARK BRAKE", BlockKind::Hard)                                         \
     X(BrakeError, "brake_error", "BRAKE ERROR", BlockKind::Hard)                                      \
     X(GearNotDrive, "gear_not_drive", "GEAR NOT D", BlockKind::Hard)                                  \
-    X(ParamsdInvalid, "paramsd_invalid", "PARAMS INVALID", BlockKind::Hard)                           \
     X(PandaNotReady, "panda_not_ready", "PANDA NOT READY", BlockKind::Transient)                      \
     X(PandaControlsOff, "panda_controls_off", "PANDA CTRL OFF", BlockKind::Transient)                 \
     X(Stopped, "stopped", "STOPPED", BlockKind::Availability)                                         \
@@ -50,6 +49,7 @@ enum class BlockKind : uint8_t {
     X(CalibrationIncomplete, "calibration_incomplete", "CALIBRATING", BlockKind::SoftDisable)         \
     X(CalibrationRecalibrating, "calibration_recalibrating", "RECALIBRATING", BlockKind::SoftDisable) \
     X(CalibrationInvalid, "calibration_invalid", "CALIB INVALID", BlockKind::SoftDisable)             \
+    X(ParamsdInvalid, "paramsd_invalid", "PARAMS INVALID", BlockKind::SoftDisable)                    \
     X(ControlStale, "control_stale", "CONTROL STALE", BlockKind::Reject)
 
 enum class BlockReason : uint8_t {

@@ -1,4 +1,5 @@
 // 웹 콘솔 공용 도구: DOM 만들기, 카드·배지·표, 토스트, 확인 창, API 호출, 주기 폴링, 숫자 표기.
+import {locale, t} from "./i18n.js";
 
 // el("div.card.live", {title: "..."}, child, "text", ...): 태그 이름 뒤 .클래스, 속성(on<event>는 리스너),
 // 자식(노드·문자열·배열, null·false는 건너뜀).
@@ -43,7 +44,7 @@ export function ms(seconds) {
 }
 
 export function clock(date = new Date()) {
-  return date.toLocaleTimeString("ko-KR", {hour12: false});
+  return date.toLocaleTimeString(locale, {hour12: false});
 }
 
 // ------------------------------------------------------------ 배지·표·카드
@@ -101,7 +102,7 @@ export function note(text, tone = "") {
 export function section(title, children, {count = null, grid = true} = {}) {
   return el("section.section",
     {},
-    el("h2.section-title", {}, title, count === null ? null : el("span", {text: `${count}개`})),
+    el("h2.section-title", {}, title, count === null ? null : el("span", {text: t("common.count", {count})})),
     el(grid ? "div.card-grid" : "div", {}, children));
 }
 
@@ -130,8 +131,15 @@ async function request(method, url, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || response.statusText || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(errorText(data.detail) || response.statusText || `HTTP ${response.status}`);
   return data;
+}
+
+// 서버가 받지 않은 이유: 문구 키({code, 자리 값}, 예: 결합 중이라 거부) 또는 글자. FastAPI의 검사 오류(목록)는
+// 상태 글자로 대신한다.
+function errorText(detail) {
+  if (typeof detail === "string") return detail;
+  return detail && typeof detail === "object" && typeof detail.code === "string" ? t(detail.code, detail) : "";
 }
 
 export const api = {

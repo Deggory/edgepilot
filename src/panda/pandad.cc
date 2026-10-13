@@ -261,7 +261,8 @@ public:
         control_.attach(kControlStateTopic);
         control_.poll();
         std::string reason;
-        if (!panda_flash_allowed(control_.latest(), monotonic_now_ns(), &reason))
+        const bool bootstub = !panda.connected() && panda_usb_mode() == PandaUsbMode::Bootstub;
+        if (!panda_flash_allowed(control_.latest(), monotonic_now_ns(), bootstub, &reason))
             return refuse(panda, reason, "car state does not allow flashing");
         if (panda.connected() && !panda_hw_type_flashable(panda.hw_type()))
             return refuse(panda, "hw_unsupported", panda_hw_type_name(panda.hw_type()));

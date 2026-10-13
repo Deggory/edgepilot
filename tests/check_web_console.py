@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """웹 콘솔(scripts/web_console) 검사. stdlib만 쓴다(fastapi 없이): 파라미터 저장, 공유 메모리 상태 읽기와 그
 배치가 src/common/ipc_messages.h와 같은지, Panda 플래싱 조건, BEV 스트림, 페이지 파일과 서버 API가 맞는지."""
+import ast
 import asyncio
 import gzip
 import json
@@ -42,15 +43,19 @@ from scripts.web_console.learner_monitor import (
     LocalizationReader,
 )
 from scripts.web_console.panda_update import (
+    IMAGE_ERRORS,
     PANDA_APP_MAX_BYTES,
     PANDA_FLASH_REQUEST_PATH,
     PANDA_SIGNATURE_BYTES,
     PANDA_STATUS_PATH,
+    REASONS,
+    STEPS,
     PandaUpdate,
     panda_image_info,
 )
 from scripts.web_console.param_metadata import PARAM_GROUPS, PARAM_METADATA, VEHICLE_TAB
 from scripts.web_console.param_store import ParamStore, group_paths
+from scripts.web_console.refusal import Refusal
 from scripts.web_console.process_status import (
     MANAGER_STATE_HEAD,
     MANAGER_STATE_TOPIC,
@@ -77,8 +82,34 @@ from scripts.web_console.state_layout import (
 from scripts.web_console.static_assets import STATIC_DIR, StaticAssets
 
 IPC_MESSAGES = ROOT / "src" / "common" / "ipc_messages.h"
+WEB_CONSOLE = ROOT / "scripts" / "web_console"
+I18N_DIR = STATIC_DIR / "i18n"
+LANGUAGES = ("ko", "en")
+HANGUL = re.compile(r"[\uac00-\ud7a3]")
 # 메타데이터 card(전용 카드가 바꾸는 항목)마다 그 카드가 부르는 API
 CARD_ROUTES = {"calibration": "/api/calibration/source"}
+
+
+def catalog(lang: str) -> dict:
+    return json.loads((I18N_DIR / f"{lang}.json").read_text(encoding="utf-8"))
+
+
+def js_code(text: str) -> list:
+    """JS 소스의 (줄 번호, 주석을 뺀 줄). 문자열 밖의 // 뒤와 한 줄 /* */를 지운다(이 저장소의 JS는 // 주석만 쓴다)."""
+    lines = []
+    for number, line in enumerate(text.splitlines(), 1):
+        line = re.sub(r"/\*.*?\*/", "", line)
+        for match in re.finditer(r"(?:^|(?<=\s))//", line):
+            before = line[:match.start()]
+            if all(before.count(quote) % 2 == 0 for quote in "\"'`"):
+                line = before
+                break
+        lines.append((number, line))
+    return lines
+
+
+def page_modules() -> list:
+    return sorted(path for path in STATIC_DIR.glob("*.js"))
 
 
 def cpp(path: Path = IPC_MESSAGES) -> str:
@@ -258,14 +289,15 @@ class ParamStoreTest(unittest.TestCase):
         self.assertEqual(set(snapshot), {"groups", "vehicle_tab", "params", "defaults", "metadata", "paths"})
         self.assertEqual(list(snapshot["groups"]), list(PARAM_GROUPS), "tab order")
         for group, spec in snapshot["groups"].items():
-            self.assertEqual(set(spec), {"label", "note", "sections", "notify"}, group)
+            self.assertEqual(set(spec), {"sections", "notify"}, group)
         self.assertEqual(snapshot["paths"]["steering"], str(self.paths["steering"]))
 
 
 class ParamMetadataTest(unittest.TestCase):
     def test_repository_params_have_complete_ui_metadata(self):
-        """항목마다 설명이 다 있고, 섹션은 그 항목이 나오는 탭(파일 그룹, tab="vehicle"이면 차량 특성 탭)의 섹션이고,
-        빈 섹션이 없다."""
+        """항목마다 섹션이 있고 두 언어 모두 이름·설명·효과 문구가 있으며, 섹션은 그 항목이 나오는 탭(파일 그룹,
+        tab="vehicle"이면 차량 특성 탭)의 섹션이고, 빈 섹션이 없다."""
+        catalogs = {lang: catalog(lang) for lang in LANGUAGES}
         tabs = {}
         for group, spec in PARAM_GROUPS.items():
             params = json.loads((ROOT / "params" / spec["file"]).read_text(encoding="utf-8"))
@@ -274,8 +306,15 @@ class ParamMetadataTest(unittest.TestCase):
             tabs.setdefault(group, (spec["sections"], set()))
             for key, value in params.items():
                 meta = metadata[key]
-                for field in ("label", "section", "description", "increase", "decrease"):
-                    self.assertTrue(meta.get(field), f"{group}.{key}.{field}")
+                self.assertTrue(meta.get("section"), f"{group}.{key}.section")
+                fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+                for lang, texts in catalogs.items():
+                    for field in fields:
+                        self.assertTrue(texts.get(f"param.{group}.{key}.{field}"), f"{lang}: param.{group}.{key}.{field}")
+                    if not meta.get("learned"):
+                        self.assertNotIn(f"param.{group}.{key}.learned_role", texts, f"{lang}: {group}.{key}")
+                    if meta.get("caution"):
+                        self.assertTrue(texts.get(f"caution.{meta['caution']}"), f"{lang}: caution.{meta['caution']}")
                 self.assertIn(meta.get("tab", group), {group, "vehicle"}, f"{group}.{key}")
                 if meta.get("card"):
                     # 차량 특성 탭의 전용 카드가 자기 API로 바꾸는 항목: 섹션은 파일 그룹의 것이지만 그 탭에 카드가
@@ -301,7 +340,7 @@ class ParamMetadataTest(unittest.TestCase):
 
     def test_vehicle_tab_matches_the_page(self):
         """차량 특성 탭: 학습기 섹션마다 스위치가 하나 있고, 나머지 항목은 학습값을 읽는 법(vehicle_view.js LIVE)과
-        자동 학습 중의 쓰임(learned_role)이 있다. 학습기 이름은 페이지의 LEARNERS와 같다."""
+        자동 학습 중의 쓰임(learned, learned_role 문구)이 있다. 학습기 이름은 페이지의 LEARNERS와 같다."""
         steering = PARAM_METADATA["steering"]
         page = (STATIC_DIR / "vehicle_view.js").read_text(encoding="utf-8")
         live = set(re.findall(r"^  (\w+): \{$", re.search(r"const LIVE = \{\n(.*?)\n\};", page, re.S).group(1), re.M))
@@ -313,11 +352,11 @@ class ParamMetadataTest(unittest.TestCase):
             self.assertEqual((switch.get("tab"), switch["section"]), ("vehicle", name), spec["switch"])
             keys = {key for key, meta in steering.items() if meta.get("tab") == "vehicle" and meta["section"] == name}
             for key in keys - {spec["switch"]}:
-                self.assertTrue(steering[key].get("learned_role"), key)
+                self.assertTrue(steering[key].get("learned"), key)
                 learned.add(key)
         self.assertEqual(live, learned)
         self.assertEqual(learners, {spec["learner"] for spec in VEHICLE_TAB["learners"].values()})
-        self.assertFalse([key for key, meta in steering.items() if meta.get("learned_role") and key not in learned])
+        self.assertFalse([key for key, meta in steering.items() if meta.get("learned") and key not in learned])
 
     def test_ui_ranges_match_runtime_clamps(self):
         """로더는 Json*Field 표대로 값을 자른다. 편집기도 같은 min/max를 보여야 하고, 아니면 런타임이 말없이
@@ -345,15 +384,120 @@ class ParamMetadataTest(unittest.TestCase):
                 self.assertEqual((float(ui[key]["min"]), float(ui[key]["max"])), (low, high), f"{group}.{key}")
 
     def test_ui_text_names_no_particular_car(self):
-        """다른 차도 붙일 수 있게 화면 문구는 차종을 말하지 않는다."""
+        """다른 차도 붙일 수 있게 화면 문구는 차종을 말하지 않는다. 한글이 바로 붙는 "K7은"도 잡는다."""
         texts = [json.dumps(PARAM_METADATA, ensure_ascii=False), json.dumps(PARAM_GROUPS, ensure_ascii=False)]
+        texts += [(I18N_DIR / f"{lang}.json").read_text(encoding="utf-8") for lang in LANGUAGES]
         texts += [path.read_text(encoding="utf-8") for path in STATIC_DIR.glob("*.html")]
         texts += [path.read_text(encoding="utf-8") for path in STATIC_DIR.glob("*_view.js")]
         texts += [(STATIC_DIR / name).read_text(encoding="utf-8") for name in ("console.js", "panda_card.js")]
         for text in texts:
-            self.assertNotRegex(text, r"(?i)\bk7\b|그랜저|grandeur")
+            self.assertNotRegex(text, r"(?i)(?<![0-9a-z])k7(?![0-9a-z])|그랜저|grandeur")
         self.assertEqual([path.name for path in STATIC_DIR.rglob("*") if "k7" in path.name.lower()], [])
 
+
+
+class I18nCatalogTest(unittest.TestCase):
+    """화면 글자는 언어마다 static/i18n/<언어>.json에만 있다: 두 언어의 키와 자리 값이 같고, 페이지와 서버가 쓰는 키가
+    다 있으며 안 쓰는 키가 없고, 코드에는 화면에 나갈 한글이 남지 않는다."""
+
+    def setUp(self):
+        self.catalogs = {lang: catalog(lang) for lang in LANGUAGES}
+
+    def test_languages_have_the_same_keys_and_placeholders(self):
+        placeholders = lambda text: set(re.findall(r"\{(\w+)\}", text))
+        ko, en = self.catalogs["ko"], self.catalogs["en"]
+        self.assertEqual(sorted(set(ko) ^ set(en)), [])
+        for key in ko:
+            forms = {lang: texts[key] if isinstance(texts[key], dict) else {"other": texts[key]}
+                     for lang, texts in self.catalogs.items()}
+            for lang, by_count in forms.items():
+                self.assertIn("other", by_count, f"{lang}: {key}")
+                self.assertLessEqual(set(by_count), {"zero", "one", "two", "few", "many", "other"}, f"{lang}: {key}")
+                for text in by_count.values():
+                    self.assertIsInstance(text, str, f"{lang}: {key}")
+                    self.assertTrue(text.strip(), f"{lang}: {key}")
+                    if len(by_count) > 1:
+                        self.assertIn("count", placeholders(text), f"{lang}: {key} plural without {{count}}")
+            names = {lang: set().union(*(placeholders(text) for text in by_count.values())) for lang, by_count in forms.items()}
+            self.assertEqual(names["ko"], names["en"], key)
+            self.assertFalse(HANGUL.search(json.dumps(en[key], ensure_ascii=False)), f"en: {key}")
+
+    def test_page_and_server_keys_exist_and_none_is_unused(self):
+        """페이지의 "이름공간.키" 글자와 index.html의 data-i18n*, 서버의 거부 코드가 다 있어야 한다. 반대로 문구마다
+        그것을 쓰는 곳(글자 그대로, `접두사.${...}` 템플릿, 메타데이터에서 나오는 키, 서버 코드)이 있어야 한다."""
+        keys = set(self.catalogs["en"])
+        spaces = {key.split(".")[0] for key in keys}
+        used, prefixes = set(), set()
+        for module in page_modules():
+            code = "\n".join(line for _, line in js_code(module.read_text(encoding="utf-8")))
+            # el("section.section", ...)의 "태그.클래스"는 키가 아니다
+            for key in re.findall(r"(?<!el\()[\"'`]([a-z_]+(?:\.[A-Za-z0-9_]+)+)[\"'`]", code):
+                if key.split(".")[0] not in spaces:
+                    continue
+                if key not in keys and any(other.startswith(f"{key}.") for other in keys):
+                    prefixes.add(f"{key}.")  # coded("panda.reason", 코드)처럼 접두사만 쓰는 글자
+                    continue
+                self.assertIn(key, keys, f"{module.name}: {key}")
+                used.add(key)
+            prefixes.update(re.findall(r"`([a-z_]+(?:\.[A-Za-z0-9_]+)*\.)\$\{", code))
+        page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        for key in re.findall(r'data-i18n(?:-[a-z-]+)?="([^"]+)"', page):
+            self.assertIn(key, keys, f"index.html: {key}")
+            used.add(key)
+        # 메타데이터에서 나오는 키(param_state.js가 만든다)
+        for group, items in PARAM_METADATA.items():
+            for key, meta in items.items():
+                fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+                used.update(f"param.{group}.{key}.{field}" for field in fields)
+                used.add(f"section.{meta['section']}")
+                if meta.get("caution"):
+                    used.add(f"caution.{meta['caution']}")
+                if meta.get("unit") and f"unit.{meta['unit']}" in keys:
+                    used.add(f"unit.{meta['unit']}")
+        for group, spec in PARAM_GROUPS.items():
+            used.add(f"group.{group}.label")
+            used.update(f"section.{name}" for name in spec["sections"])
+            if f"group.{group}.note" in keys:
+                used.add(f"group.{group}.note")
+        used.update(f"section.{name}" for name in VEHICLE_TAB["sections"])
+        used.add("section.other")
+        # 서버의 코드: Panda 사유·단계·이미지 문제와 거부(Refusal)
+        used.update(f"panda.reason.{code}" for code in REASONS)
+        used.update(f"panda.step.{code}" for code in STEPS)
+        used.update(f"panda.image.{code}" for code in IMAGE_ERRORS if code)
+        for module in WEB_CONSOLE.glob("*.py"):
+            text = module.read_text(encoding="utf-8")
+            for code in re.findall(r'Refusal\(\s*"([^"]+)"', text):
+                self.assertIn(code, keys, f"{module.name}: {code}")
+                used.add(code)
+            for prefix in re.findall(r'Refusal\(\s*f"([a-z_.]+)\{', text):
+                self.assertTrue(any(key.startswith(prefix) for key in keys), f"{module.name}: {prefix}")
+        missing = sorted(used - keys)
+        self.assertEqual(missing, [], "keys used but not in the catalogs")
+        unused = sorted(key for key in keys - used if not any(key.startswith(prefix) for prefix in prefixes))
+        self.assertEqual(unused, [], "catalog keys nothing uses")
+
+    def test_no_screen_text_left_in_code(self):
+        """한글은 주석과 문구 묶음에만 있다: 페이지 모듈과 index.html의 코드, 서버 모듈의 문자열(독스트링 빼고).
+        그 언어로 쓴 언어 이름처럼 일부러 둔 줄은 i18n-allow 주석을 단다."""
+        found = []
+        for module in page_modules():
+            text = module.read_text(encoding="utf-8")
+            raw = text.splitlines()
+            found += [f"{module.name}:{number}" for number, line in js_code(text)
+                      if HANGUL.search(line) and "i18n-allow" not in raw[number - 1]]
+        page = re.sub(r"<!--.*?-->", "", (STATIC_DIR / "index.html").read_text(encoding="utf-8"), flags=re.S)
+        found += ["index.html" for _ in HANGUL.findall(page)][:1]
+        for module in WEB_CONSOLE.glob("*.py"):
+            tree = ast.parse(module.read_text(encoding="utf-8"))
+            docstrings = {id(node.body[0].value) for node in ast.walk(tree)
+                          if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                          and node.body and isinstance(node.body[0], ast.Expr)
+                          and isinstance(node.body[0].value, ast.Constant)}
+            found += [f"{module.name}:{node.lineno}" for node in ast.walk(tree)
+                      if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
+                      and HANGUL.search(node.value)]
+        self.assertEqual(found, [])
 
 # ------------------------------------------------------------ 학습 상태
 def learner_payload(**values):
@@ -613,8 +757,9 @@ class PandaUpdateTest(unittest.TestCase):
         status = self.panda.status()
         self.assertEqual(status["blocker"], "not_park")
         self.assertFalse(status["up_to_date"])
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal) as refused:
             self.panda.request("EDGE-f9907afb-DEBUG")
+        self.assertEqual(refused.exception.detail(), {"code": "panda.reason.not_park"})
         self.assertFalse(self.request.exists())
         for blocker, kwargs in (("moving", {"speed": 3.0}), ("engaged", {"engaged": 1}),
                                 ("vehicle_stale", {"vehicle_fresh": 0}),
@@ -642,9 +787,18 @@ class PandaUpdateTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.panda.request("EDGE-f9907afb-DEBUG")
         self.publish_pandad(hw_type=7)
-        with self.assertRaises(PermissionError):
+        self.assertFalse(self.panda.status()["hw_supported"])
+        with self.assertRaises(Refusal) as refused:
             self.panda.request("EDGE-f9907afb-DEBUG")
-        self.publish_pandad(mode="bootstub", version="", hw_type=0)  # 앱이 서지 않아도 다시 쓸 수 있다
+        self.assertEqual(refused.exception.code, "panda.reason.hw_unsupported")
+        # 앱이 서지 않은 bootstub 판다는 CAN을 넘기지 않아 차 상태가 낡지만, 차 상태 없이 다시 쓸 수 있다
+        self.publish_control(vehicle_fresh=0, gear=5, speed=40.0)
+        self.publish_pandad(mode="bootstub", version="", hw_type=0)
+        self.assertEqual(self.panda.status()["blocker"], "")
+        self.publish_control(vehicle_fresh=0, engaged=1)  # 살아 있는 제어 상태가 결합 중이면 막는다
+        self.assertEqual(self.panda.status()["blocker"], "engaged")
+        self.publish_control(vehicle_fresh=0, stamp=boottime_ns() - 5_000_000_000)
+        self.assertEqual(self.panda.status()["blocker"], "")
         self.assertTrue(self.panda.request("EDGE-f9907afb-DEBUG")["request_pending"])
 
     def test_status_reports_flash_progress(self):
@@ -654,9 +808,10 @@ class PandaUpdateTest(unittest.TestCase):
         self.image.write_bytes(panda_image())
         status = self.panda.status()
         self.assertTrue(status["up_to_date"])
-        self.assertEqual(status["flash"]["error"], "app_timeout")
-        self.assertIn("bootstub", status["flash_error_text"])
-        self.assertEqual(status["flash_step_text"], "쓰는 중")
+        self.assertEqual((status["flash"]["error"], status["flash"]["step"]), ("app_timeout", "write"))
+        self.assertTrue(status["hw_supported"])
+        # 서버는 코드만 낸다: 글자는 페이지의 panda.reason.<코드>, panda.step.<단계> 문구
+        self.assertFalse([key for key in status if key.endswith("_text")])
 
 
 # ------------------------------------------------------------ 런타임 상태

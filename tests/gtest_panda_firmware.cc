@@ -97,44 +97,63 @@ TEST(PandaFirmware, RejectsImagesTheBootstubWouldNot) {
 
 TEST(PandaFirmware, FlashesOnlyAParkedCar) {
     std::string reason;
-    EXPECT_TRUE(panda_flash_allowed(parked(), kNow, &reason));
+    EXPECT_TRUE(panda_flash_allowed(parked(), kNow, false, &reason));
     EXPECT_EQ(reason, "");
 
     ControlState control = parked();
     control.timestamp_ns = 0;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "control_stale");
     control.timestamp_ns = kNow - 1500000000ULL;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "control_stale");
 
     control = parked();
     control.vehicle_fresh = 0;  // gear 0은 P이기도 하고 모름이기도 하다
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "vehicle_stale");
 
     control = parked();
     control.engaged = 1;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "engaged");
     control = parked();
     control.active = 1;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "engaged");
 
     control = parked();
     control.gear = kGearDrive;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "not_park");
 
     control = parked();
     control.ego_speed_kph = 3.0f;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "moving");
     control = parked();
     control.cluster_speed_kph = 1.0f;
-    EXPECT_FALSE(panda_flash_allowed(control, kNow, &reason));
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "moving");
+}
+
+TEST(PandaFirmware, RewritesABootstubPandaWhateverTheCarState) {
+    // bootstub 판다는 CAN을 넘기지 않아 차 상태가 늘 낡았다: 상류 pandad처럼 차 상태 없이 다시 쓴다
+    std::string reason;
+    ControlState control = parked();
+    control.timestamp_ns = 0;
+    EXPECT_TRUE(panda_flash_allowed(control, kNow, true, &reason));
+    EXPECT_EQ(reason, "");
+    control = parked();
+    control.vehicle_fresh = 0;
+    control.gear = kGearDrive;
+    control.ego_speed_kph = 50.0f;
+    EXPECT_TRUE(panda_flash_allowed(control, kNow, true, &reason));
+    control.engaged = 1;  // 그래도 결합 중이라고 하면 막는다
+    EXPECT_FALSE(panda_flash_allowed(control, kNow, true, &reason));
+    EXPECT_EQ(reason, "engaged");
+    control.timestamp_ns = kNow - 1500000000ULL;  // 낡은 제어 상태의 결합은 믿지 않는다
+    EXPECT_TRUE(panda_flash_allowed(control, kNow, true, &reason));
 }
 
 TEST(PandaFirmware, FlashesOnlyF413Boards) {

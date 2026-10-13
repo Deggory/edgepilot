@@ -112,12 +112,12 @@ class ParamStore:
         return read_document(self._path(group))
 
     def snapshot(self) -> Dict[str, Any]:
-        """페이지가 파라미터 탭을 그리는 데 필요한 것 전부: 그룹 구성(이름, 안내, 섹션 순서, 알릴 프로세스),
-        차량 특성 탭 구성, 현재값, 기본값, 항목 설명, 파일 경로."""
+        """페이지가 파라미터 탭을 그리는 데 필요한 것 전부: 그룹 구성(섹션 순서, 알릴 프로세스), 차량 특성 탭 구성,
+        현재값, 기본값, 항목 메타데이터, 파일 경로. 글자는 페이지가 고른 언어의 문구로 채운다(param_metadata)."""
         with self.lock:
             documents = {group: self.read_group(group) for group in self.paths}
         return {
-            "groups": {group: {key: spec[key] for key in ("label", "note", "sections", "notify")}
+            "groups": {group: {key: spec[key] for key in ("sections", "notify")}
                        for group, spec in PARAM_GROUPS.items() if group in self.paths},
             "vehicle_tab": VEHICLE_TAB,
             "params": documents,

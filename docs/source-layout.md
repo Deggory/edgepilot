@@ -700,7 +700,8 @@ only in the board build, against `deps/ax630` from
   `console_server.py` is the FastAPI app and its routes; each card or tab has
   its own module behind it:
   - `param_store.py` and `param_metadata.py`: the parameter files, their
-    labels, sections and ranges;
+    sections, units and ranges (the labels and descriptions are in the
+    page's text catalogues);
   - `process_status.py`: the manager's process table with each binary's build
     version, and signalling a process to reload;
   - `learner_monitor.py`: learner and localization state;
@@ -710,10 +711,14 @@ only in the board build, against `deps/ax630` from
   - `bev_stream.py`, `backlight.py` (the MaixCAM2 backlight, PWM3) and
     `static_assets.py`;
   - `shm_channel.py` reads the shared-memory channels and `state_layout.py`
-    holds the ModelState and ControlState offsets they share.
+    holds the ModelState and ControlState offsets they share;
+  - `refusal.py`: the reason a request is refused, sent as a text-catalogue
+    key so the page shows it in its language.
 - `scripts/web_console/static/`: the page, plain ES modules with no build step.
   - `index.html`, `console.css`, `console.js` (header, tabs, routing), `ui.js`
     (DOM helpers, cards, toasts, API calls, polling).
+  - `i18n.js` and `i18n/ko.json`, `i18n/en.json`: the language choice and
+    every text on screen, in Korean and English.
   - `param_state.js`, `param_editor.js` (the controls, saving and the item
     card) and `param_view.js` (the parameter tabs).
   - `vehicle_view.js` (the vehicle characteristics tab: learned and manual

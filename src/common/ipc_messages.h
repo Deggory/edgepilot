@@ -448,6 +448,8 @@ constexpr uint32_t kLearnerVehicleRestored = 1U << 11;
 constexpr uint32_t kLearnerTorqueRestored = 1U << 12;
 constexpr uint32_t kLearnerUseDelay = 1U << 13;         // 경로 지연에 lagd 추정 사용 중
 constexpr uint32_t kLearnerLocalizerInputs = 1U << 14;  // paramsd·torqued 입력이 locationd
+// 학습 입력 출처가 바뀐 torqued 캐시에서 배율·마찰만 이어 썼다(점·절편은 새로 모은다)
+constexpr uint32_t kLearnerTorquePartlyRestored = 1U << 15;
 
 struct LearnerState {
     uint64_t timestamp_ns = 0;

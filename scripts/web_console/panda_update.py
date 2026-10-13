@@ -11,6 +11,7 @@ import struct
 from pathlib import Path
 from typing import Any, Dict
 
+from .refusal import Refusal
 from .shm_channel import IpcReader, age_s, topic_path
 from .state_layout import CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, GEAR_PARK, control_value
 
@@ -27,65 +28,58 @@ PANDA_FLASHABLE_HW = (3, 5, 6)
 PANDA_VERSION_PATTERN = re.compile(rb"(?<![0-9A-Za-z])[A-Z]{3,8}-[0-9A-Za-z]{8}-(?:DEBUG|RELEASE)(?![0-9A-Za-z])")
 CONTROL_MAX_AGE_S = 1.0
 PARKED_MAX_SPEED_KPH = 1.0
-# pandad·panda_flasher의 이유 코드
-REASON_TEXT = {
-    "control_stale": "제어 상태가 없습니다 (controlsd 확인)",
-    "vehicle_stale": "차 상태를 받지 못합니다 (시동·CAN 확인)",
-    "engaged": "조향이 켜져 있습니다 (해제 후)",
-    "not_park": "P단이 아닙니다",
-    "moving": "차가 움직이고 있습니다",
-    "image_invalid": "설치된 펌웨어 이미지가 없거나 잘못됐습니다",
-    "image_changed": "설치된 이미지가 바뀌었습니다 (새로고침 후 다시)",
-    "no_panda": "판다가 USB에 없습니다",
-    "hw_unsupported": "지원하지 않는 판다입니다 (F413 보드만)",
-    "busy": "다른 프로세스가 판다를 쓰고 있습니다",
-    "usb_error": "USB 오류",
-    "bootstub_timeout": "판다가 bootstub으로 넘어가지 않았습니다",
-    "flasher_missing": "bootstub 플래셔가 응답하지 않습니다",
-    "erase_failed": "플래시를 지우지 못했습니다",
-    "write_failed": "쓰다가 실패했습니다",
-    "verify_failed": "쓴 끝 주소가 맞지 않습니다",
-    "app_timeout": "새 펌웨어가 시작되지 않았습니다 (bootstub에 머묾, 다시 쓰세요)",
-    "version_mismatch": "판다가 이미지와 다른 버전을 알립니다",
-}
-STEP_TEXT = {"bootstub": "bootstub 진입", "erase": "지우는 중", "write": "쓰는 중", "verify": "확인",
-             "reboot": "재시작", "check": "버전 확인"}
+# pandad·panda_flasher와 flash_blocker의 이유 코드, pandad가 알리는 플래싱 단계. 페이지가 panda.reason.<코드>,
+# panda.step.<단계> 문구로 보인다.
+REASONS = ("control_stale", "vehicle_stale", "engaged", "not_park", "moving", "image_invalid", "image_changed",
+           "no_panda", "hw_unsupported", "busy", "usb_error", "bootstub_timeout", "flasher_missing", "erase_failed",
+           "write_failed", "verify_failed", "app_timeout", "version_mismatch")
+STEPS = ("bootstub", "erase", "write", "verify", "reboot", "check")
+# 설치된 이미지의 문제(panda_image_info의 error). 페이지가 panda.image.<코드> 문구로 보인다.
+IMAGE_ERRORS = ("missing", "too_small", "too_large", "unaligned", "unsigned", "no_tail", "no_version")
 
 
 def panda_image_info(path: str) -> Dict[str, Any]:
-    """설치된 앱 이미지(firmware/panda의 panda.bin.signed)를 panda_firmware.cc와 같은 규칙으로 본다."""
-    info: Dict[str, Any] = {"path": path, "present": False, "valid": False, "version": "", "size": 0, "error": ""}
+    """설치된 앱 이미지(firmware/panda의 panda.bin.signed)를 panda_firmware.cc와 같은 규칙으로 본다. error는
+    IMAGE_ERRORS의 코드이고 max_bytes는 앱 영역의 크기다."""
+    info: Dict[str, Any] = {"path": path, "present": False, "valid": False, "version": "", "size": 0, "error": "",
+                            "max_bytes": PANDA_APP_MAX_BYTES}
     try:
         data = Path(path).read_bytes()
     except OSError:
-        info["error"] = "없음"
+        info["error"] = "missing"
         return info
     size = len(data)
     body = size - PANDA_SIGNATURE_BYTES
     if size <= PANDA_SIGNATURE_BYTES + 16:
-        error = "너무 작음"
+        error = "too_small"
     elif size > PANDA_APP_MAX_BYTES:
-        error = f"앱 영역({PANDA_APP_MAX_BYTES} B)보다 큼"
+        error = "too_large"
     elif size % 4:
-        error = "4바이트 단위가 아님"
+        error = "unaligned"
     elif struct.unpack_from("<I", data)[0] != body:
-        error = "서명된 이미지가 아님 (길이 필드)"
+        error = "unsigned"
     elif data[body - 8:body - 4] != b"VERS":
-        error = "VERS 꼬리 없음"
+        error = "no_tail"
     else:
         error = ""
     match = PANDA_VERSION_PATTERN.search(data)
     if not error and not match:
-        error = "버전 문자열 없음"
+        error = "no_version"
     info.update(present=True, size=size, valid=not error, error=error,
                 version=match.group().decode() if match else "")
     return info
 
 
-def flash_blocker(control: IpcReader) -> str:
-    """panda_firmware.cc의 panda_flash_allowed와 같은 조건. 막는 이유 코드, 없으면 빈 문자열."""
+def flash_blocker(control: IpcReader, bootstub: bool = False) -> str:
+    """panda_firmware.cc의 panda_flash_allowed와 같은 조건. 막는 이유 코드, 없으면 빈 문자열. 판다가 bootstub에
+    머물러 있으면 차 상태는 보지 않고(CAN이 없어 알 수 없다, 상류 pandad도 같다), 살아 있는 제어 상태가 결합
+    중이라고 할 때만 막는다."""
     latest = control.read_payload()
-    if latest is None or age_s(latest[1]) > CONTROL_MAX_AGE_S:
+    fresh = latest is not None and age_s(latest[1]) <= CONTROL_MAX_AGE_S
+    if bootstub:
+        engaged = fresh and (control_value(latest[2], "engaged") or control_value(latest[2], "active"))
+        return "engaged" if engaged else ""
+    if not fresh:
         return "control_stale"
     payload = latest[2]
     if not control_value(payload, "vehicle_fresh"):
@@ -122,7 +116,7 @@ class PandaUpdate:
         link = pandad or {}
         flash = link.get("flash") or {}
         image = panda_image_info(self.image_path)
-        blocker = flash_blocker(self.control)
+        blocker = flash_blocker(self.control, bootstub=link.get("mode") == "bootstub")
         version = link.get("firmware_version", "")
         return {
             "available": pandad is not None,
@@ -131,13 +125,11 @@ class PandaUpdate:
             "serial": link.get("serial", ""),
             "hw_type": link.get("hw_type", 0),
             "hw_name": link.get("hw_name", ""),
+            "hw_supported": link.get("hw_type", 0) in PANDA_FLASHABLE_HW,
             "firmware_version": version,
             "flash": flash,
-            "flash_error_text": REASON_TEXT.get(flash.get("error", ""), flash.get("error", "")),
-            "flash_step_text": STEP_TEXT.get(flash.get("step", ""), ""),
             "image": image,
             "blocker": blocker,
-            "blocker_text": REASON_TEXT.get(blocker, blocker),
             "request_pending": self.request_path.exists(),
             "up_to_date": bool(image["version"]) and image["version"] == version,
         }
@@ -146,19 +138,19 @@ class PandaUpdate:
         status = self.status()
         image = status["image"]
         if not status["available"]:
-            raise PermissionError("pandad가 실행 중이 아닙니다. 런타임을 멈췄다면 보드에서 panda_flash를 쓰세요.")
+            raise Refusal("error.pandad_missing")
         if status["request_pending"] or status["flash"].get("state") == "flashing":
-            raise PermissionError("이미 플래싱 중입니다.")
+            raise Refusal("error.panda_flashing")
         if not image["valid"]:
-            raise PermissionError(f"설치된 이미지를 쓸 수 없습니다: {image['error']}")
+            raise Refusal(f"panda.image.{image['error']}", max_bytes=image["max_bytes"])
         if version != image["version"]:
-            raise PermissionError(REASON_TEXT["image_changed"])
+            raise Refusal("panda.reason.image_changed")
         if status["mode"] == "none":
-            raise PermissionError(REASON_TEXT["no_panda"])
+            raise Refusal("panda.reason.no_panda")
         if status["mode"] == "app" and status["hw_type"] not in PANDA_FLASHABLE_HW:
-            raise PermissionError(REASON_TEXT["hw_unsupported"])
+            raise Refusal("panda.reason.hw_unsupported")
         if status["blocker"]:
-            raise PermissionError(f"지금은 쓸 수 없습니다: {status['blocker_text']}")
+            raise Refusal(f"panda.reason.{status['blocker']}")
         temporary = self.request_path.with_name(self.request_path.name + ".tmp")
         temporary.write_text(version + "\n", encoding="utf-8")
         os.replace(temporary, self.request_path)
