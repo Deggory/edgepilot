@@ -1,42 +1,98 @@
 # Flow calibration
 
-[← Documentation index](../README.md)
+[← Documentation](README.md)
 
-`modeld` warps the camera into the model's frame with a roll/pitch/yaw calibration. The online calibrator
-(`model/calibration_online`, a port of openpilot's `calibrationd`) learns it from the model's own pose
-output. The flow calibrator measures the same angles straight from the image instead. It always runs and is
-recorded; the device setting `calibration_use_flow` (web console, default off) makes the warp take its pitch
-and yaw ([Using the estimate](#using-the-estimate)). The same flow worker also measures how fast the lead car's
-image grows ([Lead expansion](#lead-expansion)).
+`modeld` warps the camera into the model's frame with a roll, pitch and yaw
+calibration. The flow calibrator measures pitch and yaw straight from the image,
+as the direction the camera actually travels, whereas the online calibrator
+(`model/calibration_online`, a port of openpilot's `calibrationd`) learns them
+from the model's own pose output. It runs on every frame of the GDC zero-copy
+path and is recorded; the device setting `calibration_use_flow` (web console,
+default off) makes the warp take its pitch and yaw.
+
+Where the measurement goes, each model frame:
+
+```mermaid
+flowchart TB
+    ring["frame ring slot"] --> worker["flow worker thread<br>gate, pyramid, IVE LK"]
+    worker --> solve["window solve<br>travel direction (FOE)"]
+    worker --> lead["lead expansion<br>see Lead flow"]
+    solve --> calib["FlowCalibrator<br>blocks, estimate"]
+    calib --> json["params/<br>flow_calibration.json"]
+    calib --> state["ModelState.flow_calibration<br>recording, web console"]
+    calib --> source["calibration_source<br>pose or flow"]
+    pose["pose loop<br>calibration_online"] --> source
+    source --> warp["model input warp"]
+    classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class ring pixel
+    class worker,solve,calib,source,pose,warp,lead compute
+    class json,state proc
+```
+
+The same flow worker also measures how fast the lead car's image grows; see
+[Lead flow](lead-flow.md). `EDGEPILOT_FLOW_CALIB=0`, an IVE that cannot be set
+up, or the CPU warp path turns the worker off, and the lead flow with it
+([Outputs](#outputs)).
 
 ## Why
 
-`calibrationd` closes a loop through the model. Every sample is the current warp composed with the travel
-direction the model's pose reports, so the loop settles where the pose says "straight ahead". That works
-when the pose follows the warp one to one. On the MaixCAM2 it does not:
+`calibrationd` closes a loop through the model. Every sample is the current warp
+composed with the travel direction the model's pose reports, so the loop settles
+where the pose says "straight ahead". That works when the pose follows the warp
+one to one. On the MaixCAM2 it does not:
 
-- In a controlled fp32 test, rotating the warp by 1° moved the pose's travel angle by only 0.185° and the
-  lane direction by 0.31°.
-- The quantized model behaves the same; quantized minus fp32 is 0.01°.
-- With a restoring gain of about 0.18, a small pose bias moves the fixed point by bias / 0.18.
-- On the 2026-10-10 drives the yaw crept back to about -0.5° after every reset. The measured direction of
-  travel was about -0.05°.
-- The offset is not a constant: it was -0.18° on the morning mount and about -0.5° in the evening.
+- In a controlled fp32 test, rotating the warp by 1° moved the pose's travel
+  angle by only 0.185° and the lane direction by 0.31°.
+- The quantised model behaves the same; quantised minus fp32 is 0.01°.
+- With a restoring gain of about 0.18, a small pose bias moves the fixed point
+  by bias / 0.18.
+- On the 2026-10-10 drives the yaw crept back to about -0.5° after every reset.
+  The measured direction of travel was about -0.05°.
+- The offset is not a constant: it was -0.18° on the morning mount and about
+  -0.5° in the evening.
 
-The weak response belongs to our images, not to the model alone. On a public comma segment from an OS04C10
-device (the same sensor family, night, city streets), the same fp32 model follows a warp change by about 0.5
-(travel angle) and 0.85 (lane direction). On our footage it is 0.15 to 0.32 and 0.2 to 0.48, day and night.
-- **Resolution:** resampling the comma footage to our pixel density does not change it. Neither does building
-  both inputs from one camera, or degrading our own footage 2.5 times further. So a higher-resolution frame
-  ring would not help.
-- **Highlights:** clipping the brightest 10% of the comma footage halves the travel-angle response, while a
-  linear 2x brightening does not change it. Our night exposure clips highlights.
+The weak response belongs to our images, not to the model alone. On a public
+comma segment from an OS04C10 device (the same sensor family, night, city
+streets), the same fp32 model follows a warp change by about 0.5 (travel angle)
+and 0.85 (lane direction). On our footage it is 0.15 to 0.32 and 0.2 to 0.48,
+day and night.
 
-The flow calibrator does not ask the model. It measures where the camera is actually going: the focus of
-expansion (FOE). The result is an absolute measurement with no feedback loop, so a bias cannot build up and
-averaging only removes noise.
+- **Resolution:** resampling the comma footage to our pixel density does not
+  change it. Neither does building both inputs from one camera, or degrading our
+  own footage 2.5 times further. So a higher-resolution frame ring would not
+  help.
+- **Highlights:** clipping the brightest 10% of the comma footage halves the
+  travel-angle response, while a linear 2x brightening does not change it. Our
+  night exposure clips highlights.
+
+The flow calibrator does not ask the model. It measures where the camera is
+actually going: the focus of expansion (FOE). The result is an absolute
+measurement with no feedback loop, so a bias cannot build up and averaging only
+removes noise.
 
 ## How
+
+A measuring window starts on a gated frame and follows its points for 8 frames.
+Each accepted window is one sample of the travel direction:
+
+```mermaid
+flowchart TB
+    gate{"gate open?"} -- yes --> pyr["VPP pyramid<br>two levels"]
+    gate -- no --> lost["window lost"]
+    pyr --> corners["window start<br>≤ 300 corners"]
+    corners --> lk["IVE LK<br>8 frames (0.4 s)"]
+    lk --> solve["solve_flow_direction<br>direction, rotation"]
+    solve --> accept{"accepted?"}
+    accept -- no --> rejected["rejected_windows"]
+    accept -- yes --> block["block median<br>of 20 windows"]
+    block --> estimate["estimate<br>30-block mean"]
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class gate,pyr,corners,lk,solve,accept,block,estimate compute
+    class lost,rejected proc
+```
 
 | Step | Where | Notes |
 | --- | --- | --- |
@@ -47,326 +103,314 @@ averaging only removes noise.
 | Solve | `solve_flow_direction` | windows whose median point displacement is under 1 px are dropped first; then travel direction (a, b, 1) plus a small rotation, Sampson epipolar residuals, Cauchy-weighted Gauss-Newton, then two rounds of trimming at three robust scales (1.4826·MAD) |
 | Aggregate | `FlowCalibrator` | median of every 20 windows (a block), mean of the last 30 block medians, status 2 after 3 blocks; a mount change keeps only the newest blocks |
 
-Yaw is `atan(a)` and pitch is `-atan(b)`, the same convention as the calibration's rpy. Roll is not
-observed; it is not observed by `calibrationd` either. A window is accepted when at least 50 tracks survive
-all 8 steps, their median displacement is at least 1 px, at least 40 fit the solution, and the camera turned
-less than 0.5° in the window.
+Yaw is `atan(a)` and pitch is `-atan(b)`, the same convention as the
+calibration's rpy. A window is accepted when at least 50 tracks survive all 8
+steps, their median displacement is at least 1 px, at least 40 fit the solution,
+and the camera turned less than 0.5° in the window.
 
-- **Parallax gate:** with no motion, every direction fits the epipolar constraint. A parked desk test with the
-  gate forced open accepted 45% of its windows with random directions.
-  - Real windows at 40 km/h and up have a median displacement of 0.85 px (night) and 0.32 px (day) at their
-    1st percentile.
+- **Parallax gate:** with no motion, every direction fits the epipolar
+  constraint. A parked desk test with the gate forced open accepted 45% of its
+  windows with random directions.
+  - Real windows at 40 km/h and up have a median displacement of 0.85 px
+    (night) and 0.32 px (day) at their 1st percentile.
   - Below 1 px the yaw leans 0.1° to 0.2° (only distant points are left).
   - The 1 px gate drops 2.5% of night windows and 8% of day windows.
-- **Mount change:** a block median is 20 windows, so its noise is about 0.2°. When the three newest blocks all
-  sit more than 1° to the same side of the older blocks' mean, and within 0.5° of each other, the older blocks
-  are dropped. The estimate then follows the new mount within three blocks instead of 30. A change under 1°
-  is absorbed by the running mean.
+- **Mount change:** a block median is 20 windows, so its noise is about 0.2°.
+  When the three newest blocks all sit more than 1° to the same side of the
+  older blocks' mean, and within 0.5° of each other, the older blocks are
+  dropped. The estimate then follows the new mount within three blocks instead
+  of 30.
 
-Per gated frame, the board spends about 1.1 ms of CPU. Each window start adds about 2 ms of CPU for the
-corner pick. That is about 2.6% of one core while driving straight, and nothing otherwise.
+### Load on the board
 
-The IVE does the LK, about 5 ms per frame. It is otherwise unused. The pyramid goes to the VPP queue that
-`modeld` holds anyway; see [Hardware engines](runtime.md#hardware-engines).
+Per gated frame, the flow worker spends about 1.2 ms of CPU, measured in the
+board replay with the VPP pyramid ([Time per frame](#time-per-frame)). That
+includes the corner pick, about 2 ms at each window start, and the solve, both
+spread over the window's frames. It comes to about 2.4% of one core while
+driving straight, and nothing otherwise.
 
-In the replay, a gated frame took 15.9 ms of wall time with the original copy-plus-IVE-pyramid path.
-Reading the ring slot in place cut that to 12.7 ms with identical results. Moving the pyramid to the VPP cut
-it to 9.2 ms, with 1.2 ms of CPU. The VPP refuses YUV400 output, so the levels come out as NV12. Paired by
-window, the VPP and IVE pyramids agree to within 0.05° of median difference.
+The IVE does the LK, about 5 ms per frame. It is otherwise unused. The pyramid
+goes to the VPP queue that `modeld` holds anyway; see
+[Hardware engines](runtime.md#hardware-engines).
+
+`modeld`'s model loop hands each frame to the flow worker thread and does not
+wait for it. When three frames are queued, the oldest is dropped, and the
+window in progress with it.
 
 ### What the IVE actually does
 
-The AX630C IVE (MSP v3.0.0) differs from its header documentation in ways that shaped the design
-(`platform/maixcam2/maix_ive_flow.h`):
+The AX630C IVE (MSP v3.0.0) differs from its header documentation in ways that
+shaped the design (`platform/maixcam2/maix_ive_flow.h`):
 
-- **LK start points:** they go in in top-level pixels, the level-0 position / 2^(levels - 1). The output
-  points are level-0 pixels.
-- **LK range:** the total displacement clips at ±8 px, and negative moves come back +16 px.
+- **LK start points:** they are given in top-level pixels, the level-0
+  position / 2^(levels - 1). The output points are level-0 pixels.
+- **LK range:** the total displacement clips at ±8 px, and negative moves come
+  back +16 px.
   - `bUseInitFlow` does not extend the range.
-  - So the tracker steps one frame at a time, unwraps the result, and drops tracks that move more than
-    7.5 px.
-  - Within range the LK is precise: synthetic shifts come back to a 0.002 px median, and real frames agree
-    with OpenCV to 0.08 px median.
-- **Corners:** `AX_IVE_CornerDet` never fills its corner list in Shi-Tomasi mode.
-  - Its response image equals the 5x5-window minimum eigenvalue exactly, so the points are picked on the
-    CPU from that image.
+  - So the tracker steps one frame at a time, unwraps the result, and drops
+    tracks that move more than 7.5 px.
+  - Within range the LK is precise: synthetic shifts come back to a 0.002 px
+    median, and real frames agree with OpenCV to 0.08 px median.
+- **Corners:** `AX_IVE_CornerDet` never fills its corner list in Shi-Tomasi
+  mode.
+  - Its response image equals the 5x5-window minimum eigenvalue exactly, so the
+    points are picked on the CPU from that image.
   - Sobel accepts only a U16C1 output, but the values are signed.
-- **Query:** `AX_IVE_Query` with block set returns `AX_ERR_IVE_QUERY_TIMEOUT` after a few ms while a task
-  is still running, and has to be asked again.
-  - That macro is the full `AX_DEF_ERR` code `0x80150054`, not the enum value `0x54`.
+- **Query:** `AX_IVE_Query` with block set returns `AX_ERR_IVE_QUERY_TIMEOUT`
+  after a few ms while a task is still running, and has to be asked again.
+  - That macro is the full `AX_DEF_ERR` code `0x80150054`, not the enum value
+    `0x54`.
   - Not asking again leaves tasks running and makes the following ones fail.
-- **Scalers:** the IVPS scalers (TDP/VPP) have four sync queues per board, one pair per process that calls
-  `AX_IVPS_Init`, and the runtime takes all four. Inside `modeld` the flow calibrator uses `modeld`'s own
-  queue. A separate tool, such as `flow_calibration_replay` while the runtime is up, gets `AX_ERR_IVPS_BUSY`
-  and falls back to an IVE pyramid: a 5x5 Gaussian filter, then a DMA interval copy.
+- **Scalers:** the IVPS scalers (TDP/VPP) have four sync queues per board, one
+  pair per process that calls `AX_IVPS_Init`, and the runtime takes all four.
+  Inside `modeld` the flow calibrator uses `modeld`'s own queue. A separate
+  tool, such as `flow_calibration_replay` while the runtime is up, gets
+  `AX_ERR_IVPS_BUSY` and falls back to an IVE pyramid: a 5x5 Gaussian filter,
+  then a DMA interval copy.
+- **VPP output:** the VPP refuses YUV400 output, so the levels come out as NV12.
 
-## Using the estimate
+### Using the estimate
 
 `model/calibration_source` picks what the warp uses, each model frame:
 
 - **Setting off (default):** the pose loop's value, unchanged from before.
-- **Setting on, flow estimate usable:** pitch and yaw from the flow estimate, roll from the pose loop (flow
-  cannot see roll).
-  - Usable means status 2 (3 blocks or more), a standard deviation of the block medians under 0.5°, and
-    pitch and yaw inside upstream's calibration limits.
-  - Until then the pose loop is used, so a fresh install calibrates the same way as before.
-- **While engaged:** switching from the pose loop to the flow estimate waits for disengage. That covers a
-  changed setting (the web console refuses it too) and an estimate that becomes usable mid-drive. Falling
-  back to the pose loop happens at once, even while engaged. An applied estimate that moves (a new block, a
-  mount change) is followed while engaged too.
-- **Hysteresis:** the estimate starts being used below a 0.5° block-median standard deviation and stops above
-  0.8°, so it does not toggle at the edge.
-- **Ramp:** when the source changes or the flow estimate moves, the warp moves by 1/5 of the remaining
-  difference per second, but at least 0.05°/s.
-  - The model sees two frames and a 4.8 s feature history, so a step would jerk the path.
+- **Setting on, flow estimate usable:** pitch and yaw from the flow estimate,
+  roll from the pose loop (flow cannot see roll).
+  - Usable means status 2 (3 blocks or more), a standard deviation of the block
+    medians under 0.5°, and pitch and yaw inside upstream's calibration limits.
+  - Until then the pose loop is used, so a fresh install calibrates the same
+    way as before.
+- **While engaged:** a change of the setting, in either direction, waits for
+  disengage (the web console refuses it too), and so does an estimate that
+  becomes usable mid-drive. Only an estimate that becomes unusable falls back
+  to the pose loop at once, even while engaged. An applied estimate that moves
+  (a new block, a mount change) is followed while engaged too.
+- **Hysteresis:** the estimate starts being used below a 0.5° block-median
+  standard deviation and stops above 0.8°, so it does not toggle at the edge.
+- **Ramp:** when the source changes or the flow estimate moves, the warp moves
+  by 1/5 of the remaining difference per second, but at least 0.05°/s.
+  - The model sees two frames and a 4.8 s feature history, so a step would jerk
+    the path.
   - A 0.3° switch takes about 6 s and a 2° mount change about 10 s.
-  - Back on the pose source, once caught up, the warp follows the pose loop directly again.
+  - Back on the pose source, once caught up, the warp follows the pose loop
+    directly again.
 
-The pose loop pauses while the flow estimate drives the warp, and while the warp ramps between the two.
-Like upstream, it composes each sample onto its own output, assuming the model saw an image warped with
-that output. With another value in the warp that assumption breaks:
-- there is no feedback through the warp, so the loop would settle at the flow value plus the model's own pose
-  bias;
-- the pitch-yaw cross term of the rotation composition would build up roll block after block (about
-  0.05°/h at -1° pitch and a 0.1° bias), with nothing pulling it back.
+The warp's source moves between these states. "Flow wanted" means the setting
+is on and the estimate is usable; a moving flow estimate ramps the warp without
+leaving the flow state. A setting change waits for disengage in both
+directions, while an estimate that becomes unusable starts the ramp to the pose
+loop at once:
 
-Paused, the loop keeps its last estimate and its saved `calibration.json`. Back on the pose source it carries
-on from there. `model/calibration_online` stays a plain port of upstream; `model/calibration_service` decides
-when to feed it.
+```mermaid
+stateDiagram-v2
+    state "pose loop" as Pose
+    state "pending<br>until disengage" as Pending
+    state "ramp to flow" as ToFlow
+    state "flow estimate" as Flow
+    state "flow kept<br>until disengage" as Leaving
+    state "ramp to pose" as ToPose
+    [*] --> Pose
+    [*] --> Flow: flow wanted<br>at start
+    Pose --> Pending: flow wanted<br>while engaged
+    Pose --> ToFlow: flow wanted,<br>disengaged
+    Pending --> ToFlow: disengaged
+    ToFlow --> Flow: caught up
+    Flow --> Leaving: setting off<br>while engaged
+    Flow --> ToPose: unusable, or<br>setting off,<br>disengaged
+    Leaving --> ToPose: disengaged<br>or unusable
+    ToPose --> Pose: caught up
+```
 
-`ModelState.calibration` always describes the source the warp used. On the flow source it reports Calibrated
-with the estimate's block count and standard deviations, so engagement is not held back by the pose loop.
+The pose loop pauses while the flow estimate drives the warp, and while the warp
+ramps between the two. Like upstream, it composes each sample onto its own
+output, assuming the model saw an image warped with that output. With another
+value in the warp that assumption breaks:
+
+- there is no feedback through the warp, so the loop would settle at the flow
+  value plus the model's own pose bias;
+- the pitch-yaw cross term of the rotation composition would build up roll
+  block after block (about 0.05°/h at -1° pitch and a 0.1° bias), with nothing
+  pulling it back.
+
+Paused, the loop keeps its last estimate and its saved `calibration.json`. Back
+on the pose source it carries on from there. `model/calibration_online` stays a
+plain port of upstream; `model/calibration_service` decides when to feed it.
+
+`ModelState.calibration` always describes the source the warp used. On the flow
+source it reports Calibrated with the estimate's block count and standard
+deviations, so engagement is not held back by the pose loop.
 
 The blocks are saved to `params/flow_calibration.json`:
-- the first estimate and every mount change are saved at once, otherwise once a minute and at exit;
+
+- the first estimate and every mount change are saved at once, otherwise once a
+  minute and at exit;
 - they are restored at start, so the flow estimate is used from the first frame.
 
-The web console's calibration reset clears both the pose calibration and the flow blocks, and both start
-over. If the car engaged between the request and `modeld` picking it up, the request waits for disengage.
+The web console's calibration reset clears both the pose calibration and the
+flow blocks, and both start over. If the car engaged between the request and
+`modeld` picking it up, the request waits for disengage.
 
-## Outputs
+How the processes take part (`modeld` reads the setting and the reset request
+once a second; `overlayd` shows the source on the HUD's CAL card):
 
-- `ModelState.flow_calibration` (`FlowCalibrationState`, recording v10; v11 appended four fields):
+```mermaid
+sequenceDiagram
+    participant W as web console
+    participant M as modeld
+    participant C as controlsd
+    W->>M: calibration_use_flow<br>(refused while engaged)
+    C->>M: ControlState: engaged,<br>speed, curvature
+    Note over M: picks pose or flow,<br>ramps the warp
+    M->>C: calibration status<br>(Calibrated on flow)
+    M->>W: warp, flow and<br>pose estimates
+    W->>M: calibration reset<br>(waits for disengage)
+```
+
+### Outputs
+
+- `ModelState.flow_calibration` (`FlowCalibrationState`, recording v10; v11
+  appended four fields):
   - `status`: 0 off, 1 collecting, 2 estimate.
-  - `windows` and `blocks`: counts so far (`blocks` keeps counting); `estimate_blocks`: blocks in the
-    current estimate, up to 30.
+  - `windows` and `blocks`: counts so far (`blocks` keeps counting);
+    `estimate_blocks`: blocks in the current estimate, up to 30.
   - `yaw` and `pitch`: the estimate, in rad.
-  - `sd_yaw` and `sd_pitch`: the standard deviation of the block medians (v10 stored their range in the same
-    place).
-  - The last accepted window: `window_frame_id`, `window_yaw`, `window_pitch`, `window_rotation`,
-    `window_tracks` and `window_inliers`. Per-window results can be pulled from a recording by watching
-    `window_frame_id` change.
-  - `window_parallax` (median displacement of the last solved window, px), `rejected_windows` and
-    `mount_changes`.
+  - `sd_yaw` and `sd_pitch`: the standard deviation of the block medians (v10
+    stored their range in the same place).
+  - The last accepted window: `window_frame_id`, `window_yaw`, `window_pitch`,
+    `window_rotation`, `window_tracks` and `window_inliers`. Per-window results
+    can be pulled from a recording by watching `window_frame_id` change.
+  - `window_parallax` (median displacement of the last solved window, px),
+    `rejected_windows` and `mount_changes`.
 - `ModelState.calibration_source` (`CalibrationSourceState`, recording v11):
-  - `source`: 0 pose, 1 flow; `requested`: the setting as `modeld` last read it.
+  - `source`: 0 pose, 1 flow; `requested`: the setting as `modeld` last read
+    it.
   - `flags`: flow usable, switch pending while engaged, warp ramping.
-  - `pose_*`: the pose loop's own estimate and status, frozen while it is paused.
-- `ModelState.calibration` (`CalibrationState`) is the value the warp used. Its status, block count and spread
-  belong to the same source: on the pose source the pose loop's status, valid blocks and block range; on the
-  flow source Calibrated, `estimate_blocks`, and the pitch and yaw standard deviations.
-- The `modeld` log gets one `flowcal:` line per block. It holds the estimate, the last window, frame and
-  window counts, and the wall and CPU time per frame. It also logs `calibration: warp source flow|pose` on
-  every switch.
-- The web console's camera calibration card (vehicle tab) has the source switch. It sends
-  `POST /api/calibration/source`, which is refused while engaged. The generic parameter API does not take
-  `calibration_use_flow`. The card shows the warp's value, the flow estimate, the pose loop's estimate and
-  their difference. The HUD's CAL card reads FLOW instead of OK while the flow estimate is applied.
-- `EDGEPILOT_FLOW_CALIB=0` turns the calibrator off ([Runtime options](runtime-options.md)). If the IVE
-  cannot be set up, `modeld` logs `flow calibration off` and runs without it. A stored estimate is still
-  recorded and can still be applied.
+  - `pose_*`: the pose loop's own estimate and status, frozen while it is
+    paused.
+- `ModelState.calibration` (`CalibrationState`) is the value the warp used. Its
+  status, block count and spread belong to the same source: on the pose source
+  the pose loop's status, valid blocks and block range; on the flow source
+  Calibrated, `estimate_blocks`, and the pitch and yaw standard deviations.
+- The `modeld` log gets one `flowcal:` line per block. It holds the estimate,
+  the last window, frame and window counts, and the wall and CPU time per frame.
+  It also logs `calibration: warp source flow|pose` on every switch.
+- The web console's camera calibration card (vehicle tab) has the source switch.
+  It sends `POST /api/calibration/source`, which is refused while engaged. The
+  generic parameter API does not take `calibration_use_flow`. The card shows the
+  warp's value, the flow estimate, the pose loop's estimate and their
+  difference. The HUD's CAL card reads FLOW instead of OK while the flow
+  estimate is applied.
+- `EDGEPILOT_FLOW_CALIB=0` turns the calibrator off
+  ([Runtime options](runtime-options.md#model-and-calibration)). If the IVE
+  cannot be set up, `modeld` logs `flow calibration and lead flow off` and runs
+  without it. The worker also gets no frames on the CPU warp path
+  ([Frame input](model-pipeline.md#frame-input)). In each case the lead flow is
+  off too, and the lead track runs on the model distance alone. A stored
+  estimate is still recorded and can still be applied.
 
-In `tools/model/recording_reader.py` the layouts are `FLOW_CALIBRATION_STATE` and `CALIBRATION_SOURCE_STATE`;
-`flow_calibration(payload, version)` and `calibration_source(payload, version)` read them from any version.
+In `tools/model/recording_reader.py` the layouts are `FLOW_CALIBRATION_STATE`
+and `CALIBRATION_SOURCE_STATE`; `flow_calibration(payload, version)` and
+`calibration_source(payload, version)` read them from any version.
 
-## Validation
+## Evidence
 
-Offline, the own solver matched OpenCV's essential matrix within 0.03° on the same tracks. It also scattered
-three times less between one-minute segments.
+Offline, our solver matched OpenCV's essential matrix within 0.03° on the same
+tracks. It also scattered three times less between one-minute segments.
 
-On the board, `diagnostics/flow_calibration_replay` decodes a recorded segment with the VDEC and feeds it
-through the same `FlowTracker` that `modeld` runs. Over six night segments and four day segments of
-2026-10-10:
+### Board replay
+
+On the board, `diagnostics/flow_calibration_replay` decodes a recorded segment
+with the VDEC and feeds it through the same `FlowTracker` that `modeld` runs.
+Over six night segments and four day segments of 2026-10-10:
 
 | Route | Flow calibrator on the board (median of accepted windows) | OpenCV reference (0.2 s pairs with a forward-backward check) |
 | --- | --- | --- |
 | 19:32, night, after the remount (646 windows) | yaw -0.02°, pitch -0.21° | -0.00°, -0.16° |
 | 11:16, day, morning mount (265 windows) | yaw -0.58°, pitch -1.07° | -0.63°, -1.05° |
 
-The online calibrator showed -0.16° to -0.51° on the night route and -0.79° on the day route. The day gap
-is about one standard error of the median at 265 windows.
+The online calibrator showed -0.16° to -0.51° on the night route and -0.79° on
+the day route. The day gap is about one standard error of the median at 265
+windows.
 
-The corner threshold (0.2% of the strongest response) matters only at night. At 1%, two night segments kept
-38 and 28 windows instead of 101 and 118, while the day results did not change.
+The corner threshold (0.2% of the strongest response) matters only at night. At
+1%, two night segments kept 38 and 28 windows instead of 101 and 118, while the
+day results did not change.
 
-Per gated frame the replay measured 15-17 ms of wall time and 1.6-1.9 ms of CPU. That includes the corner
-pick and the solve, which are amortised over each window.
+On the original copy-plus-IVE-pyramid path, the replay measured 15-17 ms of
+wall time and 1.6-1.9 ms of CPU per gated frame across the segments. That
+includes the corner pick and the solve, which are amortised over each window.
+The current path is faster ([Time per frame](#time-per-frame)).
+
+### Time per frame
+
+In the replay, a gated frame took 15.9 ms of wall time and 1.6 ms of CPU with
+the original copy-plus-IVE-pyramid path, whose IVE DMA copy of every gated
+frame alone cost about 3 ms of IVE time and 2.8 MB of memory traffic. Reading
+the ring slot in place cut the wall time to 12.7 ms with identical results; the
+calibrator then checks both slots' seqlocks after each LK step. Moving the
+pyramid to the VPP, the path `modeld` runs now, cut it to 9.2 ms, with 1.2 ms
+of CPU:
+
+```mermaid
+---
+config:
+  xyChart:
+    height: 260
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#2f81f7"
+---
+xychart-beta
+    x-axis "pyramid path" ["copy + IVE", "slot in place + IVE", "slot in place + VPP"]
+    y-axis "wall time (ms)" 0 --> 20
+    bar [15.9, 12.7, 9.2]
+```
+
+Paired by window, the VPP and IVE pyramids agree to within 0.05° of median
+difference.
+
+### Road test
+
+The drive 2026-10-12--22-37-07-989 (22 min, town) ran with the flow estimate as
+the warp's source. It started from the 5 blocks learned in a rehearsal replay
+(pitch -0.21°, yaw -0.13°), which proved off by 0.15-0.2°. Live blocks
+corrected that within about 8 minutes: after 23 blocks the estimate stood at
+pitch about 0.0° and yaw -0.27°, with block-median standard deviations of 0.18°
+(pitch) and 0.11° (yaw).
+
+- **Yaw:** it agrees with the pose loop's -0.30°. On the 2026-10-10 drives the
+  pose loop's yaw had crept to -0.41° to -0.57°.
+- **Lane position:** at 60-90 km/h the car's mean lane offset moved from
+  -6.4 cm (2026-10-10) to +1.6 cm, so the car drove more centred, likely
+  because of the calibration.
+
+## Limits
+
+- **Roll** is not observed; it is not observed by `calibrationd` either. The
+  warp keeps the pose loop's roll.
+- **Gated driving only.** Windows come only from frames that pass the gate
+  (fast, straight, no blinker or desire), so the estimate changes only while
+  driving that way.
+- **Small mount changes.** A change under 1° is not detected as a mount change;
+  it is absorbed by the running mean.
 
 ## Next
 
-The setting stays off until a drive with recording shows a stable flow estimate. Then turn it on in the web
-console, drive, and compare lane-relative position with the earlier drives. Because our images make the
-model follow the warp only partly, fixing the yaw moves the car only a few centimetres, so `camera_offset_m`
-gets rechecked afterwards. The pose loop's pitch matched the flow pitch within 0.07°, so mainly yaw changes.
+The board has run with `calibration_use_flow` on since 2026-10-12 (the default
+stays off). One town drive is not much, so compare lane-relative position over
+more drives with the flow source, by day and on faster roads. The calibration
+moved the car's mean lane offset by about 8 cm on that drive
+([Road test](#road-test)), so `camera_offset_m` gets rechecked from those
+drives.
 
-## Lead expansion
+## Related
 
-The flow worker also measures the lead car's expansion rate (`ModelState.lead_flow`). The [lead track](#lead-track)
-fuses it with the model's lead distance, and the vision cruise uses that track.
-
-### Why
-
-supercombo's lead velocity barely follows the closing speed beyond 25 m. The reference here is a linear fit
-of the model's own lead distance over ±2 s:
-- At 25-40 m the lead velocity correlates 0.43 with it in the day and 0.39 at night.
-- Its slope is 0.3-0.5, so it reports about half the closing speed.
-- The vision cruise therefore slows down late for a slower lead.
-
-The image expansion of the lead's rear is a direct measurement:
-- a scale ratio s over a window of T seconds gives the expansion rate r = ln(s) / T;
-- the relative speed (range rate) is -x·r, with x the model distance, negative while closing;
-- the time to collision is 1/r.
-
-### How
-
-| Step | Where | Notes |
-| --- | --- | --- |
-| Box | `project_lead_box` | the previous model frame's lead (x, y) with the warp calibration, camera height and mount offset. The rear is 1.8 m wide and 0.3-1.4 m above the road; the box is shrunk 12% at each side and 8% at top and bottom. Leads at 8-80 m with probability ≥ 0.5 |
-| Corners | `pick_lead_corners` | full-resolution Shi-Tomasi (3x3 Sobel, 3x3 window) in the box, ≥ 1% of the strongest, 3 px apart, up to 64. The calibrator's 640x360 response leaves only a few points in a 25 px box |
-| Tracking | IVE pyramidal LK | one frame at a time, in the same call as the calibration points (300 + 64 ≤ 500); then the lead points once more, backward |
-| Forward-backward | `LeadFlowTracker::advance` | a point dies when tracking it back lands 0.3 px or more from where it started, when the LK loses it, or when it leaves the box by more than 40% |
-| Top-up | `LeadFlowTracker::top_up` | below 32 live points, new corners fill the free slots, 3 px away from live points. The window keeps going |
-| Refinement | `LeadFlowTracker::refine` | every point keeps a 9x9 template per frame. A point alive for 10 frames is matched against its template from 10 frames ago: translation-only inverse-compositional LK, starting from the chained position, within 2 px |
-| Fit | `fit_similarity_scale` | similarity transform from the positions 10 frames ago to the refined ones; RANSAC at 0.7 px, then a least-squares refit. At least 8 pairs and 6 inliers |
-
-The ring slot is an uncached mapping. So the CPU copies the box's neighbourhood once per frame and picks the
-corners, cuts the templates and refines on that copy.
-
-Each step was checked by emulating the board algorithm with OpenCV on the same frames. Correlation at 25-40 m,
-night / day:
-- **Chained tracking alone:** 0.29 / 0.49. This was the first board version. It reseeded only below 8 points,
-  so most windows ran on about 10.
-- **Forward-backward check:** removes points that slide on taillight blooms and edges. Night: about 0.3 → 0.8.
-- **Top-up:** keeps the point count up.
-- **Refinement:** removes the error that piles up over 10 chained steps (√10 times one step). Day, 40-60 m:
-  0.27 → 0.56.
-- **CPU-only alternatives** to the backward IVE call stayed near 0.7 at night: a correlation gate, or matching
-  the refined window back.
-
-### Output
-
-- `ModelState.lead_flow` (`LeadFlowState`, recording v12, 32 B):
-  - `frame_id`, `valid`;
-  - `points` (pairs in the fit) and `inliers`;
-  - `expansion_rate` (1/s, positive while closing in), `window_s` (about 0.5 s);
-  - `lead_x`, the model distance the box came from.
-- The `modeld` log gets a `leadflow:` line per 1200 lead frames (about a minute).
-- `tools/model/recording_reader.py` reads it with `lead_flow(payload, version)`.
-
-### Validation
-
-`diagnostics/flow_calibration_replay --leads leads.txt` feeds the recorded leads through the same
-`FlowTracker` on the board. Against the reference above, correlation / slope / residual (m/s):
-
-| Range | Model lead velocity | Board, first version | Board, now | OpenCV prototype |
-| --- | --- | --- | --- | --- |
-| Night 8-25 m | 0.34 / 0.26 / 1.2 | 0.26 / 0.66 / 2.8 | 0.80 / 0.80 / 0.7 | 0.67 / 0.59 / 0.9 |
-| Night 25-40 m | 0.39 / 0.29 / 1.5 | 0.29 / 0.44 / 2.3 | 0.86 / 0.83 / 0.8 | 0.69 / 0.59 / 1.1 |
-| Night 40-60 m | -0.25 / -0.15 / 1.9 | 0.21 / 0.28 / 2.2 | 0.42 / 0.43 / 1.6 | 0.38 / 0.32 / 1.5 |
-| Day 8-25 m | 0.65 / 0.77 / 0.6 | 0.26 / 0.63 / 1.6 | 0.64 / 0.75 / 0.7 | 0.73 / 0.76 / 0.5 |
-| Day 25-40 m | 0.43 / 0.48 / 1.0 | 0.49 / 0.88 / 1.4 | 0.69 / 1.05 / 1.0 | 0.81 / 1.06 / 0.7 |
-| Day 40-60 m | 0.06 / 0.06 / 1.0 | 0.36 / 0.93 / 1.7 | 0.38 / 0.80 / 1.4 | 0.48 / 0.95 / 1.3 |
-
-Night is 2026-10-10 19:32 (4 segments, 1633 frames every column covers). Day is 2026-10-04 12:32 (5 segments,
-4425 frames); its first-version column is the OpenCV emulation of that version.
-
-- **The prototype** picks fresh corners at every window start and tracks them straight to the window end,
-  with a forward-backward check. The board cannot do that: the IVE LK clips at ±8 px, and the old frames are
-  gone.
-- **Day:** the board is a little under the emulation (25-40 m: 0.69 against 0.75), because the IVE LK keeps
-  slightly different points.
-- **Timing:** the value covers the last 0.5 s. Stamped when it is available, at the window end, it trails the
-  reference by 0.15 s (night) and 0.30 s (day). The model's velocity trails by 0.10 and 0.15 s. The gain is
-  accuracy, not latency.
-- **Coverage:** a rate on 84-92% of lead frames at night and 92-99% in the day.
-- **Cost:** the replay runs on the IVE pyramid with the runtime up. It took 1.4-2.0 ms of CPU and 8.4-10.3 ms
-  of wall time per lead frame, against 0.7 ms and 6.6 ms for the first version. The backward call adds 1-2 ms
-  of IVE time.
-
-### Lead track
-
-On its own, the flow rate is right in size but noisy from frame to frame. The model distance jumps 0.6-1.6 m
-from frame to frame. `model/lead_tracker` fuses the two into the lead's distance and relative speed,
-`ModelState.lead_track`. `modeld` runs it once per model frame.
-
-- **State and measurements.** The state is [distance from the camera, relative speed], at constant velocity:
-  - The process noise is 4 (m/s²)²·s of relative acceleration.
-  - The model distance has a noise of 0.5 + 0.025·d m. Around the ±2 s trend it scatters 0.7-1.9 m, or 3-7%.
-  - The flow rate enters as a measurement of -v/d (an extended Kalman filter update). Its noise is 0.03/s,
-    taken three times larger because one frame's 0.5 s window overlaps the next nine.
-  - A flow value is used once, by its frame id: the flow worker can lag a model frame.
-- **Gates.** Both measurements pass a 3σ gate, so single spikes are dropped. The filter starts again only when
-  the lead drops out, when frames stop for over 0.5 s, or when 5 model distances in a row fall outside the
-  gate (another car).
-  - An offline version that started again at every 4 m jump of the model distance spiked: most such jumps
-    are the model's noise, not a new lead.
-- **Start.** It starts from the model's distance and its relative speed (0 when `controlsd` has no fresh
-  vehicle speed).
-
-Against the same reference, on the 11 segments above (night 034/039/040/041 and 138/139, day 10-04), 8-40 m
-pooled, settings as in the runtime:
-
-| | Speed error | Corr / slope | Speed jitter per frame | Distance jitter per frame | Lag |
-| --- | --- | --- | --- | --- | --- |
-| Model lead (raw) | 3.8 km/h | 0.47 / 0.41 | 2.2 km/h | 0.91 m | 0.25 s |
-| Flow rate alone | 3.1 km/h | 0.71 / 0.76 | 2.6 km/h | (model's) | 0.40 s |
-| Model distance filtered alone | 4.2 km/h | 0.71 / 1.06 | 1.4 km/h | 0.24 m | 0.55 s |
-| Lead track (model distance and flow) | 2.3 km/h | 0.82 / 0.81 | 0.7 km/h | 0.26 m | 0.60 s |
-
-- At about the same lag, the flow halves the speed error of a filter on the model distance alone, and halves
-  its jitter. So the gain is more than smoothing.
-- The price is lag: 0.6 s against the reference, 0.35 s more than the raw model lead.
-  - Measuring the flow as a change of log distance over its window (a cloned state) could take some of that
-    back.
-  - A constant-acceleration variant that placed the flow at its window's centre overshot.
-- The flow for 138/139 came from the OpenCV emulation of the board algorithm, which matched the board. The
-  scripts are in `eval/lead_flow_20261011/fusion` (outside the repository).
-
-`ModelState.lead_track` (`LeadTrackState`, recording v13, 24 B):
-- `valid` and `flags`: the flow was used, the flow or the model distance was gated out, the track started.
-- `distance_m` (from the camera, like `lead.x`) and `relative_speed_mps` (negative while closing).
-- `distance_std_m` and `relative_speed_std_mps`: the filter's standard deviations.
-
-The web BEV draws the lead where the track puts it, with the model's own distance as a gray bar across the
-lane, and a card of both over time ([Runtime options](runtime-options.md#web-console)).
-
-### The vision cruise takes the track
-
-`controlsd` gives the vision cruise the track's distance and relative speed whenever the track has a value
-(`observe_cruise_lead`). Whether there is a lead at all is still the model's call, through its 0.5 probability
-threshold. The departure alert keeps the model's lead: it has to be quick, and at a standstill the model's lead
-is already steady (about 3 cm per frame).
-
-Before the switch, the real `controlsd` code was replayed on 9 segments where the vision cruise had pressed
-buttons behind a lead (2026-10-10 18:34: 042, 066, 069, 075; 19:32: 034, 039-042, 082):
-- `diagnostics/replay_controls --lead-track` fed in the track, computed offline with the emulated flow.
-- Each replay starts before its cruise session, because `controlsd` estimates the cruise state from the
-  driver's SET/RES presses.
-- The replay is open loop: the recorded car does not answer the replayed buttons.
-
-| | Model lead | Lead track |
-| --- | --- | --- |
-| Cruise target vs the target from the reference lead (3545 frames): RMS / median error | 6.9 / 4.3 km/h | 4.2 / 2.0 km/h |
-| Target bias / jitter per frame | -2.2 / 3.2 km/h | +0.0 / 1.3 km/h |
-| Button presses (SET- / RES+) | 85 (68 / 17) | 72 (55 / 17) |
-| Presses against the reference (SET- while the lead pulls away, RES+ while it closes) | 35 | 23 |
-| First SET- after a closing episode starts (3 of 14 answered) / first RES+ after an opening (2-3 of 10) | 0.8 s / 4.3 s | 0.4 s / 2.5 s |
-
-- The target is the formula of `AdaptiveCruiseController::target_speed`, fed each lead with the same ego speed
-  and parameters.
-- The reference target jitters 0.83 km/h per frame.
-
-### Next
-
-Drive with recording on. Check `lead_flow` and `lead_track` live, and how the vision cruise now follows slower
-leads. A time-to-collision warning could follow.
+- [Lead flow](lead-flow.md): the lead's expansion rate from the same flow worker
+- [Model pipeline](model-pipeline.md): the warp this calibration feeds
+- [Runtime](runtime.md): the processes and the hardware engines they share
+- [Runtime options](runtime-options.md): `EDGEPILOT_FLOW_CALIB` and the web
+  console
+- [Parameters](../params/README.md): the `calibration_use_flow` setting
+- [Recording](recording.md): the event log versions that carry these states
+- [Diagnostic tools](../diagnostics/README.md#board): `flow_calibration_replay`
+  and its options

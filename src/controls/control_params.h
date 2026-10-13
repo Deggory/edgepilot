@@ -64,8 +64,8 @@ struct SteeringParams {
     bool live_bank_compensation = true;
     // paramsd·torqued 학습값 사용. 끄면 학습기는 계산·기록만 한다. 차량 값을 켜면
     // 롤 보정이 live_bank_compensation을 대신한다.
-    bool use_live_vehicle_params = false;
-    bool use_live_torque_params = false;
+    bool use_live_vehicle_params = true;
+    bool use_live_torque_params = true;
     // lagd(locationd) 조향 지연 사용. 켜고 lagd가 확정(5블록)되면 경로 지연(목표 곡률을 읽는
     // 시점), 토크 컨트롤러의 요청 지연, torqued 지연에 추정값을 쓴다(상류 lat_delay).
     bool use_live_delay = false;
@@ -103,3 +103,5 @@ struct ControlTiming {
 
 // params/steering.json을 읽어 SteeringParams에 반영한다.
 bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error);
+// steering.json에서 읽는 키 가운데 a와 b가 다른 첫 키. 같으면 빈 문자열(기본값이 파일과 같은지 보는 테스트용).
+std::string first_steering_param_difference(const SteeringParams &a, const SteeringParams &b);

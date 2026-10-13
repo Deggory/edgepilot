@@ -32,7 +32,7 @@ const HISTORY_S = 10;                   // 카드가 출발 알림 입력을 얼
 // 앞차 카드: 최근 LEAD_HISTORY_S 동안 앞차의 거리와 자차 대비 상대 속도를 모델, 광류(속도만), modeld의
 // 앞차 추적(둘을 융합한 것)에서 가져와 모델 자체 거리의 추세와 견준다. 추세는 앞차 하나의 ±half s에 맞춘
 // 직선이다(끊김 없이, jump m보다 큰 튐 없이, 양 끝에서 edge s 안까지 닿는 points 프레임 이상).
-// docs/flow-calibration.md가 이들을 검증하는 방식대로다. 추세는 half s 늦게 알게 된다.
+// docs/lead-flow.md가 이들을 검증하는 방식대로다. 추세는 half s 늦게 알게 된다.
 export const LEAD_HISTORY_S = 20;
 const TREND = {half: 2, jump: 4, points: 60, edge: 0.1};
 const MODEL_STALE_S = 0.5, CONTROL_STALE_S = 1.0;

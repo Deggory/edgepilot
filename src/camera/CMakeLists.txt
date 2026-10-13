@@ -1,4 +1,4 @@
-# camerad와 카메라 내부 파라미터 측정용 스틸 캡처(camcal, docs/camcal.md). 보드에서만 빌드한다.
+# camerad와 카메라 내부 파라미터 측정용 스틸 캡처(camcal, docs/camera-intrinsics.md). 보드에서만 빌드한다.
 if(EDGEPILOT_BUILD_RUNTIME)
   add_executable(camerad camerad.cc)
   configure_board_target(camerad common maixcam2_media)

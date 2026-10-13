@@ -12,7 +12,7 @@
 //  - 살아 있는 점이 kLeadTopUpPoints보다 적으면 상자에서 새로 골라 채운다(창은 끊지 않는다).
 //  - 창이 찬 점은 10프레임 전 그 자리의 템플릿(9x9)을 지금 프레임에 맞춰 위치를 다듬는다. 쌓인 오차가 없어진다.
 // 보드 재생에서 모델 거리 추세(±2초)와의 상관(25~40 m)은 밤 0.86, 낮 0.69였다(이어 붙이기만 0.29/0.49, 모델
-// 앞차 속도 0.39/0.43, docs/flow-calibration.md). 이 파일은 하드웨어와 무관한 부분(투영, 점 고르기, 맞춤, 창)이다.
+// 앞차 속도 0.39/0.43, docs/lead-flow.md). 이 파일은 하드웨어와 무관한 부분(투영, 점 고르기, 맞춤, 창)이다.
 
 #include "common/ipc_messages.h"     // LeadFlowState
 #include "common/model_output.h"     // kLeadProbabilityThreshold

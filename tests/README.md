@@ -1,102 +1,153 @@
-# 호스트 단위 테스트
+# Host tests
 
-보드 없이 호스트에서 도는 googletest 테스트다. 파일 하나가 실행 파일 하나이고
-(`gtest_<이름>.cc` → `build-host/bin/gtest_<이름>`), 교차 빌드에는 들어가지 않는다.
+[← Documentation](../docs/README.md)
 
-## 실행
+The googletest tests and Python checks that run on the host, without the board.
+Each test file is one executable (`gtest_<name>.cc` →
+`build-host/bin/gtest_<name>`), and none of them is part of the cross build.
+
+`scripts/run_host_tests.sh` builds the tests and runs them all:
+
+```mermaid
+flowchart TB
+    script["scripts/run_host_tests.sh"] --> configure["configure build-host<br>runtime off, diagnostics on"]
+    gtest(["googletest v1.18.0<br>first configure, SHA256 pinned"]) --> configure
+    configure --> build["build the host_tests target<br>32 gtest_* executables"]
+    build --> ctest["ctest<br>from the repository root"]
+    ctest --> cpp["build-host/bin/gtest_*<br>262 cases"]
+    ctest --> py["Python checks<br>check_web_console.py<br>check_recording_reader.py<br>check_docs.py"]
+    py -.-> mjs["check_bev_lane_filter.mjs<br>jsc or node, if present"]
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    class script,configure,build,ctest,cpp,py,mjs proc
+    class gtest external
+```
+
+## Run
 
 ```sh
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 260개와
-Python 2개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
+The script configures `build-host`, builds the `host_tests` target and runs
+everything with `ctest`: 262 C++ cases and 3 Python checks. googletest v1.18.0
+is downloaded on the first configure (its SHA256 is pinned).
 
-하나만 돌릴 때:
+To run one test:
 
 ```sh
 ctest --test-dir build-host -R LateralController.InactiveDesiredTracksActual --output-on-failure
 build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 ```
 
-테스트는 `params/`를 상대 경로로 읽으므로 저장소 루트에서 돌아야 한다. `ctest`는 루트에서
-돌리고, 실행 파일을 직접 부를 때도 루트에서 부른다.
+The tests read `params/` by a relative path, so they must run from the
+repository root. Run `ctest` from the root, and call an executable directly from
+the root as well.
 
-## 목록
+## Tests
 
-| 실행 파일 | 개수 | 검사 내용 |
+| Executable | Cases | What it checks |
 | --- | ---: | --- |
-| `gtest_adaptive_cruise` | 18 | 비전 크루즈 버튼 간격과 한계. 차량 모형과 폐루프로 돌려 설정 속도 동기화, 재설정, 반응 없는 차, 오르내림 반복을 본다. 실측 같은 느린 차량 모형(초당 0.5 km/h)으로 가속 페달 사용을 버튼 유실로 읽지 않는지, 약한 감속에 맞춘 접근 속도 한계, 차가 줄이는 동안 설정 속도를 실제 속도 근처에 두는지, 앞차 측정 잡음에 SET-/RES+가 번갈아 나가지 않는지 |
-| `gtest_alert_tones` | 1 | 알림음 합성: 모든 소리가 무음에서 시작해 무음으로 끝나고, 봉우리가 같고, 0.3~2.5초이며, 서로 다르다 |
-| `gtest_background_writer` | 1 | 루프 밖 파일 쓰기 스레드: 같은 경로는 최신 내용, 지우기, 실패 수, flush는 넘긴 쓰기가 끝날 때까지 기다림, 없앨 때 남은 쓰기 마치기 |
-| `gtest_build_version` | 2 | 빌드 버전(`cmake/build_version.cmake`): 실행 파일 안의 표식 바로 뒤가 `edgepilot_version()`이고, 웹 콘솔이 그대로 보여 줄 수 있는 64자 이하의 글자만 쓰는지 |
-| `gtest_calibration` | 17 | 온라인 보정 상태 기계(calibrationd.py 참조, 카메라 높이·높이 표준편차 조건 포함), 장착 변경·초기화 재보정, 범위 밖 저장값 복원, 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조), NV21 색차 순서, 카메라 장착 위치. 보정 서비스의 광류 출처(가짜 `FlowSource`로): 저장된 광류 블록과 설정으로 첫 프레임부터 광류, 광류가 워프를 맡는 동안 포즈 보정기가 멈췄다가 포즈로 돌아오면 다시 도는지, 초기화가 두 보정을 다 지우고 측정원에 알리며 그 전 상태를 버리는지, 결합 중 초기화는 해제까지 대기, 측정원의 블록 저장 |
-| `gtest_calibration_source` | 12 | 워프 보정 출처 고르기: 설정이 포즈면 포즈 값 그대로, 광류면 쓸 만할 때(3블록, 범위·표준편차) 광류 pitch·yaw와 포즈 roll, 결합 중 설정 변경과 주행 중 생긴 추정은 해제까지 대기, 포즈로 물러나기는 결합 중에도, 적용 중인 추정 변화는 결합 중에도 따라감, 표준편차 이력(0.5°/0.8°), 램프(차이의 1/5 초당, 최소 0.05°/s), 포즈로 돌아온 뒤 그대로 따라감, 초기화 때 바로 맞추기 |
-| `gtest_car` | 15 | 휠 속도 vEgo 칼만 필터(상류 opendbc 값과 대조, 낡은 뒤 다시 시작), K7 CAN 신호 해석(LCA11, WHL_SPD11과 바퀴 정지, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터와 일시 고장(ToiUnavail·ToiFlt))과 MDPS용 CLU11 속도 바꿔치기, CGW1 B-CAN 타임아웃을 안전한 값으로 읽기(깜빡이·비상등 꺼짐, 문 열림, 안전벨트 미착용), AHB1 페달 스트로크(3 mm 초과)와 TCS13 BrakeLight(AUTO HOLD)로 켜는 브레이크등, AHB1 페달이 끄는 고정형 크루즈 추정(TCS13 0이 덮어쓰지 않음, 밟은 채 RES 무시) |
-| `gtest_control_holds` | 3 | 조향 경로 게이트(plan 도달 거리와 점 수), Panda 헬스 공백 홀드(100 ms), 잘못된 plan 홀드(150 ms) |
-| `gtest_controls_tick` | 9 | controlsd 한 틱(`ControlsTick`)을 main처럼 10 ms마다: 신호 배치대로 채운 K7 CAN·20 Hz 모델·Panda 상태로 SET 결합과 LKAS11 송신(파워트레인·MDPS 버스), 문 열림 해제, Panda 거부 1초 유예 뒤 거절, AHB1 페달이 끄는 크루즈 추정(횡제어는 유지), 휠 속도가 끊기면 0.5초 뒤 비우는 크루즈·발행 속도(조향은 설정한 시간까지), locationd를 못 읽은 틱의 마지막 lagd 지연, 확률 문턱 밑 모델 앞차 무시, 비전 크루즈는 앞차 추적을 받고 출발 알림은 모델 앞차를 받는지. 작업 스레드 플래너(`LateralPlannerWorker`)가 `SyncPlanner`와 비트까지 같은 결과를 내고 바꾼 파라미터를 다음 프레임부터 쓰는지 |
-| `gtest_departure_alert` | 14 | 정차 중 앞차 출발과 신호 대기 알림(짧은 plan 1.5초 무장, 무장 전 열림이면 다시 재기, 정차 2.7초 만의 녹색, 가속 확률, 서 있는 가까운 앞차 뒤 경로 깜빡임 거르기, 깜빡이 대기 중 가속 확률 끄기, 앞차 끊김 허용), controlsd 주기(100 Hz 틱, 모델 5틱마다)의 녹색 확인, 모델 프레임 사이에서 판단하는 가까운 앞차 거부, 서행은 정차를 끝내지 않고 가속 페달은 끝냄 |
-| `gtest_desire_helper` | 4 | 차선 변경 desire 상태 머신(`DesireHelper`): 깜빡이 쪽으로 핸들을 밀어야 시작, 차선선 0.5초 페이드 아웃·인, 사각지대 대기, 10초 시한, 도로 경계 쪽 차단과 경계가 사라질 때의 시작 |
-| `gtest_device_settings` | 3 | 웹 기기 설정(`display.json`) 읽기: 범위 클램프, 잘못된 값은 이전 값 유지, 파일이 바뀔 때만 다시 읽기 |
-| `gtest_flow_calibration` | 12 | 광류 보정기의 하드웨어 무관 부분: 합성 장면에서 이동 방향·회전 풀이와 부호 규약, 점이 적거나 회전이 크면 거절, 서 있는 장면은 이동량(1 px)으로 거절, 칸별 코너 고르기, 곧은 길 조건, 블록 중앙값과 상태, 최근 30블록, 저장·복원 왕복, 장착 변경(최근 3블록이 1° 넘게 같은 쪽)과 작은 이동·흩어진 블록은 그대로, 버린 창 수 |
-| `gtest_lane_line_filter` | 6 | 차선선 시간 필터: 가중 1이면 측정 그대로인지, 굽은 길을 따라가는 동안 치우침이 없는지(직선 보간이면 커브 안쪽으로 끌린다), 곧은 길에서 차가 방향을 틀어도 자차 움직임 보정으로 늦지 않는지, 잡음이 가중만큼 주는지, 선이 크게 바뀌거나 프레임이 끊기면 측정에서 다시 시작하는지, BEV의 JS 사본(`check_bev_lane_filter.mjs`)과 나누는 기준 출력 |
-| `gtest_lead_flow` | 6 | 앞차 확대율의 하드웨어 무관 부분: 앞차 뒷면 상자 투영(장착 오프셋 포함)과 범위 밖 거절, 원본 해상도 코너 고르기, 배경 점을 버리는 유사변환 RANSAC, 무늬 판을 그린 합성 접근 장면에서 걸음마다 떠도는 점을 10프레임 전 템플릿으로 되돌려 접근 속도를 맞추는지, 앞뒤 검사에 걸린 점을 버리고 빈자리를 채우며 창을 잇는지, 앞차가 바뀌거나 프레임이 끊기면 창을 다시 시작하는지 |
-| `gtest_lead_tracker` | 5 | 앞차 추적(모델 거리와 광류 확대율의 칼만 필터): 잡음 섞인 접근 앞차에서 거리 흔들림이 크게 줄고 덜 읽힌 상대 속도에서 시작해도 실제 접근 속도를 찾는지, 튀는 거리 하나는 버리고 5프레임 내리 다른 곳이면 다른 앞차로 다시 시작하는지, 확대율이 있으면 같은 지연에서 상대 속도가 더 정확하고 덜 흔들리는지, 튀는 확대율과 같은 창 끝 프레임의 반복은 쓰지 않는지, 앞차가 없거나 프레임이 끊기면 다시 시작하고 자차 속도를 모르면 0에서 시작하는지 |
-| `gtest_hud_canvas` | 10 | HUD 캔버스: 스트레이트 알파 합성(부동소수 기준식 대조), 다각형 커버리지 합 = 기하 넓이, 먼 쪽 흐림, 둥근 사각형 곧은 행(이음매 없음), 그린 칸만 지우기, 글자 폭, 세로 패널 버퍼 = 가로 그림의 전치. 렌더러의 상태 테두리와 알림 카드, 다시 받은 버퍼 = 새 버퍼, 늘 있는 카드(TPMS·보정·보드 상태·학습값), 오토 홀드 배지, 세 자리 속도에서도 카드에 닿지 않는 노란 깜빡이, 설정 속도 카드 안의 SET, 상태 알약·왼쪽 열 터치 영역 |
-| `gtest_hud_policy` | 12 | overlayd의 그리기 밖 판단: 제어 이벤트 알림(기준값, 카운터 리셋, 우선순위), 프레임마다 알림음 하나(해제 예고는 미루고 불가용 천이는 넘김, engage 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활 |
-| `gtest_hud_state` | 6 | 제어·녹화·학습기·locationd·보정 상태 → HUD 매핑(차선 변경·조향 쉼 플래그, 운전자 토크 눈금, 제어가 쓰는 학습값, 광류 출처면 CAL 카드 FLOW), 차선 안 위치, 모든 `BlockReason`의 라벨, 알림 카드 우선순위 |
-| `gtest_ipc_channels` | 2 | 공유 메모리 CAN 큐, 헤더가 맞지 않는 최신값 채널에는 붙지 않는 구독 |
-| `gtest_lateral_controller` | 30 | 횡제어기: engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피(85도 위 토크 상한과 steer 요청 끄기, 정차 대기·85도 위 결합, 손을 뗐을 때 80도 상한, 운전자가 넘겨받은 회전은 15도까지 해제, 회피를 끄면 상류 85도 컷), MDPS 일시 고장(조향 쉼과 해제 예고, 운전자가 넘겨받았으면 조용히), 정차 중 비활성, 곡률 제한(최소 안정 지연, 포화 경고), Panda 게이트와 넘겨받기, LKAS HUD, 학습값 소비(끄면 비트 동일, `paramsd_invalid`, 롤 반영 곡률 한계, lagd 지연), CAN 픽스처 재생 |
-| `gtest_lateral_learners` | 18 | paramsd EKF(야코비안, Joseph 양정치, 수렴, 게이트, 출력 한계, 저장, 자이로 바이어스), torqued(TLS와 닫힌 해 대조, 버킷, 게이트, 필터·decay, 4 Hz/12 s 스케줄, 캐시), controlsd 연결 |
-| `gtest_lateral_mpc` | 1 | 횡 MPC 최적성. 동역학과 코스트를 따로 구현해 시나리오 8개의 수렴점에서 기울기를 본다([검증 기록](../docs/verification.md#lateral-mpc-solver)) |
-| `gtest_lateral_planner` | 6 | 횡 플래너: laneless(openpilot `get_curvature_from_plan`), 차선 변경(상류 desire_helper), 최소 속도 아래 깜빡이는 desire 없음, `path_offset_m` 적용 범위, `lane_path_weight`, Lane 모드의 차선 없는 구간이 laneless와 같은지와 인계 블렌드 |
-| `gtest_lateral_torque` | 10 | 토크 횡제어기: 조향 지연만큼의 요청 버퍼, 속도별 이득(KP_INTERP), 상류 PID 적분 한계(포화 중 정지, 비활성 리셋), 라이브 뱅크와 latAccelOffset feedforward, 학습값 소비(opendbc `calc_curvature`, 상류 latAccelFactor 구조) |
-| `gtest_localization` | 11 | locationd(PoseKalman, LocationEstimator: 정지 수렴, 요레이트 추적, 자이로 교차검증, 되감기, IMU 묶음 무관, 정차 속도 가드, 부팅, IMU 장착 기울기)와 lagd(상류 상관식 대조, 주행 지연 추정, 개입·저속 무시) |
-| `gtest_model_output` | 5 | supercombo raw 출력 레이아웃과 시간축 입력 규약(desire 펄스·풀링, 특징 이력, 이미지 이력) |
-| `gtest_model_state_fill` | 2 | modeld가 채우고 overlayd가 되돌리는 `ModelState` 왕복(남는 값, t=0 lead만, road_transform 없음, 보정 칸)과 `compute_lane_t`(일정 속도면 거리/속도, 짧은 plan 끝 뒤 NaN, 뒤로 뛰는 knot에도 단조) |
-| `gtest_panda_can_codec` | 1 | panda USB CAN 패킹·언패킹 |
-| `gtest_panda_firmware` | 8 | 판다 펌웨어 이미지 검사(앱 영역, 길이 필드, VERS 꼬리, 버전 문자열), 주차 중에만 플래싱하는 조건, F413 보드만, 상태 JSON 이스케이프. pandad의 health 패킷·패킷 버전·USB ID·safety 번호·앱 시작 주소가 `firmware/panda` 소스와 같은지(`board/health.h`를 그대로 가져와 대조) |
-| `gtest_projection` | 4 | 화면 크기와 무관한 도로 점 투영, 설정된 카메라 내부 파라미터, 카메라 장착 오프셋 |
-| `gtest_recording` | 6 | 디스크의 route 구조: EDGELOG1 청크, EDGEIDX1 인덱스(v8 이하 녹화의 예전 매직도 읽기), 매니페스트, params 스냅샷, 스테이징 비우기. 이벤트 로그 리더(끊긴 꼬리에서 멈춤, 큰 파일 머리), 옛 버전 ModelState 해석, 기록한 CAN 페이로드 왕복(CAN-FD, 끊긴 꼬리, 256 프레임 상한), 상태 채널 기록(생산자가 생긴 뒤 붙기, 새 스냅샷만, IMU는 채운 샘플까지), replayd route 리더(세그먼트 경계, 키프레임마다 코덱 설정, 청크를 넘는 CAN·판다 이벤트 시각 순, 머리가 깨진 프레임 인덱스는 그 세그먼트만 건너뜀) |
+| `gtest_adaptive_cruise` | 18 | Vision cruise button spacing and limits. In closed loop with a vehicle model: set-speed sync, re-setting, a car that does not respond, and up-down hunting. With a slow vehicle model like the measured one (0.5 km/h per second): accelerator use is not read as a lost button press, the approach-speed limit matched to the weak deceleration, the set speed kept near the actual speed while the car slows, and no alternating SET-/RES+ on lead measurement noise |
+| `gtest_alert_tones` | 1 | Alert sound synthesis: every sound starts and ends in silence, has the same peak, lasts 0.3-2.5 s, and differs from the others |
+| `gtest_background_writer` | 1 | The thread that writes files outside the loop: the latest content wins for the same path, deletion, the failure count, `flush` waiting for the writes already handed over, and the remaining writes finishing on destruction |
+| `gtest_build_version` | 2 | The build version (`cmake/build_version.cmake`): the marker in the executable is followed by `edgepilot_version()`, which is at most 64 characters, all of them ones the web console shows as they are |
+| `gtest_calibration` | 18 | The online calibration state machine (against `calibrationd.py`, including the camera height and height standard deviation conditions), recalibration on a mount change or a reset, restoring an out-of-range saved value, save, restore and manual calibration, environment variables, the projection matrix and the YUV6 warp (against openpilot's OpenCL), NV21 chroma order, the camera mount position, the warp matrices whose golden values `check_recording_reader.py` holds `model_warp.py` to. The calibration service's flow source (with a fake `FlowSource`): flow from the first frame when a flow block is saved and the setting is on; the pose calibrator pausing while flow drives the warp and running again once it goes back to pose; a reset clearing both calibrations, telling the source and dropping the earlier state; a reset while engaged waiting for the disengage; the source saving its blocks |
+| `gtest_calibration_source` | 12 | Choosing the warp calibration source: set to pose, the pose value as it is; set to flow with the flow usable (3 blocks, range and standard deviation), the flow pitch and yaw with the pose roll; a setting change while engaged, and an estimate formed while driving, wait for the disengage; falling back to pose, and following a change in the applied estimate, happen even while engaged; the standard-deviation hysteresis (0.5°/0.8°); the ramp (1/5 of the difference per second, at least 0.05°/s); following the pose directly once back on it; matching at once on a reset |
+| `gtest_car` | 15 | The wheel-speed vEgo Kalman filter (against upstream opendbc values, restart after going stale), K7 CAN signal decoding (LCA11, WHL_SPD11 and wheel standstill, TPMS11, TCS13/15, SCC11, CLU11 cruise buttons and the fixed-cruise set speed, the MDPS12 fault filter and temporary faults (ToiUnavail, ToiFlt)) and the CLU11 speed swap for the MDPS, a CGW1 B-CAN timeout read as safe values (blinkers and hazards off, door open, seatbelt unlatched), brake lights lit by the AHB1 pedal stroke (over 3 mm) and TCS13 BrakeLight (AUTO HOLD), the AHB1 pedal turning off the fixed-cruise estimate (a TCS13 zero does not overwrite it, RES ignored while the pedal is pressed) |
+| `gtest_control_holds` | 3 | The steering path gate (plan reach and point count), the Panda health gap hold (100 ms), the invalid plan hold (150 ms) |
+| `gtest_controls_tick` | 9 | One controlsd tick (`ControlsTick`) every 10 ms, as in `main`, fed K7 CAN built from the signal layout, a 20 Hz model and the Panda state: a SET engage and the LKAS11 transmit (powertrain and MDPS buses), a disengage when a door opens, the refusal after a 1 s grace when the Panda does not allow control, the AHB1 pedal turning off the cruise estimate (lateral control stays), the cruise and the published speed cleared 0.5 s after the wheel speed drops out (steering until its configured time), the last lagd delay on ticks that could not read locationd, a model lead below the probability threshold ignored, and the vision cruise taking the lead track while the departure alert takes the model lead. The worker-thread planner (`LateralPlannerWorker`) gives results bit-identical to `SyncPlanner`'s and uses changed parameters from the next frame |
+| `gtest_departure_alert` | 14 | Lead-departure and green-light alerts at a stop (arming after 1.5 s of a short plan, timing again when the plan opens before arming, a green light only 2.7 s into the stop, the gas probability, path flicker behind a close standing lead filtered out, the gas probability unused while waiting with a blinker, short lead dropouts tolerated), the green-light check at controlsd's rates (100 Hz ticks, a model frame every 5 ticks), the close-lead rejection judged between model frames, and creeping not ending the stop while the accelerator does |
+| `gtest_desire_helper` | 4 | The lane-change desire state machine (`DesireHelper`): it starts only when the wheel is pushed towards the blinker side; lane lines fade out and in over 0.5 s; the blind-spot wait; the 10 s timeout; no lane change towards a road edge, and the start once the edge goes away |
+| `gtest_device_settings` | 3 | Reading the web device settings (`display.json`): range clamping, a bad value keeps the previous one, re-reading only when the file changes |
+| `gtest_flow_calibration` | 12 | The hardware-independent part of the flow calibrator: solving the direction of travel and the rotation on a synthetic scene, with the sign conventions; rejection with too few points or a large rotation; a standing scene rejected by its motion (1 px); corners chosen per cell; the straight-road condition; the block median and status; the last 30 blocks; a save-restore round trip; a mount change detected (the last 3 blocks more than 1° to the same side) while a small shift or scattered blocks are not; the count of dropped windows |
+| `gtest_hud_canvas` | 10 | The HUD canvas: straight alpha compositing (against a floating-point reference formula), polygon coverage summing to the geometric area, the far-side fade, the straight rows of a rounded rectangle (no seams), clearing only the drawn cells, glyph widths, the portrait panel buffer equal to the transposed landscape drawing. The renderer: the status border and alert cards, a reused buffer drawing the same as a new one, the cards always shown (TPMS, calibration, board status, learned values), the auto hold badge, the yellow blinker clear of the card even at a three-digit speed, SET inside the set-speed card, and the touch areas of the status pill and the left column |
+| `gtest_hud_policy` | 12 | overlayd's decisions outside drawing: control event alerts (baseline, counter reset, priority), one alert sound per loop (the disengage warning deferred and an unavailable transition skipped, the engage refusal shown with its reason for 3 s), blinker phases, cards opened and closed by touch, lane position smoothing |
+| `gtest_hud_state` | 6 | The mapping from control, recording, learner, locationd and calibration state to the HUD (lane-change and steering-pause flags, the driver torque gauge, the learned values the controls use, FLOW on the CAL card for the flow source), the position in the lane, labels for every `BlockReason`, alert card priority |
+| `gtest_ipc_channels` | 2 | The shared-memory CAN queue, and a subscriber that does not attach to a latest-value channel whose header does not match |
+| `gtest_lane_line_filter` | 6 | The lane-line time filter: weight 1 gives the measurement as it is; no bias while following a curve (linear interpolation would pull it towards the inside); no lag when the car turns on a straight road, thanks to the ego-motion compensation; the noise falls with the weight; it starts again from the measurement when a line changes a lot or frames drop; the golden output shared with the BEV's JS copy (`check_bev_lane_filter.mjs`) |
+| `gtest_lateral_controller` | 30 | The lateral controller: the engage gate and holds; the torque limit and the MDPS fault avoidance (torque cap and steer request off above 85°, waiting at a stop and engaging above 85°, the 80° cap with hands off, the request kept off until under 15° after a turn the driver took over, and the upstream 85° cut with the avoidance off); MDPS temporary faults (steering pause and disengage warning, quiet if the driver took over); inactive at a stop; the curvature limit (minimum stable delay, saturation warning); the Panda gate and handover; the LKAS HUD; the use of learned values (bit-identical when off, `paramsd_invalid`, roll-aware curvature limit, lagd delay); every `params/steering.json` key equal to the code default; the CAN fixture replay |
+| `gtest_lateral_learners` | 18 | paramsd EKF (Jacobian, Joseph positive definiteness, convergence, gate, output limits, save, gyro bias), torqued (TLS against the closed form, buckets, gate, filter and decay, the 4 Hz/12 s schedule, cache), the controlsd wiring |
+| `gtest_lateral_mpc` | 1 | Lateral MPC optimality: the dynamics and the cost are implemented separately, and the gradient is checked at the converged point of 8 scenarios ([Verification](../docs/verification.md#lateral-mpc-solver)) |
+| `gtest_lateral_planner` | 6 | The lateral planner: laneless (openpilot `get_curvature_from_plan`), lane change (upstream desire_helper), no desire from a blinker below the minimum speed, where `path_offset_m` applies, `lane_path_weight`, Lane mode's stretch without lanes matching laneless, and the handover blend |
+| `gtest_lateral_torque` | 10 | The torque lateral controller: a request buffer as long as the steering delay, the speed-dependent gain (KP_INTERP), upstream PID integrator limits (stopped while saturated, reset when inactive), live bank and latAccelOffset feedforward, the use of learned values (opendbc `calc_curvature`, the upstream latAccelFactor structure) |
+| `gtest_lead_flow` | 6 | The hardware-independent part of the lead expansion rate: projecting the box of the lead's rear (including the mount offset) and rejecting it when out of range; choosing corners at source resolution; a similarity RANSAC that drops background points. On a synthetic approach scene drawn with a textured board: points that drift at each step brought back with the template from 10 frames earlier, matching the closing speed; points that fail the forward-backward check dropped, the gaps refilled and the window continued; the window restarted when the lead changes or frames drop |
+| `gtest_lead_tracker` | 5 | The lead track (a Kalman filter of the model distance and the flow expansion rate): on a noisy approaching lead the distance shake falls a lot, and it finds the true closing speed even when it starts from an under-read relative speed; one jumping distance is dropped, and five frames in a row elsewhere restart on a different lead; with the expansion rate the relative speed is more accurate and steadier at the same delay; jumping expansion rates and repeats of the same window-end frame are not used; it restarts when there is no lead or frames drop, and starts from 0 when the ego speed is unknown |
+| `gtest_localization` | 11 | locationd (PoseKalman, LocationEstimator: convergence at rest, yaw-rate tracking, gyro cross-check, rewind, independence from IMU batching, standstill speed guard, boot, IMU mount tilt) and lagd (against the upstream correlation formula, the delay estimate while driving, ignoring interventions and low speed) |
+| `gtest_model_output` | 5 | The supercombo raw output layout and the time-axis input conventions (desire pulse and pooling, feature history, image history) |
+| `gtest_model_state_fill` | 2 | The `ModelState` round trip that modeld fills and overlayd reads back (spare values, lead at t=0 only, no road_transform, the calibration fields) and `compute_lane_t` (distance/speed at a constant speed, NaN beyond the end of a short plan, monotonic even with knots that jump back) |
+| `gtest_panda_can_codec` | 1 | Panda USB CAN packing and unpacking |
+| `gtest_panda_firmware` | 8 | Panda firmware image checks (app region, length field, VERS tail, version string), flashing only while parked, F413 boards only, status JSON escaping. pandad's health packet, packet version, USB IDs, safety number and app start address match the `firmware/panda` source (compared by including `board/health.h` as it is) |
+| `gtest_projection` | 4 | Road point projection independent of the screen size, the configured camera intrinsics, the camera mount offset |
+| `gtest_recording` | 7 | The route structure on disk: EDGELOG1 chunks, the EDGEIDX1 index (also reading the earlier magics of v8 and older recordings), the manifest, the params snapshot, emptying the staging. The storage reserve: refusing a route when space is short, clearing the warning when recording is turned off, and starting again (also after a stop mid-route) once 1 GiB more than the reserve is free. The event log reader (stops at a cut tail, the head of a large file), decoding old-version ModelState, the recorded CAN payload round trip (CAN-FD, cut tail, 256-frame cap), state channel recording (attaching once a producer appears, new snapshots only, IMU up to the filled samples), the replayd route reader (segment boundaries, codec config at each keyframe, CAN and Panda events across chunks in time order, a frame index with a broken header skips only that segment) |
 
-`tests/check_web_console.py`와 `tests/check_recording_reader.py`(Python unittest)도
-`ctest`에 등록돼 함께 돈다. 앞의 것은 fastapi 없이 stdlib만으로 웹 콘솔을 본다: 파라미터 저장소와
-기본값 동기화, `params/*.json`의 UI 메타데이터(섹션, 범위), UI min/max와 C++ `Json*Field` 클램프 표의
-일치, 공유 메모리 상태(학습, locationd, 매니저 프로세스 표, 카메라 보정, BEV)의 배치와 `ipc_messages.h`의
-일치, 프로세스 표의 빌드 버전(실행 중인 실행 파일과 설치된 실행 파일의 표식, 리허설의 `replayd` 칸, 표식이
-`build_version.h`와 같은지), 카메라 보정 카드가 해제 상태에서만 초기화와 보정 출처 바꾸기를 받고 카드 전용 항목은 파라미터 API가
-받지 않는지, 판다 펌웨어 카드가 설치된 이미지를 `panda_firmware.cc`와 같은 규칙으로 보고 주차 중일 때만
-플래싱 요청 파일을 쓰는지, 페이지 모듈의 import와 페이지가 부르는 API가 서버에 다 있는지, 화면 문구에 차종
-이름이 없는지, BEV의 차선 필터 사본(`lane_filter.js`)이 플래너와 같은 상수와 기준 출력을 갖는지(jsc나 node가 있으면 `check_bev_lane_filter.mjs`를
-돌려 C++ 출력과 맞추고, 없으면 그 부분만 건너뛴다). 뒤의 것은 `tools/model/recording_reader.py`의 배치와 기록 타입 번호, 도구의 MaixCAM2
-카메라 내부 파라미터를 C++ 헤더의 고정값과 대조한다(numpy가 필요하고, 없으면 건너뛴다).
+## Python checks
 
-## 인자를 주면 도는 모드
+`ctest` runs three Python checks next to the googletest cases. The first two
+are Python `unittest` files.
 
-- `gtest_lateral_controller <fixture.can>`: `LateralController.CanFixture`가 녹화한 CAN을
-  컨트롤러에 흘려 목표 곡률을 openpilot 참조식과 대조하고, LKAS/MDPS/CLU11 주기와 토크
-  범위를 본다. 인자가 없으면 건너뛴다. 픽스처는 `tools/control/export_can_fixture.py`가
-  녹화 `events/NNN.bin` 하나로 만든다. 60초 연속 주행 구간이어야 하며(활성 5900틱 초과,
-  토크 > 0) 정차 구간은 실패한다.
-- `gtest_model_output <SCODMP1 덤프>`: 테스트 대신 첫 프레임을 파싱해 출력한다.
-  덤프는 `modeld`를 `EDGEPILOT_RAW_DUMP`로 돌려 만든다
-  ([런타임 옵션](../docs/runtime-options.md)).
+| Check | Needs | What it checks |
+| --- | --- | --- |
+| `check_web_console.py` | stdlib only, no fastapi | The web console: the parameter store and its default sync, the UI metadata in `params/*.json` (sections, ranges), the UI min/max against the C++ `Json*Field` clamp table, the layout of the shared-memory state (learning, locationd, the manager's process table, camera calibration, BEV) against `ipc_messages.h`, the build version in the process table (the markers of the running and the installed executable, the rehearsal's `replayd` field, the marker matching `build_version.h`), the camera calibration card accepting a reset and a calibration source change only while disengaged, and the parameter API not accepting the card's own items, the Panda firmware card judging the installed image by the same rules as `panda_firmware.cc` and writing the flash request file only while parked, every import of the page modules and every API the page calls existing on the server, no car model name in the screen text, the BEV's lane filter copy (`lane_filter.js`) having the planner's constants and golden output (with jsc or node it runs `check_bev_lane_filter.mjs` against the C++ output; without them only that part is skipped) |
+| `check_recording_reader.py` | numpy (skipped without it) | The layout and record type numbers of `tools/model/recording_reader.py`, and the tools' MaixCAM2 camera intrinsics, against the fixed values in the C++ headers; `model_warp.py`'s warp matrix against the golden values `gtest_calibration` pins |
+| `check_docs.py` | stdlib only | The documents (`docs/*.md` and the folder READMEs): the title matches the file name, the back link under the title, `## Related` as the last section, sentence-case headings, relative links and `#` anchors that exist, prose wrapped at 80 columns, English only (except `docs/style-guide.md`, which holds the Korean glossary), Mermaid `classDef` lines from the shared palette, image files that exist. The root README gets only the link and image checks |
 
-## 테스트 추가
+`check_recording_reader.py` exits with 77 when numpy is missing, and `ctest`
+counts that as skipped. `check_docs.py` also takes documents as arguments
+(`tests/check_docs.py docs/hud.md`) and checks all of them when given none. It
+does not draw the diagrams; `tools/docs/render_mermaid.py` does that (see the
+[Style guide](../docs/style-guide.md)).
 
-1. `tests/gtest_<이름>.cc` 하나에 테스트와 도우미를 모두 둔다. 공유 헤더는 두지 않는다.
-2. [`CMakeLists.txt`](CMakeLists.txt)에 한 줄을 더한다:
-   `add_host_test(gtest_<이름> <라이브러리...>)`. 라이브러리는 `src/<폴더>/CMakeLists.txt`가 정의하는
-   `common`, `utils_json`, `car`, `control_core`, `planning`, `learners`, `controls`, `localization`,
-   `model`, `panda`, `recording`, `hud_state`, `hud`, `alert_tones` 중에서 고른다.
-3. 작성 규칙:
-   - 파일 첫머리에 `/* */` 한글 주석으로 무엇을, 무엇과 대조해 검사하는지 적는다.
-   - TEST와 도우미는 익명 namespace 안에 둔다.
-   - 주석과 실패 메시지는 한글로 쓴다. 단언 묶음의 뜻은 위에 `//` 한 줄로, 단언 하나의
-     뜻은 `<< "..."`로 붙인다. TEST 위 주석은 이름만으로 모자랄 때만 단다.
-   - 실패할 때 값이 보이는 단언을 쓴다. `ASSERT_TRUE(a < b)` 대신 `ASSERT_LT(a, b)`,
-     `ASSERT_TRUE(std::fabs(a - b) < t)` 대신 `ASSERT_NEAR(a, b, t)`.
-   - 값을 돌려주는 도우미에서는 `ASSERT_*`를 못 쓰니 `ADD_FAILURE() << ...; return {};`로
-     실패를 남긴다.
-   - 통과할 때는 아무것도 출력하지 않는다. 판정 없는 시간 측정은
-     [`diagnostics/`](../diagnostics/README.md)의 벤치로 만든다.
+## Modes with an argument
+
+- `gtest_lateral_controller <fixture.can>`: `LateralController.CanFixture` feeds
+  recorded CAN to the controller, compares the target curvature with the
+  openpilot reference formula, and checks the LKAS/MDPS/CLU11 periods and the
+  torque range. Without an argument it is skipped.
+  `tools/control/export_can_fixture.py` makes the fixture from one recording's
+  `events/NNN.bin`. It must be a 60 s stretch of continuous driving (more than
+  5900 active ticks, torque > 0); a stretch with a stop fails.
+- `gtest_model_output <SCODMP1 dump>`: instead of the tests, parses the first
+  frame and prints it. The dump comes from running `modeld` with
+  `EDGEPILOT_RAW_DUMP`
+  ([Runtime options](../docs/runtime-options.md#storage-and-replay)).
+
+## Adding a test
+
+1. Put the test and all its helpers in one `tests/gtest_<name>.cc`. There are no
+   shared headers.
+2. Add one line to [`CMakeLists.txt`](CMakeLists.txt):
+   `add_host_test(gtest_<name> <libraries...>)`. Choose the libraries from those
+   that `src/<folder>/CMakeLists.txt` defines: `common`, `utils_json`,
+   `build_version`, `car`, `control_core`, `planning`, `learners`, `controls`,
+   `localization`, `model`, `panda`, `recording`, `hud_state`, `hud`,
+   `alert_tones`.
+3. Write it to these rules:
+   - At the top of the file, a Korean `//` comment says what is checked and
+     against what.
+   - TESTs and helpers go in an anonymous namespace.
+   - Comments and failure messages are in Korean. Give the meaning of a group of
+     assertions in one `//` line above it, and the meaning of a single assertion
+     with `<< "..."`. Put a comment above a TEST only when its name is not
+     enough.
+   - Use assertions that show the values when they fail: `ASSERT_LT(a, b)`
+     instead of `ASSERT_TRUE(a < b)`, and `ASSERT_NEAR(a, b, t)` instead of
+     `ASSERT_TRUE(std::fabs(a - b) < t)`.
+   - A helper that returns a value cannot use `ASSERT_*`, so it records the
+     failure with `ADD_FAILURE() << ...; return {};`.
+   - Print nothing when the test passes. A timing measurement without a verdict
+     belongs in a benchmark in [`diagnostics/`](../diagnostics/README.md).
+
+## Related
+
+- [Build and deploy](../docs/build-and-deploy.md): the host build next to the
+  board build
+- [Scripts](../scripts/README.md): `run_host_tests.sh` and the other scripts
+- [Diagnostic tools](../diagnostics/README.md): replay tools and benchmarks
+  built in the same tree
+- [Verification](../docs/verification.md): how the ported openpilot math is
+  checked
+- [Runtime options](../docs/runtime-options.md): `EDGEPILOT_RAW_DUMP` and the
+  other switches
+- [Style guide](../docs/style-guide.md): the code and document rules that
+  `check_docs.py` enforces

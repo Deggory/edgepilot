@@ -141,6 +141,7 @@ int main() {
                         std::fprintf(stderr, "recordd: config error: %s\n", error.what());
                     }
                 }
+                writer.poll_storage(now_ns);
             }
 
             if (record_state_pub.valid() && now_ns >= next_state_publish_ns) {

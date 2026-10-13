@@ -17,11 +17,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -238,6 +241,73 @@ TEST(RecordingWriter, RouteOnDisk) {
     ASSERT_EQ(snapshot[0], "steering.json");
 
     std::system(("rm -rf '" + root + "'").c_str());
+}
+
+// 저장 공간 예비분(5 GiB): 모자라면 거절하고 STORAGE FULL을 띄운다. 녹화를 끄면 경고가 지워진다. 켜 둔 채
+// 공간이 예비분보다 1 GiB 넘게 늘면 recordd의 poll_storage가 다시 시작하고, 녹화 중 모자라지면 멈췄다가 같은
+// 방법으로 다시 시작한다. 여유 공간은 set_storage_check로 흉내 낸다.
+TEST(RecordingWriter, StorageReserveRefusesClearsAndRetries) {
+    char root_template[] = "/tmp/gtest_recording_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    setenv("EDGEPILOT_RECORD_STAGING", (root + "/staging").c_str(), 1);
+    constexpr uint64_t kGiB = 1024ULL * 1024 * 1024;
+    constexpr uint64_t kSecond = 1'000'000'000ULL;
+    std::atomic<uint64_t> free_bytes{4 * kGiB};
+    // 워커 스레드가 처리할 때까지 기다린다(최대 2초).
+    const auto settle = [](const auto &done) {
+        for (int i = 0; i < 2000 && !done(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return done();
+    };
+
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
+    writer.set_storage_check([&](uint64_t extra) { return free_bytes.load() >= 5 * kGiB + extra; });
+    uint64_t now = 10 * kSecond;
+
+    writer.set_enabled(true, now);
+    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); }))
+        << "4 GiB: 거절하고 STORAGE FULL";
+    EXPECT_FALSE(writer.active());
+    writer.set_enabled(false, now);
+    EXPECT_FALSE(writer.blocked_for_space()) << "끄면 이미 거절된 뒤라도 경고가 지워진다";
+    writer.poll_storage(now += 10 * kSecond);
+    EXPECT_FALSE(writer.requested_enabled()) << "꺼 둔 동안은 다시 시작하지 않는다";
+
+    writer.set_enabled(true, now);
+    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); }));
+    free_bytes = 5 * kGiB + kGiB / 2;
+    writer.poll_storage(now += 10 * kSecond);
+    EXPECT_TRUE(writer.blocked_for_space()) << "예비분은 넘었지만 1 GiB 여유가 없다";
+    EXPECT_FALSE(writer.requested_enabled());
+    free_bytes = 7 * kGiB;
+    writer.poll_storage(now + kSecond);
+    EXPECT_FALSE(writer.requested_enabled()) << "공간은 5초마다만 본다";
+    writer.poll_storage(now += 10 * kSecond);
+    EXPECT_TRUE(writer.requested_enabled()) << "공간이 돌아오면 다시 녹화한다";
+    EXPECT_FALSE(writer.blocked_for_space());
+    ASSERT_TRUE(settle([&] { return writer.active(); }));
+
+    // 녹화 중 모자라지면 다음 확인(5초 뒤 프레임)에서 멈춘다.
+    const uint8_t codec_config[] = {'C', 'F', 'G', 0x01};
+    writer.set_codec_config(codec_config, sizeof(codec_config));
+    std::vector<uint8_t> packet(64, 0xA0);
+    RoadAiFrame frame;
+    frame.frame_id = 1;
+    frame.timestamp_ns = now;
+    writer.write_encoded_frame(frame, packet.data(), packet.size(), true);
+    free_bytes = 4 * kGiB;
+    frame.frame_id = 2;
+    frame.timestamp_ns = now + 6 * kSecond;
+    writer.write_encoded_frame(frame, packet.data(), packet.size(), false);
+    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.active(); })) << "녹화 중 공간 부족";
+    EXPECT_FALSE(writer.requested_enabled());
+    free_bytes = 8 * kGiB;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));  // route 이름은 밀리초 단위 시각이다
+    writer.poll_storage(now += 20 * kSecond);
+    EXPECT_TRUE(writer.requested_enabled());
+    ASSERT_TRUE(settle([&] { return writer.active(); }));
+    writer.set_enabled(false, now);
+    writer.close();
+    EXPECT_EQ(list_dir(root + "/recordings").size(), 2u) << "멈춘 route와 다시 시작한 route";
 }
 
 TEST(StateRecorder, WritesEachNewSnapshotOnce) {

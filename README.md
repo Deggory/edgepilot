@@ -56,7 +56,7 @@ branch keeps the earlier Kendryte K230 port.
   and a web parameter editor pushes changes the controller picks up within
   100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite (260 tests) that needs neither the
+  macOS or Linux, with a googletest suite (262 tests) that needs neither the
   board nor its SDK.
 
 ## How it works
@@ -71,7 +71,7 @@ pass through the CPU: the frame ring lives in physically contiguous memory, the
 GDC warps it straight into both model views, and IVPS scales it onto the LCD and
 copies it for the recorder. `manager.py` starts and supervises the processes,
 the web console (`web_console/`) serves the tuning UI, and `recordd` logs every state next to
-the H.264 video. See [Split runtime](docs/runtime.md) for each process.
+the H.264 video. See [Runtime](docs/runtime.md) for each process.
 `scripts/install_autostart.sh` installs a systemd unit that starts the runtime at
 boot in place of the stock launcher.
 
@@ -184,14 +184,17 @@ source.
 ./scripts/run_host_tests.sh    # build and run every host unit test through ctest
 ```
 
-- [Host unit tests](tests/README.md): what each test covers and how to add one
+- [Host tests](tests/README.md): what each test covers and how to add one
 - [Diagnostic tools](diagnostics/README.md): replay, dataset, and HUD tools
 - [Rehearsal](docs/rehearsal.md): replay a recorded drive through the whole runtime
   on the board (hardware H.264 decode into the frame ring, CAN on the same timeline)
-- [Camera calibration](docs/camcal.md): measure the camera intrinsics with a TV checkerboard and the Func button
+- [Camera intrinsics](docs/camera-intrinsics.md): measure the camera with a TV
+  checkerboard and the Func button
 - [Closed-loop replay](docs/closed-loop-replay.md): rank control changes against
   a recorded drive before driving them
 - [Scripts](scripts/README.md): build, deploy, and the board-side Python
+- [Style guide](docs/style-guide.md): how code, comments, documents and diagrams
+  are written
 
 ## Repository layout
 
@@ -205,21 +208,28 @@ tests/          host unit tests and the Python layout checks
 diagnostics/    replay, dataset, and HUD tools
 scripts/        SDK fetch, deploy, host tests, board-side Python
 tools/          axmodel pipeline, camera calibration, build container, route readers
-docs/           documentation; docs/images holds the README media
+docs/           documentation (index in docs/README.md); docs/images holds the README media
 ```
 
 ## Documentation
 
-- **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md) ·
-  [Boot time](docs/boot-time.md) · [Panda firmware](firmware/panda/README.md)
-- **How it works:** [Split runtime](docs/runtime.md) · [Model pipeline](docs/model-pipeline.md) ·
-  [Model package](models/README.md) · [Source layout](docs/source-layout.md) ·
-  [Code style](docs/code-style.md)
-- **Operating:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·
+The [documentation index](docs/README.md) maps each part of the system to the
+document that covers it and gives a reading order.
+
+- **Get started:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md) ·
+  [Boot time](docs/boot-time.md) · [Camera intrinsics](docs/camera-intrinsics.md) ·
+  [Rehearsal](docs/rehearsal.md)
+- **How it works:** [Runtime](docs/runtime.md) · [Model pipeline](docs/model-pipeline.md) ·
+  [HUD](docs/hud.md) · [Recording](docs/recording.md) · [Source layout](docs/source-layout.md)
+- **Operate and tune:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·
   [Diagnostics](docs/diagnostics.md) · [Verification](docs/verification.md)
 - **Design notes:** [K7 Panda port](docs/k7-panda-port.md) · [Departure alerts](docs/departure-alerts.md) ·
   [Closed-loop replay](docs/closed-loop-replay.md) · [Flow calibration](docs/flow-calibration.md) ·
-  [Lane-line filter](docs/lane-line-filter.md)
+  [Lead flow](docs/lead-flow.md) · [Lane-line filter](docs/lane-line-filter.md)
+- **Code and tools:** [Style guide](docs/style-guide.md) · [Host tests](tests/README.md) ·
+  [Diagnostic tools](diagnostics/README.md) · [Scripts](scripts/README.md) ·
+  [Model tools](tools/model/README.md) · [axmodel pipeline](tools/model/axmodel/README.md) ·
+  [Model package](models/README.md) · [Panda firmware](firmware/panda/README.md)
 
 ## Acknowledgements
 

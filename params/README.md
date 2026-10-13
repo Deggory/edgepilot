@@ -1,264 +1,414 @@
-# K7 YG HEV 파라미터 안내
+# Parameters
 
-이 디렉터리에는 KIA K7 YG HEV용 조향 제어, 비전 크루즈, 기록, 디스플레이 및
-카메라 캘리브레이션 값이 들어 있다. `controlsd`는 두 런타임 JSON(`steering.json`, `adaptive_cruise.json`)의
-변경을 100ms 이내에 감지하고 다음 제어 주기에 즉시 반영한다. 제어 상태와
-PID 상태는 유지되며 engage 여부에 따른 적용 지연은 없다.
+[← Documentation](../docs/README.md)
 
-기본 경로는 실행 디렉터리의 `params/`이다. 다른 디렉터리를 사용하려면
-`EDGEPILOT_PARAMS_DIR=/path/to/params`를 지정한다.
+This folder holds the steering, vision-cruise, recording, display and camera
+calibration values for the KIA K7 YG HEV. `controlsd` notices a change to its
+two runtime JSON files (`steering.json`, `adaptive_cruise.json`) within 100 ms
+and applies it on the next control cycle, engaged or not, keeping the control
+and PID state.
 
-## 튜닝 전 주의사항
+Who writes each file and which process reads it:
 
-- 조향 토크, 차량 고정값과 CAN 통신값은 반드시 정차 상태에서 수정한다.
-- 비전 크루즈 주행 튜닝은 운전자가 직접 조작하지 말고 동승자가 한 항목씩 소폭 변경한다.
-- Panda는 먼저 `nooutput` 또는 TX 비활성 상태에서 데이터와 부하를 검증한다.
-- 한 번에 하나의 값만 조금씩 바꾸고, 변경 전후 로그를 남긴다.
-- 허용 범위를 벗어난 숫자는 로더가 아래 표의 범위로 제한한다.
-- JSON은 주석을 지원하지 않으므로 설명은 이 문서에서 관리한다.
-- 차량 제원은 다른 차량 값으로 임의 변경하지 않는다.
-- 웹 콘솔은 `EDGEPILOT_ENABLE_WEB_CONSOLE=1`일 때 기본 8080 포트에서 실행된다.
-  `차량 특성` 탭은 학습되는 조향 값(조향비, 타이어 강성, 조향각 영점, 도로 기울기 보정, 토크 배율·마찰·편향, 조향
-  지연)을 학습기(paramsd·torqued·lagd)별로 묶어, 값마다 지금 제어에 쓰는 값과 학습값·수동값을 한 카드에 보여준다.
-  묶음마다 `자동 학습`/`수동`(아래 `use_live_*`)을 고르고, 수동값을 고치거나 학습값을 수동값으로 저장한다. 카메라
-  캘리브레이션 초기화, 최근 10분 추이, 고정 제원(질량·축거·무게중심)도 이 탭에 있다.
+```mermaid
+flowchart LR
+    web["web console"]
+    subgraph params["params/"]
+        steering["steering.json"]
+        cruise["adaptive_cruise.json"]
+        recording["recording.json"]
+        display["display.json"]
+        calib["calibration.json"]
+        flow["flow_calibration.json"]
+    end
+    web --> steering & cruise & recording & display
+    steering --> controlsd
+    cruise --> controlsd
+    steering -.-> locationd
+    recording --> recordd
+    display --> modeld
+    display --> overlayd
+    calib <--> modeld
+    flow <--> modeld
+    classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef group fill:#ffffff,stroke:#d1d9e0,color:#59636e
+    class params group
+    class controlsd,locationd,modeld compute
+    class overlayd pixel
+    class web,steering,cruise,recording,display,calib,flow,recordd proc
+```
+
+modeld loads the two calibration files at start and saves them as it learns.
+locationd reads only `steer_actuator_delay` from `steering.json`, once at start
+(the dotted line).
+
+The default directory is `params/` in the runtime's working directory. To use
+another directory, set `EDGEPILOT_PARAMS_DIR=/path/to/params`. In the tables
+below, the value is the one in the repository's file, and the range is what the
+loader clamps a number to.
+
+## Before tuning
+
+- Change steering torque, fixed vehicle values and CAN communication values
+  only while stopped.
+- Do not let the driver tune the vision cruise while driving. A passenger
+  changes one item at a time, by a small step.
+- On the Panda, first check the data and the load in `nooutput` or with TX
+  disabled.
+- Change one value at a time, by a little, and keep logs from before and after
+  the change.
+- The loader clamps a number outside its allowed range to the range in the
+  tables below.
+- JSON has no comments, so the descriptions are kept in this document.
+- Do not replace the vehicle specs with another car's values.
+- The web console (port 8080) runs by default whenever control does. Its
+  Vehicle tab chooses Auto-learn or Manual for each learner's values
+  (`use_live_*` below); see
+  [Runtime options](../docs/runtime-options.md#web-console).
 
 ## recording.json
 
-| 파라미터 | 기본값 | 단위 | 설명 |
-|---|---:|---|---|
-| `enabled` | false | bool | 웹의 `주행 기록` 메뉴에서 변경한다. 켜면 모델이 실제 선택한 1280x720 20 FPS 프레임을 AX630C 하드웨어 H.264 인코더(VENC)로 저장하고 CAN RX/TX 및 모델·제어 상태를 함께 기록한다. |
-| `bitrate_bps` | 8000000 | bps / 1M~20M | H.264 인코더 목표 비트레이트다. 인코더는 recordd 기동 시 한 번 열리므로 변경은 재시작부터 적용된다. |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `enabled` | false | bool | | Changed from the web Recording tab. On, it saves the 1280x720 20 FPS frames the model actually selected with the AX630C hardware H.264 encoder (VENC), and records CAN RX/TX and the model and control state with them. |
+| `bitrate_bps` | 8000000 | bps | 1M to 20M | Target bitrate of the H.264 encoder. The encoder is opened once when recordd starts, so a change applies from the next restart. |
 
-기록은 `recordings/<시각>/` 아래에 생성된다. 영상은 60초 단위 H.264
-세그먼트(`road.h264`)로 나뉜다. 프레임의 원본 캡처 시각은 각 세그먼트의 `frames.bin`,
-CAN과 상태는 60초 청크 `events/NNN.bin`, 당시 파라미터는 `params/`에
-저장된다. 남은 공간이 5 GiB
-또는 전체 용량의 10% 미만이면 새 기록을 시작하지 않거나 진행 중인 기록을
-종료한다.
+A recording is created under `recordings/<time>/`. The video is split into
+60 s H.264 segments (`road.h264`). The original capture time of each frame
+is saved in each segment's `frames.bin`, CAN and state in 60 s chunks
+`events/NNN.bin`, and the parameters of the time in `params/`. When the free
+space is below 5 GiB or 10% of the total capacity, a new recording does not
+start, or the one in progress ends.
 
 ## display.json
 
-| 파라미터 | 기본값 | 단위 | 설명 |
-|---|---:|---|---|
-| `enabled` | true | bool | LCD 영상 파이프라인은 유지하고 백라이트만 켜거나 끈다(duty 0). |
-| `brightness_percent` | 100 | % | 백라이트 PWM3(pwmchip0/pwm3, 10 kHz, 정극성) 점등률. 실제 duty는 밝기 x 보드 최대치(`/boot/board`의 `disp_max_backlight`, 기본 95%)다. |
-| `alert_volume_percent` | 70 | % / 0~100 | 보드 스피커 알림음 크기. 0이면 소리를 내지 않는다. overlayd가 1초마다 파일을 보고 바뀌면 적용한 뒤 확인음을 한 번 낸다. 값이 없으면 `EDGEPILOT_ALERT_VOLUME`(기본 70)을 쓴다. |
-| `camera_offset_m` | 0.0 | m / -0.35~0.35 | 보드를 차 중심에서 옆으로 달았을 때 모델이 차 중심에서 본 것처럼 입력 영상을 옮긴다(sunnypilot camera offset 방식). +면 차가 차선 안에서 왼쪽으로 간다(보드를 운전석 쪽에 달았으면 그 거리만큼 +). Lane·Laneless 모두에 적용되고 HUD 차선도 같이 맞춘다. ±0.35 m를 넘으면 앞차·신호등 인식이 나빠져 막아 둔다. modeld가 1초마다 파일을 보고, 바뀐 값은 초당 0.1 m씩 옮긴다. |
-| `camera_height_m` | 1.22 | m / 0.8~2.0 | 도로면에서 카메라까지 높이다. `camera_offset_m`의 효과 크기를 정하는 데만 쓴다(오프셋이 0이면 무관). |
-| `calibration_use_flow` | false | bool | 워프 보정의 pitch·yaw를 광류 추정(영상에서 직접 잰 카메라 이동 방향, `flow_calibration.json`)에서 가져온다. 광류 추정이 쓸 만할 때(3블록 이상, 블록 중앙값 표준편차 0.5° 안, upstream 각도 한계 안)만 쓰고, 아니면 모델 포즈 보정(`calibration.json`)을 쓴다. roll은 포즈 보정 값이다. modeld가 1초마다 파일을 보고, 광류로 바꾸는 것은 해제 상태에서만 한다(설정이 결합 중에 바뀌거나 광류 추정이 주행 중 생기면 해제까지 기다린다). 광류가 쓸 만하지 않게 되면(표준편차 0.8° 초과 등) 결합 중에도 포즈로 돌아간다. 바뀐 값으로 워프를 남은 차이의 1/5씩 초당, 최소 0.05°/s로 옮긴다. 광류가 워프를 맡는 동안(옮기는 중 포함) 포즈 보정기는 멈추고 마지막 값과 `calibration.json`을 그대로 둔다. 웹의 차량 특성 탭 카메라 캘리브레이션 카드에서만 바꾼다: 카드의 `POST /api/calibration/source`는 결합 중에는 받지 않고, 파라미터 API(`PATCH /api/params/display`)는 이 항목을 받지 않는다. 기기 설정 탭에는 나오지 않는다 ([광류 보정](../docs/flow-calibration.md)). |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `enabled` | true | bool | | Turns only the backlight on or off (duty 0); the LCD video pipeline keeps running. |
+| `brightness_percent` | 100 | % | | Duty of backlight PWM3 (pwmchip0/pwm3, 10 kHz, normal polarity). The actual duty is brightness x the board maximum (`disp_max_backlight` in `/boot/board`, default 95%). |
+| `alert_volume_percent` | 70 | % | 0 to 100 | Volume of the alert sounds on the board speaker. 0 makes no sound. overlayd checks the file every second, applies a change and plays a confirmation tone once. Without a value, `EDGEPILOT_ALERT_VOLUME` (default 70) is used. |
+| `camera_offset_m` | 0.0 | m | -0.35 to 0.35 | When the board is mounted to one side of the car's centre, shifts the input image so the model sees as if from the car's centre (the sunnypilot camera offset method). Positive moves the car left within the lane (with the board on the driver's side, + by that distance). Applies in both Lane and Laneless modes, and the HUD lane lines follow. Beyond ±0.35 m the lead and traffic-light detection get worse, so it is blocked. modeld checks the file every second and moves a changed value at 0.1 m/s. |
+| `camera_height_m` | 1.22 | m | 0.8 to 2.0 | Height of the camera above the road. Used only to size the effect of `camera_offset_m` (irrelevant when the offset is 0). |
+| `calibration_use_flow` | false | bool | | Takes the warp calibration's pitch and yaw from the optical-flow estimate (the direction of camera motion measured directly in the image, `flow_calibration.json`). It is used only while the flow estimate is usable (3 blocks or more, block-median standard deviation within 0.5°, within upstream's angle limits); otherwise the model pose calibration (`calibration.json`) is used. Roll is the pose calibration's value. modeld checks the file every second and switches to flow only while disengaged (if the setting changes while engaged, or the flow estimate appears while driving, it waits for the disengagement). If flow stops being usable (standard deviation over 0.8° and so on), it goes back to pose even while engaged. It moves the warp towards the new value by 1/5 of the remaining difference per second, at least 0.05°/s. While flow drives the warp (moving included), the pose calibrator pauses and leaves its last value and `calibration.json` as they are. Changed only from the camera calibration card of the web Vehicle tab: the card's `POST /api/calibration/source` is refused while engaged, and the parameter API (`PATCH /api/params/display`) does not accept this key. It does not appear on the Device settings tab ([Flow calibration](../docs/flow-calibration.md)). |
 
-설정은 웹의 `기기 설정` 메뉴에서 바꾼다. 백라이트는 웹 콘솔이 즉시 적용하고, 뜰 때마다
-다시 적용한다. 알림음 크기는 웹 콘솔이 파일만 고치고 overlayd가 읽는다.
+The settings are changed from the web Device settings tab. The web console
+applies the backlight at once, and again every time it starts. For the alert
+volume, the web console only edits the file and overlayd reads it.
 
 ## adaptive_cruise.json
 
-이 기능은 비전 모델의 선행차 거리와 상대속도를 이용해 순정 고정형 크루즈의
-`SET-`와 `RES+` 버튼만 대신 누른다. 스로틀이나 브레이크를 직접 제어하지 않으므로
-차간거리 유지와 감속을 보장하지 않으며 운전자가 항상 제동을 담당해야 한다.
+This feature uses the vision model's lead distance and relative speed to press
+only the `SET-` and `RES+` buttons of the stock fixed-speed cruise.
 
-브레이크 페달(AHB1 스트로크 3 mm 초과)을 밟으면 순정 크루즈와 함께 꺼지고, 운전자가 `SET`이나
-`RES`로 순정 크루즈를 다시 켜야 버튼 조절이 다시 시작된다. 2026-10-06 전에는 이 차의 제동을 보지
-못해, 브레이크 뒤에도 버튼을 눌러 순정 크루즈를 다시 켰다.
+> [!WARNING]
+> It does not control the throttle or the brakes, so it guarantees neither the
+> gap nor any deceleration. The driver must always do the braking.
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `enabled` | true | bool | 비전 기반 순정 크루즈 버튼 조절을 켠다. `false`로 바꾸면 진행 중인 자동 버튼 펄스와 세션을 즉시 해제한다. |
-| `standstill_gap_m` | 5.0 | m / 2~20 | 속도와 관계없이 목표 차간거리에 더하는 기본 거리다. |
-| `following_time_s` | 1.8 | s / 0.8~4.0 | 현재 속도에 곱해 동적 차간거리를 만드는 시간 간격이다. |
-| `gap_correction_gain` | 0.25 | gain / 0.05~1.0 | 실제 거리와 목표 거리의 오차를 목표 속도 보정으로 바꾸는 비율이다. |
-| `max_slowdown_correction_mps` | 4.0 | m/s / 0.5~10 | 선행차가 가깝거나 느릴 때 목표 속도를 낮출 수 있는 최대 보정량이다. |
-| `max_speedup_correction_mps` | 2.5 | m/s / 0~5 | 차간거리가 충분할 때 선행차 속도보다 높게 잡을 수 있는 최대 보정량이다. 최초 SET 상한은 넘지 않는다. |
-| `deceleration_rate_kph_per_s` | 0.5 | km/h/s / 0.2~5 | `SET-`로 설정 속도를 낮췄을 때 차가 실제로 줄이는 속도다. 고정형 크루즈는 가속만 끊고 브레이크를 쓰지 않아 약하다(K7 HEV 실측: `SET-` 연타 뒤 중앙값 0.15 m/s², 약 0.5 km/h/s, 설정 속도를 더 낮춰도 커지지 않음). 선행차에 다가가는 속도를 이 감속으로 원하는 차간 전에 없앨 수 있는 만큼(√(2·감속·남은 거리))으로 제한하고, 버튼 응답 동안 가까워질 거리도 미리 반영한다. |
-| `lead_hold_s` | 0.6 | s / 0.1~2.0 | 비전 검출이 잠시 끊겨도 마지막 선행차를 유지하는 시간이다. |
-| `lead_restore_delay_s` | 2.0 | s / 1~10 | 선행차가 사라진 뒤 최초 SET 상한으로 복귀하기 전 대기 시간이다. |
-| `command_interval_s` | 1.0 | s / 0.5~5.0 | 연속 버튼 펄스를 시작할 수 있는 최소 간격이다. |
+Pressing the brake pedal (AHB1 stroke over 3 mm,
+[K7 Panda port](../docs/k7-panda-port.md#brake-signals)) turns it off together
+with the stock cruise. Button control starts again only once the driver turns
+the stock cruise back on with `SET` or `RES`. Until 2026-10-06 the brake on
+this car went unseen, so after the driver braked, the vision cruise pressed
+buttons that turned the stock cruise back on.
 
-버튼 한 번을 이어 보내는 CLU11 프레임 수(5)는 상류와 커뮤니티 포크처럼 코드 상수다
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `enabled` | true | bool | | Turns on the vision-based stock cruise button control. Changing it to `false` releases the automatic button pulse in progress and the session at once. |
+| `standstill_gap_m` | 5.0 | m | 2 to 20 | Base distance added to the target gap whatever the speed. |
+| `following_time_s` | 1.8 | s | 0.8 to 4.0 | Time gap multiplied by the current speed to make the dynamic gap. |
+| `gap_correction_gain` | 0.25 | gain | 0.05 to 1.0 | Ratio that turns the error between the actual and the target distance into a target speed correction. |
+| `max_slowdown_correction_mps` | 4.0 | m/s | 0.5 to 10 | Largest correction that can lower the target speed when the lead is close or slow. |
+| `max_speedup_correction_mps` | 2.5 | m/s | 0 to 5 | Largest correction that can set the target above the lead's speed when the gap is large enough. It never exceeds the first SET limit. |
+| `deceleration_rate_kph_per_s` | 0.5 | km/h/s | 0.2 to 5 | How fast the car actually slows when `SET-` lowers the set speed. A fixed-speed cruise only cuts acceleration and does not brake, so it is weak (measured on the K7 HEV: median 0.15 m/s² after repeated `SET-`, about 0.5 km/h/s, and no stronger with a lower set speed). The closing speed on the lead is limited to what this deceleration can remove before the wanted gap (√(2·deceleration·remaining distance)), and the distance closed during the button response is counted in advance. |
+| `lead_hold_s` | 0.6 | s | 0.1 to 2.0 | How long the last lead is kept when the vision detection drops out briefly. |
+| `lead_restore_delay_s` | 2.0 | s | 1 to 10 | Wait after the lead disappears before going back to the first SET limit. |
+| `command_interval_s` | 1.0 | s | 0.5 to 5.0 | Shortest interval at which consecutive button pulses can start. |
+
+The number of CLU11 frames sent for one button press (5) is a code constant, as
+in upstream and the community forks
 (`AdaptiveCruiseConfig::button_pulse_frames`).
 
-버튼 판단의 나머지 규칙도 코드 상수다(`adaptive_cruise.cc`):
-- 차가 이미 그쪽으로 줄거나(늘거나) 있으면 설정 속도를 실제 속도에서 6 km/h보다 멀리 보내지 않는다.
-  더 벌려도 빨리 줄지 않고 되돌릴 버튼만 는다. 차가 반응하지 않으면 계속 누른다.
-- 버튼 판단용 목표 속도는 내려갈 때 바로, 올라갈 때 초당 1 km/h만 따라간다. 앞차 측정 잡음으로
-  `SET-`/`RES+`가 번갈아 나가지 않게 한다.
-- 이 차는 설정 속도를 CAN으로 알려 주지 않아 버튼으로 적산해 추정한다. 그 추정이 클러스터 속도와
-  오래 어긋나 바로잡는 것은 크루즈가 속도를 붙잡고 있을 때(가속 페달을 3초 넘게 떼고 속도가 2초 넘게
-  정착)만 한다. 페달로 달리는 동안의 속도를 버튼 유실로 읽어 30초 물러나던 문제를 막는다.
+The other rules of the button decision are code constants too
+(`adaptive_cruise.cc`):
+
+- When the car is already slowing down (or speeding up) that way, the set speed
+  is not sent more than 6 km/h from the actual speed. Widening the gap further
+  does not change the speed faster and only adds buttons to undo. If the car
+  does not respond, it keeps pressing.
+- The target speed for the button decision follows downward at once and upward
+  at only 1 km/h/s, so noise in the lead measurement does not send `SET-` and
+  `RES+` in turn.
+- This car does not report the set speed on CAN, so it is estimated by adding
+  up the buttons. The estimate is corrected, when it disagrees with the cluster
+  speed for long, only while the cruise holds the speed (accelerator released
+  for more than 3 s and speed settled for more than 2 s). This keeps the speed
+  the driver holds with the pedal from being read as lost button presses, which
+  used to make the vision cruise back off for 30 s.
 
 ## steering.json
 
-### 기본 토크 제한
+### Base torque limits
 
-`steer_max`(384), `steer_delta_up`(3), `steer_delta_down`(7), `steer_driver_allowance`(50),
-`steer_driver_multiplier`(2), `steer_driver_factor`(1)은 panda의 hyundai safety가 같은 숫자를
-강제하므로(`safety_hyundai.h`) 런타임 항목에서 뺐다. 올리면 panda가 프레임을 거부하고 내리면
-순정보다 약해지기만 한다. 바꾸려면 panda 펌웨어와 함께 바꾸고 `src/controls/control_params.h`를 고친다.
-조향각 게이트(`max_steering_angle_deg`)는 fault 회피가 켜져 있으면 실행되지 않는 죽은 경로라
-파라미터와 코드를 함께 제거했다. 2026-09-18 실측에서 fault 회피는 끌 수 없는 것으로 확인됐다.
+`steer_max` (384), `steer_delta_up` (3), `steer_delta_down` (7),
+`steer_driver_allowance` (50), `steer_driver_multiplier` (2) and
+`steer_driver_factor` (1) were taken out of the runtime keys, because the
+panda's hyundai safety enforces the same numbers (`safety_hyundai.h`). Raising
+them makes the panda reject frames, and lowering them only makes the steering
+weaker than stock. To change them, change the panda firmware with them and edit
+`src/controls/control_params.h`. The steering-angle gate
+(`max_steering_angle_deg`) was a dead path that never ran while fault avoidance
+is on, so the parameter and the code were removed together. Fault avoidance
+itself (`avoid_lkas_fault_enabled`) must stay on: the measurements of
+2026-09-18 showed that without it the MDPS faults after about 1 s above 85°.
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `enabled` | true | bool | `false`면 조향 컨트롤러를 비활성화한다. |
-| `steering_pressed_threshold` | 150 | MDPS raw torque / 0~500 | 토크 PID의 적분을 멈추는 운전자 조향 감지 기준이다. RK openpilot과 같이 5프레임 필터를 거치며, CAN 안전 제한용 `steer_driver_allowance`와는 별개다. |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `enabled` | true | bool | | `false` disables the steering controller. |
+| `steering_pressed_threshold` | 150 | MDPS raw torque | 0 to 500 | Driver steering threshold that stops the torque PID's integral. It goes through a 5-frame filter, as in RK openpilot, and is separate from `steer_driver_allowance`, the CAN safety limit. |
 
-### OpenPilot 토크 컨트롤러
+### openpilot torque controller
 
-값은 openpilot `latcontrol_torque`와 같은 표현이다(횡가속도 공간). 토크 = (FF + P + I) ÷
-`torque_lat_accel_factor` + 마찰이므로 배율만 바꾸면 세 항이 같이 움직이고, KP·KI는 배율과
-무관하게 상류 숫자와 바로 비교된다. 2026-09-24 이전 파일의 `torque_*_raw` 키는 로더가 거부한다.
-옮길 때는 배율 = max_lat_raw ÷ kf_raw, KP = kp_raw ÷ 10, KI = ki_raw ÷ kf_raw, 마찰 = friction_raw ÷ 1000이다.
+The values have the same form as openpilot's `latcontrol_torque`
+(lateral-acceleration space). Torque =
+(FF + P + I) ÷ `torque_lat_accel_factor` + friction, so changing only the
+factor moves all three terms together, and KP and KI compare directly with the
+upstream numbers whatever the factor. The
+loader rejects the `torque_*_raw` keys of files from before 2026-09-24. To
+convert: factor = max_lat_raw ÷ kf_raw, KP = kp_raw ÷ 10, KI = ki_raw ÷ kf_raw,
+friction = friction_raw ÷ 1000.
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `torque_lat_accel_factor` | 2.75 | m/s^2 / 0.5~5.0 | 정규화 토크 1.0이 내는 횡가속도다(openpilot `latAccelFactor`). 선행·비례·적분 토크가 모두 이 값으로 나뉜다. 2.75는 MaixCAM2 torqued 학습값(2026-09-27)이다. 이전 4.44는 SR 16.8의 과대 피드백과 짝을 이뤄 맞았고, SR 14.9로 고친 뒤 커브 언더스티어(좌커브 곡률비 0.86, 바깥 0.3 m)로 드러났다. 2026-09-23 실차에서 2.78로 바꿔 좌·우커브가 중앙(−0.07/−0.03 m)으로 돌아왔다. |
-| `torque_kp` | 0.8 | gain / 0~10 | 횡가속도 오차의 비례 이득이다(openpilot `KP`). 속도별 이득 곡선 `KP_INTERP` [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]의 마지막 점(30 m/s 이상)이다. 나머지 점은 상류 고정값이라 저속 이득은 이 값으로 바뀌지 않는다. 이전 2.0은 v0.11 포팅 이후 튜닝된 적이 없는 상속값이었다. 2026-09-20 실차에서 확인했다. |
-| `torque_ki` | 0.15 | gain / 0~2 | 횡가속도 오차의 적분 이득이다(openpilot `KI`, 상류 기본값). 이전 raw 표기에선 0.33(상류의 2.2배)이 드러나지 않았다. 2026-09-24 실차에서 0.15로 바꿔 좌커브 곡률비 0.90→0.96(n≈17), 직선 흔들림은 그대로였다. |
-| `torque_friction` | 0.083 | 정규화 토크 / 0~0.3 | 조향계 마찰을 넘기 위해 오차 방향으로 더하는 토크다(openpilot `friction`, 상류도 토크 공간에 더한다). |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `torque_lat_accel_factor` | 2.75 | m/s² | 0.5 to 5.0 | Lateral acceleration that normalised torque 1.0 produces (openpilot `latAccelFactor`). The feed-forward, proportional and integral torques are all divided by this value. 2.75 is the MaixCAM2 torqued learned value (2026-09-27). The earlier 4.44 only worked paired with the excess feedback of SR 16.8; once SR was corrected to 14.9, it showed as understeer in curves (left-curve curvature ratio 0.86, 0.3 m to the outside). With 2.78 on the road on 2026-09-23, the left and right curves came back to the centre (−0.07/−0.03 m). |
+| `torque_kp` | 0.8 | gain | 0 to 10 | Proportional gain on the lateral-acceleration error (openpilot `KP`). It is the last point (30 m/s and above) of the gain-by-speed curve `KP_INTERP` [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]. The other points are fixed upstream values, so this value does not change the low-speed gain. The earlier 2.0 was an inherited value never tuned since the v0.11 port. Checked on the road on 2026-09-20. |
+| `torque_ki` | 0.15 | gain | 0 to 2 | Integral gain on the lateral-acceleration error (openpilot `KI`, the upstream default). The old raw notation hid that the earlier value, 0.33, was 2.2 times upstream's. With 0.15 on the road on 2026-09-24, the left-curve curvature ratio went from 0.90 to 0.96 (n≈17), and the wobble on straights stayed the same. |
+| `torque_friction` | 0.083 | normalised torque | 0 to 0.3 | Torque added in the error's direction to overcome the steering friction (openpilot `friction`; upstream adds it in torque space too). |
 
-### 차량 모델과 지연
+### Vehicle model and delay
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `steer_ratio` | 14.72 | ratio / 8~25 | 핸들 조향각과 전륜 조향각의 비율이다. paramsd 학습값(2026-09-27)이고, RK의 KIA K7 HEV 차량값은 16.8이다. |
-| `tire_stiffness_factor` | 0.83 | 배율 / 0.2~2.0 | 기준 타이어 횡강성에 적용하는 차량별 보정 계수다. paramsd 학습값(2026-09-27)이고, RK K7의 기본 배율은 1.0이다. |
-| `steer_actuator_delay` | 0.42 | second / 0.01~1.0 | 조향 액추에이터 지연이다. **두 곳에 쓰인다.** `lag_adjusted_desired_curvature`는 이 값만큼 MPC 경로를 앞에서 읽어 커브 진입을 선행하고, 토크 컨트롤러의 요청 버퍼는 이 값만큼 **지난** 목표를 지금 측정과 비교한다. 그래서 키우면 선행은 늘지만 피드백이 낡아진다. 곡률이 빠르게 조여질 때 차가 이미 낡은 목표를 넘어서 있으면 오차 부호가 뒤집혀 커브 한복판에서 토크가 빠진다 — 0.46에서 조여지는 커브 69건 중 36%가 0.4초 안에 요청 토크가 30% 아래로 주저앉았고, 0.34에서는 14%였다(쌍 비교 McNemar p=0.0015). 상류 현대 기본값은 0.1(일부 0.2)이다. |
-| `angle_offset_deg` | -1.57 | degree / -10~10 | 조향각 센서의 직진 오프셋이다. 실제 곡률 추정 전에 센서 각도에서 뺀다. paramsd 학습 평균(2026-09-21~23 주행, −1.5~−1.6°)을 넣었다. 이전 −0.7°는 0.9° 차이로 곡률 약 4e-4를 틀려, 좌커브는 덜 돌고 우커브는 더 도는 것처럼 보이게 했다. |
-| `torque_lat_accel_offset` | -0.06 | m/s^2 / -1.0~1.0 | 장착 롤 오차 등이 만드는 상수 횡가속 편향을 feed-forward에서 뺀다(openpilot latAccelOffset). 값은 `tools/control/fit_lateral_params.py fit`으로 주행 로그에서 실측한다. 양수 = 차가 오른쪽으로 쏠릴 때 키우는 방향(+y=오른쪽 관례, openpilot 문서와 반대 어휘). fit 출력을 그대로 넣는다. |
-| `live_bank_compensation` | true | bool | ESP12 실측으로 추정한 도로 편경사(2초 필터)를 feed-forward에서 실시간 보정한다. 센서로 보이는 편향(크라운·영점)은 bank가 흡수하므로, `torque_lat_accel_offset`은 센서에 안 보이는 토크 경로/기계 편향 전용 트림으로만 쓴다. 정적 roll 항목은 이것으로 대체되어 없앴다. |
-| `use_live_vehicle_params` | true | bool | openpilot paramsd처럼 주행 중 학습한 조향비·타이어 강성·조향각 영점(합계)·도로 롤을 쓴다. 켜면 실제 곡률 계산이 `steer_ratio`·`angle_offset_deg` 대신 학습값을 쓰고, 롤은 실제 곡률·feed-forward(−roll·g)·곡률 횡가속 한계에 들어가며 `live_bank_compensation`을 대신한다. 학습값이 무효가 되면(영점·롤 한계 초과 등, 캘리브 완료 후) `paramsd_invalid`로 해제한다. 끄면 계산·기록만 한다. 학습 상태는 `live_parameters.json`(1분마다)에 남고 다음 시동에 이어진다. 웹 콘솔에서는 `차량 특성` 탭의 `자동 학습`/`수동`으로 고른다. |
-| `use_live_torque_params` | true | bool | openpilot torqued처럼 토크→횡가속 배율(latAccelFactor)·편향·마찰을 학습해 토크 컨트롤러에 쓴다. 배율은 `torque_lat_accel_factor`(기본 2.75)의 ±30%, 마찰은 `torque_friction`의 ±50% 안이다. 켜면 `torque_lat_accel_offset`은 학습 편향으로 바뀐다. 버킷이 다 차기 전(`cal_perc` < 100)에는 사전값 그대로다. 점과 필터는 `live_torque_parameters.bin`(12초마다)에 남는다. 웹 콘솔에서는 `차량 특성` 탭의 `자동 학습`/`수동`으로 고른다. |
-| `use_live_delay` | false | bool | openpilot lagd처럼 locationd가 추정한 조향 지연(목표 곡률 → 실제 요레이트)을 경로 지연(목표 곡률을 읽는 시점), 토크 컨트롤러의 요청 지연, torqued 지연에 쓴다. 추정이 확정(5블록)된 뒤에만 적용되고, 그 전에는 `steer_actuator_delay`를 쓴다. 웹 콘솔에서는 `차량 특성` 탭의 `자동 학습`/`수동`으로 고른다. |
-| `use_locationd_learner_inputs` | true | bool | paramsd·torqued가 요레이트와 도로 롤을 locationd(IMU·카메라 융합)에서 받는다(openpilot과 같다). 끄면 ESP12 요레이트(자체 바이어스 추정)와 ESP12 횡가속으로 구한 롤을 쓴다. locationd가 없거나 낡으면 ESP12로 돌아간다. torqued는 시작할 때의 출처로만 점을 모으므로, 바꾸면 torqued에는 다음 시작부터 적용된다. 웹 콘솔에서는 `차량 특성` 탭의 학습 입력에서 켜고 끈다. |
-| `mass_kg` | 1816.0 | kg / 1000~2600 | 차량 모델과 타이어 횡강성 계산에 사용하는 차량 질량이다. |
-| `wheelbase_m` | 2.855 | m / 2.0~3.5 | 차량 축거다. |
-| `center_to_front_ratio` | 0.4 | wheelbase ratio / 0.2~0.7 | 무게중심에서 전축까지 거리의 축거 대비 비율이다. |
-| `path_offset_m` | 0.0 | m / -1~1 | 차선 중심 경로에 더하는 사용자 횡방향 보정이다. 양수는 목표 주행 위치를 우측, 음수는 좌측으로 이동한다. 차선이 안 보여 모델 경로를 따를 때(교차로 등)와 laneless 모드에는 적용하지 않는다: 차 기준인 모델 경로에 더하면 위치 고정점 없이 차가 그쪽으로 계속 밀린다. 실제 적용량은 차선 가중치를 따라 줄어든다. |
-| `lane_path_weight` | 3.0 | weight / 0.5~10 | Lane 모드 MPC의 경로(횡위치) 가중치다. openpilot 0.9.4 `PATH_COST`는 1이다. 2026-10-05 폐루프 재생에서 3이면 고속도로 오른쪽 커브의 안쪽 치우침이 13.4 cm에서 10.6 cm로 줄고(급커브 18→14 cm) 횡저크는 12~19% 늘었다. Laneless 모드에는 쓰지 않는다. |
-| `min_steer_speed_mps` | 1.0 | m/s / 0~5 | 이 속도 미만에서는 조향 토크를 내지 않는다(openpilot CP.minSteerSpeed). 1.1~3.6 km/h 크립에서 v0.9.4 plan이 포화 지시를 내는 대역을 덮는다. |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `steer_ratio` | 14.72 | ratio | 8 to 25 | Ratio of the steering-wheel angle to the front-wheel angle. It is the paramsd learned value (2026-09-27); RK's KIA K7 HEV value is 16.8. |
+| `tire_stiffness_factor` | 0.83 | factor | 0.2 to 2.0 | Car-specific correction applied to the reference tyre lateral stiffness. It is the paramsd learned value (2026-09-27); RK's K7 default factor is 1.0. |
+| `steer_actuator_delay` | 0.42 | s | 0.01 to 1.0 | Steering actuator delay. **It is used in two places.** `lag_adjusted_desired_curvature` reads the MPC path this far ahead to lead the curve entry, and the torque controller's request buffer compares the target from this long **ago** with the current measurement. So raising it adds lead but makes the feedback staler. When the curvature tightens quickly and the car is already past the stale target, the error's sign flips and the torque drops out in the middle of the curve — at 0.46, 36% of 69 tightening curves had the requested torque collapse below 30% within 0.4 s, against 14% at 0.34 (paired comparison, McNemar p=0.0015). The upstream Hyundai default is 0.1 (0.2 for some). |
+| `angle_offset_deg` | -1.57 | ° | -10 to 10 | Straight-ahead offset of the steering-angle sensor. It is subtracted from the sensor angle before the actual curvature is estimated. Set to the paramsd learned mean (drives of 2026-09-21 to 23, −1.5 to −1.6°). The earlier −0.7° was 0.9° off and got the curvature wrong by about 4e-4, making left curves look under-turned and right curves over-turned. |
+| `torque_lat_accel_offset` | -0.06 | m/s² | -1.0 to 1.0 | Subtracts from the feed-forward the constant lateral-acceleration bias that a mount roll error and the like cause (openpilot latAccelOffset). The value is measured from drive logs with `tools/control/fit_lateral_params.py fit`. Positive = the direction to raise when the car pulls right (+y = right convention, the opposite wording to the openpilot docs). Put the fit output in as it is. |
+| `live_bank_compensation` | true | bool | | Corrects the feed-forward in real time for the road bank estimated from the ESP12 measurements (2 s filter). The bank absorbs the bias the sensors see (crown, zero), so `torque_lat_accel_offset` is only a trim for the torque-path or mechanical bias the sensors do not see. This replaced the static roll key, which was removed. |
+| `use_live_vehicle_params` | true | bool | | Like openpilot paramsd, uses the steering ratio, tyre stiffness, steering-angle zero (total) and road roll learned while driving. On, the actual curvature uses the learned values instead of `steer_ratio` and `angle_offset_deg`, and the roll goes into the actual curvature, the feed-forward (−roll·g) and the curvature's lateral-acceleration limit, replacing `live_bank_compensation`. When the learned values become invalid (zero or roll beyond its limit and so on, after calibration has completed) it disengages with `paramsd_invalid`. Off, it only computes and records. The learning state is kept in `live_parameters.json` (every minute) and carries on at the next start. In the web console, choose Auto-learn or Manual on the Vehicle tab. |
+| `use_live_torque_params` | true | bool | | Like openpilot torqued, learns the torque-to-lateral-acceleration factor (latAccelFactor), the offset and the friction, and uses them in the torque controller. The factor stays within ±30% of `torque_lat_accel_factor` (default 2.75), the friction within ±50% of `torque_friction`. On, `torque_lat_accel_offset` is replaced by the learned offset. Until the buckets are full (`cal_perc` < 100) the priors are used as they are. The points and the filters are kept in `live_torque_parameters.bin` (every 12 s). In the web console, choose Auto-learn or Manual on the Vehicle tab. |
+| `use_live_delay` | false | bool | | Like openpilot lagd, uses the steering delay that locationd estimates (desired curvature → actual yaw rate) for the path delay (when the desired curvature is read), the torque controller's request delay and the torqued delay. It applies only once the estimate is settled (5 blocks); until then `steer_actuator_delay` is used. In the web console, choose Auto-learn or Manual on the Vehicle tab. |
+| `use_locationd_learner_inputs` | true | bool | | paramsd and torqued take the yaw rate and the road roll from locationd (IMU and camera fusion), as in openpilot. Off, they use the ESP12 yaw rate (with its own bias estimate) and a roll from the ESP12 lateral acceleration. When locationd is missing or stale, they fall back to ESP12. torqued collects points only from the source it had at start, so for torqued a change applies from the next start. In the web console, turn it on and off under the learner inputs on the Vehicle tab. |
+| `mass_kg` | 1816.0 | kg | 1000 to 2600 | Vehicle mass used for the vehicle model and the tyre lateral stiffness. |
+| `wheelbase_m` | 2.855 | m | 2.0 to 3.5 | Wheelbase of the car. |
+| `center_to_front_ratio` | 0.4 | wheelbase ratio | 0.2 to 0.7 | Distance from the centre of gravity to the front axle, as a ratio of the wheelbase. |
+| `path_offset_m` | 0.0 | m | -1 to 1 | User lateral correction added to the lane-centre path. Positive moves the target position right, negative left. It is not applied while following the model path because no lanes are visible (intersections and so on), nor in Laneless mode: added to the model path, which is relative to the car, it would push the car that way with nothing to hold the position. The amount applied shrinks with the lane weight. |
+| `lane_path_weight` | 3.0 | weight | 0.5 to 10 | Path (lateral position) weight of the Lane-mode MPC. openpilot 0.9.4's `PATH_COST` is 1. In closed-loop replay on 2026-10-05, 3 cut the inside bias on right-hand highway curves from 13.4 cm to 10.6 cm (sharp curves 18→14 cm), and the lateral jerk rose 12-19%. Not used in Laneless mode. |
+| `min_steer_speed_mps` | 1.0 | m/s | 0 to 5 | No steering torque below this speed (openpilot CP.minSteerSpeed). It covers the 1.1-3.6 km/h creep band where the v0.9.4 plan gives saturated commands. |
 
-### 경로 모드
+### Path mode
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `laneless_mode` | false | bool | `false`는 Lane 모드로, 차선 확률이 높으면 차선 중심 경로를 섞고 낮아지면 자동으로 모델 경로만 쓴다. `true`는 Laneless 모드로, openpilot 메인과 같은 방식(`get_curvature_from_plan`)이다. 차선·MPC·`path_offset_m` 없이 모델 plan의 yaw와 yaw rate로 목표 곡률 `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v`를 만든다(t_d = 조향 지연 + plan 나이). Lane 모드에서 차선이 안 보일 때(교차로 등, 유효 확률 0.3 미만)도 같은 계산을 쓰고, 차선 MPC와의 인계는 목표 곡률에서 섞는다(차선을 버릴 때 0.5초, 되찾을 때 0.25초). 2026-10-06 전에는 이 구간에서 plan 위치를 차선 MPC로 따랐는데, 25 km/h 아래에서 laneless보다 26~30% 덜 꺾고 0.3~0.4초 늦었다(녹화 재생). 실주행 저속 회전의 운전자 토크 중앙값도 152로, laneless 80의 두 배였다. 웹 콘솔 `조향` 탭에서 바꾸고, 현재 사용 중인 경로는 HUD에 `LANE`/`LANELESS`로 표시된다. 차로 변경은 두 모드 모두 모델의 desire 입력으로 동작한다. |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `laneless_mode` | false | bool | | `false` is Lane mode: with a high lane probability it blends in the lane-centre path, and as the probability drops it uses only the model path. `true` is Laneless mode, the same method as openpilot master (`get_curvature_from_plan`). Without lanes, MPC or `path_offset_m`, it makes the desired curvature `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v` from the model plan's yaw and yaw rate (t_d = steering delay + plan age). Lane mode uses the same calculation when no lanes are visible (intersections and so on, effective probability below 0.3), and the handover with the lane MPC blends the desired curvature (0.5 s when dropping the lanes, 0.25 s when getting them back). Before 2026-10-06 this stretch followed the plan positions through the lane MPC, which below 25 km/h turned 26-30% less than laneless and 0.3-0.4 s later (recording replay). On real drives, the median driver torque in slow turns was also 152, twice laneless's 80. Changed on the web console's Steering tab; the HUD shows the path in use as `LANE`/`LANELESS`. Lane changes work through the model's desire input in both modes. |
 
-### 차선 변경
+### Lane change
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `lane_change_min_speed_kph` | 30.0 | km/h / 0~80 | 이 속도 미만에서는 차선 변경 desire를 내지 않는다. |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `lane_change_min_speed_kph` | 30.0 | km/h | 0 to 80 | No lane-change desire below this speed. |
 
-차선 변경은 openpilot desire_helper와 같다. 깜빡이를 켜고 그 방향으로 핸들을 밀면(운전자 토크
-150 초과) 시작해 모델에 차선 변경 desire 펄스를 주고, 차선선 가중치를 0.5초에 걸쳐 뺀다. 모델이
-차선 변경을 마쳤다고 할 때(`desire_state` 차선 변경 확률 0.02 미만), 10초가 지났을 때, 조향이
-비활성일 때만 끝난다. 끝나면 차선선을 0.5초에 되살린다(openpilot은 1초).
+Lane changes work as in openpilot's desire_helper. Turning on the blinker and
+pushing the wheel that way (driver torque over 150) starts one: the model gets
+a lane-change desire pulse, and the lane-line weight is taken away over 0.5 s.
+It ends only when the model says the lane change is done (`desire_state`
+lane-change probability below 0.02), when 10 s have passed, or when the
+steering is inactive. At the end the lane lines come back over 0.5 s (openpilot
+takes 1 s).
 
-운전자가 핸들을 잡아도 요청 토크를 줄이지 않는다(openpilot과 같음). 운전자와 반대 방향 토크만
-panda와 같은 운전자 클램프(허용 50 + 운전자 토크 x 2)와 변화율 제한(프레임당 3 올림 / 7 내림)이
-서서히 줄이고, 핸들을 잡은 동안에는 토크 컨트롤러의 적분기만 멈춘다. 예전의
-`driver_torque_threshold`(운전자 토크 170을 1초 넘으면 방향과 무관하게 토크를 0까지 줄임)는
-같은 방향으로 거드는 급커브에서도 어시스트를 없애 2026-09-27에 지웠다.
+Holding the wheel does not reduce the requested torque (as in openpilot). Only
+torque against the driver is reduced, gradually, by the same driver clamp as
+the panda's (allowance 50 + driver torque x 2) and the rate limit (3 up / 7
+down per frame). While the wheel is held, only the torque controller's
+integrator stops. The old `driver_torque_threshold` (driver torque over 170 for
+1 s brought the torque down to 0 whatever its direction) also removed the
+assist in sharp curves where the driver was helping in the same direction, so
+it was deleted on 2026-09-27.
 
-### 경로 제한
+### Path limits
 
-횡방향 경로 제한은 런타임 항목이 아니라 `src/controls/lateral_controller.h`의 고정
-상수다: 최대 횡저크 `5.0 m/s^3`, 최대 횡가속 `3.0 m/s^2`(학습한 도로 롤만큼 이동), 최종 목표 곡률의 절대
-상한은 openpilot과 같은 `0.2 1/m`(`kMaxCurvature`)로 적용되며 설정 항목으로 노출하지 않는다.
+The lateral path limits are not runtime keys but fixed constants in
+`src/controls/lateral_controller.h`: the largest lateral jerk `5.0 m/s³`, the
+largest lateral acceleration `3.0 m/s²` (shifted by the learned road roll),
+and the absolute cap on the final desired curvature, openpilot's `0.2 1/m`
+(`kMaxCurvature`). None of them is exposed as a setting.
 
-### 조향각 및 LKAS fault 보호
+### Steering angle and LKAS fault protection
 
-| 파라미터 | 현재값 | 단위 / 허용 범위 | 설명 |
-|---|---:|---|---|
-| `avoid_lkas_fault_enabled` | true | bool | 큰 조향각 fault 회피를 사용한다. K7 YG HEV 실측(2026-09-18): steer 요청이 켜진 채 85도 위에 0.98~1.12초 머물면 MDPS가 토크와 무관하게 ToiFlt/FailState를 세우고 각도가 85도 아래로 돌아올 때까지 어시스트를 끊는다. 85도 위에서도 토크는 그대로 내되 허용 프레임에 0에 닿을 만큼만 남기고(`steer_delta_down` × 남은 프레임), 그 프레임부터 85도 아래로 올 때까지 steer request를 ToiFlt 없이 끈다. 정차 대기 중에도 같고, 85도 위에서는 request를 새로 켜지 않는다. 그 체류 중 운전자가 핸들을 돌렸으면(조향 감지) 85도 아래가 아니라 15도 아래로 오고 손을 뗄 때까지 끈 채로 둔다(carrotpilot 해제 조건): 회전을 빠져나오며 핸들을 펴는 운전자를 밀지 않는다. 끄면 상류 hyundai `carcontroller.py`의 `common_fault_avoidance`를 쓴다: 85도 위에서 request를 89프레임 낸 뒤 2프레임 끊고(ToiFlt를 켜고 토크는 그대로) 다시 센다. K7에서는 끊었던 request를 85도 위에서 다시 켜면 3~14 ms 안에 fault가 났다(2026-10-03, 4번 중 4번). 끄면 안 된다. |
-| `avoid_lkas_fault_hold_angle_deg` | 80.0 | degree / 0~180 | 운전자가 핸들을 잡지 않았을 때(steering pressed 아님) 컨트롤러가 스스로 가는 최대 핸들 각도다. 목표 곡률을 이 각도가 내는 곡률(학습 SR·강성·오프셋·롤을 쓰는 차량 모델) 안으로 묶어, 85도를 넘겨 0.89초 뒤 토크가 빠지고 핸들이 풀렸다 다시 잡는 반복 대신 이 각도에서 토크를 끊김 없이 유지한다. 운전자가 조향 중이면 묶지 않는다(더 감는 운전자를 밀지 않는다). 횡가속 한계(3.0 m/s²)가 더 좁은 약 35 km/h 위에서는 걸리지 않는다. 0이면 끈다. |
+| Key | Value | Unit | Range | Description |
+|---|---:|---|---|---|
+| `avoid_lkas_fault_enabled` | true | bool | | Uses the large-steering-angle fault avoidance. Measured on the K7 YG HEV (2026-09-18): when the steer request stays on above 85° for 0.98-1.12 s, the MDPS sets ToiFlt/FailState whatever the torque, and cuts the assist until the angle comes back below 85°. Above 85° the torque is still output, but only so much is left that it reaches 0 within the allowed frames (`steer_delta_down` × remaining frames), and from that frame the steer request is turned off, without ToiFlt, until the angle comes below 85°. The same holds while waiting at a stop, and above 85° the request is never newly turned on. If the driver turned the wheel during that stay (steering detected), it stays off until the angle comes below 15°, not 85°, and the hands leave the wheel (carrotpilot's release condition): it does not push a driver who is straightening the wheel out of a turn. Off, upstream hyundai `carcontroller.py`'s `common_fault_avoidance` is used: above 85°, after 89 frames of request it cuts 2 frames (ToiFlt on, torque unchanged) and counts again. On the K7, turning a cut request back on above 85° caused a fault within 3-14 ms (2026-10-03, 4 times out of 4). Do not turn it off. |
+| `avoid_lkas_fault_hold_angle_deg` | 80.0 | ° | 0 to 180 | Largest steering-wheel angle the controller goes to on its own while the driver is not holding the wheel (not steering pressed). It binds the desired curvature within the curvature this angle produces (the vehicle model with the learned SR, stiffness, offset and roll). So instead of passing 85°, losing the torque 0.89 s later, and the wheel unwinding and being caught again over and over, the torque holds at this angle without a break. Not bound while the driver is steering (it does not push a driver who winds on). Above about 35 km/h, where the lateral-acceleration limit (3.0 m/s²) is tighter, it never binds. 0 turns it off. |
 
-MDPS 고장 한계는 코드 상수다(`SteeringParams`): 85도 위에서 89프레임까지 요청을 유지하고, 이는 실측 고장
-하한 98프레임보다 9프레임 이르다. 상류 hyundai `carcontroller.py`의 `MAX_ANGLE`·`MAX_ANGLE_FRAMES`와 같은
-값이다. 회피를 끈 경우에 요청을 끊는 길이(2프레임)도 상류 `MAX_ANGLE_CONSECUTIVE_FRAMES`와 같은 코드 상수다. 고장이 더 일찍 나는 상황이 발견되면 이 상수를 낮춘다.
+With the avoidance on, the steer request moves between these states (the
+request is off from the start when it would begin above 85°):
 
-### 상태와 CAN
+```mermaid
+stateDiagram-v2
+    state "request on" as on
+    state "above 85°<br>torque to 0" as above
+    state "request off<br>no ToiFlt" as off
+    state "request off<br>driver turned" as held
+    [*] --> on
+    on --> above: angle over 85°
+    above --> on: back under 85°
+    above --> off: 89 frames
+    off --> on: under 85°
+    off --> held: under 85°, driver<br>turned the wheel
+    held --> on: under 15°,<br>hands off
+```
 
-모델 경로와 차량 CAN 상태를 낡았다고 보는 시간(250 ms, 500 ms), 해제 뒤 순정 LKAS로 넘기기 전에
-0 토크 프레임을 이어 보내는 시간(3초, openpilot_c2의 기본 인계 시간과 같다), 저속에서도 MDPS가 LKAS를 받도록 MDPS 버스에 쓰는 속도
-(60 km/h)는 상류(openpilot·opendbc, 커뮤니티 포크)처럼 코드 상수다(`src/controls/control_params.h`의
-`ControlTiming`, MDPS 속도는 `SteeringParams::mdps_speed_spoof_kph`). 파일에서 읽지 않는다.
+The MDPS fault limit is a code constant (`SteeringParams`): the request is held
+for up to 89 frames above 85°, 9 frames before the measured fault floor of 98
+frames. It is the same value as upstream hyundai `carcontroller.py`'s
+`MAX_ANGLE` and `MAX_ANGLE_FRAMES`. The length of the request cut with the
+avoidance off (2 frames) is also a code constant, the same as upstream
+`MAX_ANGLE_CONSECUTIVE_FRAMES`. If a case is found where the fault comes
+earlier, lower this constant.
+
+### State and CAN
+
+These are code constants, as upstream (openpilot, opendbc, the community forks)
+has them, and are not read from the file (`ControlTiming` in
+`src/controls/control_params.h`; the MDPS speed is
+`SteeringParams::mdps_speed_spoof_kph`):
+
+- the time after which the model path and the vehicle CAN state count as stale
+  (250 ms, 500 ms);
+- the time zero-torque frames keep being sent after a disengagement before the
+  stock LKAS takes over (3 s, the same as openpilot_c2's default handover
+  time);
+- the speed written on the MDPS bus so the MDPS takes LKAS even at low speed
+  (60 km/h).
 
 ## calibration.json
 
-이 파일은 일반 튜닝 파일이 아니라 온라인 카메라 캘리브레이션의 저장 상태다.
-`EDGEPILOT_CALIB_AUTO=1`일 때 모델 pose와 실제 차량 속도로 갱신된다. 보드나
-카메라 장착 각도가 달라지거나 카메라 내부 파라미터를 다시 측정하면 기존 값을
-그대로 사용하지 말고 다시 캘리브레이션한다.
+This file is not a normal tuning file but the saved state of the online camera
+calibration. It is updated from the model pose and the actual vehicle speed,
+unless `EDGEPILOT_CALIB_AUTO=0` turns the online calibration off. If the board
+or the camera mounting angle changes, or the camera intrinsics are measured
+again, do not keep using the old values; calibrate again.
 
-여기 있는 값은 새 설치의 초기 seed다. `scripts/upload_to_board.sh`는 보드에
-이미 있는 런타임 파일을 덮어쓰지 않고 이 파일을 `params.defaults/`에 둔다.
+The values here are the initial seed for a new install.
+`scripts/upload_to_board.sh` does not overwrite a runtime file already on the
+board, and puts this file in `params.defaults/`.
 
-| 파라미터 | 현재값 | 단위 | 설명 |
+| Key | Value | Unit | Description |
 |---|---:|---|---|
-| `version` | 1 | schema version | 저장 형식 버전이다. 사용자가 변경하지 않는다. |
-| `rpy_rad` | `[-0.00134, -0.01746, -0.01960]` | radian `[roll, pitch, yaw]` | 카메라 자세 보정값이다. 약 `[-0.077, -1.001, -1.123]`도다. 유효 범위는 upstream과 같은 pitch -0.0907~0.17, yaw ±0.0691 rad이고, 범위를 벗어난 저장값도 불러와 invalid로 둔다. |
-| `spread_rad` | `[0, 0, 0]` | radian `[roll, pitch, yaw]` | 유효 블록 사이 캘리브레이션 값의 분산 범위다. 작을수록 관측이 안정적이다. |
-| `valid_blocks` | 0 | block | 저장된 유효 캘리브레이션 블록 수다. 5개 이상이면 calibrated 상태가 될 수 있다. |
-| `height_m` | (없음 → 1.22) | m | 모델 road_transform z로 블록 평균한 도로면에서 카메라까지 높이다(upstream `extrinsicsCalibration.height`, 2026-10-05 추가). 없는 예전 파일은 1.22로 시작한다. 보정 뒤에는 높이 표준편차가 e^-3.5(0.030 m)보다 큰 표본을 버린다. 장착 변경으로 다시 모으면 1.22로 돌아간다. `display.camera_height_m`(카메라 오프셋 크기)에는 아직 쓰지 않는다. |
+| `version` | 1 | schema version | Version of the storage format. Users do not change it. |
+| `rpy_rad` | `[-0.00134, -0.01746, -0.01960]` | rad `[roll, pitch, yaw]` | Camera attitude correction, about -0.077°, -1.001° and -1.123°. The valid range is upstream's: pitch -0.0907 to 0.17 and yaw ±0.0691 rad. A saved value outside the range is still loaded, and marked invalid. |
+| `spread_rad` | `[0, 0, 0]` | rad `[roll, pitch, yaw]` | Spread of the calibration values between the valid blocks. The smaller, the steadier the observation. |
+| `valid_blocks` | 0 | block | Number of saved valid calibration blocks. With 5 or more the state can become calibrated. |
+| `height_m` | (absent → 1.22) | m | Height of the camera above the road, block-averaged from the model's road_transform z (upstream `extrinsicsCalibration.height`, added 2026-10-05). An old file without it starts at 1.22. After calibration, samples whose height standard deviation is over e^-3.5 (0.030 m) are dropped. Collecting again after a mount change takes it back to 1.22. Not yet used for `display.camera_height_m` (the size of the camera offset). |
 
-`valid_blocks`가 0인 것은 의도한 값이다. 2026-08-22에 카메라 내부 파라미터를
-다시 측정하면서 `fx`가 2.6% 바뀌었고, 여기 있던 자세값은 이전 내부 파라미터
-아래에서 학습된 것이라 그 오차를 일부 흡수하고 있었다(새 행렬 기준으로 다시
-맞추면 pitch +4.9 mrad, yaw -5.8 mrad 차이가 난다). `rpy_rad`는 출발점으로
-그대로 두고 `valid_blocks`만 지워 새 내부 파라미터 아래에서 다시 학습하게 했다.
+`valid_blocks` is 0 on purpose. On 2026-08-22 the camera intrinsics were
+measured again and `fx` changed by 2.6%. The attitude here had been learned
+under the old intrinsics and absorbed part of that error (fitted again against
+the new matrix, it differs by pitch +4.9 mrad and yaw -5.8 mrad). `rpy_rad` was
+kept as the starting point, and only `valid_blocks` was cleared so that the
+calibration learns again under the new intrinsics.
 
-`OnlineCalibrator::restore()`는 저장된 `valid_blocks`를 그대로 쓴다(openpilot
-calibrationd와 같다). 5(`kInputsNeeded`) 미만이면 `rpy_rad`는 모델 입력 워프의
-출발점일 뿐이고 상태는 `uncalibrated`라 결합이 막힌다. 새 블록 5개가 모여야
-`calibrated`가 된다. 블록 하나는 채택 샘플 100개(`kBlockSize`)이고 채택은 약
-24 km/h 이상 직진 주행에서만 일어나므로, 5블록은 조건을 만족하는 주행 25초
-남짓에 해당한다.
+`OnlineCalibrator::restore()` uses the saved `valid_blocks` as it is (as
+openpilot's calibrationd does). Below 5 (`kInputsNeeded`), `rpy_rad` is only
+the starting point of the model input warp, and the state is `uncalibrated`, so
+engagement is blocked. It becomes `calibrated` once 5 new blocks are collected.
+A block is 100 accepted samples (`kBlockSize`), and samples are accepted only
+when driving straight at about 24 km/h or more, so 5 blocks take a little over
+25 s of such driving.
 
-파일을 아예 지우면 seed 없이 `rpy=[0,0,0]`에서 출발한다. 이 차량의 pitch가
--1.35도이므로 수렴 전까지 모델 입력 워프가 그만큼 틀어진다. 다시 학습시킬
-때도 파일을 지우기보다 `rpy_rad`는 남기고 `valid_blocks`를 0으로 두는 편이
-낫다.
+The calibration status moves like this:
 
-카메라 마운트를 옮겼으면 웹 콘솔 `차량 특성` 탭의 **캘리브레이션 초기화**를
-누른다. 해제(disengaged) 상태에서만 받으며(openpilot의 Reset Calibration과 같다),
-`/dev/shm/edgepilot_calibration_reset`을 만들면 modeld가 1초 안에 이 파일과
-`flow_calibration.json`을 지우고 보정기를 `rpy=[0,0,0]`, 0블록에서, 광류 보정기를 블록 없이
-다시 시작한다. 옛 장착의 값은 틀렸으므로 seed로 남기지 않는다. paramsd·torqued 학습값은 CAN 요레이트로 배우므로 그대로 둔다.
-modeld가 안 떠 있으면 요청 파일은 남아 있다가 다음 시작 때 처리된다.
-블록 사이 편차가 yaw 2°, pitch 4°를 넘으면 openpilot calibrationd와 같이 장착이
-바뀐 것으로 보고 스스로 다시 보정한다: 마지막 블록 하나에서 다시 모으며 상태는
-`recalibrating`(HUD `RECAL`)이고, 출력은 0.5초(10표본)에 걸쳐 새 값으로 옮겨 가며,
-새 블록 5개가 차야 다시 보정 완료가 된다. 그 사이에는 저장하지 않는다. 그보다 작게
-바뀐 장착은 옛 블록과 섞여 천천히 움직이므로 이 버튼으로 초기화한다.
+```mermaid
+stateDiagram-v2
+    [*] --> uncalibrated
+    uncalibrated --> calibrated: 5 blocks,<br>within the range
+    uncalibrated --> invalid: 5 blocks,<br>outside the range
+    calibrated --> recalibrating: spread over<br>yaw 2° or pitch 4°
+    recalibrating --> calibrated: 5 new blocks
+```
 
-내부 파라미터를 다시 측정해 옛 값을 seed로 남긴 채 다시 학습시키려면,
-정차 상태에서 파이프라인을 멈추고 보드의 `params/calibration.json`을 백업한 뒤
-`valid_blocks`를 0으로 바꿔 다시 쓰고 파이프라인을 시작한다. 실차에서는 충분한
-속도로 직선에 가까운 도로를 주행하면서 카메라가 움직이지 않게 고정해야 한다.
+Deleting the file outright starts from `rpy=[0,0,0]` with no seed. This car's
+pitch is -1.35°, so the model input warp is off by that much until the
+calibration converges. To make it learn again, keeping `rpy_rad` and setting
+`valid_blocks` to 0 is better than deleting the file.
+
+After moving the camera mount, press **Reset calibration** on the web console's
+Vehicle tab. It is accepted only while disengaged (like openpilot's Reset
+Calibration). It creates `/dev/shm/edgepilot_calibration_reset`, and within
+a second modeld deletes this file and `flow_calibration.json` and restarts the
+calibrator from `rpy=[0,0,0]` with 0 blocks, and the flow calibrator with no
+blocks. The old mount's values are wrong, so they are not kept as a seed. The
+paramsd and torqued learned values are learned from the CAN yaw rate, so they
+stay. If modeld is not running, the request file stays and is handled at the
+next start.
+
+When the spread between blocks goes over 2° in yaw or 4° in pitch, the
+calibrator decides, as openpilot's calibrationd does, that the mount has
+changed, and calibrates again by itself. It collects again from the last
+block, the state is `recalibrating` (HUD `RECAL`), the output moves to the new
+value over 0.5 s (10 samples), and it is calibrated again once 5 new blocks are
+full. Nothing is saved in between. A smaller mount change mixes with the old
+blocks and moves slowly, so reset it with this button.
+
+To measure the intrinsics again and relearn while keeping the old values as the
+seed: while stopped, stop the pipeline, back up the board's
+`params/calibration.json`, rewrite it with `valid_blocks` set to 0, and start
+the pipeline. On the road, drive fast enough on a nearly straight road, with
+the camera fixed so that it cannot move.
 
 ## flow_calibration.json
 
-저장소에 없는 런타임 파일이다. 광류 보정기의 블록 중앙값(창 20개의 중앙값, 오래된 것부터 최대 30개)을 modeld가
-저장해, 다시 시작하면 그 추정으로 바로 시작한다. 첫 추정과 장착 변경은 바로, 그 밖에는 1분에 한 번과 끝낼 때
-쓴다. 웹 콘솔의 캘리브레이션 초기화가 `calibration.json`과 함께 지운다.
+A runtime file that is not in the repository. modeld saves the flow
+calibrator's block medians (each the median of 20 windows, up to 30, oldest
+first), so a restart starts straight from that estimate. The first estimate and
+a mount change are written at once, otherwise once a minute and on exit. The
+web console's calibration reset deletes it together with `calibration.json`.
 
-| 키 | 단위 | 설명 |
+| Key | Unit | Description |
 |---|---|---|
 | `version` | schema version | 1 |
-| `yaw_rad`, `pitch_rad` | radian | 블록 중앙값들. 길이가 같아야 하고, 하나라도 유한하지 않거나 10°를 넘으면 파일 전체를 버린다 |
-| `windows` | count | 지금까지 받아들인 측정 창 수 |
-| `mount_changes` | count | 장착 변경(최근 3블록이 1° 넘게 같은 쪽)으로 예전 블록을 버린 횟수 |
+| `yaw_rad`, `pitch_rad` | rad | The block medians. They must have the same length; if any value is not finite or exceeds 10°, the whole file is discarded |
+| `windows` | count | Number of measurement windows accepted so far |
+| `mount_changes` | count | Number of times old blocks were dropped for a mount change (the last 3 blocks over 1° on the same side) |
 
-## 권장 튜닝 순서
+## Recommended tuning order
 
-1. 카메라 장착을 고정하고 온라인 캘리브레이션을 완료한다.
-2. `path_offset_m`로 차선 중심 위치를 먼저 맞춘다.
-3. `angle_offset_deg`, `steer_ratio`, 차량 제원이 실제 차량과 맞는지 확인한다.
-4. `torque_lat_accel_factor`, `torque_kp`, `torque_ki`, `torque_friction`을 한 항목씩 조정한다.
-5. 토크가 정상적으로 추종된 뒤 `steer_actuator_delay`를 조정한다. 횡저크·횡가속
-   상한은 런타임 항목이 아니므로 여기서 바꾸지 않는다(위 `경로 제한` 참고).
-6. 마지막으로 운전자 토크 보호와 fault 회피 옵션을 검증한다.
+1. Fix the camera mount and complete the online calibration.
+2. Set the lane-centre position first, with `path_offset_m`.
+3. Check that `angle_offset_deg`, `steer_ratio` and the vehicle specs match the
+   real car.
+4. Adjust `torque_lat_accel_factor`, `torque_kp`, `torque_ki` and
+   `torque_friction`, one at a time.
+5. Once the torque tracks properly, adjust `steer_actuator_delay`. The lateral
+   jerk and acceleration limits are not runtime keys, so they are not changed
+   here (see [Path limits](#path-limits) above).
+6. Last, check the fault avoidance options (`avoid_lkas_fault_*`).
 
-각 단계에서 disengage 가능 여부, 운전자 개입 시 즉시 토크가 줄어드는지, CAN 오류와
-MDPS fault가 없는지를 먼저 확인한다.
+At each step, first check that you can disengage, that the torque against the
+driver eases off when the driver steers against it, and that there are no CAN
+errors and no MDPS faults.
+
+## Related
+
+- [Runtime options](../docs/runtime-options.md): the environment variables, how
+  a changed file reaches the processes, and the web console
+- [Runtime](../docs/runtime.md): the processes that read these files
+- [Flow calibration](../docs/flow-calibration.md): the optical-flow calibrator
+  behind `calibration_use_flow`
+- [Lead flow](../docs/lead-flow.md): the lead track the vision cruise follows
+- [K7 Panda port](../docs/k7-panda-port.md): the K7's CAN signals, the brake
+  pedal and the transmit gates
+- [Closed-loop replay](../docs/closed-loop-replay.md): the simulation behind
+  `lane_path_weight`
+- [Recording](../docs/recording.md): the route that `recording.json` switches on

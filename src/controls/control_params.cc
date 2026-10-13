@@ -60,3 +60,13 @@ bool load_steering_params_json(const std::string &path, SteeringParams *params, 
         },
         error);
 }
+
+std::string first_steering_param_difference(const SteeringParams &a, const SteeringParams &b) {
+    for (const auto &field : kSteeringBools)
+        if (a.*field.member != b.*field.member) return field.key;
+    for (const auto &field : kSteeringInts)
+        if (a.*field.member != b.*field.member) return field.key;
+    for (const auto &field : kSteeringFloats)
+        if (a.*field.member != b.*field.member) return field.key;
+    return "";
+}

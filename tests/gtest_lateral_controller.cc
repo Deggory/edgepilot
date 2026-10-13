@@ -923,14 +923,8 @@ TEST(LateralController, SteeringJsonMatchesDefaults) {
     SteeringParams json, defaults;
     std::string error;
     ASSERT_TRUE(load_steering_params_json("params/steering.json", &json, &error)) << "steering.json 읽기";
-    // steering.json 토크 이득이 코드 기본값과 같다
-    ASSERT_EQ(json.torque_lat_accel_factor, defaults.torque_lat_accel_factor);
-    ASSERT_EQ(json.torque_kp, defaults.torque_kp);
-    ASSERT_EQ(json.torque_ki, defaults.torque_ki);
-    ASSERT_EQ(json.torque_friction, defaults.torque_friction);
-    // 경로 모드와 차선 변경 최소 속도도 같다
-    ASSERT_EQ(json.laneless_mode, defaults.laneless_mode);
-    ASSERT_EQ(json.lane_change_min_speed_kph, defaults.lane_change_min_speed_kph);
+    // 파일에서 읽는 모든 키가 코드 기본값과 같다
+    EXPECT_EQ(first_steering_param_difference(json, defaults), "") << "steering.json과 기본값이 다른 키";
     const std::string path = "/tmp/gtest_lateral_controller_raw_keys.json";
     std::FILE *f = std::fopen(path.c_str(), "w");
     ASSERT_NE(f, nullptr) << "raw 키 픽스처 쓰기";
@@ -1092,6 +1086,8 @@ TEST(LateralController, LiveParamsSwitchOffIsIdentical) {
     LateralControllerConfig config;
     config.force_engaged = true;
     config.timing.vehicle_state_timeout_ms = 2000;
+    config.steering_params.use_live_vehicle_params = false;
+    config.steering_params.use_live_torque_params = false;
     LateralController plain(config), fed(config);
     double t = 1.0;
     for (int tick = 0; tick < 600; ++tick, t += 0.01) {

@@ -1,53 +1,149 @@
-# Split runtime
+# Runtime
 
-[← Documentation index](../README.md)
+[← Documentation](README.md)
+
+The board runtime is a set of single-purpose processes that `manager.py`
+starts and supervises; they talk to each other through `/dev/shm`. This
+document covers how the runtime starts, what each process does, what it costs,
+and where the process boundaries are.
+
+The camera's pixels go from `camerad` into the frame ring, which `modeld`,
+`overlayd` and `recordd` read with hardware engines; everything else is small
+state snapshots and CAN batches:
+
+```mermaid
+flowchart TB
+    cam(["camera<br>OS04D10"]) --> camerad
+    camerad --> ring["frame ring<br>8 CMM slots"]
+    ring --> modeld["modeld<br>warp, NPU"]
+    ring --> overlayd["overlayd<br>LCD and HUD"]
+    ring --> recordd["recordd<br>H.264, event log"]
+    modeld --> controlsd["controlsd<br>planner, MPC, torque"]
+    modeld -- "frame it used" --> recordd
+    imu(["board IMU"]) --> imud
+    imud --> locationd
+    locationd --> controlsd
+    controlsd <-- "CAN, sendcan" --> pandad
+    pandad <-- USB --> car(["Panda and K7"])
+    classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    class cam,camerad,ring,overlayd pixel
+    class modeld,controlsd,locationd compute
+    class recordd,imud,pandad,imu proc
+    class car external
+```
+
+What `overlayd` draws is in [HUD](hud.md), and what `recordd` writes is in
+[Recording](recording.md).
 
 ## Managed startup
+
+### Start the runtime
 
 ```sh
 python3 /root/edgepilot/manager.py [supercombo.axmodel]
 ```
 
 The manager changes to its own directory, so it can be started from anywhere.
-The no-argument command selects `models/supercombo.axmodel` (or `EDGEPILOT_MODEL`),
-K7 control enabled, Panda TX enabled, and the FastAPI web console enabled.
-`pandad` is off unless `EDGEPILOT_ENABLE_PANDA=1`. Every setting can be
-overridden with its environment variable; see
-[Runtime options](runtime-options.md).
+With no argument it runs `models/supercombo.axmodel` (or `EDGEPILOT_MODEL`)
+with K7 control and the FastAPI web console on. `pandad` starts only with
+`EDGEPILOT_ENABLE_PANDA=1`, which the boot service sets, and then transmits by
+default (`EDGEPILOT_PANDA_TX=1`). Every setting can be overridden with its
+environment variable; see [Runtime options](runtime-options.md).
 
 Stop it with Ctrl-C or `SIGTERM`: children get `SIGTERM`, then `SIGKILL` after
 3 s.
 
-For boot autostart, `scripts/install_autostart.sh [root@board]` installs
-`scripts/edgepilot.service` (after `edgepilot-drivers.service`, which loads the
-AX drivers early in boot and is installed by `scripts/install_boot_tuning.sh`,
-and after `usb-gadget.service`; `Conflicts=launcher.service`; `Restart=always`)
-and disables the stock
-launcher at boot. The unit reads `/etc/environment` for `LD_LIBRARY_PATH` and
-sets `EDGEPILOT_LOG_DIR=/run/edgepilot`, so each child's output goes to
-`/run/edgepilot/<name>.log` (tmpfs, emptied past 1 MiB). `systemctl start
-launcher.service` switches back to the stock UI; `install_autostart.sh
---remove` undoes the install.
+### Boot autostart
 
-It also installs `wifi-dhcp-renew.service`. The service waits for
+`scripts/install_autostart.sh [root@board]` installs
+`scripts/edgepilot.service` and disables the stock launcher at boot. The unit:
+
+- starts after `edgepilot-drivers.service`, which loads the AX drivers early in
+  boot and is installed by `scripts/install_boot_tuning.sh`, and after
+  `usb-gadget.service` ([Boot time](boot-time.md#unit-order))
+- has `Conflicts=launcher.service camcal.service` and `Restart=always`
+- reads `/etc/environment` for `LD_LIBRARY_PATH`
+- sets `EDGEPILOT_LOG_DIR=/run/edgepilot`, so each child's output goes to
+  `/run/edgepilot/<name>.log` (tmpfs, emptied past 1 MiB)
+- sets `EDGEPILOT_USB_ROLE=host` and `EDGEPILOT_ENABLE_PANDA=1`, so the Panda
+  on the USB-C port is used and `pandad` runs
+
+`systemctl start launcher.service` switches back to the stock UI, and
+`systemctl start camcal` stops the runtime for a camera capture;
+`install_autostart.sh --remove` undoes the install.
+
+The script puts `maix_npu_ai_isp=1` in `/boot/configs`, which splits the NPU
+at boot. `camerad` refuses to start without it, so reboot the board once after
+the script first writes it (the script says so).
+
+The script also installs `wifi-dhcp-renew.service`. The service waits for
 wpa_supplicant's control socket, then renews the wlan0 DHCP lease on every
 reconnect; otherwise udhcpc keeps the old network's lease. It also sets the
 AIC8800 Wi-Fi driver's debug level to errors only. The stock level 1039 logs
 more than 5 lines/s, which the journal writes to the SD card.
+
+### No SD writes from a real-time loop
 
 Real-time daemons must not write to the SD card from their loop. With the
 recording mover busy, a small open/rename can block for seconds. modeld's
 calibration save did this, stalled modeld and dropped steering. Use a
 background writer, as calibration and controlsd's learners do.
 
-The manager restarts a dead child after 1 s. When `camerad` restarts,
-`overlayd` and `recordd` are restarted after it settles (1.5 s), because opening
-the VI resets the AX common pools they hold. If `camerad` crashes on a signal or
-fails twice within 5 s of starting, the manager restarts every process: a
-crashed `camerad` leaves its VI/IVPS group and pools allocated while `modeld`
-keeps the AX system open.
+### Start order
 
-## Runtime processes
+The manager starts the processes in a fixed order, 0.3 s apart. `overlayd` and
+`recordd` wait until `camerad` has run for 1.5 s, because opening the VI resets
+the AX common pools they hold:
+
+```mermaid
+flowchart TB
+    prep["stop launcher,<br>set USB-C role"] --> cam["camerad"]
+    cam --> rest["modeld, imud,<br>locationd,<br>pandad,<br>controlsd,<br>web console"]
+    rest --> settle["camerad has<br>run for 1.5 s"]
+    settle --> late["overlayd,<br>recordd"]
+    late --> watch["supervise,<br>managerState<br>every 1 s"]
+    classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class cam,late pixel
+    class prep,rest,settle,watch proc
+```
+
+`imud`, `locationd` and `pandad` are never started in rehearsal mode. Otherwise
+`pandad` starts only with `EDGEPILOT_ENABLE_PANDA=1`, and `controlsd` and the
+web console only when they are enabled. Binaries that are not installed are
+skipped.
+
+### Restarts
+
+The manager restarts a dead child after 1 s. `camerad` has two extra rules:
+
+```mermaid
+flowchart TB
+    exit["a child exits"] --> which{"camerad?"}
+    which -- no --> one["restart it<br>after 1 s"]
+    which -- yes --> bad{"signal, or 2nd<br>quick exit?"}
+    bad -- no --> cam["restart camerad<br>after 1 s"]
+    cam --> deps["restart overlayd<br>and recordd once<br>camerad has run 1.5 s"]
+    bad -- yes --> stop["stop every process"]
+    stop --> all["start all again<br>in start order"]
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class exit,which,one,bad,cam,deps,stop,all proc
+```
+
+- When `camerad` restarts, `overlayd` and `recordd` are restarted after it
+  settles (1.5 s), because opening the VI resets the AX common pools they hold.
+- If `camerad` crashes on a signal, or exits within 5 s of starting twice in a
+  row, the manager restarts every process: a crashed `camerad` leaves its
+  VI/IVPS group and pools allocated while `modeld` keeps the AX system open.
+  Every child gets `SIGTERM`, then `SIGKILL` after 3 s, and all start again
+  1 s later in the start order.
+
+## Processes
+
+The processes are described in the order data passes through them.
 
 ### `manager.py`
 
@@ -59,13 +155,15 @@ keeps the AX system open.
   previous role on exit; `EDGEPILOT_USB_ROLE=host|device` instead fixes the
   role at start and leaves it (the boot service sets `host`)
 - starts, in this order: `camerad`, `modeld`, `imud` and `locationd` (not in
-  rehearsal mode), then `pandad`, `controlsd`, and the web console when
-  enabled; `overlayd` and `recordd` start once `camerad` has run for 1.5 s
-  (opening VI resets the AX pools); binaries that are not installed are
-  skipped
-- restarts a process 1 s after it exits; each process's first log line names
-  its build (`modeld: edgepilot v0.0.4-6-g1a2b3c4`,
-  [Build version](build-and-deploy.md#build-version))
+  rehearsal mode), then `pandad` (not in rehearsal mode), `controlsd`, and the
+  web console when enabled; `overlayd` and `recordd` start once `camerad` has
+  run for 1.5 s (opening VI resets the AX pools); binaries that are not
+  installed are skipped ([Start order](#start-order))
+- restarts a process 1 s after it exits ([Restarts](#restarts)); each C++
+  daemon's first log line names its build, as in
+  `modeld: edgepilot v0.0.4-6-g1a2b3c4`
+  ([Build version](build-and-deploy.md#build-version)); `manager.py` and the
+  web console do not log one
 - publishes `managerState` to `/dev/shm/edgepilot_manager_state` every second
 - nice levels: `camerad=0`, `overlayd=10`, `recordd=15`, `modeld=-15`,
   `imud=10`, `locationd=5`, `pandad=-10`, `controlsd=-8`, `web_console=10`
@@ -76,7 +174,7 @@ keeps the AX system open.
   AI-ISP on (one NPU core; `modeld` uses the other). It refuses to start unless
   `/boot/configs` has `maix_npu_ai_isp=1`, which splits the NPU at boot
 - runs the sensor itself at 20 fps (`AX_ISP_SetSnsAttr`) with auto exposure on
-  and the maximum shutter capped at 33,333 us (`EDGEPILOT_MAX_SHUTTER_US`), so
+  and the maximum shutter capped at 33,333 µs (`EDGEPILOT_MAX_SHUTTER_US`), so
   frames arrive 50 ms apart as the model expects
 - allocates the 8 frame-ring slots as CMM (physically contiguous) blocks and
   copies each camera frame into the next slot with IVPS TDP; the CPU never
@@ -86,64 +184,6 @@ keeps the AX system open.
   published as `roadAiFrame`
 - lowers the sensor library's log level, which otherwise writes a harmless
   gain-table error on every AE update
-
-### `overlayd`
-
-- drives the LCD: the camera on VO video layer 0 and the HUD on the graphic
-  layer (`/dev/fb0`); the hardware composes them for the 480x640 panel
-- layer 0 is the camera: IVPS reads the newest ring slot, crops the centre 4:3
-  (960x720 of 1280x720), and scales it to 640x480, so the preview is not
-  stretched; a frame overwritten during the read is dropped
-- the HUD is straight-alpha BGRA drawn by the CPU renderer in the panel's
-  portrait orientation into a cached buffer (no rotation pass: IVPS TDP
-  rotation smears 32-bit BGRA edges); only the 64 px tiles drawn this frame or
-  last frame are cleared and copied into the visible fb0 page
-- redraws the HUD when a new model, control, panda, manager, or record snapshot
-  arrives and once a second, at most every 45 ms, which gives 20 Hz with the
-  model; lanes and path are anti-aliased and fade with distance; the
-  turn-signal animation has its own 50 ms clock
-- HUD content: a border in the steering state colour (grey while engaged but
-  not steering, including the large-angle pause), the speed with yellow
-  turn-signal chevrons beside it (both sides for the hazard lights) and a large
-  green `AUTO HOLD` badge under it while the car holds the brake, the set speed
-  card (with the vision cruise speed as `SET` when it is lower) and gear card
-  and steering mode chip at the top left with a manoeuvre chip below it while
-  steering (`CHANGING LANES`), a status pill
-  at the top right (red `REC`
-  while `recordd` writes a route, a Wi-Fi fan lit by signal, or `OFFLINE` unless
-  a `wlan` link is associated with an AP; the USB link does not count), TPMS
-  and camera calibration cards in the bottom corners with a pair of cards
-  above them: board state above TPMS (CPU temperature, CPU, RAM, disk; amber
-  from 70 °C / 90%) and the learned values above calibration (steer ratio,
-  angle offset, lateral-acceleration torque factor, steering delay; white
-  while control uses the learned value, dim while it still uses the
-  parameter), a lane-position marker across the
-  ego lane about 7 m ahead (ticks at both lane lines, the lane centre above the
-  line and the car below it at true scale, the offset in cm), a steering
-  torque bar at the bottom
-  edge while engaged (openpilot's mici UI torque bar: sent torque / 384 from the
-  center toward the turn, white, then orange above 75%; the driver's torque on
-  the same scale as a light-blue tick), and an alert card above it, which also
-  asks for the nudge that starts a lane change (`LANE CHANGE`) and says when the
-  wheel is past 85° or held by the driver (`STEERING PAUSED`). Panda,
-  storage, and a radar-only lead appear as chips only when they apply,
-  and the green-light wait as a traffic-light icon (red lamp lit); a tap on the left column
-  adds a card with what no other card shows: camera/model/HUD FPS, steering
-  torques, paramsd stiffness and average offset, torqued raw estimates and
-  progress, and lagd's blocks (amber until valid)
-- reads the touchscreen (`hyn_ts`, rotated clockwise 90° like MaixCDK): a tap
-  on the status pill opens a network card (SSID, IPv4, interface, signal, or
-  `Not connected`, plus the USB link's address) for
-  10 s and a second tap closes it, a tap on the left column (set speed and gear
-  cards, chips, board state card) shows or hides the diagnostics card (off when overlayd starts),
-  and a tap elsewhere closes the network card;
-  every tap is logged as `overlayd: tap x=... y=... <action>`
-- turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`, level from
-  `/boot/configs`)
-- plays the alert sounds (short bell-like tones, `src/hud/alert_tones.cc`) on the
-  board speaker, shows departure
-  alerts and engage refusals on screen, and writes every alert as a
-  `overlayd: alert=...` log line
 
 ### `modeld`
 
@@ -156,49 +196,8 @@ keeps the AX system open.
   dropped before it enters the image and feature queues
 - runs the NPU, parses the output, updates online calibration, feeds the
   calibration back into the next warp, and publishes compact `modelState`
+- publishes the frame it used as `recordFrame`, which `recordd` follows
 - see [Model pipeline](model-pipeline.md)
-
-### `pandad` (optional)
-
-- started only with `EDGEPILOT_ENABLE_PANDA=1`, when built with
-  `-DEDGEPILOT_BUILD_PANDA=ON` (the default)
-- connects to the Panda over `libusb`, publishes compact Panda health and
-  ordered CAN receive batches, and can relay ordered `sendcan` batches
-- standalone default is shadow mode (`EDGEPILOT_PANDA_TX=0`); the manager's default
-  enables TX
-- reads the Panda's firmware version when it connects and, once a second, writes
-  the link, that version and any flashing progress to
-  `/dev/shm/edgepilot_panda_status.json` for the web console
-- flashes the Panda when the web console asks: `/dev/shm/edgepilot_panda_flash`
-  holds the version to write, and `pandad` writes the installed image
-  (`EDGEPILOT_PANDA_FIRMWARE`) only if it is that version and the car is parked.
-  See [Panda firmware](../firmware/panda/README.md)
-
-### `controlsd` (K7 controller)
-
-- enabled by default (`EDGEPILOT_ENABLE_CONTROL=1`)
-- runs the openpilot-compatible lane planner and lateral MPC in a worker,
-  with the KIA K7 YG HEV torque controller and `LKAS11`/`CLU11`/`MDPS12` packer
-  at 100 Hz; the planner smooths the ego lane lines over time first
-  ([Lane-line filter](lane-line-filter.md))
-- consumes model path, lane, road-edge, and vehicle-state IPC
-- filters the wheel-speed average into `vEgo` as openpilot does
-  (`car/speed_filter`); the controller, the planner, the learners and the
-  published `ego_speed_kph` (read by modeld's calibration and locationd) all
-  use it
-- uses the vision lead distance and relative speed (`modeld`'s lead track when
-  it has one, see [Lead track](flow-calibration.md#lead-track)) to adjust the stock
-  fixed-speed cruise setting with rate-limited `SET-`/`RES+` CLU11 pulses; the
-  first driver SET speed remains the maximum. A lower set speed only makes the
-  car coast (about 0.5 km/h/s, no braking), so the speed at which it closes in on
-  a lead is capped to what that coast can take off before the desired gap, and
-  the set speed is not pushed more than 6 km/h past the actual speed while the
-  car is already moving that way. The target the buttons follow drops at once
-  but rises at only 1 km/h/s, so lead noise does not alternate `SET-` and `RES+`
-- publishes generated raw `sendcan` batches for `pandad`
-- publishes compact `controlState` diagnostics for the display HUD
-- does not transmit by itself; actual TX still requires `pandad` with
-  `EDGEPILOT_PANDA_TX=1`
 
 ### `imud`
 
@@ -213,9 +212,10 @@ keeps the AX system open.
   rate and roll (`use_locationd_learner_inputs` in `params/steering.json`) and
   whose lagd estimate can set the steering delay (`use_live_delay`). Without
   the IMU, `locationd` publishes nothing and `controlsd` falls back to ESP12
-  values. If the IMU cannot be opened it retries every 10 s instead of
-  exiting, so a missing IMU neither loops the manager nor marks the runtime
-  unhealthy. It is not started in rehearsal mode
+  values
+- if the IMU cannot be opened it retries every 10 s instead of exiting, so a
+  missing IMU neither loops the manager nor marks the runtime unhealthy
+- is not started in rehearsal mode
 
 ### `locationd`
 
@@ -225,33 +225,93 @@ keeps the AX system open.
 - publishes `LocalizationState` to `/dev/shm/edgepilot_localization`; with no
   IMU input it publishes nothing and waits
 - saves the lagd estimate to `params/live_delay.json` every 60 s and on exit,
-  and resumes it at start when `steer_actuator_delay` is unchanged. It is not
-  started in rehearsal mode
+  and resumes it at start when `steer_actuator_delay` is unchanged
+- is not started in rehearsal mode
+
+### `controlsd` (K7 controller)
+
+- enabled by default (`EDGEPILOT_ENABLE_CONTROL=1`)
+- runs the openpilot-compatible lane planner and lateral MPC in a worker,
+  with the KIA K7 YG HEV torque controller and `LKAS11`/`CLU11`/`MDPS12` packer
+  at 100 Hz; the planner smooths the ego lane lines over time first
+  ([Lane-line filter](lane-line-filter.md))
+- consumes model path, lane, road-edge, and vehicle-state IPC
+- filters the wheel-speed average into `vEgo` as openpilot does
+  (`car/speed_filter`); the controller, the planner, the learners and the
+  published `ego_speed_kph` (read by modeld's calibration and locationd) all
+  use it
+- adjusts the stock fixed-speed cruise setting with rate-limited
+  `SET-`/`RES+` CLU11 pulses from the vision lead distance and relative speed
+  (`modeld`'s lead track when it has one, see [Lead flow](lead-flow.md)):
+  - the first driver SET speed remains the maximum
+  - a lower set speed only makes the car coast (about 0.5 km/h/s, no braking),
+    so the speed at which it closes in on a lead is capped to what that coast
+    can take off before the desired gap
+  - the set speed is not pushed more than 6 km/h past the actual speed while
+    the car is already moving that way
+  - the target the buttons follow drops at once but rises at only 1 km/h/s,
+    so lead noise does not alternate `SET-` and `RES+`
+- publishes generated raw `sendcan` batches for `pandad`
+- publishes compact `controlState` diagnostics for the display HUD, and the
+  learners' output as `learnerState`
+- does not transmit by itself; actual TX still requires `pandad` with
+  `EDGEPILOT_PANDA_TX=1`
+
+### `pandad` (optional)
+
+- started only with `EDGEPILOT_ENABLE_PANDA=1`, when built with
+  `-DEDGEPILOT_BUILD_PANDA=ON` (the default)
+- connects to the Panda over `libusb`, publishes compact Panda health and
+  ordered CAN receive batches, and can relay ordered `sendcan` batches
+- standalone default is shadow mode (`EDGEPILOT_PANDA_TX=0`); the manager's
+  default enables TX
+- copies received and sent CAN batches into the log queues that `recordd`
+  records
+- reads the Panda's firmware version when it connects and, once a second,
+  writes the link, that version and any flashing progress to
+  `/dev/shm/edgepilot_panda_status.json` for the web console
+- flashes the Panda when the web console asks:
+  `/dev/shm/edgepilot_panda_flash` holds the version to write, and `pandad`
+  writes the installed image (`EDGEPILOT_PANDA_FIRMWARE`) only if it is that
+  version and the car is parked. See
+  [Panda firmware](../firmware/panda/README.md)
+
+### `overlayd`
+
+- drives the LCD: the camera on VO video layer 0 and the HUD on the graphic
+  layer (`/dev/fb0`), composed by the hardware for the 480x640 panel
+- redraws the HUD at up to 20 Hz, reads the touchscreen, turns the backlight on
+  and plays the alert sounds
+- see [HUD](hud.md)
 
 ### `recordd`
 
-- follows the frame `modeld` used (`/dev/shm/edgepilot_record_frame`), copies
-  the ring slot into its own pool block with IVPS, checks the slot was not
-  overwritten meanwhile, and encodes it with the hardware H.264 encoder (VENC,
-  CBR, 1 s GOP) — the CPU never touches pixels (~5% of a core while recording).
-  H.264 because the board's decoder only decodes H.264, so a route can be
-  replayed as recorded ([Rehearsal](rehearsal.md))
-- writes the recording format with the codec in the manifest
-  (`segments/NNN/road.h264` + `frames.bin`,
-  event log with CAN, model, control, panda, learner, IMU and localization
-  state, params snapshot), staged in tmpfs and moved to `recordings/` on the SD card
-- `params/recording.json` `enabled` starts/stops a route; `bitrate_bps` is read
-  once, when `recordd` starts
-- publishes `recordState` (route being written, storage reserve exhausted)
-  twice a second; `overlayd` shows `REC` or a `STORAGE FULL` chip from it
+- encodes the frame `modeld` used with the hardware H.264 encoder and logs the
+  CAN batches and state topics beside it, as a route staged in tmpfs and moved
+  to `recordings/` on the SD card; `params/recording.json` `enabled` starts
+  and stops it
+- publishes `recordState` twice a second for the HUD's `REC` and
+  `STORAGE FULL`
+- see [Recording](recording.md)
 
 ### `replayd` (rehearsal)
 
 - with `EDGEPILOT_REPLAY_ROUTE`, takes the place of `camerad` and `pandad`: it
   decodes the route's H.264 into the frame ring with the hardware decoder and
   replays its CAN and panda state in real time, while the other processes run
-  as in the car. Generated CAN is logged, never sent. See
-  [Rehearsal](rehearsal.md)
+  as in the car. Generated CAN is logged, never sent
+- the manager runs it under `camerad`'s name, so the camera's start and
+  restart rules apply to it; `EDGEPILOT_REPLAY_START` and
+  `EDGEPILOT_REPLAY_DURATION` (seconds) choose the stretch to replay
+- see [Rehearsal](rehearsal.md)
+
+### `web_console`
+
+- started when `EDGEPILOT_ENABLE_WEB_CONSOLE` is on (by default, whenever
+  control is enabled) as `python3 -m web_console`
+- reads the model, control, learner, localization and manager states, and
+  writes the Panda flash and calibration reset requests to `/dev/shm`
+- see [Web console](runtime-options.md#web-console)
 
 ## Measured load
 
@@ -260,7 +320,7 @@ CPU per process on the board with the full camera/model/HUD/control pipeline
 `modeld` ~8%, `controlsd` ~1%. Camera, model, and HUD all run at 20 Hz with no
 missed model frames.
 
-### Hardware engines
+## Hardware engines
 
 Per camera frame (20 Hz), from `/proc/ax_proc/ivps` on the board (2026-10):
 
@@ -271,107 +331,134 @@ Per camera frame (20 Hz), from `/proc/ax_proc/ivps` on the board (2026-10):
 | `camerad` | TDP, sync queue 0 | copy into the next frame ring slot | 2.0 ms |
 | `overlayd` | TDP, sync queue 3 | ring slot centre 4:3 to 640x480 | 1.5 ms |
 | `overlayd` | TDP + VPP, VO pipeline (group 1) | 90° rotation and mirror for the portrait panel | 2.8 + 0.8 ms |
-| `modeld` | GDC | two 512x256 model views | 2 × 0.3 ms |
-| `modeld` | VPP, sync queue 1 | flow pyramid, NV12 out (straight and fast, or a model lead) | see below |
+| `modeld` | GDC | two 512x256 model views; GDC engine time per view | 2 × 0.3 ms |
+| `modeld` | VPP, sync queue 1 | flow pyramid, NV12 out (straight and fast, or a model lead) | see [Flow calibration](flow-calibration.md#evidence) |
 | `modeld` | IVE | flow calibrator corners and LK (straight and fast only); lead points LK, also backward (with a model lead) | about 5 ms; lead 1-2 ms |
 | `recordd` | TDP, sync queue 2 | ring slot into the encoder's pool block (while recording) | 2.0 ms |
 
-At home (not recording, flow calibrator idle) the engines run at TDP 12%, VPP 17% and GDC 1% duty. None of
-them is a bottleneck.
+The GDC row is the engine's own time per view, as `/proc/ax_proc/ivps`
+reports it. The warp step in `modeld` takes about 3 ms of wall time
+([Model pipeline](model-pipeline.md)).
 
-- **Four queue pairs per board.** Every process that calls `AX_IVPS_Init` gets one TDP and one VPP sync
-  work queue, and the board has four of each (`/dev/ivps_tdp0-3`, `/dev/ivps_vpp0-3`). `camerad`,
-  `modeld`, `recordd` and `overlayd` take all four, so a fifth process gets `AX_ERR_IVPS_BUSY` (`0x800d0111`)
-  from any TDP or VPP call. That fifth process is typically a tool run while the runtime is up.
-  - Such tools must not need TDP or VPP. `VideoDecoder::receive_luma` copies the decoded Y plane with the
-    CPU for that reason.
-  - The GDC (`/dev/ivps_gdc0`) is shared and not limited this way.
-- **Flow calibrator.** `modeld` held its pair only because the GDC warp calls `AX_IVPS_Init`. The flow
-  calibrator now builds its two pyramid levels with that VPP queue in one `AX_IVPS_CropResizeV2Vpp` call
-  straight from the ring slot.
-  - It reads the ring slot itself as the full-resolution level and checks both slots' seqlocks after each
-    LK step.
-  - Without a VPP queue it falls back to an IVE Gaussian pyramid, still without copying the frame.
-  - The earlier version copied every gated frame with IVE DMA first, which cost about 3 ms of IVE time and
-    2.8 MB of memory traffic per frame.
-  - The VPP refuses YUV400 output (`0x800d010a`), so the levels come out as NV12.
-  - A gated frame now takes 9.2 ms of wall time end to end (VPP pyramid plus IVE LK), against 12.7 ms with
-    the IVE pyramid and 15.9 ms with the copy. Thread CPU dropped from 1.6 to 1.2 ms.
-  - Paired by window, the VPP and IVE pyramids agree to within 0.05° of median difference.
-- **The pass-through TDP stage** in `camerad`'s pipeline does no work for us: no mirror, flip, rotation or
-  OSD. The MaixCDK middleware (`VI::add_channel`) always adds it so mirror and flip can be switched at run
-  time, and its implementation is closed. It stays until `camerad` builds its own IVPS group.
-- **The frame ring copy** in `camerad` and the encoder copy in `recordd` are deliberate. The ring outlives
-  the VI pool blocks, and the encoder needs a pool block it can hold until encoding is done.
-- **The sensor delivers 2560x1440,** but the ring is 1280x720. The model's narrow input (f = 910) is
-  therefore upsampled 1.2x from the ring. comma's AR0231/OX03C10 cameras downsample about 2.9x, and its
-  OS04C10 cameras only 1.25x. A larger ring was tested as a fix for the model's weak response to the warp
-  and ruled out: comma footage resampled to our pixel density responds exactly as at full resolution
-  ([Flow calibration](flow-calibration.md#why)).
+At home (not recording, flow calibrator idle) the engines run at TDP 12%, VPP
+17% and GDC 1% duty. None of them is a bottleneck.
 
-## Recording format
+### Four queue pairs per board
 
-`recordd` writes the routes the host tools read (`recording_reader.py`, the
-replay tools, `lane_bias.py`). `gtest_recording` covers
-`src/recording/recording_writer.*`.
+Every process that calls `AX_IVPS_Init` gets one TDP and one VPP sync work
+queue, and the board has four of each (`/dev/ivps_tdp0-3`,
+`/dev/ivps_vpp0-3`). `camerad`, `modeld`, `recordd` and `overlayd` take all
+four, so a fifth process gets `AX_ERR_IVPS_BUSY` (`0x800d0111`) from any TDP or
+VPP call. That fifth process is typically a tool run while the runtime is up.
 
-The event log is written as 60 s chunks in `events/NNN.bin`, each starting with
-an 8-byte `EDGELOG1` magic, a version word, and fixed 16-byte record headers;
-each segment's `frames.bin` starts with `EDGEIDX1`. The current version is `13`:
-`ModelState` gained `lead_track`, the lead's fused distance and relative speed
-(3736 B; see [Lead track](flow-calibration.md#lead-track)). Version 12 had added
-`lead_flow`, the lead's expansion rate from the optical flow (3712 B). Version 11
-grew the optical-flow calibrator's state by four fields, made its spread the
-standard deviation of the block medians (`sd_pitch`, `sd_yaw`), and gave
-`ModelState` `calibration_source`, the warp calibration's source and the pose
-loop's own estimate (3680 B). `calibration` is now the value the warp used, with
-the status, block count and spread of that source. Version 10 had appended the
-flow calibrator's shadow state
-(`flow_calibration`, 3632 B; see [Flow calibration](flow-calibration.md)).
-Version 9 only changed those two magics: recordings up to version 8 carry the
-earlier ones, and every reader still accepts them. Version 8 gave `ModelState`
-the model's pedal predictions
-(`gas_press_probs`, `brake_press_probs`: the chance the driver presses the
-pedal 0, 2, …, 10 s ahead, 3576 B), which the departure alert reads.
-Version 7 added the camera mount the warp used for that frame
-(`camera_offset_m`, `camera_height_m`, 3528 B), so the HUD and the analysis
-tools use exactly what modeld applied. Version 6 added the plan yaw and yaw
-rate (`plan_yaw`, `plan_yaw_rate`, 3520 B) that laneless mode steers from.
-Readers take version 12 and older payloads as before, with the missing fields
-zeroed (`src/recording/recorded_model_state.h`, `recording_reader.model_state_layout`;
-`recording_reader.flow_calibration`, `calibration_source`, `lead_flow` and
-`lead_track` read those fields from any version).
+- Such tools must not need TDP or VPP. `VideoDecoder::receive_luma` copies the
+  decoded Y plane with the CPU for that reason.
+- The GDC (`/dev/ivps_gdc0`) is shared and not limited this way.
+- `modeld` holds its pair because the GDC warp calls `AX_IVPS_Init`. The flow
+  calibrator builds its pyramid on that VPP queue straight from the ring slot,
+  and falls back to an IVE pyramid without one, as in a tool; what each path
+  costs is in [Flow calibration](flow-calibration.md#evidence).
 
-| Record type | Payload |
-| --- | ---: |
-| `CanRx` / `CanTx` | variable CAN batch |
-| `ModelState` | 3736 B |
-| `ControlState` | 240 B |
-| `PandaState` | 96 B |
-| `LearnerState` | 128 B |
-| `Imu` | 16 B + 40 B per sample (about 10 samples every 100 ms) |
-| `Localization` | 128 B |
+### Copies that stay
 
-Older recordings are not `ModelState`-compatible: version 1 carried 4384 B
-including unused lateral draft fields, versions 2–3 carried 4080 B including the
-stop-line block that openpilot v0.9.4 does not emit, and version 4 carried
-4048 B including plan position stds and orientations that nothing read.
-Version 2 also kept a single route-level `events.bin`; CAN logging alone
-(~0.5 MB/s) filled the 988 MB tmpfs staging in about 30 minutes on long drives
-and silently killed the rest of the recording, which is why version 3 rotates
-event chunks alongside video segments. `tools/model/recording_reader.py` reads
-the v2 to v13 layouts; `lane_bias.py`, `hud_tools.py`,
-`fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event log
-through its `iter_event_records`.
+- **The pass-through TDP stage** in `camerad`'s pipeline does no work for us:
+  no mirror, flip, rotation or OSD. The MaixCDK middleware (`VI::add_channel`)
+  always adds it so mirror and flip can be switched at run time, and its
+  implementation is closed. It stays until `camerad` builds its own IVPS group.
+- **The frame ring copy** in `camerad` and the encoder copy in `recordd` are
+  deliberate. The ring outlives the VI pool blocks, and the encoder needs a pool
+  block it can hold until encoding is done.
+- **The sensor delivers 2560x1440,** but the ring is 1280x720. The model's
+  narrow input (f = 910) is therefore upsampled 1.2x from the ring. comma's
+  AR0231/OX03C10 cameras downsample about 2.9x, and its OS04C10 cameras only
+  1.25x. A larger ring was tested as a fix for the model's weak response to the
+  warp and ruled out: comma footage resampled to our pixel density responds
+  exactly as at full resolution ([Flow calibration](flow-calibration.md)).
 
 ## IPC boundaries
 
 Camera frames never go through the small-message IPC. The frame ring's pixels
 live in camerad's CMM blocks and are read by physical address: the GDC in
-`modeld` and IVPS in `overlayd` read the slot directly, and a CPU
+`modeld` and IVPS in `overlayd` and `recordd` read the slot directly, and a CPU
 reader (the CPU warp fallback) maps it uncached. Only the ring header and
 per-frame metadata are in `/dev/shm`. This keeps the split runtime close to
 openpilot's process boundaries without paying the cost of Cap'n Proto/cereal.
 
+```mermaid
+flowchart TB
+    camerad -- "IVPS copy" --> slots["8 ring slots<br>CMM blocks, NV12"]
+    camerad --> header["edgepilot_road_ai<br>slot addresses, seqlocks"]
+    camerad --> meta["edgepilot_road_ai_frame<br>newest slot"]
+    slots -- GDC --> modeld
+    header --> modeld
+    meta --> modeld
+    slots -- IVPS --> overlayd
+    header --> overlayd
+    meta --> overlayd
+    modeld --> rec["edgepilot_record_frame<br>slot modeld used"]
+    slots -- IVPS --> recordd
+    header --> recordd
+    rec --> recordd
+    classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class camerad,slots,overlayd pixel
+    class modeld compute
+    class header,meta,rec,recordd proc
+```
+
+`modeld`, `overlayd` and `recordd` check the slot's seqlock after they read it,
+and drop a frame that `camerad` overwrote meanwhile.
+
 The lateral plan has a single producer: the lateral MPC inside `controlsd`.
 `modelState` carries perception output only.
+
+### Shared-memory topics
+
+Each topic is a file under `/dev/shm/`. A latest-value topic holds one snapshot
+behind a seqlock; a queue holds up to 64 CAN batches in order. In rehearsal,
+`replayd` publishes what `camerad` and `pandad` publish here.
+
+| Topic | Message | Kind | Publisher | Readers |
+| --- | --- | --- | --- | --- |
+| `edgepilot_road_ai` | `FrameRingHeader` | ring header | `camerad` | `modeld`, `overlayd`, `recordd` |
+| `edgepilot_road_ai_frame` | `RoadAiFrame` | latest | `camerad` | `modeld`, `overlayd` |
+| `edgepilot_record_frame` | `RoadAiFrame` | latest | `modeld` | `recordd` |
+| `edgepilot_model_state` | `ModelState` | latest | `modeld` | `controlsd`, `locationd`, `overlayd`, `recordd`, web console |
+| `edgepilot_control_state` | `ControlState` | latest | `controlsd` | `modeld`, `locationd`, `overlayd`, `recordd`, `pandad` (flashing check), web console |
+| `edgepilot_learner_state` | `LearnerState` | latest | `controlsd` | `overlayd`, `recordd`, web console |
+| `edgepilot_can` | `CanBatch` | queue | `pandad` | `controlsd` |
+| `edgepilot_sendcan` | `CanBatch` | queue | `controlsd` | `pandad` |
+| `edgepilot_can_log` | `CanBatch` | queue | `pandad` | `recordd` |
+| `edgepilot_sendcan_log` | `CanBatch` | queue | `pandad` | `recordd` |
+| `edgepilot_panda_state` | `PandaState` | latest | `pandad` | `controlsd`, `overlayd`, `recordd` |
+| `edgepilot_imu` | `ImuBatch` | latest | `imud` | `locationd`, `recordd` |
+| `edgepilot_localization` | `LocalizationState` | latest | `locationd` | `controlsd`, `overlayd`, `recordd`, web console |
+| `edgepilot_record_state` | `RecordState` | latest | `recordd` | `overlayd` |
+| `edgepilot_manager_state` | `ManagerState` | latest | `manager.py` | `overlayd`, web console |
+
+The layouts are in `src/common/ipc_messages.h`, the channels in
+`src/common/ipc_channels.h`. Three plain files sit beside them:
+`edgepilot_panda_status.json` (`pandad` to the web console), and
+`edgepilot_panda_flash` and `edgepilot_calibration_reset` (the web console to
+`pandad` and `modeld`).
+
+## Related
+
+- [HUD](hud.md): what `overlayd` draws, its redraw timing, touch and sounds
+- [Recording](recording.md): the route layout and event log that `recordd`
+  writes
+- [Model pipeline](model-pipeline.md): inside `modeld`, from the ring slot to
+  `ModelState`
+- [Runtime options](runtime-options.md): the environment variables, parameter
+  files and the web console
+- [Build and deploy](build-and-deploy.md): building and uploading the
+  processes, and the build version in each log
+- [Rehearsal](rehearsal.md): running the runtime on a recorded route with
+  `replayd`
+- [Lead flow](lead-flow.md): the lead track that the vision cruise follows
+- [Flow calibration](flow-calibration.md): the flow calibrator in `modeld` and
+  why the ring stays 1280x720
+- [Lane-line filter](lane-line-filter.md): the planner's lane-line smoothing in
+  `controlsd`
+- [Panda firmware](../firmware/panda/README.md): the firmware `pandad` flashes

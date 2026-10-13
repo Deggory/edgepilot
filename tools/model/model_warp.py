@@ -14,7 +14,7 @@ HALF_W, HALF_H = MODEL_W // 2, MODEL_H // 2
 WEIGHT_BITS = 12
 WEIGHT_SCALE = 1 << WEIGHT_BITS
 
-CAMERA_HEIGHT_M = 1.22
+CAMERA_HEIGHT_M = 1.22  # src/common/model_output.h kModelHeight: 장착 높이를 따로 주지 않을 때
 
 # 1920x1080에서의 MaixCAM2 카메라: src/common/app_config.h kCamera*(check_recording_reader.py가 같은지 본다).
 MAIXCAM2_FX_1080 = 1131.24
@@ -22,17 +22,8 @@ MAIXCAM2_FY_1080 = 1130.85
 MAIXCAM2_CX_1080 = 940.13
 MAIXCAM2_CY_1080 = 552.60
 
-GROUND_FROM_MEDMODEL = np.array([
-    [0.00000000e+00, 0.00000000e+00, 1.00000000e+00],
-    [-1.09890110e-03, 0.00000000e+00, 2.81318681e-01],
-    [-1.84808520e-20, 9.00738606e-04, -4.28751576e-02],
-], dtype=np.float32)
-
-GROUND_FROM_SBIGMODEL = np.array([
-    [0.00000000e+00, 7.31372216e-19, 1.00000000e+00],
-    [-2.19780220e-03, 4.11497335e-19, 5.62637363e-01],
-    [-5.46146580e-20, 1.80147721e-03, -2.73464241e-01],
-], dtype=np.float32)
+# view_from_device: 행이 (0,1,0), (0,0,1), (1,0,0). 역행렬은 전치다.
+VIEW_FROM_DEVICE = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
 
 
 def maixcam2_intrinsics(width: int, height: int) -> tuple[float, float, float, float]:
@@ -53,17 +44,26 @@ def _rotation_from_rpy(roll: float, pitch: float, yaw: float) -> np.ndarray:
 
 def projection_matrix(fx: float, fy: float, cx: float, cy: float,
                       rpy: np.ndarray, sbig: bool,
-                      height_m: float = CAMERA_HEIGHT_M) -> np.ndarray:
+                      camera_offset_m: float = 0.0,
+                      camera_height_m: float = CAMERA_HEIGHT_M) -> np.ndarray:
+    """모델 화소 -> 원본 화소. ModelInputTransform::projection_matrix와 같은 openpilot get_warp_matrix다:
+    K · view_from_device · device_from_calib(rpy) · shift · inv(K_model · view_from_device). 카메라 중심에서의
+    순수 회전에, 가상 카메라를 오른쪽으로 camera_offset_m 옮긴 높이 camera_height_m의 도로면 이동(shift)을
+    더한다. C++는 단정밀도로 곱하므로 상대 1e-5 안에서 같다(tests/gtest_calibration.cc의 기준값)."""
+    if sbig:
+        model_f, model_cy = 455.0, 0.5 * (256.0 + 47.6)  # sbigmodel_fl, 가운데
+    else:
+        model_f, model_cy = 910.0, 47.6                  # medmodel_fl, MEDMODEL_CY
+    model_cx = 256.0
+    k = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    model_k_inv = np.array([[1.0 / model_f, 0.0, -model_cx / model_f],
+                            [0.0, 1.0 / model_f, -model_cy / model_f],
+                            [0.0, 0.0, 1.0]])
     rot = _rotation_from_rpy(*np.asarray(rpy, dtype=np.float64))
-    device_from_road = rot * np.array([1.0, -1.0, -1.0])
-    view_from_road = device_from_road[[1, 2, 0], :]
-    extrinsic = np.hstack([view_from_road,
-                           np.array([[0.0], [height_m], [0.0]])])
-    k = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
-    camera_from_road = k @ extrinsic
-    camera_from_ground = camera_from_road[:, [0, 1, 3]]
-    ground_from_model = GROUND_FROM_SBIGMODEL if sbig else GROUND_FROM_MEDMODEL
-    return (camera_from_ground @ ground_from_model.astype(np.float64)).astype(np.float32)
+    shift = np.eye(3)
+    shift[1, 2] = camera_offset_m / camera_height_m
+    projection = k @ VIEW_FROM_DEVICE @ rot @ shift @ VIEW_FROM_DEVICE.T @ model_k_inv
+    return projection.astype(np.float32)
 
 
 def _scale_transform(projection: np.ndarray, scale: float) -> np.ndarray:
@@ -123,12 +123,14 @@ class ModelInputWarp:
     """보정을 고정한 모델 프레임 워프 하나(medmodel 또는 sbigmodel)."""
 
     def __init__(self, src_w: int, src_h: int, rpy: np.ndarray, sbig: bool,
-                 intrinsics: tuple[float, float, float, float] | None = None):
+                 intrinsics: tuple[float, float, float, float] | None = None,
+                 camera_offset_m: float = 0.0, camera_height_m: float = CAMERA_HEIGHT_M):
         fx, fy, cx, cy = intrinsics or maixcam2_intrinsics(src_w, src_h)
-        proj_y = projection_matrix(fx, fy, cx, cy, rpy, sbig)
+        proj_y = projection_matrix(fx, fy, cx, cy, rpy, sbig, camera_offset_m, camera_height_m)
         proj_uv = _scale_transform(proj_y, 0.5)
         self.src_w, self.src_h = src_w, src_h
         self.rpy = np.asarray(rpy, dtype=np.float32).copy()
+        self.mount = (float(camera_offset_m), float(camera_height_m))
         offsets = [(0, 0), (0, 1), (1, 0), (1, 1)]
         self.y_maps = [_PlaneMap(proj_y, src_w, src_h, 2, ox, oy)
                        for ox, oy in offsets]
@@ -155,13 +157,17 @@ class WarpPair:
         self._med: ModelInputWarp | None = None
         self._sbig: ModelInputWarp | None = None
 
-    def set_calibration(self, rpy: np.ndarray):
+    def set_calibration(self, rpy: np.ndarray, camera_offset_m: float = 0.0,
+                        camera_height_m: float = CAMERA_HEIGHT_M):
+        """보정(rpy)과 카메라 장착(modeld set_camera_mount: 오른쪽 이동, 높이). 녹화 v7부터 ModelState에 있다."""
         rpy = np.asarray(rpy, dtype=np.float32)
-        if self._med is None or not np.allclose(self._med.rpy, rpy, atol=1e-7):
-            self._med = ModelInputWarp(self.src_w, self.src_h, rpy, sbig=False,
-                                       intrinsics=self.intrinsics)
-            self._sbig = ModelInputWarp(self.src_w, self.src_h, rpy, sbig=True,
-                                        intrinsics=self.intrinsics)
+        mount = (float(camera_offset_m), float(camera_height_m))
+        if (self._med is None or not np.allclose(self._med.rpy, rpy, atol=1e-7)
+                or not np.allclose(self._med.mount, mount, atol=1e-5)):
+            self._med = ModelInputWarp(self.src_w, self.src_h, rpy, sbig=False, intrinsics=self.intrinsics,
+                                       camera_offset_m=mount[0], camera_height_m=mount[1])
+            self._sbig = ModelInputWarp(self.src_w, self.src_h, rpy, sbig=True, intrinsics=self.intrinsics,
+                                        camera_offset_m=mount[0], camera_height_m=mount[1])
 
     def warp(self, y, u, v) -> tuple[np.ndarray, np.ndarray]:
         if self._med is None:

@@ -1,10 +1,29 @@
 # Lane-line filter
 
-[← Documentation index](../README.md)
+[← Documentation](README.md)
 
 `planning/lane_line_filter` smooths the two ego lane lines over time before the
 Lane-mode planner uses them. It moves the last filtered lines by the car's own
-motion and blends in the new frame, so it does not lag behind the car.
+motion and blends in the new frame, so it steadies the lines without lagging
+behind the car.
+
+Each model frame, for each ego line:
+
+```mermaid
+flowchart TB
+    last["last frame's filtered line"] --> move["move it by the car's motion<br>(arc of the measured curvature)"]
+    move --> read["read it at the model's distances<br>(three-point quadratic)"]
+    model["new frame's line"] --> check
+    read --> check{"start again?"}
+    check -- no --> blend["blend at weight 0.5"]
+    check -- yes --> take["take the measurement"]
+    blend --> planner["Lane-mode planner"]
+    take --> planner
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class move,read,blend,take compute
+    class last,model,planner proc
+```
 
 ## Why
 
@@ -25,6 +44,7 @@ that.
 
 Feeding the planner lines smoothed both ways in time (σ 0.15 s) shows how much
 of the steering command the shake causes:
+
 - **Desired curvature.** Its frame-to-frame noise fell from 0.021 to
   0.002 m/s² at night, and from 0.036 to 0.005 m/s² in the day. So the lines
   cause almost all of the command's fast ripple.
@@ -37,7 +57,8 @@ of the steering command the shake causes:
 
 ## How
 
-Each model frame, for each ego line (`LanePlanner::parse`):
+`LanePlanner::parse` runs the steps in the diagram above for each ego line:
+
 1. Move the last frame's filtered line into the current car frame. The car went
    v·dt along an arc of the measured curvature (`actual_curvature`, from the
    steering angle through the vehicle model).
@@ -59,11 +80,12 @@ in Laneless mode too, so it is warm on a switch, but nothing there reads the
 lines' positions.
 
 What did not work:
+
 - **Blending points at the same distance**, without the motion, lags the car's
   own motion. In the closed-loop replay the lane-centre error doubled (RMS 8.75
   to 16.2 cm, weight 0.33).
 - **Linear interpolation** of the prediction reads the chord of a curved line.
-  - Each frame pulls the line toward the inside of the curve, and the filter
+  - Each frame pulls the line towards the inside of the curve, and the filter
     adds it up.
   - In a synthetic curve at weight 0.33 (`gtest_lane_line_filter`) that was
     8 mm at curvature 0.002 and 17 mm at −0.004.
@@ -105,12 +127,30 @@ What did not work:
 
 ## Evidence
 
-All of this comes from replays of the two drives above:
+The weight was chosen on replays of the two drives above:
+
 - **Open loop:** `replay_planner --vehicle` on 30 min blocks (night chunks
   095-124, day 000-029), against the command from the lines smoothed both ways.
 - **Closed loop:** `replay_closed_loop` on the whole drives, on hands-off
   stretches above 30 km/h (night 114 min, day 24 min). See
   [Closed-loop replay](closed-loop-replay.md).
+
+How often the torque rate limit binds in the closed-loop replay, night drive:
+
+```mermaid
+---
+config:
+  xyChart:
+    height: 260
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#2f81f7"
+---
+xychart-beta
+    x-axis "filter weight" ["off", "0.5", "0.33"]
+    y-axis "rate-limited ticks (%)" 0 --> 60
+    bar [52, 28, 18]
+```
 
 Open loop:
 
@@ -147,6 +187,13 @@ costs 0.4 cm on the night drive.
 All three replay tools take `--lane-filter W` to compare weights (1 turns the
 filter off).
 
+**On the road.** The first drive with the filter (2026-10-12--22-37-07-989,
+22 min in town) matched the replays. At 60-90 km/h, with lane changes left
+out, the torque rate limit bound on 38% of the ticks against 59-68% on the
+drives of 2026-10-10, the torque ripple was 2.2% of the maximum against
+2.7-3.1%, and the command ripple 0.015 against 0.025-0.032 m/s². Below
+60 km/h little changed, as expected.
+
 ## Limits
 
 - **Curvature error.** The motion uses the steering-angle curvature. An error
@@ -163,8 +210,8 @@ filter off).
 
   What stays is the filter's own cost on straights: a standard deviation 0.1 cm
   larger.
-- **Replays only.** The closed-loop plant was identified on lane drives, but it
-  cannot show how the steering feels.
+- **Feel.** The closed-loop plant was identified on lane drives, but it cannot
+  show how the steering feels.
 - **The BEV copy.** The web BEV draws the ego lines through a JavaScript copy
   of this filter (`web_console/static/lane_filter.js`), on the capture times and
   `controlsd`'s speed and measured curvature from the stream. It matches the
@@ -177,4 +224,12 @@ filter off).
 
 ## Next
 
-Drive with it. If lane keeping holds, try 0.33.
+Drive more at highway speed with 0.5. If lane keeping holds there too, try
+0.33.
+
+## Related
+
+- [Closed-loop replay](closed-loop-replay.md): the simulation the weights were
+  compared in
+- [Runtime](runtime.md): where the planner runs inside `controlsd`
+- [Diagnostics](diagnostics.md): the planner and control-tick replays

@@ -30,6 +30,9 @@ constexpr uint64_t kSegmentDurationNs = 60ULL * 1000000000ULL;
 constexpr uint64_t kStorageCheckIntervalNs = 5ULL * 1000000000ULL;
 constexpr uint64_t kMinimumFreeBytes = 5ULL * 1024 * 1024 * 1024;
 constexpr unsigned kMinimumFreePercent = 10;
+// 공간 부족으로 멈춘 뒤 다시 시작하려면 예비분보다 이만큼 더 비어 있어야 한다. 멈춘 route의 파일이 tmpfs에서
+// SD로 옮겨지며 공간을 더 쓰므로, 기준에서 바로 다시 시작하면 시작과 정지를 되풀이한다.
+constexpr uint64_t kRetryMarginBytes = 1ULL * 1024 * 1024 * 1024;
 constexpr size_t kFileBufferBytes = 1024 * 1024;
 
 bool make_directories(const std::string &path) {
@@ -265,6 +268,8 @@ void RecordingWriter::process(PendingWrite &&write) {
             break;
         case PendingWrite::Kind::Disable:
             close_route(true);
+            // 바로 앞의 Enable이 공간 부족으로 거절됐어도 끈 뒤에는 경고를 남기지 않는다.
+            blocked_for_space_.store(false);
             break;
         case PendingWrite::Kind::CodecConfig:
             codec_config_ = std::move(write.data);
@@ -288,25 +293,42 @@ FILE *RecordingWriter::open_buffered(const std::string &path) {
     return file;
 }
 
-bool RecordingWriter::has_storage_reserve() const {
+bool RecordingWriter::has_storage_reserve(uint64_t extra_bytes) const {
+    if (storage_check_) return storage_check_(extra_bytes);
     struct statvfs space{};
     if (statvfs(root_.c_str(), &space) != 0 || space.f_blocks == 0) return false;
     const uint64_t block_size = space.f_frsize ? space.f_frsize : space.f_bsize;
     const uint64_t free_bytes = block_size * space.f_bavail;
     const uint64_t total_bytes = block_size * space.f_blocks;
-    return free_bytes >= kMinimumFreeBytes && free_bytes * 100ULL >= total_bytes * kMinimumFreePercent;
+    return free_bytes >= kMinimumFreeBytes + extra_bytes && free_bytes * 100ULL >= total_bytes * kMinimumFreePercent;
 }
 
 void RecordingWriter::set_enabled(bool enabled, uint64_t now_ns) {
+    config_enabled_ = enabled;
     if (!enabled) {
-        if (!requested_enabled_.exchange(false)) return;
+        // 공간 부족으로 거절된 뒤라 이미 꺼져 있어도 경고는 지운다.
         blocked_for_space_.store(false);
+        if (!requested_enabled_.exchange(false)) return;
         PendingWrite write;
         write.kind = PendingWrite::Kind::Disable;
         enqueue(std::move(write), true);
         return;
     }
     if (requested_enabled_.exchange(true)) return;
+    blocked_for_space_.store(false);
+    PendingWrite write;
+    write.kind = PendingWrite::Kind::Enable;
+    write.timestamp_ns = now_ns;
+    enqueue(std::move(write), true);
+}
+
+void RecordingWriter::poll_storage(uint64_t now_ns) {
+    if (!config_enabled_ || requested_enabled_.load() || !blocked_for_space_.load()) return;
+    if (now_ns < next_storage_retry_ns_) return;
+    next_storage_retry_ns_ = now_ns + kStorageCheckIntervalNs;
+    if (!has_storage_reserve(kRetryMarginBytes)) return;
+    std::fprintf(stderr, "recordd: storage reserve is back, recording again\n");
+    requested_enabled_.store(true);
     blocked_for_space_.store(false);
     PendingWrite write;
     write.kind = PendingWrite::Kind::Enable;

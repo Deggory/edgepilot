@@ -1,12 +1,38 @@
-# 진단 도구
+# Diagnostic tools
 
-런타임 경로 밖에 두는 분석·재생·벤치 도구다. 기본 빌드에는 들어가지 않고
-`EDGEPILOT_BUILD_DIAGNOSTICS=ON`일 때 [`CMakeLists.txt`](CMakeLists.txt)가 만든다.
-단위 테스트와 Python 검사(`check_*.py`)는 [`../tests/`](../tests/README.md)에 있다.
+[← Documentation](../docs/README.md)
 
-## 빌드
+Analysis, replay and benchmark tools kept outside the runtime path. They are not
+in the default build; [`CMakeLists.txt`](CMakeLists.txt) builds them when
+`EDGEPILOT_BUILD_DIAGNOSTICS=ON`. The unit tests and the Python checks
+(`check_*.py`) are in [`../tests/`](../tests/README.md).
 
-호스트 도구는 AX 런타임, MaixCAM2 SDK, OpenCV 없이 빌드된다:
+Most tools read a `recordd` route. This map shows what each tool reads and what
+it writes:
+
+```mermaid
+flowchart LR
+    route["recorded route"] --> events["events/*.bin"]
+    route --> seg["one segment<br>frames.bin, road.h264"]
+    route --> inputs["hud_tools.py inputs<br>model.bin, control.bin"]
+    events --> closed["replay_closed_loop<br>score, CSV"]
+    events --> planner["replay_planner<br>CSV"]
+    events --> controls["replay_controls<br>digest, dump"]
+    events --> learners["replay_lateral_learners<br>learned values"]
+    events --> loc["replay_localization<br>CSV"]
+    events --> dataset["extract_lateral_dataset<br>CSV"]
+    inputs --> hud["hud_snapshot<br>EDGEARGB frames"]
+    seg --> flow["flow_calibration_replay<br>board only"]
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    class route,events,seg,inputs,closed,planner,controls,learners,loc,dataset,hud,flow proc
+```
+
+`hud_snapshot` also draws synthetic scenes without any input, and
+`alert_sound_preview` needs no input at all.
+
+## Build
+
+The host tools build without the AX runtime, the MaixCAM2 SDK or OpenCV:
 
 ```sh
 cmake -S . -B build-host \
@@ -16,82 +42,121 @@ cmake -S . -B build-host \
 cmake --build build-host --target replay_closed_loop -j2
 ```
 
-보드용으로는 `tools/docker_ax630/`의 컨테이너에서 `build-ax630/`을 구성할 때
-`-DEDGEPILOT_BUILD_DIAGNOSTICS=ON`을 더하면 같은 도구가 `build-ax630/bin`에 생긴다
-(`build.sh`는 옵션을 받지 않으므로 컨테이너 안에서 직접 구성한다). 보드 전용 도구는
-`flow_calibration_replay` 하나다(VDEC·IVE를 쓴다).
+For the board, add `-DEDGEPILOT_BUILD_DIAGNOSTICS=ON` when configuring
+`build-ax630/` in the container from `tools/docker_ax630/`, and the same tools
+appear in `build-ax630/bin`. `build.sh` takes no options, so configure inside
+the container by hand. The only board-only tool is `flow_calibration_replay`
+(it uses the VDEC and the IVE).
 
-## 도구
+## Tools
 
-호스트:
+The replay tools read `recordd` recordings (`events/*.bin`).
 
-| 도구 | 사용 | 하는 일 |
+### Host
+
+| Tool | Usage | What it does |
 | --- | --- | --- |
-| `replay_closed_loop` | `[옵션] <out.csv\|-> <events.bin...>` | 차 응답을 시뮬레이션해 횡제어 루프를 폐루프로 재생한다. `--lane-filter W`는 차선선 시간 필터의 새 측정 가중이다(1이면 끈다, [Lane-line filter](../docs/lane-line-filter.md)) |
-| `replay_planner` | `[--laneless\|--lane] [--exact] [--vehicle] [--steering s.json] [--lane-filter W] <out.csv> <events.bin...>` | 녹화한 `ModelState`/`ControlState`로 `LateralPlanner`를 다시 돌려 요구 곡률을 CSV로 쓴다. `--vehicle`은 녹화한 깜빡이·운전자 토크·active를 주고, `--exact`는 모든 출력을 비트 그대로(`%a`) 써서 리팩토링 전후 비교에 쓴다. `--lane-filter`는 차선선 시간 필터의 새 측정 가중이다(1이면 끈다) |
-| `replay_controls` | `[--steering s.json] [--cruise c.json] [--vehicle-json j] [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt] <events.bin...>` | 녹화를 controlsd 한 틱의 로직(`ControlsTick`)에 10 ms 틱으로 다시 흘려, 보낼 CAN·`ControlState`·학습 출력의 다이제스트를 쓰고 녹화된 `ControlState`와 대조한다. 같은 코드면 출력이 비트 단위로 같아 controlsd 리팩토링 전후 비교에 쓴다. `--lead-track`은 녹화 v13 전 route의 `ModelState.lead_track`을 프레임 번호로 채운다(오프라인으로 만든 앞차 추적, 줄마다 `frame_id valid flags distance relative_speed distance_std speed_std`). 크루즈 상태는 운전자의 SET/RES로 추정하므로 크루즈를 보려면 그 세션의 시작 전부터 돌린다. `--lane-filter`는 차선선 시간 필터의 새 측정 가중이다(1이면 끈다) |
-| `replay_lateral_learners` | `[옵션] <events.bin...>` | paramsd·torqued 학습기를 녹화에 돌려 학습값을 출력한다 |
-| `replay_localization` | `<out.csv> <events.bin...>` | 녹화를 보드 `locationd`와 같은 코드(자세 칼만 필터 + lagd)에 기록 순서대로 흘려 IMU 묶음마다 CSV 한 행을 쓰고, 끝에 CAN 대비 요레이트 비교와 lagd 결과를 출력한다. IMU 기록이 있는 녹화가 필요하다 |
-| `extract_lateral_dataset` | `<out.csv> <events.bin...>` | `ControlState`마다 CSV 한 행. CAN은 런타임과 같은 `vehicle_can`으로 푼다 |
-| `hud_snapshot` | `[--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--portrait [--flip-x] [--flip-y]]` | HUD 시나리오 27개(또는 녹화한 모델·제어 상태)를 `overlayd`와 같은 640x480으로 `EDGEARGB` 프레임에 그리고 그리기 시간을 출력한다. `--portrait`는 보드처럼 세로 480x640 버퍼에 transpose로 그린다. 시간은 보드에서 잰다 |
-| `alert_sound_preview` | `[--out PREFIX]` | `overlayd` 알림음을 같은 합성 코드로 `PREFIX_<이름>.wav`(48 kHz 모노, 100% 크기)에 쓴다 |
+| `replay_closed_loop` | `[options] <out.csv\|-> <events.bin...>` | Replays the lateral control loop in closed loop, with the car's response simulated. `--lane-filter W` is the lane-line time filter's weight for the new measurement (1 turns it off, [Lane-line filter](../docs/lane-line-filter.md)) |
+| `replay_planner` | `[--laneless\|--lane] [--exact] [--vehicle] [--steering s.json] [--lane-filter W] <out.csv> <events.bin...>` | Runs `LateralPlanner` again on the recorded `ModelState`/`ControlState` and writes the desired curvature to a CSV. `--laneless` or `--lane` forces that mode whatever the parameter file says. `--steering` loads a parameter file, such as the route's `params/steering.json` snapshot (the code defaults without it). `--vehicle` feeds the recorded blinkers, driver torque and blind spot (from the CAN, skipping the Panda's echoes as controlsd does) and the recorded active flag; without it the planner sees no blinker and no driver, so lane changes never run. `--exact` writes every `LateralTarget` field and the lag-adjusted curvature bit for bit (`%a`), for comparing before and after a refactor. `--lane-filter` is the lane-line time filter's weight for the new measurement (1 turns it off) |
+| `replay_controls` | `[--steering s.json] [--cruise c.json] [--vehicle-json j] [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt] <events.bin...>` | Feeds a recording through the logic of one controlsd tick (`ControlsTick`) at 10 ms ticks, writes a digest of the CAN to send, the `ControlState` and the learner outputs, and compares them with the recorded `ControlState`. The same code gives bit-identical output, so it is used to compare before and after a controlsd refactor. `--lead-track` fills `ModelState.lead_track` by frame number for routes recorded before v13 (a lead track made off-line, one line per frame: `frame_id valid flags distance relative_speed distance_std speed_std`). The cruise state is estimated from the driver's SET/RES, so to look at the cruise, start the replay before that session begins. `--lane-filter` is the lane-line time filter's weight for the new measurement (1 turns it off) |
+| `replay_lateral_learners` | `[options] <events.bin...>` | Runs the paramsd and torqued learners on a recording and prints the learned values |
+| `replay_localization` | `<out.csv> <events.bin...>` | Feeds a recording, in recorded order, through the same code as the board's `locationd` (the pose Kalman filter and lagd), writes one CSV row per IMU batch, and at the end prints a yaw-rate comparison against the CAN and the lagd result. It needs a recording with IMU records |
+| `extract_lateral_dataset` | `<out.csv> <events.bin...>` | One CSV row per `ControlState`. The CAN is decoded by the same `vehicle_can` as the runtime |
+| `hud_snapshot` | `[--model m.bin] [--control c.bin] [--iterations N] [--out PREFIX] [--portrait [--flip-x] [--flip-y]]` | Draws 27 HUD scenarios at the same 640x480 as `overlayd` into `EDGEARGB` frames (`PREFIX_<scenario>.argb`), and prints the drawing time over N iterations (50 by default). `--model` and `--control` draw a recorded `ModelState`/`ControlState` pair (from `tools/ui/hud_tools.py inputs`) instead. `--portrait` draws into the portrait 480x640 buffer with a transpose, as the board does, and `--flip-x`/`--flip-y` add the board's axis flips. Time it on the board |
+| `alert_sound_preview` | `[--out PREFIX]` | Writes the `overlayd` alert sounds with the same synthesis code to `PREFIX_<name>.wav` (48 kHz mono, 100% volume) |
 
-보드:
+### Board
 
-| 도구 | 사용 | 하는 일 |
+| Tool | Usage | What it does |
 | --- | --- | --- |
-| `flow_calibration_replay` | `<segment_dir> [--open frames.txt] [--leads leads.txt]` | 녹화 구간 하나를 VDEC로 디코딩해 `modeld`와 같은 광류 작업(`FlowTracker`, IVE)에 흘리고, 받아들인 보정 창마다 결과, 앞차 확대율을 낸 프레임마다 한 줄, 끝의 추정·시간을 출력한다. `--open`은 조건이 열린 프레임 번호 목록(없으면 전부 곧은 길로 본다, 빈 파일이면 보정을 돌리지 않는다). `--leads`는 프레임마다 직전 모델 출력의 앞차와 워프 보정("번호 시각 유효 확률 x y roll pitch yaw 카메라높이 오프셋")이다. IVPS를 쓰지 않아 런타임이 도는 중에도 되지만, 런타임과 함께 여러 번 돌린 끝에 VDEC 생성이 커널 메모리 할당(order 4)에 실패하고 그 뒤 `imud`의 I2C 호출이 커널 Oops로 보드를 재부팅시킨 적이 있다(2026-10-11). 길게 돌릴 때는 edgepilot을 멈춘다 |
+| `flow_calibration_replay` | `<segment_dir> [--open frames.txt] [--leads leads.txt]` | Decodes one recorded segment with the VDEC, feeds it through the same optical-flow work as `modeld` (`FlowTracker`, IVE), and prints the result of each accepted calibration window, one line for each frame that gave a lead expansion rate, and the final estimate and timing. `--open` is a list of the frame numbers where the conditions were open (without it every frame counts as a straight road; with an empty file the calibration does not run). `--leads` gives, per frame, the lead from the previous model output and the warp calibration (`number time valid probability x y roll pitch yaw camera_height offset`). It does not use the IVPS, so it works while the runtime runs, but see the warning below |
 
-재생 도구의 입력은 `recordd` 녹화(`events/*.bin`)다.
+> [!WARNING]
+> After several `flow_calibration_replay` runs beside the runtime, creating the
+> VDEC once failed a kernel memory allocation (order 4), and an `imud` I2C call
+> then rebooted the board with a kernel Oops (2026-10-11). Stop edgepilot for
+> long runs.
 
-### replay_closed_loop
+## `replay_closed_loop`
 
-녹화가 본 차선 기하를 시뮬레이션 차가 벌어진 만큼(`dy`, `dpsi`) 차체 좌표로 다시 돌리므로,
-제어를 바꾸면 차가 실제로 다르게 움직인다. 운전자 토크가 있거나 비활성인 틱은 녹화 상태로
-재동기화해, 자유 주행 구간마다 실제 자세에서 출발한다.
+The tool turns the lane geometry the recording saw back into car coordinates by
+how far the simulated car has drifted from it (`dy`, `dpsi`), so a control
+change really makes the car move differently. Ticks with driver torque, or
+inactive ticks, resynchronise to the recorded state, so every free-running
+stretch starts from the real pose.
 
-- 플랜트: `--wn`, `--zeta`, `--delay`, `--gain G`(속도 노드 전부) 또는 `--gain-pts a,b,c,d`
-- 컨트롤러: `--sad`(steer_actuator_delay), `--kp`, `--ki`, `--laf`
-- 운전자 개입 히스테리시스: `--driver-high`, `--driver-low`, `--driver-release`
-- `--open-loop`: 자세 보정을 멈춰 플랜트가 녹화 주행을 얼마나 재현하는지만 본다
-- `--steering route/params/steering.json`: 녹화 당시 튜닝(경로 모드 포함). 녹화의 LearnerState
-  학습값(paramsd·torqued)은 controlsd처럼 컨트롤러에 넣고, 조향각 역모델도 같은 학습값을 쓴다.
-- `--camera-shift D`: 카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다.
-- `--torque F,O,R`: torqued 값(배율·절편·마찰)을 바꿔 넣어 유효해진 뒤의 거동을 본다.
-- laneless는 차선이 위치를 잡아 주지 않아 폐루프가 발산한다(2 m 클램프). Lane 모드에만 쓴다.
+- Plant: `--wn`, `--zeta`, `--delay`, `--gain G` (all speed nodes) or
+  `--gain-pts a,b,c,d`.
+- Controller: `--sad` (steer_actuator_delay), `--kp`, `--ki`, `--laf`.
+- Driver intervention hysteresis: `--driver-high`, `--driver-low`,
+  `--driver-release`.
+- `--open-loop`: stops the pose correction, to see only how well the plant
+  reproduces the recorded drive.
+- `--steering route/params/steering.json`: the tuning at the time of the
+  recording (including the path mode). The recording's LearnerState learned
+  values (paramsd, torqued) go into the controller as in controlsd, and the
+  inverse steering-angle model uses the same learned values.
+- `--camera-shift D`: shifts the model output as if the camera mount offset
+  differed from the recording by D m.
+- `--torque F,O,R`: substitutes torqued values (factor, offset, friction) to see
+  the behaviour once they are valid.
+- In laneless mode no lane holds the position, so the closed loop diverges
+  (2 m clamp). Use it only in Lane mode.
 
-재현 점수(전체와 속도 구간별)를 표준 출력으로 낸다. CSV가 필요 없으면 출력 경로에 `-`를
-준다. 플랜트 식별과 점수의 해석은 [폐루프 재생](../docs/closed-loop-replay.md)에 있다.
+It prints the reproduction score (overall and per speed band) on standard
+output. Give `-` as the output path when no CSV is needed. Plant identification
+and how to read the score are in
+[Closed-loop replay](../docs/closed-loop-replay.md).
 
-### replay_lateral_learners
+## `replay_lateral_learners`
 
-controlsd와 같은 `LateralLearners`를 부른다. 활성과 보낸 토크는 `ControlState`에서,
-운전자 개입은 기록된 운전자 토크를 컨트롤러와 같게 디바운스해서 얻는다.
+The tool calls the same `LateralLearners` as controlsd. The active flag and the
+torque sent come from `ControlState`; driver intervention comes from the
+recorded driver torque, debounced as the controller does it.
 
-- `--steering route/params/steering.json`: 녹화 당시 튜닝(사전값, 지연, 입력 출처)을 쓴다.
-  없으면 코드 기본값이라 보드와 다를 수 있다.
-- `--vehicle-json route/params/live_parameters.json`: paramsd 저장값으로 시작한다.
-- `--source steering|locationd|esp`: paramsd·torqued의 요레이트·롤 출처. 기본(`steering`)은
-  `use_locationd_learner_inputs`를 따르고, controlsd처럼 locationd가 0.5초 넘게 낡거나 필터가
-  무효면 ESP12로 돌아간다.
-- `--metric-from N`: 끝에 내는 곡률 대조를 0부터 센 N번 파일부터 센다. 앞 파일은 학습을
-  수렴시키는 데만 쓴다.
-- `--upstream-schedule`: 조향각·속도를 상류처럼 20 Hz로만 관측한다(기본은 매 틱).
-- `--fit-all`: torqued 적합에 점을 전부 쓴다(기본은 상류처럼 무작위 2000점).
-- `--torque-cache c.bin`: 있으면 복원하고 저장 틱마다 덮어써, 여러 주행을 런타임 캐시처럼
-  잇는다.
-- `--inputs`/`--torque-inputs`는 틱마다의 입력을, `--outputs`/`--torque-outputs`는 발행
-  메시지를 남긴다. 참조 구현과 대조할 때 쓴다.
+- `--steering route/params/steering.json`: uses the tuning at the time of the
+  recording (priors, delay, input source). Without it the code defaults apply,
+  which may differ from the board.
+- `--vehicle-json route/params/live_parameters.json`: starts from the paramsd
+  saved values.
+- `--source steering|locationd|esp`: the yaw-rate and roll source for paramsd
+  and torqued. The default (`steering`) follows
+  `use_locationd_learner_inputs` and, as controlsd does, falls back to ESP12
+  when locationd is more than 0.5 s stale or its filter is invalid.
+- `--metric-from N`: counts the curvature comparison printed at the end from
+  file N (counted from 0). The earlier files only serve to converge the
+  learning.
+- `--upstream-schedule`: observes the steering angle and speed only at 20 Hz,
+  as upstream does (the default is every tick).
+- `--fit-all`: uses every point for the torqued fit (the default is 2000 random
+  points, as upstream).
+- `--torque-cache c.bin`: restores it when it exists and overwrites it at each
+  save tick, to chain several drives like the runtime cache.
+- `--inputs`/`--torque-inputs` keep each tick's inputs and
+  `--outputs`/`--torque-outputs` the published messages, for comparing with a
+  reference implementation.
 
-## 도구 작성 규칙
+## Writing a tool
 
-- 파일 첫머리의 `/* */` 한글 주석에 용도를 적고 마지막 줄을 `사용:`으로 끝낸다.
-- 입력 파일은 위치 인자로, 옵션은 `--이름 값` 또는 값 없는 `--이름`으로 받는다. 모르는
-  옵션이 오면 사용법을 출력한다.
-- 사용법 오류는 종료 코드 2, 입력을 못 읽거나 결과가 맞지 않는 실행 오류는 1로 끝낸다.
+- The Korean `//` comment at the top of the file says what the tool is for and
+  gives its usage on a `사용:` line.
+- Input files are positional arguments; options are `--name value` or `--name`
+  without a value. An unknown option prints the usage
+  (`flow_calibration_replay` still ignores one).
+- A usage error exits with code 2; a run error, where an input cannot be read or
+  a result does not match, exits with 1.
 
-## 자세한 절차
+## Related
 
-[진단 절차](../docs/diagnostics.md)에 HUD 스냅샷, NV12 재생, 모델 교체 검증, 차선 치우침
-분석, 데이터셋 추출, 플래너 재생의 절차와 결과가 있다. 녹화 포맷은
-[분할 런타임](../docs/runtime.md#recording-format)에 있다.
+- [Diagnostics](../docs/diagnostics.md): procedures and results for HUD
+  snapshots, NV12 replay, model swap verification, lateral bias, dataset
+  extraction, and the planner and control-tick replays
+- [Closed-loop replay](../docs/closed-loop-replay.md): plant identification and
+  the score of `replay_closed_loop`
+- [Lane-line filter](../docs/lane-line-filter.md): the filter that
+  `--lane-filter` weighs
+- [Flow calibration](../docs/flow-calibration.md): the calibrator that
+  `flow_calibration_replay` runs
+- [Recording](../docs/recording.md): the route layout the replay tools read
+- [Host tests](../tests/README.md): the unit tests and Python checks
+- [Build and deploy](../docs/build-and-deploy.md): the host and board builds

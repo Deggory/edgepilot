@@ -2,7 +2,7 @@
 
 샘플은 모두 보드에서 런타임이 코어에 넣는 것과 똑같다: 녹화된 H.264 프레임(1280x720)을 기기 워프
 (tools/model/model_warp.py, src/common/app_config.h의 MaixCAM2 내부 파라미터, 녹화에 담긴 보정)에
-통과시킨 것, 타워별 5프레임 이미지 이력(t-4와 t), controlsd가 보낸 desire 펄스(src/model/model_temporal.h:
+통과시킨 것(녹화에 담긴 카메라 장착도 쓴다), 타워별 5프레임 이미지 이력(t-4와 t), controlsd가 보낸 desire 펄스(src/model/model_temporal.h:
 상승 에지, 100틱을 25로 max-pool), fp32 코어를 순서대로 돌려 얻은 코어 자신의 96틱 hidden-state 이력.
 
   make_m2_data.py calib <spec.json> <out_dir>
@@ -32,7 +32,7 @@ import onnxruntime as ort
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import recording_reader as rr  # noqa: E402
-from model_warp import WarpPair, maixcam2_intrinsics  # noqa: E402
+from model_warp import CAMERA_HEIGHT_M, WarpPair, maixcam2_intrinsics  # noqa: E402
 
 # src/common/app_config.h: MaixCAM2 1920x1080 내부 파라미터를 1280x720 AI 스트림에 맞춰 스케일했다
 INTRINSICS = maixcam2_intrinsics(1280, 720)
@@ -41,8 +41,8 @@ TENSORS = ("input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic
 
 
 def recorded(route_dir: Path):
-    """ControlState(시각, desire)와 모든 ModelState의 보정."""
-    cs_t, cs_des, m_t, rpy = [], [], [], []
+    """ControlState(시각, desire)와 모든 ModelState의 보정, 카메라 장착(v7부터, 그 전은 기본값)."""
+    cs_t, cs_des, m_t, rpy, mount = [], [], [], [], []
     for path in rr.route_event_files(route_dir):
         for rec in rr.iter_event_records(path):
             if rec.type == rr.RECORD_CONTROL_STATE:
@@ -53,19 +53,25 @@ def recorded(route_dir: Path):
                 lay = rec.model_layout()
                 m_t.append(np.frombuffer(rec.payload, "<u8", 1, lay["capture_timestamp_ns"])[0] * 1e-9)
                 rpy.append(np.frombuffer(rec.payload, "<f4", 3, lay["calibration"] + 8).copy())
-    return np.array(cs_t), np.array(cs_des), np.array(m_t), np.array(rpy)
+                if "camera_offset_m" in lay:
+                    mount.append((np.frombuffer(rec.payload, "<f4", 1, lay["camera_offset_m"])[0],
+                                  np.frombuffer(rec.payload, "<f4", 1, lay["camera_height_m"])[0]))
+                else:
+                    mount.append((0.0, CAMERA_HEIGHT_M))
+    return np.array(cs_t), np.array(cs_des), np.array(m_t), np.array(rpy), np.array(mount)
 
 
 def run_stream(sess, route_dir: Path, seg_dirs: list[Path]):
     """이어진 세그먼트 구간의 프레임마다 (route 시각, feed, 원시 출력)을 낸다."""
-    cs_t, cs_des, m_t, rpy_all = recorded(route_dir)
+    cs_t, cs_des, m_t, rpy_all, mount_all = recorded(route_dir)
     t_first = cs_t[0]
     segments = [rr.read_segment_index(d) for d in seg_dirs]
     t0 = segments[0].frames["capture_timestamp_ns"][0] * 1e-9 - t_first
     t1 = segments[-1].frames["capture_timestamp_ns"][-1] * 1e-9 - t_first
     sel = (m_t - t_first >= t0 - 30) & (m_t - t_first <= t1)
     warp = WarpPair(1280, 720, INTRINSICS)
-    warp.set_calibration(np.median(rpy_all[sel], axis=0))
+    offset, height = np.median(mount_all[sel], axis=0)
+    warp.set_calibration(np.median(rpy_all[sel], axis=0), offset, height)
     zero = np.zeros((6, 128, 256), np.uint8)
     road, wide = deque([zero] * 5, maxlen=5), deque([zero] * 5, maxlen=5)
     feat = np.zeros((96, 512), np.float32)

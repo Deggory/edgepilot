@@ -2,7 +2,8 @@
 """tools/model/recording_reader.py의 바이너리 배치가 C++ 헤더의 고정값과 같은지 본다:
 ControlState·LearnerState·ModelState의 offsetof 고정값과 크기, LocalizationState·ImuSample·
 CalibrationState 크기, 이벤트 레코드 머리·프레임 인덱스 레코드 크기, 기록 타입 번호. 도구가 쓰는
-MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지도 본다.
+MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지, 그 워프 행렬이
+런타임(gtest_calibration의 기준값)과 같은지도 본다.
 ctest가 저장소 루트에서 돌린다. 두 도구가 numpy를 쓰므로 numpy가 없으면 77로 끝나고 ctest는 건너뛴 것으로 센다."""
 
 import re
@@ -14,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "model"))
 
 try:
-    import numpy  # noqa: F401
+    import numpy as np
 except ModuleNotFoundError:
     print("numpy가 없어 건너뛴다")
     sys.exit(77)
@@ -176,6 +177,26 @@ class CameraIntrinsics(unittest.TestCase):
             match = re.search(r"constexpr float kCamera" + axis + r" = ([\d.]+)f;", APP_CONFIG)
             self.assertIsNotNone(match, axis)
             self.assertEqual(float(match.group(1)), value, axis)
+
+
+class ModelWarp(unittest.TestCase):
+    def test_projection_matches_the_cpp_golden(self):
+        """model_warp.projection_matrix가 런타임(ModelInputTransform)과 같은 행렬을 낸다. 기준값은
+        gtest_calibration ProjectionGoldenSharedWithModelWarpPy가 C++ 코드로 확인하는 것이다."""
+        source = (ROOT / "tests" / "gtest_calibration.cc").read_text(encoding="utf-8")
+        block = source[source.index("// GOLDEN BEGIN: roll"):source.index("// GOLDEN END")]
+        number = r"(-?[\d.]+(?:e-?\d+)?)"
+        cases = re.findall(r"\{" + r"f?,\s*".join([number] * 3) + r"f,\s*(true|false),\s*" + number + r"f,\s*"
+                           + number + r"f,\s*\{([^}]*)\}\}", block)
+        self.assertEqual(len(cases), 5)
+        intrinsics = model_warp.maixcam2_intrinsics(1280, 720)
+        for roll, pitch, yaw, sbig, offset, height, values in cases:
+            expected = np.array([float(v) for v in values.split(",")])
+            actual = model_warp.projection_matrix(*intrinsics, np.array([float(roll), float(pitch), float(yaw)]),
+                                                  sbig == "true", float(offset), float(height)).ravel()
+            tolerance = np.maximum(1.0, np.abs(expected)) * 1e-5
+            tolerance[6:8] = 1e-9
+            np.testing.assert_array_less(np.abs(actual - expected), tolerance, f"{roll} {pitch} {yaw} {sbig}")
 
 
 if __name__ == "__main__":

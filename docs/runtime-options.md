@@ -1,173 +1,139 @@
 # Runtime options
 
-[← Documentation index](../README.md)
+[← Documentation](README.md)
+
+The switches that set how the runtime runs on the board: environment variables
+read when a process starts, the parameter files in `params/` that the processes
+reload while they run, and the web console that edits those files. Look here
+before you change how a process starts or what it reads.
+
+Where the settings come from and who reads them:
+
+```mermaid
+flowchart TB
+    service(["edgepilot.service<br>or a shell"]) -->|environment| manager["manager.py"]
+    manager -->|"starts, passes<br>its environment"| procs["runtime<br>processes"]
+    manager -->|starts| web["web console"]
+    browser(["browser"]) --> web
+    web -->|writes| params["params/*.json"]
+    params -->|reloaded while running| procs
+    procs -.->|learned state| learned["calibration.json,<br>live_* files"]
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    class service,manager,procs,web,params,learned proc
+    class browser external
+```
+
+## Environment variables
 
 Boolean environment variables follow one convention: unset or empty uses the
-default, `0`/`false`/`no`/`off`/`n` (case-insensitive) is false, anything else is
-true.
+default, `0`/`false`/`no`/`off`/`n` (case-insensitive) is false, anything else
+is true.
 
-## Manager
+The manager reads its own variables and passes its whole environment to the
+processes it starts, so a variable set for the manager reaches every process.
+`edgepilot.service` sets `EDGEPILOT_LOG_DIR=/run/edgepilot`,
+`EDGEPILOT_USB_ROLE=host` and `EDGEPILOT_ENABLE_PANDA=1`.
 
-- `EDGEPILOT_MODEL=/path/to/supercombo.axmodel`
-  - overrides the model selected by `manager.py` (default
-    `models/supercombo.axmodel` in the install directory). A command-line
-    argument wins over it.
-- `EDGEPILOT_STOP_LAUNCHER=0`
-  - leaves the stock `launcher.service` and `/maixapp/apps/` running. The
-    default stops them, since they hold the camera and NPU.
+### Manager
 
-## Model and calibration
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_MODEL=/path/to/supercombo.axmodel` | `models/supercombo.axmodel` in the install directory | Overrides the model selected by `manager.py`. A command-line argument wins over it. |
+| `EDGEPILOT_STOP_LAUNCHER=0` | on | Leaves the stock `launcher.service` and `/maixapp/apps/` running. The default stops them, since they hold the camera and NPU. |
+| `EDGEPILOT_LOG_DIR=dir` | unset: output goes to the terminal | Writes each process's output to `<name>.log` in that directory and empties a log above 1 MiB. `edgepilot.service` sets `/run/edgepilot`, on tmpfs, so logs never reach the SD card. |
+| `EDGEPILOT_REPLAY_ROUTE=route` | unset | Rehearsal: `replayd` plays the recorded route in place of `camerad`, from `EDGEPILOT_REPLAY_START` for `EDGEPILOT_REPLAY_DURATION` seconds; `imud`, `locationd` and `pandad` are not started ([Rehearsal](rehearsal.md)). |
 
-- `modeld <supercombo.axmodel>`
-  - the only argument. The runtime targets the openpilot master supercombo core:
-    5 inputs (`input_imgs` and `big_input_imgs` uint8 `[1,12,128,256]`,
-    `desire` `[1,25,8]`, `features_buffer` `[1,24,512]`, `traffic_convention`
-    `[1,2]`) and 2576 output floats (15 head outputs reassembled, or one
-    `[1,2576]` output). `modeld` checks names, shapes, dtypes,
-    and buffer sizes at startup and refuses any other axmodel rather than
-    misreading it.
-- `EDGEPILOT_PROFILE=1`
-  - `modeld` prints warp/inputs/NPU/outputs averages every 30 frames;
-    `overlayd` adds HUD draw and video push timing to its status line.
-- `EDGEPILOT_CAMERA_INTRINSICS=fx,fy,cx,cy`
-  - camera intrinsics at 1920x1080, scaled to the capture size. The default is
-    the calibrated MaixCAM2 camera (`1131.24,1130.85,940.13,552.60`); set it to
-    replay footage from another camera.
-- `EDGEPILOT_CALIB_ROLL_DEG`, `EDGEPILOT_CALIB_PITCH_DEG`,
-  `EDGEPILOT_CALIB_YAW_DEG`
-  - manual calibration in degrees for both the HUD projection and the model
-    input warp. If any value is set, it wins and online calibration is applied to
-    neither. Otherwise the saved calibration is restored and pose-based online
-    calibration feeds the next frame's input warp, matching openpilot's
-    `cameraOdometry -> liveCalibration -> modeld` loop.
-- `EDGEPILOT_CALIB_AUTO=0`
-  - disables pose-based online calibration and keeps the restored or
-    manually supplied projection.
-- `EDGEPILOT_LOG_CALIB=1`
-  - prints the online calibrator status, accepted/rejected sample counts, valid
-    block count, rpy, and spread.
-- `EDGEPILOT_FLOW_CALIB=0`
-  - turns off the optical-flow calibrator (VPP/IVE). On, it is recorded in
-    `ModelState.flow_calibration` and logged as `flowcal:` lines; the warp uses
-    it only when the web device setting `calibration_use_flow` is on
-    ([Flow calibration](flow-calibration.md)). Off, nothing new is measured; a
-    stored estimate (`params/flow_calibration.json`) is still recorded and can
-    still be applied, and with none the recorded status stays 0.
+The variables that choose which processes start (`EDGEPILOT_ENABLE_CONTROL`,
+`EDGEPILOT_ENABLE_PANDA`, `EDGEPILOT_ENABLE_WEB_CONSOLE`) are listed with their
+parts below.
 
-## Camera and input warp
+### Model and calibration
 
-- `EDGEPILOT_MAX_SHUTTER_US=N`
-  - caps the auto-exposure shutter in `camerad` (default `33333`, the
-    30 fps frame time, so the 20 fps sensor does not add motion blur). `0`
-    leaves the sensor default.
-- `EDGEPILOT_WARP_CPU=1`
-  - disables the GDC warp and returns the whole input warp to the CPU; the
-    wide tower is warped on the second core. The GDC path also falls back to the
-    CPU when it cannot be set up or the frame is NV21.
+`modeld <supercombo.axmodel>` takes one argument, the model. The runtime
+targets the openpilot master supercombo core: 5 inputs (`input_imgs` and
+`big_input_imgs` uint8 `[1,12,128,256]`, `desire` `[1,25,8]`,
+`features_buffer` `[1,24,512]`, `traffic_convention` `[1,2]`) and 2576 output
+floats (15 head outputs reassembled, or one `[1,2576]` output). `modeld` checks
+names, shapes, dtypes, and buffer sizes at startup and refuses any other
+axmodel rather than misreading it.
 
-## Storage and replay
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_PROFILE=1` | off | `modeld` prints warp/inputs/NPU/outputs averages every 30 frames; `overlayd` adds HUD draw and video push timing to its status line. |
+| `EDGEPILOT_CAMERA_INTRINSICS=fx,fy,cx,cy` | `1131.24,1130.85,940.13,552.60`, the calibrated MaixCAM2 camera | Camera intrinsics at 1920x1080, scaled to the capture size. Set it to replay footage from another camera. |
+| `EDGEPILOT_CALIB_ROLL_DEG`, `EDGEPILOT_CALIB_PITCH_DEG`, `EDGEPILOT_CALIB_YAW_DEG` | unset | Manual calibration in degrees for both the HUD projection and the model input warp. If any value is set, it wins and online calibration is applied to neither; the manual values also seed `params/calibration.json`. Otherwise the saved calibration is restored and pose-based online calibration feeds the next frame's input warp, matching openpilot's `cameraOdometry -> liveCalibration -> modeld` loop. |
+| `EDGEPILOT_CALIB_AUTO=0` | on | Disables pose-based online calibration and keeps the restored or manually supplied projection. |
+| `EDGEPILOT_LOG_CALIB=1` | off | Prints the online calibrator status, accepted/rejected sample counts, valid block count, rpy, and spread. |
+| `EDGEPILOT_FLOW_CALIB=0` | on | Turns off the optical-flow calibrator (VPP/IVE). On, it is recorded in `ModelState.flow_calibration` and logged as `flowcal:` lines; the warp uses it only when the device setting `calibration_use_flow` is on ([Flow calibration](flow-calibration.md#using-the-estimate)). Off, nothing new is measured; a stored estimate (`params/flow_calibration.json`) is still recorded and can still be applied, and with none the recorded status stays 0. |
 
-- `EDGEPILOT_PARAMS_DIR=/path/to/params`
-  - overrides the shared runtime parameter directory, and is the only way to
-    relocate parameter files; there are no per-file overrides. The default is
-    `params/` relative to the runtime working directory. The web console reads
-    the factory defaults from the directory beside it with `.defaults` added
-    (`params.defaults/`, filled by the upload script). Stable online
-    calibration is stored atomically in `params/calibration.json` and restored
-    before the first model frame. Manual `EDGEPILOT_CALIB_*` values take
-    precedence and seed this file.
-- `EDGEPILOT_REPLAY_NV12=/path/to/replay.scnv12`
-  - when launching `modeld` directly, runs headless from an `SCNV12R1` NV12
-    replay file instead of the camera ring. Width, height, and frame count are
-    read from the replay header; the warp uses the same GDC path as live. This is
-    for validating inference and online calibration from collected logs. It
-    still runs on the board, since it needs the NPU.
-- `EDGEPILOT_CAMERA_OFFSET_M=m`, `EDGEPILOT_CAMERA_HEIGHT_M=m`
-  - the camera mount for replay mode, which does not read
-    `params/display.json` (defaults `0` and the model height, 1.22 m). Live
-    capture uses `camera_offset_m` and `camera_height_m` from the device
-    settings.
-- `EDGEPILOT_MAX_FRAMES=N`
-  - stops after `N` frames (`modeld` inferred frames, `camerad`
-    captured frames). This is mainly useful with replay mode.
-- `EDGEPILOT_RAW_DUMP=/path/to/dump.bin`
-  - during replay, writes every raw model output to an `SCODMP1` file that
-    `gtest_model_output` reads; see
-    [diagnostics](diagnostics.md#model-swap-verification).
+### Camera and input warp
 
-`recordd` reads `EDGEPILOT_RECORD_ROOT` (default `recordings` under the install
-directory) and `EDGEPILOT_RECORD_STAGING`. `params/recording.json` `enabled`
-toggles recording.
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_MAX_SHUTTER_US=N` | `33333`, the 30 fps frame time | Caps the auto-exposure shutter in `camerad`, so the 20 fps sensor does not add motion blur. `0` leaves the sensor default. |
+| `EDGEPILOT_WARP_CPU=1` | off: the GDC warp | Disables the GDC warp and returns the whole input warp to the CPU; the wide tower is warped on the second core. The GDC path also falls back to the CPU when it cannot be set up or the frame is NV21. |
 
-## IMU
+### Storage and replay
 
-- `EDGEPILOT_IMU_DEV=/dev/i2c-1`, `EDGEPILOT_IMU_ADDR=0x6B`
-  - where `imud` finds the LSM6DSOW. The defaults are the MaixCAM2's.
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_PARAMS_DIR=/path/to/params` | `params/` relative to the runtime working directory | Overrides the shared runtime parameter directory, and is the only way to relocate parameter files; there are no per-file overrides. The web console reads the factory defaults from the directory beside it with `.defaults` added (`params.defaults/`, filled by the upload script). |
+| `EDGEPILOT_REPLAY_NV12=/path/to/replay.scnv12` | unset: the camera ring | When launching `modeld` directly, runs headless from an `SCNV12R1` NV12 replay file instead of the camera ring. Width, height, and frame count are read from the replay header; the warp uses the same GDC path as live. This is for validating inference and online calibration from collected logs. It still runs on the board, since it needs the NPU. |
+| `EDGEPILOT_CAMERA_OFFSET_M=m`, `EDGEPILOT_CAMERA_HEIGHT_M=m` | `0` and the model height, 1.22 m | The camera mount for replay mode, which does not read `params/display.json`. Live capture uses `camera_offset_m` and `camera_height_m` from the device settings. |
+| `EDGEPILOT_MAX_FRAMES=N` | `0`: no limit | Stops after `N` frames (`modeld` inferred frames, `camerad` captured frames). This is mainly useful with replay mode. |
+| `EDGEPILOT_RAW_DUMP=/path/to/dump.bin` | unset | During replay, writes every raw model output to an `SCODMP1` file that `gtest_model_output` reads; see [Model swap verification](diagnostics.md#model-swap-verification). |
+| `EDGEPILOT_RECORD_ROOT=dir` | `recordings` under the install directory | Where `recordd` writes its routes. `params/recording.json` `enabled` toggles recording. |
+| `EDGEPILOT_RECORD_STAGING=dir` | `/tmp/record_staging` | The staging directory in RAM that `recordd` writes through. A route left there by a session that died is moved to the record root at start. |
 
-## Panda
+### IMU
 
-- `EDGEPILOT_ENABLE_PANDA=1`
-  - manager also starts `pandad` and switches the USB-C port to host mode
-    (restored on exit). The manager default is off; `edgepilot.service` sets
-    it. The binary must have been built with `-DEDGEPILOT_BUILD_PANDA=ON`.
-- `EDGEPILOT_USB_ROLE=host|device`
-  - fixes the USB-C role at manager start and leaves it on exit.
-    `edgepilot.service` sets `host` (the Panda plugs into the USB-C port);
-    set `device` to reach the board from a computer over USB. Unset, the role
-    only changes with `EDGEPILOT_ENABLE_PANDA=1` as above.
-- `EDGEPILOT_PANDA_SAFETY=nooutput|silent|elm327|hyundai|hyundaiCommunity|allOutput`
-  - panda safety mode for `pandad`. Its standalone default is `nooutput`;
-    the manager defaults to `hyundaiCommunity`. `hyundai` defaults its parameter
-    to `2` (the Hyundai/Kia hybrid path), every other mode to `0`; an unknown
-    name falls back to `nooutput`.
-  - collected KIA K7 YG HEV logs from the current openpilot fork report
-    `safety=hyundaiCommunity:0`, `sccBus=-1`, `mdpsBus=1`, and `sasBus=1`. Use
-    `EDGEPILOT_PANDA_SAFETY=hyundaiCommunity` for shadow/TX experiments unless a newer
-    fingerprint proves otherwise.
-- `EDGEPILOT_PANDA_SAFETY_PARAM=N`
-  - numeric safety parameter passed with the safety mode. Unset takes the mode's
-    default; the manager sets `0`.
-- `EDGEPILOT_PANDA_TX=1`
-  - allows `pandad` to relay ordered `/dev/shm/edgepilot_sendcan` batches to
-    panda. Its standalone default is `0`; the manager defaults to `1`.
-- `EDGEPILOT_PANDA_LOG_CAN=1`
-  - prints every received CAN frame from `pandad`. This is a bus-bringup
-    aid only; at full bus load it is far too noisy to leave on.
-- `EDGEPILOT_PANDA_ENGAGED=1`
-  - sends panda heartbeat as engaged, only meaningful with `EDGEPILOT_PANDA_TX=1`. Its
-    standalone default is disengaged; the manager defaults to engaged.
-- `EDGEPILOT_PANDA_FIRMWARE=path`
-  - the Panda application image the web console flashes, relative to the
-    install directory. Default `firmware/panda.bin.signed` (built by
-    `make -C firmware/panda`).
-- `EDGEPILOT_PANDA_IDLE_US=5000`
-  - sleep time used by `pandad` when panda returns no CAN frames and no
-    pending `sendcan` batch exists. This keeps USB-only or parked shadow runs from
-    stealing scheduler time from `modeld`.
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_IMU_DEV` | `/dev/i2c-1` | The I²C bus where `imud` finds the LSM6DSOW. |
+| `EDGEPILOT_IMU_ADDR` | `0x6B` | Its address. Both defaults are the MaixCAM2's. |
 
-## K7 control
+### Panda
 
-- `EDGEPILOT_ENABLE_CONTROL=1`
-  - manager starts `controlsd`. This is the manager default. It does not
-    start `pandad` on its own; that needs `EDGEPILOT_ENABLE_PANDA=1`. No
-    openpilot checkout or Python native extension is required.
-- `EDGEPILOT_FORCE_ENGAGED=0|1`
-  - bypasses the SET/CANCEL engage latch for offline replay only. Default is `0`
-    and must remain `0` in a vehicle.
+Several Panda variables have two defaults: one when `pandad` runs on its own,
+and the one the manager sets before it starts `pandad`.
 
-## Web console and display
+| Variable | `pandad` alone | Manager | Effect |
+| --- | --- | --- | --- |
+| `EDGEPILOT_ENABLE_PANDA=1` | | off; `edgepilot.service` sets it | The manager also starts `pandad` and switches the USB-C port to host mode (restored on exit). The binary must have been built with `-DEDGEPILOT_BUILD_PANDA=ON`. |
+| `EDGEPILOT_USB_ROLE=host\|device` | | unset; `edgepilot.service` sets `host` | Fixes the USB-C role at manager start and leaves it on exit. `host` is for the Panda, which plugs into the USB-C port; set `device` to reach the board from a computer over USB. Unset, the role only changes with `EDGEPILOT_ENABLE_PANDA=1` as above. |
+| `EDGEPILOT_PANDA_SAFETY=nooutput\|silent\|elm327\|hyundai\|hyundaiCommunity\|allOutput` | `nooutput` | `hyundaiCommunity` | Panda safety mode for `pandad`. `hyundai` defaults its parameter to `2` (the Hyundai/Kia hybrid path), every other mode to `0`; an unknown name falls back to `nooutput`. |
+| `EDGEPILOT_PANDA_SAFETY_PARAM=N` | the mode's default | `0` | Numeric safety parameter passed with the safety mode. |
+| `EDGEPILOT_PANDA_TX=1` | `0` | `1` | Allows `pandad` to relay ordered `/dev/shm/edgepilot_sendcan` batches to the Panda. |
+| `EDGEPILOT_PANDA_ENGAGED=1` | disengaged | engaged | Sends the Panda heartbeat as engaged; only meaningful with `EDGEPILOT_PANDA_TX=1`. |
+| `EDGEPILOT_PANDA_LOG_CAN=1` | off | off | Prints every received CAN frame from `pandad`. This is a bus-bringup aid only; at full bus load it is far too noisy to leave on. |
+| `EDGEPILOT_PANDA_FIRMWARE=path` | `firmware/panda.bin.signed` | same | The Panda application image the web console flashes, relative to the install directory (built by `make -C firmware/panda`). `pandad` and the web console read the same variable. |
+| `EDGEPILOT_PANDA_IDLE_US=N` | `5000` | same | Sleep time used by `pandad` when the Panda returns no CAN frames and no `sendcan` batch is pending. This keeps USB-only or parked shadow runs from stealing scheduler time from `modeld`. |
 
-- `EDGEPILOT_ENABLE_WEB_CONSOLE=0|1`
-  - starts the web console (FastAPI, `web_console/`) with the manager. It
-    defaults to the value of `EDGEPILOT_ENABLE_CONTROL`.
-- `EDGEPILOT_WEB_CONSOLE_HOST=address`, `EDGEPILOT_WEB_CONSOLE_PORT=port`
-  - select the web console's listen address and port. Defaults are
-    `0.0.0.0:8080`.
-- `EDGEPILOT_CALIBRATION_RESET_PATH`
-  - the request file behind the web console's calibration reset (default
-    `/dev/shm/edgepilot_calibration_reset`). `modeld` checks it every second;
-    when it exists, `modeld` deletes it and restarts calibration from the
-    beginning. Both sides read the same variable.
+Collected KIA K7 YG HEV logs from the current openpilot fork report
+`safety=hyundaiCommunity:0`, `sccBus=-1`, `mdpsBus=1`, and `sasBus=1`. A
+shadow run uses `EDGEPILOT_PANDA_SAFETY=nooutput` with `EDGEPILOT_PANDA_TX=0`;
+`hyundaiCommunity` is only for TX, once the connected car's fingerprint and the
+Panda's health confirm that configuration
+([Shadow run](k7-panda-port.md#shadow-run)).
+
+### K7 control
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_ENABLE_CONTROL=1` | on | The manager starts `controlsd`. It does not start `pandad` on its own; that needs `EDGEPILOT_ENABLE_PANDA=1`. No openpilot checkout or Python native extension is required. |
+| `EDGEPILOT_FORCE_ENGAGED=0\|1` | `0` | Bypasses the SET/CANCEL engage latch, for offline replay only. |
+
+> [!WARNING]
+> `EDGEPILOT_FORCE_ENGAGED` must remain `0` in a vehicle.
+
+### Web console and display
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_ENABLE_WEB_CONSOLE=0\|1` | the value of `EDGEPILOT_ENABLE_CONTROL` | Starts the web console (FastAPI, `web_console/`) with the manager. |
+| `EDGEPILOT_WEB_CONSOLE_HOST=address`, `EDGEPILOT_WEB_CONSOLE_PORT=port` | `0.0.0.0:8080` | The web console's listen address and port. |
+| `EDGEPILOT_CALIBRATION_RESET_PATH` | `/dev/shm/edgepilot_calibration_reset` | The request file behind the web console's calibration reset. `modeld` checks it every second; when it exists, `modeld` deletes it and restarts calibration from the beginning. Both sides read the same variable. |
 
 `overlayd` turns the backlight on at start (`pwmchip0/pwm3`, level from
 `maix_backlight_value` in `/boot/configs` and `disp_max_backlight` in
@@ -175,39 +141,90 @@ toggles recording.
 `scripts/web_console/backlight.py` on the same PWM: duty = 100 µs period x
 brightness % x `disp_max_backlight` %, and `enabled: false` sets the duty to 0.
 
-## Alerts
+### Alerts
 
-`overlayd` plays the alert sounds (`src/hud/alert_tones.cc`) on the board speaker. One
-`aplay` starts with overlayd and stays open. A sound thread feeds it silence,
-or the alert's samples when one fires. The HUD loop never spawns a process at
-alert time. The amplifier stays on, so the first note is not cut. Latency is
-under 0.1 s. A new alert interrupts the one playing.
+`overlayd` plays the alert sounds on the board speaker. How it picks and plays
+them, and how to check the speaker at the desk, is in
+[Alert sounds](hud.md#alert-sounds); which events alert is in
+[Departure alerts](departure-alerts.md).
 
-- `EDGEPILOT_ALERT_SOUND=0` turns the sounds off (default on)
-- `EDGEPILOT_ALERT_VOLUME` 0–100, default 70; `alert_volume_percent` in
-  `params/display.json` (web 기기 설정) overrides it at runtime
-- `EDGEPILOT_ALERT_PCM` ALSA device, default `plughw:0,1`
-
-To check the speaker at the desk, run `pkill -USR1 -x overlayd`. Each
-signal plays the next sound in the order engage, disengage, unable,
-signal_changed, unavailable.
-
-Departure alerts and engage refusals are also shown on the HUD, and every alert
-is written as a `overlayd: alert=...` log line. Which events alert
-is described in [Departure alerts](departure-alerts.md).
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `EDGEPILOT_ALERT_SOUND=0` | on | Turns the sounds off. |
+| `EDGEPILOT_ALERT_VOLUME` | `70` | Volume, 0–100. `alert_volume_percent` in `params/display.json` (the web Device settings tab) overrides it at runtime. |
+| `EDGEPILOT_ALERT_PCM` | `plughw:0,1` | ALSA device. |
 
 ## Parameter files
 
 The tracked JSON files in `params/` are the source of truth for K7 steering,
-vision-cruise, recording, and display configuration. Changes are written
-atomically. Control changes are signaled to `controlsd` and also detected by
-its 100 ms fallback poll.
+vision-cruise, recording, and display configuration;
+[Parameters](../params/README.md) lists every value. Changes are written
+atomically: to a temporary file, synced, then renamed over the old one.
+
+| File | Written by | Read by | A change applies |
+| --- | --- | --- | --- |
+| `steering.json` | web console: Steering and Vehicle tabs | `controlsd`; `locationd` reads `steer_actuator_delay` once at start | on the next control cycle: the web console signals `controlsd`, which also checks the file every 100 ms |
+| `adaptive_cruise.json` | web console: Vision cruise tab | `controlsd` | as `steering.json` |
+| `recording.json` | web console: Recording tab | `recordd` | `enabled` within 250 ms; `bitrate_bps` when `recordd` next starts |
+| `display.json` | web console: Device settings tab; `calibration_use_flow` from the Vehicle tab's calibration card | web console (backlight), `modeld` (camera mount, calibration source), `overlayd` (alert volume) | the backlight at once; `modeld` and `overlayd` within 1 s |
+| `calibration.json` | `modeld` | `modeld`, at start | the runtime's own state, see below |
+
+`controlsd` reads its two files together. If either is rejected, it keeps the
+previous values of both and logs why. How a changed steering value reaches the
+controller:
+
+```mermaid
+---
+config:
+  sequence:
+    actorMargin: 30
+    width: 130
+---
+sequenceDiagram
+    participant B as browser
+    participant W as web console
+    participant F as steering.json
+    participant C as controlsd
+    B->>W: PATCH<br>/api/params/steering
+    W->>F: write, rename
+    W->>C: SIGHUP
+    W-->>B: new values
+    C->>F: read both files
+    Note over C: next 10 ms tick,<br>PID state kept
+```
+
+The signal makes `controlsd` read the files on its next 10 ms tick and apply
+them on the same tick, keeping the control and PID state. Without the signal,
+its check every 100 ms finds the change.
 
 `params/calibration.json` is also tracked as the initial calibration seed. The
-runtime replaces it atomically when a stable calibration is learned, while
-`scripts/upload_to_board.sh` preserves an existing runtime copy and installs the
-repository copy under `params.defaults/` as a fallback. After a mount change,
-let online calibration relearn it.
+runtime replaces it atomically when a stable calibration is learned, and
+restores it before the first model frame; manual `EDGEPILOT_CALIB_*` values
+take precedence and seed it. `scripts/upload_to_board.sh` preserves an existing
+runtime copy and installs the repository copy under `params.defaults/` as a
+fallback. After a mount change, let online calibration relearn it.
+
+When it starts, the web console brings the keys of each runtime file in line
+with `params.defaults/`: a missing key gets its default, and a key gone from
+the defaults is removed, so a parameter the code no longer reads does not stay
+in the editor. The values of the other keys stay as they are.
+
+### Learned state
+
+The runtime saves what it learns next to the parameter files, and reads it back
+at the next start:
+
+| File | Written by | When | Read back |
+| --- | --- | --- | --- |
+| `calibration.json` | `modeld` | when a stable calibration is learned | at `modeld` start |
+| `flow_calibration.json` | `modeld` | the first estimate and a mount change at once, otherwise every minute and on exit | at `modeld` start |
+| `live_parameters.json` | `controlsd` (paramsd) | every minute | at `controlsd` start |
+| `live_torque_parameters.bin` | `controlsd` (torqued) | every 12 s | at `controlsd` start |
+| `live_delay.json` | `locationd` (lagd) | every 60 s and on exit | at `locationd` start, if `steer_actuator_delay` is unchanged |
+
+A saved learner state that fails to restore is deleted (for torqued, only a
+corrupt cache). The web console's calibration reset deletes `calibration.json`
+and `flow_calibration.json`.
 
 ## Web console
 
@@ -218,34 +235,106 @@ directly, from the install directory:
 cd /root/edgepilot && python3 -m web_console --host 0.0.0.0 --port 8080
 ```
 
-The header shows the processes the manager runs (its `ManagerState`, a red or
-amber pill when one is down or the manager stopped publishing) and the
-backlight. The process panel also names the build most processes run, read
-from the running binaries ([Build version](build-and-deploy.md#build-version)),
-and marks a process that runs a different build, or whose installed binary
-has changed since it started (a copied binary that needs a restart). There is one tab per parameter file, with 차량 특성 after 조향, and
-BEV. The address keeps the tab (`#steering`, `#vehicle`, `#bev`), so a reload
-stays on it, and only the tab on screen polls the board. Parameter tabs search,
-show only the changed items, mark each item's default and put it back with one
-press. A value is written as soon as it is changed.
+The page is in Korean; the documents name its tabs and buttons in English:
 
-차량 특성 holds the steering values that belong to the car rather than to the
-controller. The values a learner replaces come in one group per learner
-(paramsd, torqued, lagd), as the learners publish them, with one 자동 학습 /
-수동 choice per group (the `use_live_*` switches). Each value's card shows the
-value control uses now and where it comes from (controlsd's LearnerState says
-whether the learned values are in use), the learned value, the manual value
-with what it does while learning is on, and a button that copies the learned
-value into the manual one. Below are the camera calibration, the learners' last
-ten minutes, the learner input source and the fixed specs (mass, wheelbase,
-centre of gravity). 조향 keeps the controller
-tuning, the path mode (Laneless) and the lane-change minimum speed, and
-searching it for a moved value links to 차량 특성.
+| On screen | In the documents |
+| --- | --- |
+| `조향` | Steering tab |
+| `차량 특성` | Vehicle tab |
+| `비전 크루즈` | Vision cruise tab |
+| `주행 기록` | Recording tab |
+| `기기 설정` | Device settings tab |
+| `BEV` | BEV tab |
+| `항목 검색`, `바꾼 항목만`, `↺ 기본값으로` | search, show only the changed items, put the default back |
+| `차량 모델`, `토크 모델`, `조향 지연` | the paramsd, torqued and lagd groups |
+| `자동 학습` / `수동` | Auto-learn / Manual |
+| `⤓ 학습값을 수동값으로` | the button that copies the learned value into the manual one |
+| `카메라 캘리브레이션` | camera calibration card |
+| `캘리브레이션 초기화` | Reset calibration |
+| `광류 (없으면 포즈)` / `모델 포즈만` | calibration source: flow / pose |
+| `최근 10분 추이` | the learners' last ten minutes |
+| `학습 입력` | learner input source |
+| `고정 제원` | fixed specs |
+| `Panda 펌웨어` | Panda firmware card |
+| `펌웨어 플래싱` | flash button |
+| `뒤에서` / `위에서` | BEV view buttons: behind / from above |
+| `원시 차선` | raw lines (a BEV layer button) |
 
 > [!WARNING]
 > The web console has no authentication and writes steering parameters that
 > `controlsd` hot-reloads while driving. Expose it only on a trusted vehicle
 > or development network.
+
+The header shows the processes the manager runs (its `ManagerState`, a red or
+amber pill when one is down or the manager stopped publishing) and the
+backlight. The process panel also names the build most processes run, read
+from the running binaries ([Build version](build-and-deploy.md#build-version)),
+and marks a process that runs a different build, or whose installed binary has
+changed since it started (a copied binary that needs a restart).
+
+There is one tab per parameter file, with Vehicle after Steering, and BEV. The
+address keeps the tab (`#steering`, `#vehicle`, `#bev`), so a reload stays on
+it, and only the tab on screen polls the board. Parameter tabs search, show
+only the changed items, mark each item's default and put it back with one
+press. A value is written as soon as it is changed.
+
+| Tab | Address | Holds |
+| --- | --- | --- |
+| Steering | `#steering` | the controller tuning, the path mode (Laneless) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
+| Vehicle | `#vehicle` | the steering values that belong to the car rather than to the controller, the camera calibration, the learners' trend, the learner input source and the fixed specs |
+| Vision cruise | `#adaptive_cruise` | `adaptive_cruise.json` |
+| Recording | `#recording` | `recording.json` |
+| Device settings | `#display` | backlight, sound and camera mount from `display.json`, and the Panda firmware card |
+| BEV | `#bev` | the model's view from above, drawn in the browser |
+
+What each tab writes:
+
+```mermaid
+flowchart LR
+    device["Device settings"] --> pwm(["backlight PWM"])
+    device --> flash["Panda flash<br>request"]
+    device --> dj["display.json"]
+    rec["Recording"] --> rj["recording.json"]
+    cruise["Vision cruise"] --> aj["adaptive_cruise.json"]
+    vehicle["Vehicle"] --> dj
+    vehicle --> reset["calibration<br>reset request"]
+    vehicle --> sj["steering.json"]
+    steering["Steering"] --> sj
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    class steering,vehicle,cruise,rec,device,sj,reset,dj,aj,rj,flash proc
+    class pwm external
+```
+
+The BEV tab writes nothing. The two request files sit in `/dev/shm`: `modeld`
+acts on the calibration reset, and `pandad` on the flash request.
+
+### Vehicle tab
+
+Vehicle holds the steering values that belong to the car rather than to the
+controller. The values a learner replaces come in one group per learner, as
+the learners publish them: paramsd's steering ratio, tyre stiffness,
+steering-angle zero and road-roll compensation; torqued's torque factor,
+friction and offset; lagd's steering delay. Each group has one Auto-learn /
+Manual choice (the `use_live_*` switches). Each value's card shows the value
+control uses now and where it comes from (controlsd's LearnerState says
+whether the learned values are in use), the learned value, the manual value
+with what it does while learning is on, and a button that copies the learned
+value into the manual one. Below are the camera calibration, the learners'
+last ten minutes, the learner input source and the fixed specs (mass,
+wheelbase, centre of gravity).
+
+The camera calibration card resets the calibration and chooses its source,
+pose or flow (`calibration_use_flow`); it refuses both while engaged.
+
+### Device settings tab
+
+The tab edits the backlight, the alert volume and the camera mount in
+`display.json`. Its Panda firmware card shows the Panda's link and firmware,
+and asks `pandad` to flash the installed image (`EDGEPILOT_PANDA_FIRMWARE`)
+only while the car is parked ([Panda firmware](../firmware/panda/README.md)).
+
+### BEV tab
 
 The BEV tab shows what the model sees from above: lane lines, road edges, the
 planned path and the lead, round the ego car, with the HUD's colours and limits
@@ -256,28 +345,29 @@ sleeps until the next model frame is due, so a viewer costs about 3% of one
 core at nice 10, and nothing once the tab is closed or hidden. `/api/bev` says
 where the fields sit. `ipc_messages.h` pins those offsets, and
 `check_web_console.py` checks the two match. The page refuses to draw, and says
-so, when the server does not list a field it reads. The page loads `bev.js` and three.js
-from `web_console/static/`. The server gzips each file once in memory (about 250 kB in
-all) and then answers with 304 while it is unchanged.
+so, when the server does not list a field it reads. The page loads `bev.js` and
+three.js from `web_console/static/`. The server gzips each file once in memory
+(about 250 kB in all) and then answers with 304 while it is unchanged.
 
-The ego car is the car's own model (`web_console/static/bev_ego.js`); the BEV knows
-only its size and the function that builds it, so another car brings its own. Today
-it is a black 2017 Kia K7, built in code from the published dimensions and from
-measurements of Kia's studio photographs (side, front, back): its proportions,
-grille, lamps, chrome, plates and wheels. Its tail lamps are lit. It costs the
-browser 26k triangles in 22 meshes, and is made once when the tab opens. The lead
-is the generic car (`web_console/static/bev_car.js`).
+The ego car is the car's own model (`web_console/static/bev_ego.js`); the BEV
+knows only its size and the function that builds it, so another car brings its
+own. Today it is a black 2017 Kia K7, built in code from the published
+dimensions and from measurements of Kia's studio photographs (side, front,
+back): its proportions, grille, lamps, chrome, plates and wheels. Its tail
+lamps are lit. It costs the browser 26k triangles in 22 meshes, and is made
+once when the tab opens. The lead is the generic car
+(`web_console/static/bev_car.js`).
 
 Beyond the HUD, the BEV shows the following. Its cards (lead, departure) sit in
-a column beside the view, or under it below 900 px wide, so they never cover the
-road. Over the view are only the view and layer buttons and the chips along the
-bottom.
+a column beside the view, or under it below 900 px wide, so they never cover
+the road. Over the view are only the view and layer buttons and the chips along
+the bottom.
 
 - **Steadied ego lines.** The two ego lines are drawn as the planner sees them:
   `web_console/static/lane_filter.js` runs the planner's lane-line filter on the
   capture times and on `controlsd`'s speed and measured curvature
   ([Lane-line filter](lane-line-filter.md)). The model's own lines run thin and
-  gray beneath them; the `원시 차선` button hides those. On the 2026-10 drives
+  grey beneath them; the raw lines button hides those. On the 2026-10 drives
   the drawn lines tremble about 60% less from frame to frame, but still sway:
   the slower swing over a second drops only 13-26%. The `LANE W` chip measures
   the drawn lines. Without `controlsd` the model's lines are drawn as they are.
@@ -301,21 +391,20 @@ bottom.
   light both sides.
 - **Ego brake lights.** The K7's tail lamps brighten, its high brake light comes
   on and a red glow lights the road behind it, while the pedal is pressed or
-  AUTO HOLD holds the car
-  (`kHudFlagBrakeLights`; see [the K7 brake signals](k7-panda-port.md#brake-signals)).
+  AUTO HOLD holds the car (`kHudFlagBrakeLights`; see
+  [Brake signals](k7-panda-port.md#brake-signals)).
 - **Lead track.** `modeld` fuses the model's lead distance with the optical
   flow's measure of how fast the lead's image grows (`ModelState.lead_track`;
-  see [Lead track](flow-calibration.md#lead-track)). While it
-  has a value:
+  see [Lead track](lead-flow.md#lead-track)). While it has a value:
   - The lead car stands at the tracked distance, and its arrow and the `LEAD`
     chip give the tracked relative speed.
-  - A gray bar across the lane marks the model's own distance, so its jitter
+  - A grey bar across the lane marks the model's own distance, so its jitter
     shows.
   - A label beside the car gives the time to contact under 10 s.
   - A `LEAD` card shows, over the last 20 s (its title folds the charts away,
     remembered in that browser):
     - the distance and the relative speed of the track (green), the model's
-      own (gray) and the flow's (cyan, speed only);
+      own (grey) and the flow's (cyan, speed only);
     - the trend of the model's distance (amber): a straight line over ±2 s,
       so it ends 2 s back;
     - its badge, the time to contact.
@@ -325,20 +414,57 @@ bottom.
   alert's inputs (`departure_alert.cc`):
   - the 2 s gas press probability against the 0.3 that fires it, with its last
     10 s;
-  - the plan's x at 10 s against the ±5 m that arms the alert and the 10 m that
-    fires it;
+  - how far the plan reaches in 10 s: the alert arms while the plan reaches
+    less than 5 m in 10 s, and fires when it reaches more than 10 m;
   - `ARMED`, or `GREEN` / `LEAD GO` while an alert shows.
+
+### API
+
+The page talks to the server over these routes (`console_server.py`):
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/status` | the manager's process states and the backlight |
+| `GET /api/params` | parameter groups, current values, defaults and descriptions |
+| `PATCH /api/params/{group}` | change values, `{"values": {...}}` |
+| `GET /api/learners` | paramsd and torqued learned values, the camera calibration, the locationd steering delay |
+| `GET /api/learners/trend` | the learned values over the last 10 minutes |
+| `POST /api/calibration/reset` | reset the camera calibration (disengaged only) |
+| `POST /api/calibration/source` | choose the calibration source, `{"use_flow": ...}` (disengaged only) |
+| `GET /api/panda` | the Panda firmware and the installed image |
+| `POST /api/panda/flash` | ask for a Panda flash, `{"version": ...}` (parked only) |
+| `GET /api/bev` | where the fields the BEV reads sit |
+| `GET /api/bev/stream` | the BEV stream (`ModelState` and `ControlState` payloads) |
+| `GET /static/{path}` | the page's files |
 
 ## Production defaults
 
-- Capture is `NV12 1280x720`, the full sensor field of view scaled (no crop),
-  sensor at 20 fps.
-- The frame ring has 8 CMM slots.
-- `overlayd` and `recordd` start once `camerad` has run for 1.5 s, because
-  opening VI resets the AX pools.
-- Child process nice levels are fixed as `camerad=0`, `overlayd=10`,
-  `recordd=15`, `modeld=-15`, `imud=10`, `locationd=5`, optional `pandad=-10`,
-  `controlsd=-8`, and `web_console=10`.
-- The front-vehicle marker is always enabled with probability threshold `0.5`.
-- Desired curvature is clamped to openpilot's `0.2 1/m`; it is intentionally not
-  a runtime tuning option.
+The start order is in [Start order](runtime.md#start-order) and the nice levels
+under [`manager.py`](runtime.md#managerpy).
+
+| Setting | Value |
+| --- | --- |
+| Capture | `NV12 1280x720`, the full sensor field of view scaled (no crop), sensor at 20 fps |
+| Frame ring | 8 CMM slots |
+| Front-vehicle marker | always enabled, with probability threshold `0.5` |
+| Desired curvature | clamped to openpilot's `0.2 1/m`; intentionally not a runtime tuning option |
+
+## Related
+
+- [Parameters](../params/README.md): every value in the parameter files
+- [Runtime](runtime.md): the processes the manager starts and how it supervises
+  them
+- [Build and deploy](build-and-deploy.md): the upload that fills
+  `params.defaults/`, and the build version
+- [Flow calibration](flow-calibration.md): the optical-flow calibrator and
+  `calibration_use_flow`
+- [Lead flow](lead-flow.md): the lead track drawn in the BEV and used by the
+  vision cruise
+- [Lane-line filter](lane-line-filter.md): the steadied ego lines
+- [Departure alerts](departure-alerts.md): which events alert
+- [HUD](hud.md): what `overlayd` draws on the LCD
+- [Rehearsal](rehearsal.md): replaying a recorded route through the runtime
+- [Diagnostics](diagnostics.md): checking a model swap with raw output dumps
+- [K7 Panda port](k7-panda-port.md): the CAN signals, safety modes and brake
+  signals
+- [Scripts](../scripts/README.md): `manager.py` and the web console sources

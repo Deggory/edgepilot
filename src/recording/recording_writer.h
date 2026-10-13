@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -56,6 +57,12 @@ public:
     ~RecordingWriter();
 
     void set_enabled(bool enabled, uint64_t now_ns);
+    // 녹화를 켜 두었는데 저장 공간 부족으로 거절되거나 멈춘 동안, 여유 공간이 예비분보다 1 GiB 넘게 늘면
+    // route를 다시 시작한다. 메인 루프가 자주 불러도 공간은 5초마다만 본다.
+    void poll_storage(uint64_t now_ns);
+    // 여유 공간 확인을 바꾼다(테스트가 공간 부족을 흉내 낸다). extra_bytes는 예비분 위에 더 있어야 할 크기다.
+    // 녹화를 켜기 전에 부른다. 기본은 statvfs로 root의 여유 공간을 본다.
+    void set_storage_check(std::function<bool(uint64_t extra_bytes)> check) { storage_check_ = std::move(check); }
     void set_codec_config(const uint8_t *data, size_t size);
     void write_encoded_frame(const RoadAiFrame &frame, const uint8_t *data, size_t size, bool keyframe);
     void write_can(RecordType type, const CanBatch &batch);
@@ -105,7 +112,7 @@ private:
     void close_route(bool complete);
     void write_manifest(bool complete) const;
     void snapshot_params() const;
-    bool has_storage_reserve() const;
+    bool has_storage_reserve(uint64_t extra_bytes = 0) const;
     bool write_event_header(RecordType type, uint64_t timestamp_ns, uint32_t payload_size);
     static FILE *open_buffered(const std::string &path);
 
@@ -122,6 +129,9 @@ private:
     std::atomic<bool> requested_enabled_{false};
     std::atomic<bool> active_{false};
     std::atomic<bool> blocked_for_space_{false};
+    bool config_enabled_ = false;         // 설정(recording.json)이 바라는 상태. 메인 스레드만 쓴다
+    uint64_t next_storage_retry_ns_ = 0;  // poll_storage가 다음에 공간을 볼 시각
+    std::function<bool(uint64_t)> storage_check_;
     std::atomic<uint64_t> total_video_frames_{0};
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;

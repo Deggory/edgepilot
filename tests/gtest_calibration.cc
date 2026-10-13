@@ -1082,6 +1082,51 @@ TEST(CalibrationEquivalence, Nv21ChromaOrder) {
 }
 
 // 카메라 장착 보정(sunnypilot camera offset): 가상 카메라가 offset만큼 오른쪽에 있을 때 가상 기준
+// 호스트 도구의 워프(tools/model/model_warp.py projection_matrix)와 같은 행렬: 720p MaixCAM2 내부 파라미터에서
+// rpy·모델 시점·카메라 장착별 모델 화소 -> 원본 화소 행렬. tests/check_recording_reader.py가 이 기준값을 읽어
+// Python 쪽도 맞춘다. 상대 1e-5(단정밀도 곱셈 순서 차이) 안에서 같아야 한다.
+TEST(CalibrationEquivalence, ProjectionGoldenSharedWithModelWarpPy) {
+    // clang-format off
+    // GOLDEN BEGIN: roll, pitch, yaw, sbig, camera_offset_m, camera_height_m -> 행렬 9개(행 우선)
+    const struct {
+        float roll, pitch, yaw;
+        bool sbig;
+        float offset, height;
+        double p[9];
+    } golden[] = {
+        {0.0f, 0.0f, 0.0f, false, 0.0f, 1.22f,
+         {0.828747272, 0, 414.594025, 0, 0.828461528, 328.96524, 0, 0, 1}},
+        {0.02f, -0.03f, 0.01f, false, 0.0f, 1.22f,
+         {0.821236074, -0.0373377427, 425.518921, 0.0122703603, 0.815863907, 348.853088,
+          -1.1645795e-05, -3.27340858e-05, 1.00403953}},
+        {0.02f, -0.03f, 0.01f, true, 0.0f, 1.22f,
+         {1.64247215, -0.0746754855, 224.840942, 0.0245407205, 1.63172781, 136.850723,
+          -2.329159e-05, -6.54681717e-05, 1.01540077}},
+        {-0.015f, 0.04f, -0.02f, false, 0.2f, 1.35f,
+         {0.841857553, 0.164225429, 387.723969, -0.00456404313, 0.843335032, 298.909393,
+          2.13150761e-05, 4.7418016e-05, 0.991286516}},
+        {-0.015f, 0.04f, -0.02f, true, -0.15f, 1.1f,
+         {1.68371511, -0.150585905, 202.884506, -0.00912808627, 1.68926716, 83.7897797,
+          4.26301522e-05, 8.27072508e-05, 0.975531995}},
+    };
+    // GOLDEN END
+    // clang-format on
+    AppConfig config;
+    config.set_warp_source(1280, 720);
+    for (const auto &g : golden) {
+        ModelInputTransform transform(config, g.sbig ? ModelFrame::SmallBigModel : ModelFrame::MedModel);
+        transform.set_calibration(g.roll, g.pitch, g.yaw);
+        transform.set_camera_mount(g.offset, g.height);
+        float p[9];
+        transform.projection_matrix(p);
+        for (int i = 0; i < 9; ++i) {
+            // 원근 항(6, 7)은 1e-5 크기라 절대 오차로, 나머지는 상대 오차로 본다.
+            const double tolerance = i == 6 || i == 7 ? 1e-9 : 1e-5 * std::max(1.0, std::fabs(g.p[i]));
+            EXPECT_NEAR(p[i], g.p[i], tolerance) << "case rpy " << g.roll << " sbig " << g.sbig << " index " << i;
+        }
+    }
+}
+
 // 도로면 점의 모델 픽셀은, 실제 카메라에서 그 도로 점(가상 위치 + offset)이 찍히는 픽셀로 간다.
 // offset 0이면 기존 행렬과 같다.
 TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane) {

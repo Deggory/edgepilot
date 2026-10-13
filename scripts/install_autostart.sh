@@ -36,7 +36,7 @@ sed "s|@DEST@|$DEST|g" scripts/edgepilot.service |
   "${SSH[@]}" "test -x '$DEST/manager.py' || { echo 'run scripts/upload_to_board.sh first' >&2; exit 1; }
     cat > /etc/systemd/system/edgepilot.service && systemctl daemon-reload &&
     systemctl disable launcher.service && systemctl enable edgepilot.service && sync"
-# 카메라 캘리브레이션 캡처(수동 시작 전용, docs/camcal.md).
+# 카메라 캘리브레이션 캡처(수동 시작 전용, docs/camera-intrinsics.md).
 sed "s|@DEST@|$DEST|g" scripts/camcal.service |
   "${SSH[@]}" "cat > /etc/systemd/system/camcal.service && systemctl daemon-reload"
 echo "autostart installed on $BOARD (starts at next boot, or: ssh $BOARD systemctl start edgepilot)"
