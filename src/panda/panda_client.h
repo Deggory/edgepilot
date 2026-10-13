@@ -63,8 +63,8 @@ public:
 
 private:
     bool control_write(uint8_t request, uint16_t value, uint16_t index, unsigned timeout_ms = 1000);
-    bool control_read(uint8_t request, uint16_t value, uint16_t index,
-                      void *data, uint16_t length, unsigned timeout_ms = 1000);
+    bool control_read(uint8_t request, uint16_t value, uint16_t index, void *data, uint16_t length,
+                      unsigned timeout_ms = 1000);
     int bulk_read(uint8_t endpoint, uint8_t *data, int length, unsigned timeout_ms);
     int bulk_write(uint8_t endpoint, const uint8_t *data, int length, unsigned timeout_ms);
     void mark_usb_error(int err, const char *where);

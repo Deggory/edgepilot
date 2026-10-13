@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Generate a checkerboard calibration target sized for a specific display.
+"""특정 화면 크기에 맞춘 체커보드 보정 표적을 만든다.
 
-The camera intrinsics are solved from photos of a flat target. A TV panel
-is flatter than any printed board, so the target is generated at the panel's
-native pixel grid: every square is an exact integer number of pixels, which
-keeps the corners on a perfect lattice as long as the TV shows the image 1:1
-(no overscan, no sharpening, no scaling).
+카메라 내부 파라미터는 평평한 표적을 찍은 사진으로 푼다. TV 패널은 어떤 인쇄 보드보다 평평하므로 표적을
+패널의 원래 화소 격자에 맞춰 만든다. 칸마다 정확히 정수 개의 화소라서, TV가 영상을 1:1로 보여 주는 한
+(오버스캔, 샤프닝, 확대 없음) 코너가 완벽한 격자 위에 놓인다.
 
-Defaults describe a 65" 16:9 4K TV. The output is 8-bit grayscale PNG written
-with the stdlib only, so this runs on any host with numpy.
+기본값은 65인치 16:9 4K TV다. 출력은 표준 라이브러리만으로 쓰는 8비트 회색조 PNG라, numpy만 있으면 어느
+호스트에서나 돈다.
 """
 
 from __future__ import annotations
@@ -25,10 +23,9 @@ MM_PER_INCH = 25.4
 
 
 def write_png_gray(path: Path, image: np.ndarray, pixels_per_meter: int | None) -> None:
-    """Write an 8-bit grayscale PNG using the Up filter for every scanline.
+    """모든 주사선에 Up 필터를 써서 8비트 회색조 PNG를 쓴다.
 
-    Consecutive rows of a checkerboard are identical inside a square row, so the
-    Up filter turns most of the image into zeros and keeps the file small.
+    체커보드는 한 칸 줄 안에서 이웃한 행이 똑같으므로, Up 필터가 영상 대부분을 0으로 만들어 파일이 작다.
     """
     if image.dtype != np.uint8 or image.ndim != 2:
         raise ValueError("image must be 2-D uint8")
@@ -63,7 +60,7 @@ def build_checkerboard(width: int, height: int, squares_x: int, squares_y: int,
     offset_x = (width - board_w) // 2
     offset_y = (height - board_h) // 2
 
-    # Index each board pixel by its square, then colour the odd parity ones.
+    # 보드 화소마다 속한 칸을 정하고, 홀수 패리티 칸을 칠한다.
     ys = (np.arange(board_h) // square_px)[:, None]
     xs = (np.arange(board_w) // square_px)[None, :]
     squares = np.where(((ys + xs) & 1) == 0, dark, light).astype(np.uint8)

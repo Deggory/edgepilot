@@ -11,7 +11,7 @@ namespace {
 constexpr int kSubRows = 4;
 constexpr int kSubRowWeight = 256 / kSubRows;
 constexpr int kMaxCrossings = 16;
-constexpr int kMaxEdges = 72;  // 궤적 띠(33쌍 = 66변)가 들어가는 크기
+constexpr int kMaxEdges = 72;          // 궤적 띠(33쌍 = 66변)가 들어가는 크기
 constexpr int kMaxFadeColumns = 1024;  // 열마다 흐림 알파를 미리 셀 수 있는 버퍼 폭
 
 // 다각형 변: 위 끝(작은 y)에서 아래 끝까지, 위 끝의 x와 기울기 dx/dy.
@@ -41,16 +41,12 @@ constexpr std::array<uint32_t, 256> kInverse = [] {
     return table;
 }();
 
-inline uint32_t div255(uint32_t x)
-{
-    return (x + 128 + ((x + 128) >> 8)) >> 8;
-}
+inline uint32_t div255(uint32_t x) { return (x + 128 + ((x + 128) >> 8)) >> 8; }
 
-/* dst 위에 rgb를 알파 a(0..255)로 over 합성한다(둘 다 스트레이트 알파). 투명한 바탕(대부분의
- * 화소)과 불투명한 위 색은 바로 쓴다. 분자는 255·oa를 넘지 않아 역수를 곱해도 넘치지 않는다.
- * 화소 루프마다 펼쳐지도록 늘 인라인한다(그냥 두면 GCC가 호출로 남겨 화소마다 호출한다). */
-[[gnu::always_inline]] inline void blend(uint32_t &dst, uint32_t rgb, uint32_t a)
-{
+// dst 위에 rgb를 알파 a(0..255)로 over 합성한다(둘 다 스트레이트 알파). 투명한 바탕(대부분의
+// 화소)과 불투명한 위 색은 바로 쓴다. 분자는 255·oa를 넘지 않아 역수를 곱해도 넘치지 않는다.
+// 화소 루프마다 펼쳐지도록 늘 인라인한다(그냥 두면 GCC가 호출로 남겨 화소마다 호출한다).
+[[gnu::always_inline]] inline void blend(uint32_t &dst, uint32_t rgb, uint32_t a) {
     if (a == 0) return;
     const uint32_t da = dst >> 24;
     if (a == 255 || da == 0) {
@@ -66,8 +62,8 @@ inline uint32_t div255(uint32_t x)
     dst = oa << 24 | channel(16) << 16 | channel(8) << 8 | channel(0);
 }
 
-/* 한 행의 부표본 커버리지 합(화소마다 0..256)과 덮인 화소 범위 [min, max]. 칸은 합성하며
- * 0으로 되돌린다. */
+// 한 행의 부표본 커버리지 합(화소마다 0..256)과 덮인 화소 범위 [min, max]. 칸은 합성하며
+// 0으로 되돌린다.
 struct RowCoverage {
     uint16_t *cells;
     int width;
@@ -75,8 +71,7 @@ struct RowCoverage {
     int max;
 
     // 부표본 행 하나의 구간 [x0, x1)을 더한다. 양 끝 화소는 덮인 비율만큼.
-    [[gnu::always_inline]] void add(float x0, float x1)
-    {
+    [[gnu::always_inline]] void add(float x0, float x1) {
         x0 = std::max(x0, 0.0f);
         x1 = std::min(x1, static_cast<float>(width));
         if (x1 <= x0) return;
@@ -96,41 +91,39 @@ struct RowCoverage {
 
 }  // namespace
 
-HudCanvas::HudCanvas(void *pixels, int width, int height, int stride_bytes,
-                             std::vector<uint16_t> &coverage, std::vector<uint16_t> &damage,
-                             HudOrientation orientation)
-    : base_(static_cast<uint8_t *>(pixels)), width_(width), height_(height),
-      buffer_w_(orientation.transpose ? height : width), buffer_h_(orientation.transpose ? width : height),
-      stride_(stride_bytes), orientation_(orientation), coverage_(coverage), damage_(damage)
-{
+HudCanvas::HudCanvas(void *pixels, int width, int height, int stride_bytes, std::vector<uint16_t> &coverage,
+                     std::vector<uint16_t> &damage, HudOrientation orientation)
+    : base_(static_cast<uint8_t *>(pixels)),
+      width_(width),
+      height_(height),
+      buffer_w_(orientation.transpose ? height : width),
+      buffer_h_(orientation.transpose ? width : height),
+      stride_(stride_bytes),
+      orientation_(orientation),
+      coverage_(coverage),
+      damage_(damage) {
     if (static_cast<int>(coverage_.size()) < buffer_w_) coverage_.assign(buffer_w_, 0);
     if (static_cast<int>(damage_.size()) < buffer_h_) damage_.assign(buffer_h_, 0);
     while ((buffer_w_ - 1) >> tile_shift_ >= 16) ++tile_shift_;  // 칸이 16개 안에 들게
 }
 
-uint32_t *HudCanvas::row(int y) const
-{
-    return reinterpret_cast<uint32_t *>(base_ + static_cast<size_t>(y) * stride_);
-}
+uint32_t *HudCanvas::row(int y) const { return reinterpret_cast<uint32_t *>(base_ + static_cast<size_t>(y) * stride_); }
 
-HudPoint HudCanvas::to_buffer(HudPoint p) const
-{
+HudPoint HudCanvas::to_buffer(HudPoint p) const {
     HudPoint b = orientation_.transpose ? HudPoint{p.y, p.x} : p;
     if (orientation_.flip_x) b.x = static_cast<float>(buffer_w_) - b.x;
     if (orientation_.flip_y) b.y = static_cast<float>(buffer_h_) - b.y;
     return b;
 }
 
-void HudCanvas::mark(int y, int x0, int x1)
-{
+void HudCanvas::mark(int y, int x0, int x1) {
     const uint32_t first = static_cast<uint32_t>(x0) >> tile_shift_;
     const uint32_t last = static_cast<uint32_t>(x1 - 1) >> tile_shift_;
     damage_[y] |= static_cast<uint16_t>((2u << last) - (1u << first));
 }
 
-/* 이어진 칸은 memset 한 번으로 지운다. */
-void HudCanvas::clear(bool only_damaged)
-{
+// 이어진 칸은 memset 한 번으로 지운다.
+void HudCanvas::clear(bool only_damaged) {
     for (int y = 0; y < buffer_h_; ++y) {
         uint32_t tiles = only_damaged ? damage_[y] : 0xffffu;
         damage_[y] = 0;
@@ -144,16 +137,14 @@ void HudCanvas::clear(bool only_damaged)
     }
 }
 
-void HudCanvas::fill_rect(int x, int y, int w, int h, uint32_t color)
-{
+void HudCanvas::fill_rect(int x, int y, int w, int h, uint32_t color) {
     const HudPoint a = to_buffer({static_cast<float>(x), static_cast<float>(y)});
     const HudPoint b = to_buffer({static_cast<float>(x + w), static_cast<float>(y + h)});
     fill_buffer_rect(static_cast<int>(std::min(a.x, b.x)), static_cast<int>(std::min(a.y, b.y)),
                      static_cast<int>(std::max(a.x, b.x)), static_cast<int>(std::max(a.y, b.y)), color);
 }
 
-void HudCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color)
-{
+void HudCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color) {
     x0 = std::max(0, x0), x1 = std::min(buffer_w_, x1);
     y0 = std::max(0, y0), y1 = std::min(buffer_h_, y1);
     if (x0 >= x1) return;
@@ -165,14 +156,15 @@ void HudCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color)
     }
 }
 
-/* 모서리 넷을 시계 방향(오른쪽 위부터)으로 이은 다각형. 곧은 행을 따로 칠할 때는 위 모서리
- * 둘(왼쪽 위, 오른쪽 위)과 아래 모서리 둘(오른쪽 아래, 왼쪽 아래)을 따로 칠한다. 둘을 잇는
- * 변은 수평이라 커버리지에 끼지 않는다. */
-void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color)
-{
+// 모서리 넷을 시계 방향(오른쪽 위부터)으로 이은 다각형. 곧은 행을 따로 칠할 때는 위 모서리
+// 둘(왼쪽 위, 오른쪽 위)과 아래 모서리 둘(오른쪽 아래, 왼쪽 아래)을 따로 칠한다. 둘을 잇는
+// 변은 수평이라 커버리지에 끼지 않는다.
+void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color) {
     radius = std::clamp(radius, 0.0f, std::min(w, h) / 2);
-    const HudPoint centers[] = {{x + w - radius, y + radius}, {x + w - radius, y + h - radius},
-                                {x + radius, y + h - radius}, {x + radius, y + radius}};
+    const HudPoint centers[] = {{x + w - radius, y + radius},
+                                {x + w - radius, y + h - radius},
+                                {x + radius, y + h - radius},
+                                {x + radius, y + radius}};
     // 모서리 c는 (c-1)·90°에서 c·90°까지: 사분원 점 (cos, sin)을 90°씩 돌린 것.
     constexpr float kTurn[4][4] = {{0, 1, -1, 0}, {1, 0, 0, 1}, {0, -1, 1, 0}, {-1, 0, 0, -1}};
     const int step = radius < 3.0f ? 3 : radius < 6.0f ? 2 : 1;  // 선분 2, 3, 6개
@@ -189,8 +181,8 @@ void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius
         }
         fill_polygon(points, n, color);
     };
-    const bool integral = x == std::floor(x) && y == std::floor(y) && w == std::floor(w) &&
-                          h == std::floor(h) && radius == std::floor(radius);
+    const bool integral = x == std::floor(x) && y == std::floor(y) && w == std::floor(w) && h == std::floor(h) &&
+                          radius == std::floor(radius);
     if (!integral || h <= 2 * radius) {
         corners({0, 1, 2, 3});
         return;
@@ -201,25 +193,22 @@ void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius
     corners({1, 2});
 }
 
-void HudCanvas::fill_polygon(const HudPoint *points, int count, uint32_t color)
-{
+void HudCanvas::fill_polygon(const HudPoint *points, int count, uint32_t color) {
     fill_rows(points, count, color, 0.0f, 0.0f, 1.0f);
 }
 
-void HudCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y,
-                                       float far_y, float far_alpha)
-{
+void HudCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y, float far_y,
+                                   float far_alpha) {
     fill_rows(points, count, color, near_y, far_y, far_alpha);
 }
 
-/* 버퍼 행마다 부표본 행 4개가 변과 만나는 x로 짝홀 구간을 구한다. 변은 위 끝 순으로 정렬해 지금
- * 걸친 변만 본다(띠는 66변 중 둘). 네 부표본 행이 모두 구간 하나면(이 HUD의 도형은 거의 다)
- * 넷 다 덮는 안쪽은 바로 합성하고 양쪽 가장자리 띠만 커버리지로 쌓는다. 아니면 구간 전부를
- * 쌓는다. 흐림은 화면 높이(near_y → far_y)를 따른다: 가로 버퍼에서는 행마다, 세로 패널 버퍼
- * 에서는 화면 높이가 버퍼 열이라 열마다 알파를 미리 센다. near_y == far_y면 줄이지 않는다. */
-void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t color, float near_y,
-                              float far_y, float far_alpha)
-{
+// 버퍼 행마다 부표본 행 4개가 변과 만나는 x로 짝홀 구간을 구한다. 변은 위 끝 순으로 정렬해 지금
+// 걸친 변만 본다(띠는 66변 중 둘). 네 부표본 행이 모두 구간 하나면(이 HUD의 도형은 거의 다)
+// 넷 다 덮는 안쪽은 바로 합성하고 양쪽 가장자리 띠만 커버리지로 쌓는다. 아니면 구간 전부를
+// 쌓는다. 흐림은 화면 높이(near_y → far_y)를 따른다: 가로 버퍼에서는 행마다, 세로 패널 버퍼
+// 에서는 화면 높이가 버퍼 열이라 열마다 알파를 미리 센다. near_y == far_y면 줄이지 않는다.
+void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t color, float near_y, float far_y,
+                          float far_alpha) {
     if (count < 3 || count > kMaxEdges) return;
     HudPoint points[kMaxEdges];
     for (int i = 0; i < count; ++i) points[i] = to_buffer(screen_points[i]);
@@ -250,7 +239,8 @@ void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t col
     if (fade_columns) {
         for (int bx = 0; bx < buffer_w_; ++bx) {
             const float center = static_cast<float>(bx) + 0.5f;
-            column_alpha[bx] = static_cast<uint8_t>(fade(orientation_.flip_x ? static_cast<float>(buffer_w_) - center : center));
+            column_alpha[bx] =
+                static_cast<uint8_t>(fade(orientation_.flip_x ? static_cast<float>(buffer_w_) - center : center));
         }
     }
 
@@ -309,8 +299,10 @@ void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t col
         if (inner_l >= inner_r && cover.max < cover.min) continue;
 
         const float row_center = static_cast<float>(y) + 0.5f;
-        const uint32_t row_a = !faded || fade_columns ? static_cast<uint32_t>(alpha + 0.5f)
-                             : fade(orientation_.flip_y ? static_cast<float>(buffer_h_) - row_center : row_center);
+        const uint32_t row_a =
+            !faded || fade_columns
+                ? static_cast<uint32_t>(alpha + 0.5f)
+                : fade(orientation_.flip_y ? static_cast<float>(buffer_h_) - row_center : row_center);
         auto a = [&](int x) { return fade_columns ? column_alpha[x] : row_a; };
         uint32_t *pixels = row(y);
         auto blend_covered = [&](int from, int to) {
@@ -331,21 +323,21 @@ void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t col
     }
 }
 
-int HudCanvas::text(int x, int y, std::string_view text, const HudFont &font, uint32_t color,
-                        HudAlign align, bool shadow)
-{
+int HudCanvas::text(int x, int y, std::string_view text, const HudFont &font, uint32_t color, HudAlign align,
+                    bool shadow) {
     const int width = font.width(text);
-    if (align == HudAlign::center) x -= width / 2;
-    else if (align == HudAlign::right) x -= width;
+    if (align == HudAlign::center)
+        x -= width / 2;
+    else if (align == HudAlign::right)
+        x -= width;
     if (shadow) glyphs(x + 1, y + 1, text, font, hud_fade(kTextShadow, static_cast<float>(color >> 24) / 255.0f));
     glyphs(x, y, text, font, color);
     return width;
 }
 
-/* 글리프 화소를 버퍼로 옮겨 합성한다. 가로 버퍼에서는 글리프 줄이, 세로 패널 버퍼에서는 글리프
- * 열이 버퍼 행 하나가 되도록 돌아 버퍼 쪽 쓰기가 이어진다. */
-void HudCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color)
-{
+// 글리프 화소를 버퍼로 옮겨 합성한다. 가로 버퍼에서는 글리프 줄이, 세로 패널 버퍼에서는 글리프
+// 열이 버퍼 행 하나가 되도록 돌아 버퍼 쪽 쓰기가 이어진다.
+void HudCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color) {
     const uint32_t rgb = color & 0x00ffffffu, a = color >> 24;
     const bool transpose = orientation_.transpose;
     auto buffer_x = [&](int v) { return orientation_.flip_x ? buffer_w_ - 1 - v : v; };

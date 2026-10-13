@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""HUD snapshot helpers.
+"""HUD 스냅샷 도우미.
 
   hud_tools.py inputs <route_dir> <out_dir> [--time SECONDS]
-      Extract hud_snapshot inputs from a recordd route: model.bin (raw
-      ModelState in the current layout; older records are zero-filled at
-      the end), control.bin (raw
-      ControlState padded to 240 bytes) and camera.png (the matching road
-      frame). Without --time the moment is chosen automatically: controller
-      active, 40-95 km/h, all lane lines confident, a lead if any.
+      recordd route에서 hud_snapshot 입력을 뽑는다: model.bin(현재 배치의 ModelState 원본, 옛 기록은 끝을
+      0으로 채운다), control.bin(240바이트로 채운 ControlState 원본), camera.png(맞는 도로 프레임).
+      --time이 없으면 순간을 자동으로 고른다: 컨트롤러 활성, 40~95 km/h, 차선이 모두 확실하고, 있으면
+      앞차도 있는 때.
 
   hud_tools.py compose <prefix> [camera.png]
-      Turn hud_snapshot EDGEARGB frames (<prefix>_<scenario>.argb, 640x480)
-      into PNGs: <name>_overlay.png (transparent) and, with a camera frame,
-      <name>_composite.png over the centre 4:3 of the frame, as the screen
-      shows it.
+      hud_snapshot의 EDGEARGB 프레임(<prefix>_<scenario>.argb, 640x480)을 PNG로 바꾼다:
+      <name>_overlay.png(투명)와, 카메라 프레임이 있으면 화면처럼 프레임 가운데 4:3 위에 겹친
+      <name>_composite.png.
 """
 from __future__ import annotations
 
@@ -33,12 +30,12 @@ from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE, RECORDIN
                               iter_event_records, model_state_layout,
                               route_event_files, route_segments, segment_video)
 
-MODEL_STATE_SIZE = model_state_layout(RECORDING_VERSION)["__size__"]  # hud_snapshot reads the current struct
+MODEL_STATE_SIZE = model_state_layout(RECORDING_VERSION)["__size__"]  # hud_snapshot은 현재 구조체를 읽는다
 CONTROL_STATE_SIZE = 240
 FRAME_MAGIC = b"EDGEARGB"
 
 
-# ---- inputs ----
+# ---- 입력 ----
 
 class ModelMoment(NamedTuple):
     ts: int
@@ -102,7 +99,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     control = controls[cj][1]
 
     args.out.mkdir(parents=True, exist_ok=True)
-    # v7 has no pedal predictions at the end; zero-fill them to the current struct
+    # v7에는 끝의 페달 예측이 없다. 현재 구조체 크기까지 0으로 채운다
     raw_model = bytes(model.payload[:MODEL_STATE_SIZE])
     (args.out / "model.bin").write_bytes(raw_model + b"\0" * (MODEL_STATE_SIZE - len(raw_model)))
     raw = control.tobytes()
@@ -130,7 +127,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     return 0
 
 
-# ---- compose ----
+# ---- 합성 ----
 
 def load_frame(path: Path) -> np.ndarray:
     data = path.read_bytes()
@@ -138,11 +135,11 @@ def load_frame(path: Path) -> np.ndarray:
         raise ValueError(f"{path}: not an EDGEARGB file")
     width, height = struct.unpack_from("<II", data, 8)
     pixels = np.frombuffer(data, np.uint8, count=width * height * 4, offset=16)
-    return pixels.reshape(height, width, 4)[..., [2, 1, 0, 3]].copy()  # BGRA -> RGBA
+    return pixels.reshape(height, width, 4)[..., [2, 1, 0, 3]].copy()  # BGRA를 RGBA로
 
 
 def screen_camera(path: Path, size: tuple[int, int]) -> Image.Image:
-    """The camera frame as overlayd shows it: the centre 4:3 scaled to the screen."""
+    """overlayd가 보여 주는 카메라 프레임: 가운데 4:3을 화면 크기로 늘린다."""
     image = Image.open(path).convert("RGBA")
     crop_w = image.height * 4 // 3
     left = (image.width - crop_w) // 2

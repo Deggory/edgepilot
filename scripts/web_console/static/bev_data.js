@@ -1,47 +1,43 @@
-// What the board's model and controlsd publish, as the BEV (bev.js) draws it. The board only copies:
-// /api/bev says where the fields the BEV reads sit in ModelState and ControlState
-// (src/common/ipc_messages.h; check_web_console.py holds the two together), and /api/bev/stream sends both
-// payloads as they were published, a frame per new model frame. A frame is a 16-byte head, magic
-// "BEV1" (u32), ModelState and ControlState byte counts (u16 each) and the board's CLOCK_BOOTTIME ns
-// (u64), then the payloads. A payload is 0 bytes when the board has none or, for the model, nothing
-// new: with the model stopped, a frame comes every second all the same.
+// 보드의 모델과 controlsd가 발행하는 것을 BEV(bev.js)가 그리는 형태로 옮긴다. 보드는 복사만 한다:
+// /api/bev는 BEV가 읽는 필드가 ModelState와 ControlState의 어디에 있는지 알려 주고
+// (src/common/ipc_messages.h; 둘이 맞는지는 check_web_console.py가 지킨다), /api/bev/stream은 두 페이로드를
+// 발행된 그대로, 새 모델 프레임마다 한 프레임씩 보낸다. 프레임은 16바이트 머리와 그 뒤의 페이로드다. 머리는
+// 매직 "BEV1"(u32), ModelState와 ControlState 바이트 수(각 u16), 보드의 CLOCK_BOOTTIME ns(u64)다.
+// 페이로드는 보드에 그것이 없거나, 모델이면 새것이 없을 때 0바이트다: 모델이 멈춰도 프레임은 그대로 매초 온다.
 //
-// scene() is what bev.js draws, in vehicle coordinates: metres, x forward from the front bumper, y
-// to the left. The model's points are from the camera, y to the right; the camera sits
-// RADAR_TO_CAMERA behind the bumper, as controlsd and the HUD take it. The model already sees from
-// the car's centre line (modeld warps by camera_offset_m), so y needs no shift.
+// scene()은 bev.js가 그리는 것으로, 차량 좌표계다: 미터, x는 앞 범퍼에서 앞으로, y는 왼쪽. 모델의 점은
+// 카메라 기준이고 y가 오른쪽이다. 카메라는 controlsd와 HUD가 잡는 대로 범퍼에서 RADAR_TO_CAMERA 뒤에 있다.
+// 모델은 이미 차의 중심선에서 보므로(modeld가 camera_offset_m만큼 워프한다) y는 옮길 필요가 없다.
 //
-// The two ego lines are drawn as controlsd's planner sees them: through the same lane-line filter
-// (lane_filter.js), on the capture times and controlsd's speed and measured curvature. The model's own
-// lines stay alongside (scene().lanes raw).
+// 두 자차 차선선은 controlsd의 플래너가 보는 대로 그린다: 같은 차선선 필터(lane_filter.js)에 캡처 시각과
+// controlsd의 속도·측정 곡률로 거른다. 모델 자체의 차선선도 함께 남는다(scene().lanes raw).
 
 import {LaneLineFilter} from "./lane_filter.js";
 
 const MAGIC = 0x31564542;
 const HEADER = 16;
 const TRAJECTORY = 33;
-// openpilot T_IDXS: when the car is at each plan point, s
+// openpilot T_IDXS: 차가 각 계획 점에 있게 되는 시각, s
 const T_IDXS = Array.from({length: TRAJECTORY}, (_, i) => 10 * (i / (TRAJECTORY - 1)) ** 2);
 const RADAR_TO_CAMERA = 1.52;           // model_output.h kRadarToCameraDistanceM (check_web_console.py)
 const LEAD_PROBABILITY = 0.5;           // model_output.h kLeadProbabilityThreshold (check_web_console.py)
-const LANE_SURE = 0.5;                  // both ego lines at least this sure for the lane width
-const LANE_WIDTH_INDEX = 6;             // hud_scene.cc kLaneRulerIndex: 6.75 m from the camera
-// hud_scene.cc draw_scene: lines and the path reach as far as the plan does, 10 to 100 m
+const LANE_SURE = 0.5;                  // 차로 폭을 재려면 두 자차 차선선 모두 이만큼 확실해야 한다
+const LANE_WIDTH_INDEX = 6;             // hud_scene.cc kLaneRulerIndex: 카메라에서 6.75 m
+// hud_scene.cc draw_scene: 차선선과 경로는 계획이 닿는 데까지, 10~100 m
 const DRAW = {min: 10, max: 100};
-const PLAN_NOW_INDEX = 2;               // the plan's speed now: at 0.04 s, past the first point's noise
-const GAS_PRESS_HORIZON = 1;            // controls_tick.cc feeds the departure alert gas_press_probs[1], 2 s ahead
-const DRIVE_GEAR = 5;                   // can_frame.h kGearDrive: the departure alert only watches in D
-const HISTORY_S = 10;                   // how much of the departure inputs the card keeps
-// The lead card: the lead's distance and speed relative to ours over the last LEAD_HISTORY_S, from the
-// model, from optical flow (speed only) and from modeld's lead track (the two fused), against the trend
-// of the model's own distance: a straight line fitted over ±half s of one lead (no gap, no jump of more
-// than jump m, at least points frames reaching within edge s of both ends), as docs/flow-calibration.md
-// validates them. It is known half s late.
+const PLAN_NOW_INDEX = 2;               // 계획의 현재 속도: 첫 점의 잡음을 지난 0.04 s 지점
+const GAS_PRESS_HORIZON = 1;            // controls_tick.cc가 출발 알림에 넣는 gas_press_probs[1], 2 s 후
+const DRIVE_GEAR = 5;                   // can_frame.h kGearDrive: 출발 알림은 D에서만 본다
+const HISTORY_S = 10;                   // 카드가 출발 알림 입력을 얼마나 남겨 두는지
+// 앞차 카드: 최근 LEAD_HISTORY_S 동안 앞차의 거리와 자차 대비 상대 속도를 모델, 광류(속도만), modeld의
+// 앞차 추적(둘을 융합한 것)에서 가져와 모델 자체 거리의 추세와 견준다. 추세는 앞차 하나의 ±half s에 맞춘
+// 직선이다(끊김 없이, jump m보다 큰 튐 없이, 양 끝에서 edge s 안까지 닿는 points 프레임 이상).
+// docs/flow-calibration.md가 이들을 검증하는 방식대로다. 추세는 half s 늦게 알게 된다.
 export const LEAD_HISTORY_S = 20;
 const TREND = {half: 2, jump: 4, points: 60, edge: 0.1};
 const MODEL_STALE_S = 0.5, CONTROL_STALE_S = 1.0;
 const RETRY_MS = [500, 5000];
-// the fields this page reads; a server that does not say where one is is older or newer than the page
+// 이 페이지가 읽는 필드. 그중 하나라도 위치를 알려 주지 않는 서버는 페이지보다 오래됐거나 새것이다
 const NEEDS = {
   model: ["size", "capture_timestamp_ns", "model_timestamp_ns", "valid", "plan", "lanes", "lane_probabilities", "road_edges", "road_edge_stds",
           "lead", "gas_press_probs", "lead_flow", "lead_track"],
@@ -53,8 +49,8 @@ const NEEDS = {
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-// [[x, y(, speed)], ...] of model points xs, ys, as the HUD draws a ribbon of them: finite points, x
-// growing, no farther than reach (model x).
+// 모델 점 xs, ys의 [[x, y(, speed)], ...]. HUD가 그것들로 띠를 그리듯, 유한하고 x가 커지며 reach(모델 x)보다
+// 멀지 않은 점만.
 function linePoints(xs, ys, reach, speeds = null) {
   const points = [];
   let last = -Infinity;
@@ -67,7 +63,7 @@ function linePoints(xs, ys, reach, speeds = null) {
   return points;
 }
 
-// The x and y of the IpcPoint array at offset.
+// offset에 있는 IpcPoint 배열의 x와 y.
 function pointsAt(view, offset) {
   const xs = [], ys = [];
   for (let i = 0; i < TRAJECTORY; i++) {
@@ -81,9 +77,9 @@ function polyline(view, offset, reach, speeds = null) {
   return linePoints(...pointsAt(view, offset), reach, speeds);
 }
 
-// The plan's speed at each point, m/s, from its positions over T_IDXS. Against the model's own
-// velocity output (not in ModelState) it is off by 0.04 m/s at 2 s and 0.07 m/s at 4 s (median,
-// 2026-10-04 drives), and the board's U16 model keeps it (correlation 0.997 with fp32 to 4 s).
+// 각 점에서 계획의 속도(m/s)를 T_IDXS에 걸친 위치로 구한다. 모델 자체의 속도 출력(ModelState에 없음)과
+// 비교하면 2 s에서 0.04 m/s, 4 s에서 0.07 m/s 어긋나고(중앙값, 2026-10-04 주행), 보드의 U16 모델도 이를
+// 지킨다(4 s까지 fp32와 상관 0.997).
 function planSpeeds(view, offset) {
   const at = (i, k) => view.getFloat32(offset + 12 * i + 4 * k, true);
   return T_IDXS.map((_, i) => {
@@ -92,7 +88,7 @@ function planSpeeds(view, offset) {
   });
 }
 
-// One ModelState payload (bytes), read where layout says.
+// ModelState 페이로드(bytes) 하나를 layout이 알려 준 위치에서 읽는다.
 function readModel(at, bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const f32 = (offset) => view.getFloat32(offset, true);
@@ -111,26 +107,26 @@ function readModel(at, bytes) {
     planEnd,
     gas: Array.from({length: 6}, (_, i) => f32(at.gas_press_probs + 4 * i)),
     lanes, reach,
-    egoLines: [lines[1], lines[2]],     // the ego lines' model points, for the lane filter (BevStream)
+    egoLines: [lines[1], lines[2]],     // 차선선 필터(BevStream)에 넣을 자차 차선선의 모델 점
     edges: [0, 1].map((i) => ({std: f32(at.road_edge_stds + 4 * i), points: polyline(view, at.road_edges + 12 * TRAJECTORY * i, reach)})),
     laneWidth: laneWidth(lanes, lines[1][1], lines[2][1]),
     lead: view.getUint32(lead, true)
       ? {probability: f32(lead + 4), x: f32(lead + 8), y: f32(lead + 12), speed: f32(lead + 16), accel: f32(lead + 20)} : null,
-    // LeadFlowState: the lead's expansion rate (1/s, + closing in) over about 0.5 s, and the model distance
-    // it came from (m, from the camera)
+    // LeadFlowState: 약 0.5 s 동안 앞차의 확대율(1/s, +면 가까워진다)과 그것을 구한 모델 거리
+    // (m, 카메라 기준)
     flow: view.getUint32(flow + 8, true) ? {rate: f32(flow + 20), x: f32(flow + 28)} : null,
-    // LeadTrackState: the model distance and the flow fused (m from the camera, m/s, - closing)
+    // LeadTrackState: 모델 거리와 광류를 융합한 값(카메라에서 m, m/s, -면 가까워진다)
     track: view.getUint32(track, true) ? {x: f32(track + 8), relative: f32(track + 12)} : null,
   };
 }
 
-// The width between the ego lines at LANE_WIDTH_INDEX, NaN unless both are sure.
+// LANE_WIDTH_INDEX에서 두 자차 차선선 사이의 폭. 둘 다 확실하지 않으면 NaN.
 function laneWidth(lanes, left, right) {
   return lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE
     ? right[LANE_WIDTH_INDEX] - left[LANE_WIDTH_INDEX] : NaN;
 }
 
-// One ControlState payload.
+// ControlState 페이로드 하나.
 function readControl(at, flags, bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const u32 = (offset) => view.getUint32(offset, true), f32 = (offset) => view.getFloat32(offset, true);
@@ -150,24 +146,24 @@ function readControl(at, flags, bytes) {
 
 const ageOf = (now, stamp) => stamp ? Number(now - stamp) / 1e9 : Infinity;
 
-// The scene of the latest model and control state (either may be null) at board time now:
-//   path [[x, y, planned speed m/s]], planNow (m/s), lanes [{probability, points, raw}] ×4 (far left,
-//   left, right, far right; the ego lines' points filtered as the planner filters them while controlsd
-//   runs, raw the model's own, only on the ego lines), edges [{std, points}] ×2, laneWidth (m, between
-//   the lines drawn, NaN unless both ego lines are sure)
-//   lead {x: its rear, y, gap, speed, accel, relative (m/s, null without our speed), ttc (s, Infinity unless
-//     closing in), tracked (x, gap, relative and speed come from the lead track), raw {x, relative} (the
-//     model's own), flow {relative: -x · rate (m/s, from optical flow)} or null} or null
-//   leads [{t s, x, v (the model's), flow, fx, fv (the lead track's), trend, level, segment}, ...]: the lead
-//     card's last LEAD_HISTORY_S, distances from our bumper; set by BevStream (BevStream.addLead)
-//   state {enabled, engaged, active, steering, laneless, output}, speedKph (NaN without controlsd)
-//   curvature {desired, actual} (1/m, + to the right as in controlsd) or null without controlsd
-//   blinkers {left, right} (both: hazard lights) or null without controlsd. controlsd holds each on
-//   for 0.5 s past the lamp's last flash, so they stay on while it flashes
-//   brakeLights: the ego car's brake lights (pedal pressed, or AUTO HOLD: vehicle_can brake_lights_on)
-//   departure {drive (in D), armed, alert (0 none, 1 lead moved, 2 green light), gas [0, 2, … 10 s],
-//   plan10 (m, model x at 10 s), history [[t s, gas 2 s, plan10]]}: what departure_alert.cc decides from
-//   modelAge, controlAge (s, Infinity if none)
+// 보드 시각 now에서 최신 모델·제어 상태(둘 다 null일 수 있다)의 장면:
+//   path [[x, y, 계획 속도 m/s]], planNow (m/s), lanes [{probability, points, raw}] ×4 (왼쪽 바깥, 왼쪽,
+//   오른쪽, 오른쪽 바깥. controlsd가 도는 동안 자차 차선선의 points는 플래너가 거르는 대로 거른 것이고, raw는
+//   모델 자체의 것으로 자차 차선선에만 있다), edges [{std, points}] ×2, laneWidth (m, 그려진 차선선 사이,
+//   두 자차 차선선이 다 확실하지 않으면 NaN)
+//   lead {x: 앞차 뒷면, y, gap, speed, accel, relative (m/s, 자차 속도가 없으면 null), ttc (s, 가까워지지
+//     않으면 Infinity), tracked (x, gap, relative, speed가 앞차 추적에서 온다), raw {x, relative} (모델 자체의
+//     것), flow {relative: -x · rate (m/s, 광류에서)} 또는 null} 또는 null
+//   leads [{t s, x, v (모델의 것), flow, fx, fv (앞차 추적의 것), trend, level, segment}, ...]: 앞차 카드의
+//     최근 LEAD_HISTORY_S, 거리는 자차 범퍼 기준. BevStream이 채운다(BevStream.addLead)
+//   state {enabled, engaged, active, steering, laneless, output}, speedKph (controlsd가 없으면 NaN)
+//   curvature {desired, actual} (1/m, controlsd처럼 +가 오른쪽), controlsd가 없으면 null
+//   blinkers {left, right} (둘 다면 비상등), controlsd가 없으면 null. controlsd는 램프가 마지막으로 깜박인
+//   뒤 0.5 s 동안 각각을 켜 두므로, 램프가 깜박이는 동안 켜진 채로 있다
+//   brakeLights: 자차의 브레이크등(페달을 밟았거나 AUTO HOLD: vehicle_can brake_lights_on)
+//   departure {drive (D 단), armed, alert (0 없음, 1 앞차 출발, 2 녹색 신호), gas [0, 2, … 10 s],
+//   plan10 (m, 10 s의 모델 x), history [[t s, gas 2 s, plan10]]}: departure_alert.cc가 판단에 쓰는 것
+//   modelAge, controlAge (s, 없으면 Infinity)
 export function scene(model, control, now, history = []) {
   const modelAge = model ? ageOf(now, model.stamp) : Infinity;
   const controlAge = control ? ageOf(now, control.stamp) : Infinity;
@@ -201,8 +197,8 @@ export function scene(model, control, now, history = []) {
   };
 }
 
-// A straight line fitted to the model distance of rows[i]'s lead over ±TREND.half s: [slope m/s, level m at
-// rows[i]'s time], NaN where that lead does not cover the window (scene().leads).
+// rows[i] 앞차의 모델 거리에 ±TREND.half s 동안 맞춘 직선: [기울기 m/s, rows[i] 시각의 level m]. 그 앞차가
+// 창을 다 덮지 않으면 NaN (scene().leads).
 function trendAt(rows, i) {
   const {t, segment} = rows[i];
   let a = i, b = i;
@@ -228,8 +224,8 @@ function concat(a, b) {
   return joined;
 }
 
-// The stream while the BEV tab is shown: onScene(scene()) for every frame, onStatus({live, text})
-// when what it has to say changes. It connects again by itself, waiting longer each time it fails.
+// BEV 탭이 보이는 동안의 스트림: 프레임마다 onScene(scene()), 알릴 내용이 바뀌면 onStatus({live, text}).
+// 스스로 다시 연결하며, 실패할 때마다 더 오래 기다린다.
 export class BevStream {
   constructor({onScene, onStatus, hz = 20}) {
     Object.assign(this, {onScene, onStatus, hz});
@@ -237,11 +233,11 @@ export class BevStream {
     this.model = this.control = null;
     this.run = 0;
     this.abort = null;
-    this.arrivals = [];                 // when the model frames of the last second came, ms
-    this.history = [];                  // [t s, gas 2 s, plan10] of the last HISTORY_S of model frames
-    this.leads = [];                    // the lead card's rows (scene().leads), one per model frame
-    this.segment = 0;                   // which lead a row belongs to (trend fits stay within one)
-    this.laneFilters = [new LaneLineFilter(), new LaneLineFilter()];   // the ego lines, as the planner's
+    this.arrivals = [];                 // 최근 1초 동안 모델 프레임이 온 시각, ms
+    this.history = [];                  // 최근 HISTORY_S 동안 모델 프레임의 [t s, gas 2 s, plan10]
+    this.leads = [];                    // 앞차 카드의 행(scene().leads), 모델 프레임마다 하나
+    this.segment = 0;                   // 행이 어느 앞차의 것인지(추세 맞춤은 한 앞차 안에서만)
+    this.laneFilters = [new LaneLineFilter(), new LaneLineFilter()];   // 자차 차선선, 플래너의 것처럼
     this.said = "";
   }
 
@@ -311,11 +307,11 @@ export class BevStream {
     }
   }
 
-  // One model frame's lead for the lead card (scene().leads). A row's trend and level are filled once the
-  // rows TREND.half s past it are in; the rows still waiting are always the newest ones.
+  // 모델 프레임 하나의 앞차를 앞차 카드(scene().leads)에 넣는다. 행의 trend와 level은 그보다 TREND.half s
+  // 뒤의 행들이 들어오면 채워진다. 아직 기다리는 행은 언제나 가장 새로운 것들이다.
   addLead(t, lead) {
     const rows = this.leads, last = rows[rows.length - 1];
-    if (last && t < last.t) rows.length = 0;                     // another boot
+    if (last && t < last.t) rows.length = 0;                     // 재부팅
     const x = lead ? lead.raw.x : NaN;
     if (!lead || !last || !Number.isFinite(last.x) || Math.abs(x - last.x) > TREND.jump) this.segment++;
     rows.push({t, x, v: lead && lead.raw.relative !== null ? lead.raw.relative : NaN, flow: lead && lead.flow ? lead.flow.relative : NaN,
@@ -329,9 +325,9 @@ export class BevStream {
     while (rows.length && rows[0].t < t - LEAD_HISTORY_S) rows.shift();
   }
 
-  /* The ego lines through the planner's lane filter, on controlsd's speed and measured curvature (as the
-   * planner gets them, ControlState ego_speed_kph and actual_curvature). Like the planner, an invalid model
-   * frame leaves the filters alone. Without controlsd the model's lines stand and the filters start again. */
+  // 자차 차선선을 controlsd의 속도와 측정 곡률(플래너가 받는 그대로, ControlState ego_speed_kph와
+  // actual_curvature)로 플래너의 차선선 필터에 거른다. 플래너처럼, 유효하지 않은 모델 프레임은 필터를 건드리지
+  // 않는다. controlsd가 없으면 모델의 차선선이 그대로 남고 필터는 처음부터 다시 시작한다.
   filterLanes(model, now) {
     if (!model.valid) return;
     const control = this.control && ageOf(now, this.control.stamp) <= CONTROL_STALE_S ? this.control : null;
@@ -359,7 +355,7 @@ export class BevStream {
       this.arrivals.push(performance.now());
       t = Number(this.model.stamp) / 1e9;
       const history = this.history;
-      if (history.length && t < history[history.length - 1][0]) history.length = 0;     // another boot
+      if (history.length && t < history[history.length - 1][0]) history.length = 0;     // 재부팅
       history.push([t, this.model.gas[GAS_PRESS_HORIZON], this.model.planEnd]);
       while (history.length && history[0][0] < t - HISTORY_S) history.shift();
     }

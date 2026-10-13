@@ -1,11 +1,11 @@
-"""Board-side open-loop runner for an axmodel on prepared inputs (pyaxengine).
+"""준비된 입력으로 axmodel을 보드에서 개루프로 돌리는 러너(pyaxengine).
 
-usage: run_axmodel_assembled.py <model.axmodel> <input_dir> <out.bin>
-<input_dir> holds one frame-major <input>.npy per model input (make_m2_data.py eval writes them).
-Each frame's output goes to <out.bin> as 2576 float32 in the original output layout; an axmodel
-with split heads (split_outputs.py) is put back together the way src/model/model_output_assembly.h does,
-so single-output and split builds compare with the same metrics. Run it with edgepilot.service
-stopped, because modeld holds the NPU core.
+사용: run_axmodel_assembled.py <model.axmodel> <input_dir> <out.bin>
+<input_dir>에는 모델 입력마다 frame-major <input>.npy가 하나씩 있다(make_m2_data.py eval이 쓴다).
+프레임마다 출력을 원래 출력 배치의 float32 2576개로 <out.bin>에 쓴다. 헤드가 나뉜 axmodel
+(split_outputs.py)은 src/model/model_output_assembly.h와 같은 방식으로 다시 합치므로,
+단일 출력 빌드와 분할 빌드를 같은 지표로 비교한다. modeld가 NPU 코어를 쥐고 있으므로
+edgepilot.service를 멈춘 채 돌린다.
 """
 import sys, time
 import numpy as np

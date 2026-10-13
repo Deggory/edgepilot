@@ -7,7 +7,7 @@
 
 namespace {
 
-constexpr int kNx = 3;  // y, psi, curvature
+constexpr int kNx = 3;  // 상태: y, psi, curvature
 constexpr int kY = 0, kPsi = 1, kCurv = 2;
 
 // openpilot idxbx=[2,3]의 radians(90)/radians(50). 실주행에서 활성되지 않는다.
@@ -40,10 +40,9 @@ void jacobian(const double *z, double v, double rr, Mat jac) {
     jac[kPsi][kCurv] = v;
 }
 
-/* acados ERK(4단 1스텝) 및 forward VDE와 같은 적분. z_next와 함께
- * A = dz_next/dz, B = dz_next/du를 같은 RK4 스테이지에서 전파한다. */
-void rk4_step(const double *z, double u, double v, double rr, double dt,
-              double *z_next, Mat a_out, double *b_out) {
+// acados ERK(4단 1스텝) 및 forward VDE와 같은 적분. z_next와 함께
+// A = dz_next/dz, B = dz_next/du를 같은 RK4 스테이지에서 전파한다.
+void rk4_step(const double *z, double u, double v, double rr, double dt, double *z_next, Mat a_out, double *b_out) {
     // du/dz 시드는 (0,0,1): curvature_rate가 곧 curvature의 미분이다.
     static constexpr double kFu[kNx] = {0.0, 0.0, 1.0};
     const double half = 0.5 * dt;
@@ -57,8 +56,7 @@ void rk4_step(const double *z, double u, double v, double rr, double dt,
 
     for (int stage = 0; stage < 4; ++stage) {
         const double scale = stage == 0 ? 0.0 : (stage == 3 ? dt : half);
-        for (int r = 0; r < kNx; ++r)
-            arg[r] = stage == 0 ? z[r] : z[r] + scale * k[stage - 1][r];
+        for (int r = 0; r < kNx; ++r) arg[r] = stage == 0 ? z[r] : z[r] + scale * k[stage - 1][r];
         dynamics(arg, u, v, rr, k[stage]);
         jacobian(arg, v, rr, jac);
 
@@ -67,8 +65,7 @@ void rk4_step(const double *z, double u, double v, double rr, double dt,
         double dargdu[kNx];
         for (int r = 0; r < kNx; ++r) {
             for (int c = 0; c < kNx; ++c)
-                dargdz[r][c] = (r == c ? 1.0 : 0.0) +
-                               (stage == 0 ? 0.0 : scale * sx[stage - 1][r][c]);
+                dargdz[r][c] = (r == c ? 1.0 : 0.0) + (stage == 0 ? 0.0 : scale * sx[stage - 1][r][c]);
             dargdu[r] = stage == 0 ? 0.0 : scale * su[stage - 1][r];
         }
         for (int r = 0; r < kNx; ++r) {
@@ -88,17 +85,14 @@ void rk4_step(const double *z, double u, double v, double rr, double dt,
         z_next[r] = z[r] + sixth * (k[0][r] + 2.0 * k[1][r] + 2.0 * k[2][r] + k[3][r]);
         b_out[r] = sixth * (su[0][r] + 2.0 * su[1][r] + 2.0 * su[2][r] + su[3][r]);
         for (int c = 0; c < kNx; ++c)
-            a_out[r][c] = (r == c ? 1.0 : 0.0) +
-                          sixth * (sx[0][r][c] + 2.0 * sx[1][r][c] +
-                                   2.0 * sx[2][r][c] + sx[3][r][c]);
+            a_out[r][c] =
+                (r == c ? 1.0 : 0.0) + sixth * (sx[0][r][c] + 2.0 * sx[1][r][c] + 2.0 * sx[2][r][c] + sx[3][r][c]);
     }
 }
 
 }  // namespace
 
-double LateralMpc::time_step(int i) {
-    return model_t_idx_double(i + 1) - model_t_idx_double(i);
-}
+double LateralMpc::time_step(int i) { return model_t_idx_double(i + 1) - model_t_idx_double(i); }
 
 void LateralMpc::reset() {
     x_ = {};
@@ -108,15 +102,13 @@ void LateralMpc::reset() {
 }
 
 void LateralMpc::run(double curvature, double v_ego, double rotation_radius,
-                     const std::array<double, kLatMpcNodes> &y_ref,
-                     const std::array<double, kLatMpcNodes> &heading_ref,
+                     const std::array<double, kLatMpcNodes> &y_ref, const std::array<double, kLatMpcNodes> &heading_ref,
                      const LateralMpcWeights &weights) {
     const double speed = v_ego + kSpeedOffset;
     // 잔차 스케일을 흡수한 상태/입력 가중치.
     const double w_y = weights.path;
     const double w_psi = weights.heading * speed * speed;
-    const double w_u = weights.rate * (kRateScale * speed) * (kRateScale * speed) +
-                       weights.steering_rate;
+    const double w_u = weights.rate * (kRateScale * speed) * (kRateScale * speed) + weights.steering_rate;
 
     Mat a[kLatMpcN];
     double b[kLatMpcN][kNx];
@@ -215,8 +207,7 @@ void LateralMpc::run(double curvature, double v_ego, double rotation_radius,
         double next_p_vec[kNx];
         for (int r = 0; r < kNx; ++r) {
             double acc = grad[i][r];
-            for (int m = 0; m < kNx; ++m)
-                acc += a[i][m][r] * (pd[m] + pb[m] * gain_k[i]);
+            for (int m = 0; m < kNx; ++m) acc += a[i][m][r] * (pd[m] + pb[m] * gain_k[i]);
             next_p_vec[r] = acc;
         }
         for (int r = 0; r < kNx; ++r) {
@@ -252,8 +243,7 @@ void LateralMpc::run(double curvature, double v_ego, double rotation_radius,
     x_[kLatMpcN].curvature += dz[kCurv];
 
     for (int i = 0; i < kLatMpcNodes; ++i) {
-        if (!std::isfinite(x_[i].y) || !std::isfinite(x_[i].psi) ||
-            !std::isfinite(x_[i].curvature) ||
+        if (!std::isfinite(x_[i].y) || !std::isfinite(x_[i].psi) || !std::isfinite(x_[i].curvature) ||
             (i < kLatMpcN && !std::isfinite(u_[i]))) {
             reset();
             status_ = 1;

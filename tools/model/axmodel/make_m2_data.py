@@ -1,25 +1,24 @@
-"""Calibration and evaluation data for the master core from MaixCAM2 recordings.
+"""MaixCAM2 녹화로 만드는 master 코어용 캘리브레이션·평가 데이터.
 
-Every sample is exactly what the runtime feeds the core on the board: the recorded H.264 frame
-(1280x720) through the device warp (tools/model/model_warp.py, MaixCAM2 intrinsics from
-src/common/app_config.h, the calibration the recording carries), the 5-frame image history per tower
-(t-4 and t), the desire pulses controlsd sent (src/model/model_temporal.h: rising edge, 100 ticks
-max-pooled to 25), and the core's own 96-tick hidden-state history from running the fp32 core in order.
+샘플은 모두 보드에서 런타임이 코어에 넣는 것과 똑같다: 녹화된 H.264 프레임(1280x720)을 기기 워프
+(tools/model/model_warp.py, src/common/app_config.h의 MaixCAM2 내부 파라미터, 녹화에 담긴 보정)에
+통과시킨 것, 타워별 5프레임 이미지 이력(t-4와 t), controlsd가 보낸 desire 펄스(src/model/model_temporal.h:
+상승 에지, 100틱을 25로 max-pool), fp32 코어를 순서대로 돌려 얻은 코어 자신의 96틱 hidden-state 이력.
 
   make_m2_data.py calib <spec.json> <out_dir>
-      Pulsar2 calibration set (<out_dir>/<tensor>.tar of NNNN.npy, float32 with a batch axis).
-      spec: {"core": core_fp32.onnx, "routes_dir": dir with <route>/events,
-             "video_dir": dir with <route>/<seg>/road.h264 + frames.bin,
-             "groups": [[route, [seg, ...]], ...]   contiguous segments, decoded as one stream,
-             "exclude": {route: [t, ...]}             leave out t-12..t+5 s (evaluation moments),
-             "dense": {route: [[a, b], ...]},         sample densely here (light changes),
-             "stride": 80, "dense_stride": 5}         frames between samples
-      Every 4th sample also gets one synthetic desire pulse so the desire range stays [0, 1].
+      Pulsar2 캘리브레이션 세트(<out_dir>/<tensor>.tar 안의 NNNN.npy, batch 축이 있는 float32).
+      spec: {"core": core_fp32.onnx, "routes_dir": <route>/events가 있는 디렉터리,
+             "video_dir": <route>/<seg>/road.h264 + frames.bin이 있는 디렉터리,
+             "groups": [[route, [seg, ...]], ...]   이어진 세그먼트, 스트림 하나로 디코드한다,
+             "exclude": {route: [t, ...]}             t-12..t+5 s를 뺀다(평가 순간),
+             "dense": {route: [[a, b], ...]},         여기서는 촘촘히 뽑는다(빛 변화),
+             "stride": 80, "dense_stride": 5}         샘플 사이 프레임 수
+      4번째 샘플마다 합성 desire 펄스 하나를 더 넣어 desire 범위를 [0, 1]로 유지한다.
 
   make_m2_data.py eval <spec.json> <route> <seg>[,<seg>...] <from> <to> <out_dir>
-      Exact inputs of every frame in [from, to] (route seconds from the first ControlState) after
-      an 8 s warm-up, as frame-major .npy for run_axmodel_assembled.py on the board, plus
-      the fp32 outputs for the same inputs (ref.npy) and frame times (t.npy).
+      8 s 워밍업 뒤 [from, to](첫 ControlState부터 잰 route 초) 안 모든 프레임의 정확한 입력.
+      보드의 run_axmodel_assembled.py가 읽는 frame-major .npy이고, 같은 입력의 fp32 출력(ref.npy)과
+      프레임 시각(t.npy)도 함께 낸다.
 """
 import io
 import json
@@ -35,14 +34,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import recording_reader as rr  # noqa: E402
 from model_warp import WarpPair, maixcam2_intrinsics  # noqa: E402
 
-# src/common/app_config.h: MaixCAM2 1920x1080 intrinsics scaled to the 1280x720 AI stream
+# src/common/app_config.h: MaixCAM2 1920x1080 내부 파라미터를 1280x720 AI 스트림에 맞춰 스케일했다
 INTRINSICS = maixcam2_intrinsics(1280, 720)
 FEAT = 1064
 TENSORS = ("input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic_convention")
 
 
 def recorded(route_dir: Path):
-    """ControlState (time, desire) and the calibration of every ModelState."""
+    """ControlState(시각, desire)와 모든 ModelState의 보정."""
     cs_t, cs_des, m_t, rpy = [], [], [], []
     for path in rr.route_event_files(route_dir):
         for rec in rr.iter_event_records(path):
@@ -58,7 +57,7 @@ def recorded(route_dir: Path):
 
 
 def run_stream(sess, route_dir: Path, seg_dirs: list[Path]):
-    """Yield (route time, feed, raw output) for every frame of a contiguous run of segments."""
+    """이어진 세그먼트 구간의 프레임마다 (route 시각, feed, 원시 출력)을 낸다."""
     cs_t, cs_des, m_t, rpy_all = recorded(route_dir)
     t_first = cs_t[0]
     segments = [rr.read_segment_index(d) for d in seg_dirs]

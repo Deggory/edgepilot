@@ -1,9 +1,10 @@
-/* panda_flash: 런타임을 멈춘 채 판다에 펌웨어를 쓴다(웹 콘솔을 쓸 수 없을 때, 복구용).
- * 런타임이 돌 때는 웹 콘솔의 기기 설정 탭에서 쓴다(pandad가 차 상태를 확인하고 쓴다).
- *
- * 사용: panda_flash [--yes] [이미지]   (기본 firmware/panda.bin.signed)
- *   --yes 없이는 이미지와 판다를 보여 주기만 한다. 판다가 두 번 재부팅하는 약 10초 동안 하네스가
- *   순정 카메라 배선으로 돌아가고 조향 제어가 끊기므로 주차한 차에서만 쓴다. */
+// panda_flash: 런타임을 멈춘 채 판다에 펌웨어를 쓴다(웹 콘솔을 쓸 수 없을 때, 복구용).
+// 런타임이 돌 때는 웹 콘솔의 기기 설정 탭에서 쓴다(pandad가 차 상태를 확인하고 쓴다).
+//
+// 사용: panda_flash [--yes] [이미지]   (기본 firmware/panda.bin.signed)
+//   --yes 없이는 이미지와 판다를 보여 주기만 한다. 판다가 두 번 재부팅하는 약 10초 동안 하네스가
+//   순정 카메라 배선으로 돌아가고 조향 제어가 끊기므로 주차한 차에서만 쓴다.
+#include "common/build_version.h"
 #include "panda/panda_firmware.h"
 #include "panda/panda_flasher.h"
 
@@ -13,20 +14,22 @@
 
 namespace {
 
-const char *mode_name(PandaUsbMode mode)
-{
+const char *mode_name(PandaUsbMode mode) {
     switch (mode) {
-    case PandaUsbMode::App: return "application";
-    case PandaUsbMode::Bootstub: return "bootstub (no application running)";
-    case PandaUsbMode::None: break;
+        case PandaUsbMode::App:
+            return "application";
+        case PandaUsbMode::Bootstub:
+            return "bootstub (no application running)";
+        case PandaUsbMode::None:
+            break;
     }
     return "not found";
 }
 
-} // namespace
+}  // namespace
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
+    log_build_version("panda_flash");
     bool yes = false;
     std::string path = "firmware/panda.bin.signed";
     for (int i = 1; i < argc; ++i) {
@@ -51,8 +54,9 @@ int main(int argc, char **argv)
     std::printf("panda: %s\n", mode_name(mode));
     if (mode == PandaUsbMode::None) return 1;
     if (!yes) {
-        std::printf("Run again with --yes to flash. Do it parked: the Panda reboots twice (about 10 s) and the\n"
-                    "harness falls back to the stock camera wiring meanwhile. Stop the runtime first.\n");
+        std::printf(
+            "Run again with --yes to flash. Do it parked: the Panda reboots twice (about 10 s) and the\n"
+            "harness falls back to the stock camera wiring meanwhile. Stop the runtime first.\n");
         return 2;
     }
 

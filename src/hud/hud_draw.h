@@ -1,14 +1,14 @@
 #ifndef HUD_DRAW_H
 #define HUD_DRAW_H
 
-/* HUD 렌더러 내부 공용: 디자인 토큰(색·간격·카드 크기), 글자 줄 배치와 색 섞기, 상태 → 색, 앞차
- * 정보, 그리고 렌더러가 나눈 영역의 그리기 함수(hud_scene.cc의 도로 장면, hud_cards.cc의
- * 카드). hud_renderer.cc·hud_scene.cc·hud_cards.cc만 쓴다. */
+// HUD 렌더러 내부 공용: 디자인 토큰(색·간격·카드 크기), 글자 줄 배치와 색 섞기, 상태 → 색, 앞차
+// 정보, 그리고 렌더러가 나눈 영역의 그리기 함수(hud_scene.cc의 도로 장면, hud_cards.cc의
+// 카드). hud_renderer.cc·hud_scene.cc·hud_cards.cc만 쓴다.
 
 #include "common/model_output.h"
+#include "common/projection.h"
 #include "hud/hud_canvas.h"
 #include "hud/hud_state.h"
-#include "common/projection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,7 +28,7 @@ constexpr uint32_t kTrack = hud_argb(90, 255, 255, 255);
 constexpr uint32_t kShadow = hud_argb(110, 0, 0, 0);
 constexpr uint32_t kCarBody = hud_argb(70, 255, 255, 255);
 constexpr uint32_t kDriverTorque = hud_argb(255, 90, 200, 250);  // 토크 바의 운전자 토크 눈금
-constexpr uint32_t kSignalHousing = hud_argb(255, 58, 62, 70);    // 신호등 아이콘 몸체
+constexpr uint32_t kSignalHousing = hud_argb(255, 58, 62, 70);   // 신호등 아이콘 몸체
 constexpr uint32_t kGreen = hud_argb(255, 48, 209, 88);
 constexpr uint32_t kYellow = hud_argb(255, 255, 204, 0);  // 깜빡이·비상등
 constexpr uint32_t kBlue = hud_argb(255, 64, 156, 255);
@@ -44,7 +44,7 @@ constexpr int kCardPad = 10;
 constexpr int kChipH = 30;
 constexpr int kChipPadX = 12;
 constexpr int kDot = 10;
-constexpr int kTopCardH = 80;   // 왼쪽 위 설정 속도·기어 카드
+constexpr int kTopCardH = 80;  // 왼쪽 위 설정 속도·기어 카드
 constexpr int kSetCardW = 90;
 constexpr int kGearCardW = 56;
 constexpr int kNetworkCardMinW = 200;
@@ -65,15 +65,13 @@ constexpr int kWeakWifiDbm = -75;
 // ---- 글자와 색 ----
 
 template <typename... Args>
-std::string format_text(const char *format, Args... args)
-{
+std::string format_text(const char *format, Args... args) {
     char text[96];
     std::snprintf(text, sizeof(text), format, args...);
     return text;
 }
 
-inline uint32_t mix(uint32_t a, uint32_t b, float t)
-{
+inline uint32_t mix(uint32_t a, uint32_t b, float t) {
     t = std::clamp(t, 0.0f, 1.0f);
     uint32_t out = 0;
     for (int shift = 0; shift < 32; shift += 8) {
@@ -85,8 +83,7 @@ inline uint32_t mix(uint32_t a, uint32_t b, float t)
 }
 
 // 줄 배치 기준 글리프: 대문자 H, 숫자만 있는 글꼴은 0.
-inline const HudGlyph &cap_glyph(const HudFont &font)
-{
+inline const HudGlyph &cap_glyph(const HudFont &font) {
     const HudGlyph *cap = font.glyph('H');
     return cap && cap->h ? *cap : *font.glyph('0');
 }
@@ -95,14 +92,10 @@ inline const HudGlyph &cap_glyph(const HudFont &font)
 inline int cap_line(const HudFont &font, int cap_top) { return cap_top - cap_glyph(font).top; }
 
 // 대문자 아랫선(기준선)을 baseline에 두는 줄 위 y. 크기가 다른 글꼴을 한 줄에 맞출 때 쓴다.
-inline int base_line(const HudFont &font, int baseline)
-{
-    return cap_line(font, baseline - cap_glyph(font).h);
-}
+inline int base_line(const HudFont &font, int baseline) { return cap_line(font, baseline - cap_glyph(font).h); }
 
 // 대문자 높이를 box_h 안 가운데에 두는 줄 위 y.
-inline int centered_line_top(const HudFont &font, int box_y, int box_h)
-{
+inline int centered_line_top(const HudFont &font, int box_y, int box_h) {
     return cap_line(font, box_y + (box_h - cap_glyph(font).h) / 2);
 }
 
@@ -112,8 +105,7 @@ inline int centered_line_top(const HudFont &font, int box_y, int box_h)
 inline bool steering_now(const HudState &hud) { return hud.controller_active && !hud.steer_paused; }
 
 // 화면 테두리와 모드 점의 색. 결합 전이면 0(테두리 없음). 결합했지만 조향을 쉬면 회색.
-inline uint32_t state_color(const HudState &hud)
-{
+inline uint32_t state_color(const HudState &hud) {
     if (hud.steering_fault || hud.panda_faults != 0 || hud.soft_disabling) return kRed;
     if (!hud.services_healthy) return kAmber;
     if (steering_now(hud)) return hud.laneless_mode ? kBlue : kGreen;
@@ -137,10 +129,10 @@ std::string lead_text(const LeadInfo &lead);
 
 // ---- 도로 장면(hud_scene.cc) ----
 
-void draw_scene(HudCanvas &canvas, const ParsedModelOutput &output,
-                const ProjectionState &projection, const HudState &hud, const LeadInfo &lead);
-void draw_lane_position(HudCanvas &canvas, const ParsedModelOutput &output,
-                        const ProjectionState &projection, float lane_center_offset_m, uint32_t car_color);
+void draw_scene(HudCanvas &canvas, const ParsedModelOutput &output, const ProjectionState &projection,
+                const HudState &hud, const LeadInfo &lead);
+void draw_lane_position(HudCanvas &canvas, const ParsedModelOutput &output, const ProjectionState &projection,
+                        float lane_center_offset_m, uint32_t car_color);
 
 // ---- 카드(hud_cards.cc) ----
 

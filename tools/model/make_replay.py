@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build an SCNV12R1 replay of recorded frames for modeld replay mode on the board.
+"""보드의 modeld 리플레이 모드용으로 녹화 프레임의 SCNV12R1 리플레이를 만든다.
 
-modeld reads the file instead of the camera ring (EDGEPILOT_REPLAY_NV12) and runs the same GDC
-warp, temporal plumbing and axmodel as live. See docs/diagnostics.md for the board side.
+modeld는 카메라 링 대신 이 파일을 읽고(EDGEPILOT_REPLAY_NV12) 라이브와 같은 GDC 워프,
+이력 큐 처리, axmodel을 돌린다. 보드 쪽은 docs/diagnostics.md를 본다.
 
-Usage:
+사용:
   python make_replay.py --route ROUTE --out DIR --frames 100 --skip 400
 """
 
@@ -23,7 +23,7 @@ MAGIC = b"SCNV12R1"
 
 
 def nv12_bytes(y: np.ndarray, u: np.ndarray, v: np.ndarray) -> bytes:
-    """One decoded frame (planar Y, U, V) as NV12: Y plane then interleaved UV."""
+    """디코딩된 프레임 하나(평면 Y, U, V)를 NV12로: Y 평면 뒤에 교차 배치한 UV."""
     nv12 = np.empty(y.size + u.size + v.size, np.uint8)
     nv12[: y.size] = y.reshape(-1)
     uv = nv12[y.size:].reshape(y.shape[0] // 2, y.shape[1])

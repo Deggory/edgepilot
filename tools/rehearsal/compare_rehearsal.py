@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""Compare an on-board rehearsal recording with the route it replayed.
+"""보드 리허설 녹화를 그것이 재생한 route와 비교한다.
 
-The rehearsal (replayd) feeds a recorded route's camera and CAN to the
-MaixCAM2 runtime, which records its own route. Both routes carry the same CAN
-speed, so the MaixCAM2 control states are aligned to the original by
-cross-correlating speed_kph. Reported per 100 Hz control tick, over the ticks
-the original drive had lateral control active:
+리허설(replayd)은 녹화된 route의 카메라와 CAN을 MaixCAM2 런타임에 넣고, 런타임은 자기 route를 따로
+녹화한다. 두 route의 CAN 속도가 같으므로 speed_kph의 상호상관으로 MaixCAM2 제어 상태를 원본에 맞춘다.
+원본 주행에서 횡제어가 활성이던 100 Hz 제어 틱마다 다음을 보고한다:
 
-- engagement agreement (engaged/active),
-- desired curvature: correlation, mean |difference|, p95 |difference|,
-- apply torque the rehearsal would have sent (shadow) vs what the drive sent,
-- control loop and model rates.
+- 결합 일치(engaged/active),
+- 요구 곡률: 상관, 평균 |차이|, p95 |차이|,
+- 리허설이 보냈을 토크(그림자)와 주행 때 보낸 토크,
+- 제어 루프와 모델 주기.
 
   python3 compare_rehearsal.py ORIGINAL_ROUTE REHEARSAL_ROUTE
 """
@@ -38,7 +36,7 @@ def resample(t, values, grid):
 
 
 def align(t_ref, v_ref, t_new, v_new):
-    """Offset (s) to add to t_new so its speed trace lines up with the reference."""
+    """t_new에 더하면 속도 곡선이 기준과 맞는 시간 차(s)."""
     dt = 0.05
     grid_new = np.arange(t_new[0], t_new[-1], dt)
     sn = resample(t_new, v_new, grid_new)

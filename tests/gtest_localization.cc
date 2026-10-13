@@ -1,8 +1,8 @@
-/* locationd(PoseKalman·LocationEstimator)와 lagd(LateralLagEstimator) 이식 검사.
- * lagd의 상관·신뢰도는 upstream 식을 그대로 옮긴 파이썬(FFT 방식)과 같은 입력에서 대조한다. */
+// locationd(PoseKalman·LocationEstimator)와 lagd(LateralLagEstimator) 이식 검사.
+// lagd의 상관·신뢰도는 upstream 식을 그대로 옮긴 파이썬(FFT 방식)과 같은 입력에서 대조한다.
+#include "common/ipc_messages.h"
 #include "localization/lateral_lag.h"
 #include "localization/localization_pipeline.h"
-#include "common/ipc_messages.h"
 #include "localization/location_estimator.h"
 
 #include <gtest/gtest.h>
@@ -16,8 +16,7 @@ constexpr double kPi = 3.14159265358979323846;
 
 // 파이썬 upstream 이식(lagd.py actuator_delay, FFT 마스크 정규화 상관)으로 구한 값.
 // 같은 식의 입력: 0.33 s 늦고 0.9배인 응답 + 13 rad/s 잡음, 7초마다 한 구간씩 마스크.
-TEST(Localization, LagdMatchesUpstreamCorrelation)
-{
+TEST(Localization, LagdMatchesUpstreamCorrelation) {
     const int n = 1200;
     std::vector<double> des(n), act(n);
     std::vector<bool> mask(n);
@@ -41,8 +40,7 @@ TEST(Localization, LagdMatchesUpstreamCorrelation)
 // 20 Hz로 60초 넘게 조건을 만족하는 주행을 넣으면 블록이 차고 진짜 지연을 낸다. 두 사인파의
 // 합은 상관 봉우리가 넓어 upstream 신뢰도가 0.6이라, 블록 로직을 보려고 기준만 0.5로 낮춘다
 // (신뢰도 계산 자체는 위 검사가 upstream과 대조한다).
-TEST(Localization, LagdEstimatesDelayFromDriving)
-{
+TEST(Localization, LagdEstimatesDelayFromDriving) {
     LateralLagConfig config;
     config.initial_lag = 0.34;
     config.min_confidence = 0.5;
@@ -80,8 +78,7 @@ TEST(Localization, LagdEstimatesDelayFromDriving)
     EXPECT_NEAR(retuned.output().estimate, out.estimate, 1e-5);
 }
 
-TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed)
-{
+TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed) {
     LateralLagEstimator lag;
     for (int i = 0; i < 20 * 200; ++i) {
         const double t = 50.0 + i * 0.05;
@@ -89,7 +86,7 @@ TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed)
         in.t = t;
         in.lat_active = true;
         in.steering_pressed = (i / 100) % 2 == 0;  // 5초마다 번갈아 핸들을 잡는다
-        in.v_ego = 5.0;                             // 저속
+        in.v_ego = 5.0;                            // 저속
         in.desired_curvature = 0.002 * std::sin(t);
         in.yaw_rate = in.desired_curvature * in.v_ego;
         in.pose_valid = in.calib_valid = true;
@@ -101,8 +98,7 @@ TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed)
 }
 
 // 정차: 기울어진 보드의 가속도(중력)와 자이로 바이어스를 넣으면 roll·pitch와 바이어스가 수렴한다.
-TEST(Localization, PoseKalmanConvergesAtRest)
-{
+TEST(Localization, PoseKalmanConvergesAtRest) {
     LocationEstimator loc;
     const double pitch = 3.0 * kPi / 180.0, roll = -1.5 * kPi / 180.0;
     const double g = 9.81;
@@ -132,8 +128,7 @@ TEST(Localization, PoseKalmanConvergesAtRest)
 }
 
 // 일정한 오른쪽 선회: 자이로와 카메라 회전이 같은 요레이트를 말하면 각속도가 그 값이다.
-TEST(Localization, PoseKalmanTracksYawRate)
-{
+TEST(Localization, PoseKalmanTracksYawRate) {
     LocationEstimator loc;
     const double w = 0.1, v = 15.0, g = 9.81;
     const float gyro_chip[3] = {0.0f, static_cast<float>(-w), 0.0f};  // 기기 z(아래) = −칩 y
@@ -158,11 +153,10 @@ TEST(Localization, PoseKalmanTracksYawRate)
     EXPECT_NEAR(calibrate_pose(p, calib_rpy).angular_velocity[2], w, 0.005) << "보정 좌표계 요레이트";
 }
 
-/* 카메라는 IMU 묶음(~100 ms) 앞에 몰려 들어가 마지막 프레임 하나가 자이로 ~10표본을 가린다.
- * 상류(도착 순서, 프레임당 ~5표본)처럼 나쁜 프레임 하나로는 inputs_ok가 내려가지 않고, 연달아
- * 나쁘면 내려간다. */
-TEST(Localization, GyroCrossCheckToleratesOneBadCameraFrame)
-{
+// 카메라는 IMU 묶음(~100 ms) 앞에 몰려 들어가 마지막 프레임 하나가 자이로 ~10표본을 가린다.
+// 상류(도착 순서, 프레임당 ~5표본)처럼 나쁜 프레임 하나로는 inputs_ok가 내려가지 않고, 연달아
+// 나쁘면 내려간다.
+TEST(Localization, GyroCrossCheckToleratesOneBadCameraFrame) {
     const double w = 0.1, v = 15.0, g = 9.81;
     const float gyro_chip[3] = {0.0f, static_cast<float>(-w), 0.0f};
     const float accel_chip[3] = {static_cast<float>(w * v), static_cast<float>(g), 0.0f};
@@ -170,7 +164,7 @@ TEST(Localization, GyroCrossCheckToleratesOneBadCameraFrame)
     const float rot[3] = {0, 0, static_cast<float>(w)};
     const float stds[3] = {0.1f, 0.1f, 0.1f};
     const float bad_rot[3] = {0, 0, static_cast<float>(w - 0.5)};  // 급회전 중 모델이 틀린 요레이트
-    const float tight[3] = {0.001f, 0.001f, 0.001f};  // ×10 → 교차검사 한계 0.3 rad/s
+    const float tight[3] = {0.001f, 0.001f, 0.001f};               // ×10 → 교차검사 한계 0.3 rad/s
     const double calib[3] = {0, 0, 0};
     for (const int bad_frames : {1, 2}) {
         SCOPED_TRACE(bad_frames);
@@ -202,8 +196,7 @@ TEST(Localization, GyroCrossCheckToleratesOneBadCameraFrame)
 }
 
 // 늦게 온 관측을 되감아 넣으면, 처음부터 시간순으로 넣은 것과 결과가 같다.
-TEST(Localization, PoseKalmanRewindMatchesInOrder)
-{
+TEST(Localization, PoseKalmanRewindMatchesInOrder) {
     using K = PoseKalman::Kind;
     PoseKalman in_order, rewound;
     struct Obs {
@@ -229,16 +222,15 @@ TEST(Localization, PoseKalmanRewindMatchesInOrder)
         << "0.8초보다 오래된 관측은 거부";
 }
 
-/* 파이프라인: 조향 지연 lag만큼 늦게 따라오는 선회를 IMU 묶음·모델 상태·제어 상태로 넣는다.
- * 모델 상태는 캡처보다 늦게, IMU는 묶음으로 도착한다(보드와 같은 순서). */
+// 파이프라인: 조향 지연 lag만큼 늦게 따라오는 선회를 IMU 묶음·모델 상태·제어 상태로 넣는다.
+// 모델 상태는 캡처보다 늦게, IMU는 묶음으로 도착한다(보드와 같은 순서).
 struct PipelineRun {
     LocalizationState last{};
     LateralLagOutput lag{};
     int outputs = 0;
 };
 
-PipelineRun run_pipeline(double batch_s, double true_lag, double seconds)
-{
+PipelineRun run_pipeline(double batch_s, double true_lag, double seconds) {
     LateralLagConfig config;
     config.min_confidence = 0.5;  // 합성 사인파의 신뢰도(LagdEstimatesDelayFromDriving 참고)
     LocalizationPipeline pipeline(config);
@@ -289,8 +281,7 @@ PipelineRun run_pipeline(double batch_s, double true_lag, double seconds)
     return run;
 }
 
-TEST(Localization, PipelineOutputsPoseAndLagIndependentOfImuBatching)
-{
+TEST(Localization, PipelineOutputsPoseAndLagIndependentOfImuBatching) {
     for (const double batch_s : {0.05, 0.1}) {
         const PipelineRun run = run_pipeline(batch_s, 0.3, 360.0);
         SCOPED_TRACE(batch_s);
@@ -309,11 +300,10 @@ TEST(Localization, PipelineOutputsPoseAndLagIndependentOfImuBatching)
     }
 }
 
-/* 정차 중 모델이 가짜 움직임(2026-09-29 책상: 전진 15 m/s, 요 −0.25 rad/s)을 내도, CAN 차속이
- * 0이면 카메라를 쓰지 않아 자세가 IMU 중력 기울기에 머물고 입력도 정상으로 남는다.
- * 차속을 모를 때(부팅 직후)도 카메라를 쓰지 않는다. */
-TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
-{
+// 정차 중 모델이 가짜 움직임(2026-09-29 책상: 전진 15 m/s, 요 −0.25 rad/s)을 내도, CAN 차속이
+// 0이면 카메라를 쓰지 않아 자세가 IMU 중력 기울기에 머물고 입력도 정상으로 남는다.
+// 차속을 모를 때(부팅 직후)도 카메라를 쓰지 않는다.
+TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped) {
     const float accel[3] = {0.16f, 9.76f, 0.08f}, gyro[3] = {0.0396f, 0.0157f, -0.0222f};  // 보드 책상 실측
     const float rot_std[3] = {0.0009f, 0.0009f, 0.0009f}, trans_std[3] = {0.05f, 0.05f, 0.05f};
     const double calib[3] = {0, 0, 0};
@@ -349,9 +339,9 @@ TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
     EXPECT_NEAR(pitch, true_pitch, 0.5);
     EXPECT_TRUE(inputs_ok);
     EXPECT_NEAR(static_cast<double>(guarded), 120.0 * 104.0 / 5.0, 5.0);  // 가짜 구간의 카메라 관측 전부
-    /* 부팅: 가짜 움직임이 나오는 동안 차속을 모르다가(10~130 s) 이후 CAN 차속 0이 들어온다.
-     * 모르는 동안 카메라를 쓰지 않아 자이로가 버려지지 않고, 차속이 오면 정상 기울기로 돌아온다
-     * (예전에는 모르면 가드가 없어 책상처럼 틀어지고 inputs_ok가 7분 가까이 떨어졌다). */
+    // 부팅: 가짜 움직임이 나오는 동안 차속을 모르다가(10~130 s) 이후 CAN 차속 0이 들어온다.
+    // 모르는 동안 카메라를 쓰지 않아 자이로가 버려지지 않고, 차속이 오면 정상 기울기로 돌아온다
+    // (예전에는 모르면 가드가 없어 책상처럼 틀어지고 inputs_ok가 7분 가까이 떨어졌다).
     run(130.0, &roll, &pitch, &inputs_ok, &guarded);
     EXPECT_NEAR(roll, true_roll, 0.5);
     EXPECT_NEAR(pitch, true_pitch, 0.5);
@@ -359,11 +349,10 @@ TEST(Localization, CameraSpeedGuardKeepsPoseWhenStopped)
     EXPECT_GE(static_cast<double>(guarded), 120.0 * 104.0 / 5.0) << "모르는 동안의 관측은 쓰지 않는다";
 }
 
-/* 부팅 직후 차속을 모르는 동안은 카메라를 못 써서 IMU만으로 돈다(자세가 틀어진다). 첫 카메라
- * 관측에서 필터를 새로 시작하고, 그 뒤 3초는 무효로 낸다: 유효해졌을 때 자세가 맞아야 한다
- * (예전에는 120초 뒤 첫 관측 순간부터 유효였고 자세가 40° 넘게 틀려 있었다). */
-TEST(Localization, BootWithoutSpeedSettlesBeforeValid)
-{
+// 부팅 직후 차속을 모르는 동안은 카메라를 못 써서 IMU만으로 돈다(자세가 틀어진다). 첫 카메라
+// 관측에서 필터를 새로 시작하고, 그 뒤 3초는 무효로 낸다: 유효해졌을 때 자세가 맞아야 한다
+// (예전에는 120초 뒤 첫 관측 순간부터 유효였고 자세가 40° 넘게 틀려 있었다).
+TEST(Localization, BootWithoutSpeedSettlesBeforeValid) {
     const float accel[3] = {0.16f, 9.76f, 0.08f}, gyro[3] = {0.0396f, 0.0157f, -0.0222f};  // 보드 책상 실측
     const float rot_std[3] = {0.0009f, 0.0009f, 0.0009f}, trans_std[3] = {0.05f, 0.05f, 0.05f};
     const float zero[3] = {0, 0, 0};
@@ -386,9 +375,8 @@ TEST(Localization, BootWithoutSpeedSettlesBeforeValid)
                 continue;
             }
             if (first_valid < 0.0) first_valid = t;
-            worst_after_valid = std::fmax(worst_after_valid,
-                                          std::fmax(std::fabs(p.orientation_ned[0] - true_roll),
-                                                    std::fabs(p.orientation_ned[1] - true_pitch)));
+            worst_after_valid = std::fmax(worst_after_valid, std::fmax(std::fabs(p.orientation_ned[0] - true_roll),
+                                                                       std::fabs(p.orientation_ned[1] - true_pitch)));
         }
         ASSERT_GT(first_valid, 0.0);
         EXPECT_GE(first_valid, speed_known_from + 3.0 - 0.2) << "첫 카메라 관측 뒤 3초는 무효";
@@ -396,10 +384,9 @@ TEST(Localization, BootWithoutSpeedSettlesBeforeValid)
     }
 }
 
-/* 외부 회전: 칩이 카메라 대비 앞 2.2°·오른쪽 1.0° 기운 보드를 수평에 두면, 원시 가속도는 그만큼
- * 기운 중력을 보이지만 기본 외부 회전을 적용한 추정은 수평이다. */
-TEST(Localization, ImuExtrinsicLevelsTiltedChip)
-{
+// 외부 회전: 칩이 카메라 대비 앞 2.2°·오른쪽 1.0° 기운 보드를 수평에 두면, 원시 가속도는 그만큼
+// 기운 중력을 보이지만 기본 외부 회전을 적용한 추정은 수평이다.
+TEST(Localization, ImuExtrinsicLevelsTiltedChip) {
     const double r = LocationEstimator::kDefaultImuExtrinsicRpy[0], p = LocationEstimator::kDefaultImuExtrinsicRpy[1];
     const double g = 9.81;
     // 기기(수평) 중력 측정 (0,0,−g)을 IMU 좌표로: imu = device_from_imuᵀ · device

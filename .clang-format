@@ -1,0 +1,12 @@
+# C++ 서식(docs/code-style.md). Google 스타일에서 들여쓰기, 줄 길이, 포인터 위치, 접근 지정자 칸만 바꾼다.
+# 적용: clang-format -i $(git ls-files '*.cc' '*.h' | grep -v '^firmware/')
+# Apple clang-format 21(Xcode 명령줄 도구)로 맞췄다. 판이 다르면 몇 줄이 다르게 나올 수 있다.
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 120            # 한글은 두 칸으로 센다
+DerivePointerAlignment: false
+PointerAlignment: Right     # int *p
+AccessModifierOffset: -4    # public:은 class와 같은 칸
+ReflowComments: IndentOnly  # 주석은 들여쓰기만 맞추고 다시 감싸지 않는다
+IncludeBlocks: Preserve     # 빈 줄로 나눈 묶음 안에서만 정렬한다
+Standard: c++17

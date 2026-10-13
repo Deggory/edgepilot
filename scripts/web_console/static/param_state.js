@@ -48,7 +48,7 @@ export function clampToMeta(value, meta, minDigits = 0) {
   return Number(Math.min(meta.max, Math.max(meta.min, value)).toFixed(Math.max(decimals(meta.step), minDigits)));
 }
 
-/* 값 하나를 저장하고 스냅샷을 갱신한다. {applied, notified}를 돌려주고, 실패하면 예외를 던진다. */
+// 값 하나를 저장하고 스냅샷을 갱신한다. {applied, notified}를 돌려주고, 실패하면 예외를 던진다.
 export async function saveParam(group, key, value) {
   const update = await api.patch(`/api/params/${group}`, {values: {[key]: value}});
   snapshot.params[group] = update.params;

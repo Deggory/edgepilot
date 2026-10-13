@@ -9,18 +9,17 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kMinPoints = 50;
 constexpr int kMinInliers = 40;
-constexpr double kMaxRotation = 0.5 * kPi / 180.0;   // 창(0.4초) 동안. 곧은 길에서는 0.1° 안팎이다
-constexpr double kMaxAngle = 10.0 * kPi / 180.0;     // 이보다 크면 풀이가 엇나간 것
-constexpr double kSigmaPx = 1.0;                     // 첫 풀이의 Cauchy 척도, 맞는 점의 기준(2배)
-constexpr double kMinScalePx = 0.1;                  // 다시 풀 때 강건 척도의 하한
+constexpr double kMaxRotation = 0.5 * kPi / 180.0;  // 창(0.4초) 동안. 곧은 길에서는 0.1° 안팎이다
+constexpr double kMaxAngle = 10.0 * kPi / 180.0;    // 이보다 크면 풀이가 엇나간 것
+constexpr double kSigmaPx = 1.0;                    // 첫 풀이의 Cauchy 척도, 맞는 점의 기준(2배)
+constexpr double kMinScalePx = 0.1;                 // 다시 풀 때 강건 척도의 하한
 constexpr int kIterations = 8;
 
 // 곧은 길: 40 km/h 이상, 요레이트 0.25°/s 이하(100 km/h에서 곡률 1.4e-4), 깜빡이·desire 없음
 constexpr float kMinSpeed = 40.0f / 3.6f;
 constexpr float kMaxYawRate = 0.25f * static_cast<float>(kPi) / 180.0f;
 
-void rodrigues(const double w[3], double r[9])
-{
+void rodrigues(const double w[3], double r[9]) {
     const double th = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
     if (th < 1e-12) {
         for (int i = 0; i < 9; ++i) r[i] = i % 4 == 0 ? 1.0 : 0.0;
@@ -40,10 +39,9 @@ void rodrigues(const double w[3], double r[9])
     r[8] = 1.0 + c * (-kx * kx - ky * ky);
 }
 
-/* 파라미터 p = (a, b, wx, wy, wz)에서 Sampson으로 정규화한 에피폴라 잔차(정규화 영상 단위). E = R(w)[m]x,
- * m = (a, b, 1). x1, x2는 (x, y, 1) 정규화 좌표를 x, y만 담는다. */
-void residuals(const double p[5], const std::vector<double> &x1, const std::vector<double> &x2, double *e)
-{
+// 파라미터 p = (a, b, wx, wy, wz)에서 Sampson으로 정규화한 에피폴라 잔차(정규화 영상 단위). E = R(w)[m]x,
+// m = (a, b, 1). x1, x2는 (x, y, 1) 정규화 좌표를 x, y만 담는다.
+void residuals(const double p[5], const std::vector<double> &x1, const std::vector<double> &x2, double *e) {
     double r[9];
     rodrigues(p + 2, r);
     const double m0 = p[0], m1 = p[1], m2 = 1.0;
@@ -68,8 +66,7 @@ void residuals(const double p[5], const std::vector<double> &x1, const std::vect
 }
 
 // 5x5 대칭 양정치 연립방정식(작은 능선 포함)을 부분 피벗 가우스 소거로 푼다
-bool solve5(double a[25], double b[5], double x[5])
-{
+bool solve5(double a[25], double b[5], double x[5]) {
     for (int c = 0; c < 5; ++c) {
         int piv = c;
         for (int r = c + 1; r < 5; ++r)
@@ -93,8 +90,7 @@ bool solve5(double a[25], double b[5], double x[5])
     return true;
 }
 
-float median_of(std::vector<float> v)
-{
+float median_of(std::vector<float> v) {
     if (v.empty()) return 0.0f;
     const size_t mid = v.size() / 2;
     std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid), v.end());
@@ -103,15 +99,14 @@ float median_of(std::vector<float> v)
     return 0.5f * (hi + *std::max_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid)));
 }
 
-} // namespace
+}  // namespace
 
 namespace {
 
-/* 가중 가우스-뉴턴. use가 비어 있으면 모든 점을, 아니면 use[i]인 점만 쓴다. 잔차 척도 sigma의 Cauchy 가중.
- * 수치 미분(5개 파라미터)이라 점 300개 x 8회에 1~2 ms(A53)다. */
+// 가중 가우스-뉴턴. use가 비어 있으면 모든 점을, 아니면 use[i]인 점만 쓴다. 잔차 척도 sigma의 Cauchy 가중.
+// 수치 미분(5개 파라미터)이라 점 300개 x 8회에 1~2 ms(A53)다.
 bool gauss_newton(double p[5], const std::vector<double> &x1, const std::vector<double> &x2,
-                  const std::vector<char> &use, double sigma, int iterations)
-{
+                  const std::vector<char> &use, double sigma, int iterations) {
     const size_t n = x1.size() / 2;
     const double step[5] = {1e-6, 1e-6, 1e-7, 1e-7, 1e-7};
     std::vector<double> e(n), ep(n), jac(5 * n);
@@ -147,10 +142,9 @@ bool gauss_newton(double p[5], const std::vector<double> &x1, const std::vector<
     return true;
 }
 
-} // namespace
+}  // namespace
 
-FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy, const float *end_xy, int n)
-{
+FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy, const float *end_xy, int n) {
     FlowSolution out;
     out.points = n;
     if (n < kMinPoints || k.fx <= 0.0 || k.fy <= 0.0) return out;
@@ -172,9 +166,9 @@ FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy
     double p[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
     std::vector<char> use;
     if (!gauss_newton(p, x1, x2, use, sigma, kIterations)) return out;
-    /* 크게 빗나간 추적이 섞이면(IVE 경로는 왕복 검사가 없다) 1 px 척도의 Cauchy 가중만으로는 창마다 흩어짐이
-     * 15배 커진다(합성 점, 이상치 10%). 잔차의 강건 척도(1.4826·MAD, 0.1 px 이상)를 재서 그 3배를 넘는 점을
-     * 빼고, 그 척도로 다시 푼다. 두 번. */
+    // 크게 빗나간 추적이 섞이면(IVE 경로는 왕복 검사가 없다) 1 px 척도의 Cauchy 가중만으로는 창마다 흩어짐이
+    // 15배 커진다(합성 점, 이상치 10%). 잔차의 강건 척도(1.4826·MAD, 0.1 px 이상)를 재서 그 3배를 넘는 점을
+    // 빼고, 그 척도로 다시 푼다. 두 번.
     std::vector<double> e(static_cast<size_t>(n)), mag(static_cast<size_t>(n));
     for (int round = 0; round < 2; ++round) {
         residuals(p, x1, x2, e.data());
@@ -203,9 +197,8 @@ FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy
     return out;
 }
 
-int pick_flow_corners(const int16_t *response, int width, int height, int scale, int row_offset,
-                      double quality, int max_points, float *xy)
-{
+int pick_flow_corners(const int16_t *response, int width, int height, int scale, int row_offset, double quality,
+                      int max_points, float *xy) {
     constexpr int kCell = 8, kBorder = 3, kMinDist2 = 25;
     if (!response || width < kCell || height < kCell || max_points <= 0) return 0;
     const int gw = width / kCell, gh = height / kCell;
@@ -252,15 +245,12 @@ int pick_flow_corners(const int16_t *response, int width, int height, int scale,
     return n;
 }
 
-bool flow_gate_open(const FlowGateInput &in)
-{
-    return in.vehicle_fresh && !in.blinker && !in.desire && std::isfinite(in.v_ego) &&
-           std::isfinite(in.curvature) && in.v_ego >= kMinSpeed &&
-           std::fabs(in.curvature * in.v_ego) <= kMaxYawRate;
+bool flow_gate_open(const FlowGateInput &in) {
+    return in.vehicle_fresh && !in.blinker && !in.desire && std::isfinite(in.v_ego) && std::isfinite(in.curvature) &&
+           in.v_ego >= kMinSpeed && std::fabs(in.curvature * in.v_ego) <= kMaxYawRate;
 }
 
-void FlowCalibrator::reset()
-{
+void FlowCalibrator::reset() {
     block_yaw_.clear();
     block_pitch_.clear();
     med_yaw_.clear();
@@ -269,16 +259,16 @@ void FlowCalibrator::reset()
     state_.status = 1;
 }
 
-bool FlowCalibrator::restore(const FlowBlocks &blocks)
-{
+bool FlowCalibrator::restore(const FlowBlocks &blocks) {
     if (blocks.yaw.size() != blocks.pitch.size()) return false;
     for (size_t i = 0; i < blocks.yaw.size(); ++i)
-        if (!std::isfinite(blocks.yaw[i]) || !std::isfinite(blocks.pitch[i]) ||
-            std::fabs(blocks.yaw[i]) >= kMaxAngle || std::fabs(blocks.pitch[i]) >= kMaxAngle)
+        if (!std::isfinite(blocks.yaw[i]) || !std::isfinite(blocks.pitch[i]) || std::fabs(blocks.yaw[i]) >= kMaxAngle ||
+            std::fabs(blocks.pitch[i]) >= kMaxAngle)
             return false;
     reset();
     const size_t skip = blocks.yaw.size() > static_cast<size_t>(kFlowMaxBlocks)
-        ? blocks.yaw.size() - static_cast<size_t>(kFlowMaxBlocks) : 0;
+                            ? blocks.yaw.size() - static_cast<size_t>(kFlowMaxBlocks)
+                            : 0;
     med_yaw_.assign(blocks.yaw.begin() + static_cast<std::ptrdiff_t>(skip), blocks.yaw.end());
     med_pitch_.assign(blocks.pitch.begin() + static_cast<std::ptrdiff_t>(skip), blocks.pitch.end());
     state_.windows = blocks.windows;
@@ -288,8 +278,7 @@ bool FlowCalibrator::restore(const FlowBlocks &blocks)
     return true;
 }
 
-FlowBlocks FlowCalibrator::blocks() const
-{
+FlowBlocks FlowCalibrator::blocks() const {
     FlowBlocks out;
     out.yaw.assign(med_yaw_.begin(), med_yaw_.end());
     out.pitch.assign(med_pitch_.begin(), med_pitch_.end());
@@ -298,8 +287,7 @@ FlowBlocks FlowCalibrator::blocks() const
     return out;
 }
 
-void FlowCalibrator::add(const FlowSolution &window, int tracks, uint64_t end_frame_id)
-{
+void FlowCalibrator::add(const FlowSolution &window, int tracks, uint64_t end_frame_id) {
     if (!window.valid) return;
     state_.window_frame_id = end_frame_id;
     state_.window_yaw = static_cast<float>(window.yaw);
@@ -326,8 +314,7 @@ void FlowCalibrator::add(const FlowSolution &window, int tracks, uint64_t end_fr
     update_estimate();
 }
 
-void FlowCalibrator::detect_mount_change()
-{
+void FlowCalibrator::detect_mount_change() {
     const int n = static_cast<int>(med_yaw_.size()), recent = kFlowMountCheckBlocks;
     if (n < kFlowMinBlocks + recent) return;
     double old_yaw = 0.0, old_pitch = 0.0;
@@ -354,8 +341,7 @@ void FlowCalibrator::detect_mount_change()
     ++state_.mount_changes;
 }
 
-void FlowCalibrator::update_estimate()
-{
+void FlowCalibrator::update_estimate() {
     state_.estimate_blocks = static_cast<uint32_t>(med_yaw_.size());
     if (med_yaw_.empty()) {
         state_.status = 1;

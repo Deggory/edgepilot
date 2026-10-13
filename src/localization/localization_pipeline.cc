@@ -6,17 +6,16 @@
 
 namespace {
 
-constexpr size_t kMaxPendingCamera = 40;      // 2초(IMU가 멈추면 오래된 것부터 버린다)
+constexpr size_t kMaxPendingCamera = 40;  // 2초(IMU가 멈추면 오래된 것부터 버린다)
 constexpr double kControlHistoryS = 1.0;
-constexpr double kMaxControlGapS = 0.1;       // 이보다 먼 제어 상태와는 짝짓지 않는다
+constexpr double kMaxControlGapS = 0.1;        // 이보다 먼 제어 상태와는 짝짓지 않는다
 constexpr unsigned kLagPointsPerEstimate = 5;  // 20 Hz 점, 4 Hz 추정(상류 lagd)
 
 }  // namespace
 
 LocalizationPipeline::LocalizationPipeline(const LateralLagConfig &lag_config) : lag_(lag_config) {}
 
-void LocalizationPipeline::on_control(const ControlState &control)
-{
+void LocalizationPipeline::on_control(const ControlState &control) {
     const double v = std::isfinite(control.ego_speed_kph) ? control.ego_speed_kph / 3.6 : 0.0;
     ControlSample s;
     s.t = static_cast<double>(control.timestamp_ns) * 1e-9;
@@ -32,8 +31,7 @@ void LocalizationPipeline::on_control(const ControlState &control)
         control_history_.pop_front();
 }
 
-void LocalizationPipeline::on_model(const ModelState &model)
-{
+void LocalizationPipeline::on_model(const ModelState &model) {
     calib_rpy_[0] = model.calibration.roll;
     calib_rpy_[1] = model.calibration.pitch;
     calib_rpy_[2] = model.calibration.yaw;
@@ -50,18 +48,15 @@ void LocalizationPipeline::on_model(const ModelState &model)
     while (pending_camera_.size() > kMaxPendingCamera) pending_camera_.pop_front();
 }
 
-void LocalizationPipeline::flush_camera_until(double t)
-{
-    while (!pending_camera_.empty() &&
-           pending_camera_.front().capture_s - LocationEstimator::kCamOdoPoseDelay <= t) {
+void LocalizationPipeline::flush_camera_until(double t) {
+    while (!pending_camera_.empty() && pending_camera_.front().capture_s - LocationEstimator::kCamOdoPoseDelay <= t) {
         const CameraOdometry &c = pending_camera_.front();
         estimator_.handle_camera_odometry(c.capture_s, c.trans, c.rot, c.trans_std, c.rot_std);
         pending_camera_.pop_front();
     }
 }
 
-const LocalizationPipeline::ControlSample *LocalizationPipeline::control_at(double t) const
-{
+const LocalizationPipeline::ControlSample *LocalizationPipeline::control_at(double t) const {
     // t 이전의 가장 늦은 제어 상태(그 시각에 내려진 명령)
     const ControlSample *best = nullptr;
     for (const ControlSample &s : control_history_) {
@@ -71,8 +66,7 @@ const LocalizationPipeline::ControlSample *LocalizationPipeline::control_at(doub
     return best && t - best->t <= kMaxControlGapS ? best : nullptr;
 }
 
-void LocalizationPipeline::feed_lag(double t)
-{
+void LocalizationPipeline::feed_lag(double t) {
     const ControlSample *c = control_at(t);
     if (!c) return;
     const LivePoseEstimate pose = estimator_.estimate(t);
@@ -95,8 +89,7 @@ void LocalizationPipeline::feed_lag(double t)
     }
 }
 
-bool LocalizationPipeline::on_imu(const ImuBatch &batch, double now_s, LocalizationState *out)
-{
+bool LocalizationPipeline::on_imu(const ImuBatch &batch, double now_s, LocalizationState *out) {
     const uint32_t count = std::min<uint32_t>(batch.count, kImuBatchMaxSamples);
     if (count == 0) return false;
     const double dt = lag_.config().dt;
@@ -107,8 +100,8 @@ bool LocalizationPipeline::on_imu(const ImuBatch &batch, double now_s, Localizat
         flush_camera_until(t);
         estimator_.handle_imu(t, s.accel_mps2, s.gyro_rad_s);
         last_t = t;
-        /* lagd 점은 IMU 묶음 주기와 무관하게 dt 격자로 넣는다(상관의 지연은 점 간격이 dt라고
-         * 가정한다). 멈췄다가 다시 오면 격자를 새로 잡는다. */
+        // lagd 점은 IMU 묶음 주기와 무관하게 dt 격자로 넣는다(상관의 지연은 점 간격이 dt라고
+        // 가정한다). 멈췄다가 다시 오면 격자를 새로 잡는다.
         if (next_lag_t_ <= 0.0 || t - next_lag_t_ > 1.0 || t < next_lag_t_ - 2.0 * dt) next_lag_t_ = t;
         if (t >= next_lag_t_) {
             feed_lag(t);
@@ -142,7 +135,6 @@ bool LocalizationPipeline::on_imu(const ImuBatch &batch, double now_s, Localizat
     o.lag_valid_blocks = lag.valid_blocks;
     o.lag_cal_perc = lag.cal_perc;
     o.lag_points = static_cast<uint32_t>(lag_.okay_points());
-    o.input_flags = estimator_.invalid_service_mask() |
-                    (estimator_.camera_guarded() ? kLocalizationCameraGuarded : 0U);
+    o.input_flags = estimator_.invalid_service_mask() | (estimator_.camera_guarded() ? kLocalizationCameraGuarded : 0U);
     return true;
 }

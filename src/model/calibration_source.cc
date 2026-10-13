@@ -10,19 +10,17 @@ namespace {
 
 constexpr float kReachedRad = 1e-6f;
 
-} // namespace
+}  // namespace
 
-bool CalibrationSourceSelector::flow_usable(const FlowCalibrationState &flow, float max_spread)
-{
+bool CalibrationSourceSelector::flow_usable(const FlowCalibrationState &flow, float max_spread) {
     const float rpy[3] = {0.0f, flow.pitch, flow.yaw};
     return flow.status == 2 && flow.estimate_blocks >= static_cast<uint32_t>(kFlowMinBlocks) &&
            std::isfinite(flow.pitch) && std::isfinite(flow.yaw) && flow.sd_pitch <= max_spread &&
            flow.sd_yaw <= max_spread && OnlineCalibrator::rpy_within_limits(rpy);
 }
 
-void CalibrationSourceSelector::update(const float pose_rpy[3], const FlowCalibrationState &flow,
-                                       bool requested_flow, bool engaged, float dt_s)
-{
+void CalibrationSourceSelector::update(const float pose_rpy[3], const FlowCalibrationState &flow, bool requested_flow,
+                                       bool engaged, float dt_s) {
     requested_ = requested_flow;
     if (!initialized_ || (requested_flow != active_ && !engaged)) active_ = requested_flow;
     // 쓰는 중이면 느슨한 문턱으로 계속 쓰고, 아니면 엄한 문턱을 넘고 해제 상태(또는 시작)일 때만 쓰기 시작한다
@@ -63,14 +61,10 @@ void CalibrationSourceSelector::update(const float pose_rpy[3], const FlowCalibr
              (ramping ? kCalibrationSourceRamping : 0u);
 }
 
-void CalibrationSourceSelector::snap_to(const float rpy[3])
-{
+void CalibrationSourceSelector::snap_to(const float rpy[3]) {
     std::copy(rpy, rpy + 3, rpy_);
     transition_ = false;
     flow_applied_ = false;
 }
 
-void CalibrationSourceSelector::rpy(float out[3]) const
-{
-    std::copy(rpy_, rpy_ + 3, out);
-}
+void CalibrationSourceSelector::rpy(float out[3]) const { std::copy(rpy_, rpy_ + 3, out); }

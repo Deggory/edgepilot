@@ -1,12 +1,12 @@
 #pragma once
 
 #include <array>
-#include <cerrno>
-#include <functional>
-#include <cmath>
 #include <cctype>
+#include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,90 +17,99 @@ bool parse_json_bool_value(const std::string &text, const std::string &key, bool
 // 단순 JSON 텍스트에서 float 값을 읽는다.
 bool parse_json_float_value(const std::string &text, const std::string &key, float *out);
 
-/* 아래 세 헬퍼는 파라미터 로더 공통 규약이다. 키가 없으면 기존 값을 유지하고,
- * 있으면 허용 범위로 clamp 해서 덮어쓴다. */
-void parse_json_optional_bool(const std::string &text, const std::string &key,
-                              bool *field);
-void parse_json_optional_float(const std::string &text, const std::string &key,
-                               float minimum, float maximum, float *field);
-void parse_json_optional_int(const std::string &text, const std::string &key,
-                             int minimum, int maximum, int *field);
+// 아래 세 헬퍼는 파라미터 로더 공통 규약이다. 키가 없으면 기존 값을 유지하고,
+// 있으면 허용 범위로 clamp 해서 덮어쓴다.
+void parse_json_optional_bool(const std::string &text, const std::string &key, bool *field);
+void parse_json_optional_float(const std::string &text, const std::string &key, float minimum, float maximum,
+                               float *field);
+void parse_json_optional_int(const std::string &text, const std::string &key, int minimum, int maximum, int *field);
 
-/* 파라미터 파일 로더 공통 뼈대. 파일을 통째로 읽어 apply(text)를 부르고,
- * 파싱 예외를 error 문자열로 바꾼다. 로더는 키 목록만 쓰면 된다. */
-/* {키, 하한, 상한, 멤버} 표로 파라미터 구조체를 채운다. 없는 키는 기본값을 남기고
- * 범위 밖은 클램프한다(parse_json_optional_*와 같다). 표가 곧 파라미터 명세다. */
-template <class T> struct JsonBoolField { const char *key; bool T::*member; };
-template <class T> struct JsonIntField { const char *key; int lo; int hi; int T::*member; };
-template <class T> struct JsonFloatField { const char *key; float lo; float hi; float T::*member; };
+// 파라미터 파일 로더 공통 뼈대. 파일을 통째로 읽어 apply(text)를 부르고,
+// 파싱 예외를 error 문자열로 바꾼다. 로더는 키 목록만 쓰면 된다.
+// {키, 하한, 상한, 멤버} 표로 파라미터 구조체를 채운다. 없는 키는 기본값을 남기고
+// 범위 밖은 클램프한다(parse_json_optional_*와 같다). 표가 곧 파라미터 명세다.
+template <class T>
+struct JsonBoolField {
+    const char *key;
+    bool T::*member;
+};
+template <class T>
+struct JsonIntField {
+    const char *key;
+    int lo;
+    int hi;
+    int T::*member;
+};
+template <class T>
+struct JsonFloatField {
+    const char *key;
+    float lo;
+    float hi;
+    float T::*member;
+};
 
 template <class T, size_t N>
 void parse_json_fields(const std::string &text, const JsonBoolField<T> (&fields)[N], T *out) {
-  for (const auto &f : fields) parse_json_optional_bool(text, f.key, &(out->*f.member));
+    for (const auto &f : fields) parse_json_optional_bool(text, f.key, &(out->*f.member));
 }
 template <class T, size_t N>
 void parse_json_fields(const std::string &text, const JsonIntField<T> (&fields)[N], T *out) {
-  for (const auto &f : fields) parse_json_optional_int(text, f.key, f.lo, f.hi, &(out->*f.member));
+    for (const auto &f : fields) parse_json_optional_int(text, f.key, f.lo, f.hi, &(out->*f.member));
 }
 template <class T, size_t N>
 void parse_json_fields(const std::string &text, const JsonFloatField<T> (&fields)[N], T *out) {
-  for (const auto &f : fields) parse_json_optional_float(text, f.key, f.lo, f.hi, &(out->*f.member));
+    for (const auto &f : fields) parse_json_optional_float(text, f.key, f.lo, f.hi, &(out->*f.member));
 }
 
-bool load_json_param_file(const std::string &path,
-                          const std::function<void(const std::string &)> &apply,
+bool load_json_param_file(const std::string &path, const std::function<void(const std::string &)> &apply,
                           std::string *error);
 
-/* 단순 JSON 텍스트에서 길이가 정해지지 않은 float 배열을 읽는다(최대 max_count개). 키가 없으면 false, 숫자가
- * 아니거나 max_count를 넘으면 예외. */
-bool parse_json_float_list(const std::string &text, const std::string &key, size_t max_count,
-                           std::vector<float> *out);
+// 단순 JSON 텍스트에서 길이가 정해지지 않은 float 배열을 읽는다(최대 max_count개). 키가 없으면 false, 숫자가
+// 아니거나 max_count를 넘으면 예외.
+bool parse_json_float_list(const std::string &text, const std::string &key, size_t max_count, std::vector<float> *out);
 
 // 단순 JSON 텍스트에서 고정 길이 float 배열을 읽는다.
 template <size_t N>
-bool parse_json_float_array(const std::string &text, const std::string &key,
-                            std::array<float, N> *out) {
-  if (!out) return false;
-  const std::string quoted_key = "\"" + key + "\"";
-  const size_t key_pos = text.find(quoted_key);
-  if (key_pos == std::string::npos) return false;
+bool parse_json_float_array(const std::string &text, const std::string &key, std::array<float, N> *out) {
+    if (!out) return false;
+    const std::string quoted_key = "\"" + key + "\"";
+    const size_t key_pos = text.find(quoted_key);
+    if (key_pos == std::string::npos) return false;
 
-  const size_t open = text.find('[', key_pos + quoted_key.size());
-  if (open == std::string::npos) {
-    throw std::runtime_error("json key '" + key + "' is not an array");
-  }
-  const size_t close = text.find(']', open + 1);
-  if (close == std::string::npos) {
-    throw std::runtime_error("json key '" + key + "' has no closing bracket");
-  }
+    const size_t open = text.find('[', key_pos + quoted_key.size());
+    if (open == std::string::npos) {
+        throw std::runtime_error("json key '" + key + "' is not an array");
+    }
+    const size_t close = text.find(']', open + 1);
+    if (close == std::string::npos) {
+        throw std::runtime_error("json key '" + key + "' has no closing bracket");
+    }
 
-  const char *cursor = text.c_str() + open + 1;
-  const char *array_end = text.c_str() + close;
-  for (size_t i = 0; i < out->size(); ++i) {
-    while (cursor < array_end &&
-           (std::isspace(static_cast<unsigned char>(*cursor)) || *cursor == ',')) {
-      ++cursor;
+    const char *cursor = text.c_str() + open + 1;
+    const char *array_end = text.c_str() + close;
+    for (size_t i = 0; i < out->size(); ++i) {
+        while (cursor < array_end && (std::isspace(static_cast<unsigned char>(*cursor)) || *cursor == ',')) {
+            ++cursor;
+        }
+        if (cursor >= array_end) {
+            throw std::runtime_error("json key '" + key + "' must contain " + std::to_string(out->size()) + " floats");
+        }
+        char *end = nullptr;
+        errno = 0;
+        const float parsed = std::strtof(cursor, &end);
+        if (end == cursor || errno == ERANGE || !std::isfinite(parsed)) {
+            throw std::runtime_error("json key '" + key + "' contains an invalid float");
+        }
+        (*out)[i] = parsed;
+        cursor = end;
     }
-    if (cursor >= array_end) {
-      throw std::runtime_error("json key '" + key + "' must contain " +
-                               std::to_string(out->size()) + " floats");
-    }
-    char *end = nullptr;
-    errno = 0;
-    const float parsed = std::strtof(cursor, &end);
-    if (end == cursor || errno == ERANGE || !std::isfinite(parsed)) {
-      throw std::runtime_error("json key '" + key + "' contains an invalid float");
-    }
-    (*out)[i] = parsed;
-    cursor = end;
-  }
 
-  while (cursor < array_end) {
-    if (!(std::isspace(static_cast<unsigned char>(*cursor)) || *cursor == ',')) {
-      throw std::runtime_error("json key '" + key + "' must contain exactly " +
-                               std::to_string(out->size()) + " floats");
+    while (cursor < array_end) {
+        if (!(std::isspace(static_cast<unsigned char>(*cursor)) || *cursor == ',')) {
+            throw std::runtime_error("json key '" + key + "' must contain exactly " + std::to_string(out->size()) +
+                                     " floats");
+        }
+        ++cursor;
     }
-    ++cursor;
-  }
-  return true;
+    return true;
 }

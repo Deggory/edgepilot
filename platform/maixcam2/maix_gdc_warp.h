@@ -1,11 +1,11 @@
 #ifndef MAIXCAM2_GDC_WARP_H
 #define MAIXCAM2_GDC_WARP_H
 
-/* 모델 입력 워프를 AX620E IVPS GDC(AX_IVPS_Dewarp, 투시 변환)로 한다. 소스 NV12를 CMM 버퍼(source())에 채우면 medmodel/sbigmodel
- * 두 시점으로 512x256 NV12를 만들고 모델의 YUV6 배치(Y 4평면 + U + V, 128x256)로
- * 풀어 준다. 행렬은 모델 픽셀 -> 소스 픽셀(ModelInputTransform::projection_matrix).
- * CPU 워프와 Y는 최대 1 LSB, U/V는 평균 0.4 LSB 차이다(실측).
- * AX_SYS_Init은 같은 프로세스의 AxEngineSession이 해 둔 뒤에 만든다. */
+// 모델 입력 워프를 AX620E IVPS GDC(AX_IVPS_Dewarp, 투시 변환)로 한다. 소스 NV12를 CMM 버퍼(source())에 채우면
+// medmodel/sbigmodel 두 시점으로 512x256 NV12를 만들고 모델의 YUV6 배치(Y 4평면 + U + V, 128x256)로 풀어 준다. 행렬은
+// 모델 픽셀 -> 소스 픽셀(ModelInputTransform::projection_matrix).
+// CPU 워프와 Y는 최대 1 LSB, U/V는 평균 0.4 LSB 차이다(실측).
+// AX_SYS_Init은 같은 프로세스의 AxEngineSession이 해 둔 뒤에 만든다.
 
 #include <cstddef>
 #include <cstdint>
@@ -23,11 +23,10 @@ public:
     int src_height() const { return src_h_; }
 
     // 두 시점을 워프해 각 YUV6(6*128*256 바이트)에 쓴다.
-    bool warp(const float med_projection[9], const float sbig_projection[9],
-              uint8_t *med_yuv6, uint8_t *sbig_yuv6);
+    bool warp(const float med_projection[9], const float sbig_projection[9], uint8_t *med_yuv6, uint8_t *sbig_yuv6);
     // 소스를 복사하지 않고 다른 CMM 블록(예: 프레임 링 슬롯)에서 직접 읽는다.
-    bool warp_phys(unsigned long long src_phys, const float med_projection[9],
-                   const float sbig_projection[9], uint8_t *med_yuv6, uint8_t *sbig_yuv6);
+    bool warp_phys(unsigned long long src_phys, const float med_projection[9], const float sbig_projection[9],
+                   uint8_t *med_yuv6, uint8_t *sbig_yuv6);
 
 private:
     void release();

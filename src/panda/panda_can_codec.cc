@@ -10,41 +10,33 @@ constexpr int kUsbPacketMaxSize = 0x40;
 constexpr int kCanPacketHeadSize = 5;
 
 constexpr uint8_t kDlcToLen[16] = {
-    0, 1, 2, 3, 4, 5, 6, 7,
-    8, 12, 16, 20, 24, 32, 48, 64,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64,
 };
 
-void set_error(std::string *error, const char *message)
-{
+void set_error(std::string *error, const char *message) {
     if (error) *error = message;
 }
 
-uint8_t len_to_dlc(uint8_t len)
-{
+uint8_t len_to_dlc(uint8_t len) {
     for (uint8_t dlc = 0; dlc < 16; ++dlc) {
         if (kDlcToLen[dlc] == len) return dlc;
     }
     return 0xff;
 }
 
-uint32_t read_le32(const uint8_t *data)
-{
-    return static_cast<uint32_t>(data[0]) |
-           (static_cast<uint32_t>(data[1]) << 8) |
-           (static_cast<uint32_t>(data[2]) << 16) |
-           (static_cast<uint32_t>(data[3]) << 24);
+uint32_t read_le32(const uint8_t *data) {
+    return static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+           (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
 }
 
-void write_le32(uint8_t *data, uint32_t value)
-{
+void write_le32(uint8_t *data, uint32_t value) {
     data[0] = static_cast<uint8_t>(value & 0xffU);
     data[1] = static_cast<uint8_t>((value >> 8) & 0xffU);
     data[2] = static_cast<uint8_t>((value >> 16) & 0xffU);
     data[3] = static_cast<uint8_t>((value >> 24) & 0xffU);
 }
 
-void append_packet_bytes(std::vector<uint8_t> *dest, const uint8_t *src, size_t size)
-{
+void append_packet_bytes(std::vector<uint8_t> *dest, const uint8_t *src, size_t size) {
     for (size_t i = 0; i < size; ++i) {
         if ((dest->size() % kUsbPacketMaxSize) == 0) {
             dest->push_back(static_cast<uint8_t>(dest->size() / kUsbPacketMaxSize));
@@ -53,17 +45,11 @@ void append_packet_bytes(std::vector<uint8_t> *dest, const uint8_t *src, size_t 
     }
 }
 
-} // namespace
+}  // namespace
 
-bool panda_can_is_valid_data_len(uint8_t len)
-{
-    return len_to_dlc(len) != 0xff;
-}
+bool panda_can_is_valid_data_len(uint8_t len) { return len_to_dlc(len) != 0xff; }
 
-bool panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames,
-                           std::vector<uint8_t> *out,
-                           std::string *error)
-{
+bool panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames, std::vector<uint8_t> *out, std::string *error) {
     if (!out) {
         set_error(error, "output buffer is null");
         return false;
@@ -102,11 +88,8 @@ bool panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames,
     return true;
 }
 
-bool panda_can_unpack_buffer(const uint8_t *data, int size,
-                             std::vector<uint8_t> *recv_buf,
-                             std::vector<PandaCanFrame> *frames,
-                             std::string *error)
-{
+bool panda_can_unpack_buffer(const uint8_t *data, int size, std::vector<uint8_t> *recv_buf,
+                             std::vector<PandaCanFrame> *frames, std::string *error) {
     if (!data || !recv_buf || !frames) {
         set_error(error, "null unpack argument");
         return false;

@@ -1,4 +1,4 @@
-/* model/lead_flow: 앞차 상자 투영, 원본 해상도 점 고르기, 유사변환 확대율, 창. 합성 장면으로 본다(IVE 없이). */
+// model/lead_flow: 앞차 상자 투영, 원본 해상도 점 고르기, 유사변환 확대율, 창. 합성 장면으로 본다(IVE 없이).
 #include "model/lead_flow.h"
 
 #include <gtest/gtest.h>
@@ -11,8 +11,7 @@ namespace {
 const FlowIntrinsics kK{754.16, 753.9, 626.7533, 368.4};  // MaixCAM2 1280x720
 constexpr int kW = 1280, kH = 720;
 
-LeadFlowInput lead_at(float x)
-{
+LeadFlowInput lead_at(float x) {
     LeadFlowInput in;
     in.valid = true;
     in.probability = 0.9f;
@@ -25,8 +24,7 @@ LeadFlowInput lead_at(float x)
 class Noise {
 public:
     explicit Noise(uint32_t seed = 11) : rng_(seed) {}
-    float operator()(float amp)
-    {
+    float operator()(float amp) {
         rng_ = rng_ * 1103515245u + 12345u;
         return (static_cast<float>((rng_ >> 8) & 0xffff) / 65535.0f - 0.5f) * 2.0f * amp;
     }
@@ -35,8 +33,7 @@ private:
     uint32_t rng_;
 };
 
-TEST(LeadFlow, BoxIsThePinholeProjectionOfTheLeadsRear)
-{
+TEST(LeadFlow, BoxIsThePinholeProjectionOfTheLeadsRear) {
     const float rpy[3] = {};
     LeadBox box;
     ASSERT_TRUE(project_lead_box(kK, rpy, 1.22f, 0.0f, 30.0f, 0.0f, kW, kH, &box));
@@ -59,13 +56,11 @@ TEST(LeadFlow, BoxIsThePinholeProjectionOfTheLeadsRear)
     EXPECT_FALSE(project_lead_box(kK, rpy, 1.22f, 0.0f, 10.0f, 9.0f, kW, kH, &box));
 }
 
-TEST(LeadFlow, CornersComeFromTheBoxTexture)
-{
+TEST(LeadFlow, CornersComeFromTheBoxTexture) {
     std::vector<uint8_t> img(static_cast<size_t>(kW) * kH, 100);
     LeadBox box{600, 360, 660, 400};
     for (int y = box.y0; y < box.y1; ++y)  // 4 px 바둑판
-        for (int x = box.x0; x < box.x1; ++x)
-            img[static_cast<size_t>(y) * kW + x] = ((x / 4 + y / 4) % 2) ? 220 : 30;
+        for (int x = box.x0; x < box.x1; ++x) img[static_cast<size_t>(y) * kW + x] = ((x / 4 + y / 4) % 2) ? 220 : 30;
     std::vector<float> xy(2 * kLeadMaxPoints);
     const int n = pick_lead_corners(img.data(), kW, box, kLeadMaxPoints, xy.data());
     EXPECT_GE(n, 30) << "무늬가 있는 상자에서는 점을 넉넉히 고른다";
@@ -83,8 +78,7 @@ TEST(LeadFlow, CornersComeFromTheBoxTexture)
     EXPECT_EQ(pick_lead_corners(flat.data(), kW, box, kLeadMaxPoints, xy.data()), 0) << "평평한 곳에는 점이 없다";
 }
 
-TEST(LeadFlow, SimilarityScaleIgnoresBackgroundPoints)
-{
+TEST(LeadFlow, SimilarityScaleIgnoresBackgroundPoints) {
     std::vector<float> a, b;
     Noise noise(7);
     const float cx = 630.0f, cy = 380.0f, s = 1.05f;
@@ -109,16 +103,15 @@ TEST(LeadFlow, SimilarityScaleIgnoresBackgroundPoints)
     EXPECT_LE(fit.inliers, 31) << "배경 점은 앞차의 확대·이동에 맞지 않는다";
 }
 
-/* 일정하게 다가오는 앞차. 뒷면 판(폭 1.8 m, 도로 위 0.3~1.4 m)에 부드러운 무늬를 칠해 거리 x(f)에서 본 영상을
- * 그리고(카메라 높이 1.22 m, 보정 0, 판 밖은 평평한 회색), LK 대신 판 위 점의 실제 이동(주점에서 x(f-1)/x(f)배로
- * 퍼진다)에 걸음마다 잡음을 더해 준다. */
+// 일정하게 다가오는 앞차. 뒷면 판(폭 1.8 m, 도로 위 0.3~1.4 m)에 부드러운 무늬를 칠해 거리 x(f)에서 본 영상을
+// 그리고(카메라 높이 1.22 m, 보정 0, 판 밖은 평평한 회색), LK 대신 판 위 점의 실제 이동(주점에서 x(f-1)/x(f)배로
+// 퍼진다)에 걸음마다 잡음을 더해 준다.
 class Approach {
 public:
     Approach(float x0, float closing) : x0_(x0), closing_(closing) {}
     float x(int frame) const { return x0_ - closing_ * 0.05f * static_cast<float>(frame); }
 
-    void render(int frame, std::vector<uint8_t> *img) const
-    {
+    void render(int frame, std::vector<uint8_t> *img) const {
         img->assign(static_cast<size_t>(kW) * kH, 100);
         const double x = this->x(frame);
         const int u0 = static_cast<int>(std::floor(kK.cx - kK.fx * 0.9 / x)) - 1;
@@ -134,16 +127,14 @@ public:
         }
     }
     // frame-1에서 (u, v)에 보이던 판 위 점이 frame에서 보이는 곳
-    void move(int frame, float u, float v, float *u2, float *v2) const
-    {
+    void move(int frame, float u, float v, float *u2, float *v2) const {
         const double s = static_cast<double>(x(frame - 1)) / x(frame);
         *u2 = static_cast<float>(kK.cx + (u - kK.cx) * s);
         *v2 = static_cast<float>(kK.cy + (v - kK.cy) * s);
     }
 
 private:
-    static double texture(double lat, double up)
-    {
+    static double texture(double lat, double up) {
         const double tau = 6.283185307179586;
         return 128.0 + 45.0 * std::sin(tau * lat / 0.31) * std::sin(tau * up / 0.23) +
                25.0 * std::sin(tau * (lat + 0.7 * up) / 0.17);
@@ -151,13 +142,11 @@ private:
     float x0_, closing_;
 };
 
-
-/* 한 프레임: begin → (점이 있으면) 이동 + 잡음으로 따라가고, 되돌린 위치는 back_err만큼 어긋나게 → top_up.
- * back_err(점 번호, 위치)가 0이면 앞뒤 검사를 통과한다. */
+// 한 프레임: begin → (점이 있으면) 이동 + 잡음으로 따라가고, 되돌린 위치는 back_err만큼 어긋나게 → top_up.
+// back_err(점 번호, 위치)가 0이면 앞뒤 검사를 통과한다.
 template <class BackErr>
 LeadFlowState step(LeadFlowTracker &tracker, const Approach &scene, int f, bool consecutive, float noise_px,
-                   Noise &noise, BackErr back_err)
-{
+                   Noise &noise, BackErr back_err) {
     std::vector<uint8_t> img;
     scene.render(f, &img);
     std::vector<float> in(2 * kLeadMaxPoints), out(2 * kLeadMaxPoints), back(2 * kLeadMaxPoints);
@@ -180,8 +169,7 @@ LeadFlowState step(LeadFlowTracker &tracker, const Approach &scene, int f, bool 
 
 auto no_back_err = [](float) { return 0.0f; };
 
-TEST(LeadFlow, TrackerMeasuresTheClosingSpeedThroughChainDrift)
-{
+TEST(LeadFlow, TrackerMeasuresTheClosingSpeedThroughChainDrift) {
     LeadFlowTracker tracker(kK, kW, kH);
     const Approach scene(25.0f, 3.0f);  // 25 m에서 3 m/s로 다가온다
     Noise noise;
@@ -202,8 +190,7 @@ TEST(LeadFlow, TrackerMeasuresTheClosingSpeedThroughChainDrift)
     EXPECT_NEAR(-last.lead_x * last.expansion_rate, -expected, 0.1) << "상대 속도 -x·r";
 }
 
-TEST(LeadFlow, PointsThatDoNotTrackBackAreDroppedAndRefilled)
-{
+TEST(LeadFlow, PointsThatDoNotTrackBackAreDroppedAndRefilled) {
     LeadFlowTracker tracker(kK, kW, kH);
     const Approach scene(30.0f, 2.0f);
     Noise noise;
@@ -223,8 +210,7 @@ TEST(LeadFlow, PointsThatDoNotTrackBackAreDroppedAndRefilled)
     EXPECT_GT(tracker.state().points, st.points) << "채운 점도 창이 차면 쓴다";
 }
 
-TEST(LeadFlow, AnotherLeadOrAGapRestartsTheWindow)
-{
+TEST(LeadFlow, AnotherLeadOrAGapRestartsTheWindow) {
     LeadFlowTracker tracker(kK, kW, kH);
     const Approach still(30.0f, 0.0f), near(18.0f, 0.0f);
     Noise noise;
@@ -233,7 +219,8 @@ TEST(LeadFlow, AnotherLeadOrAGapRestartsTheWindow)
     EXPECT_NEAR(tracker.state().expansion_rate, 0.0f, 1e-4) << "움직이지 않으면 확대율 0";
 
     int f = kLeadWindowSteps + 1;
-    EXPECT_FALSE(step(tracker, near, f++, true, 0.0f, noise, no_back_err).valid) << "거리가 튀면(다른 앞차) 창을 버린다";
+    EXPECT_FALSE(step(tracker, near, f++, true, 0.0f, noise, no_back_err).valid)
+        << "거리가 튀면(다른 앞차) 창을 버린다";
     for (int i = 1; i < kLeadWindowSteps; ++i)
         EXPECT_FALSE(step(tracker, near, f++, true, 0.0f, noise, no_back_err).valid);
     EXPECT_TRUE(step(tracker, near, f++, true, 0.0f, noise, no_back_err).valid) << "새 앞차로 창이 다시 차면 낸다";

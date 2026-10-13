@@ -3,8 +3,7 @@
 
 #include <cmath>
 
-void rotation_from_rpy(float roll, float pitch, float yaw, float *rot)
-{
+void rotation_from_rpy(float roll, float pitch, float yaw, float *rot) {
     const float cr = std::cos(roll);
     const float sr = std::sin(roll);
     const float cp = std::cos(pitch);
@@ -23,10 +22,8 @@ void rotation_from_rpy(float roll, float pitch, float yaw, float *rot)
     rot[8] = cp * cr;
 }
 
-
-ProjectionState make_projection_state(float roll, float pitch, float yaw)
-{
-    ProjectionState state {};
+ProjectionState make_projection_state(float roll, float pitch, float yaw) {
+    ProjectionState state{};
     state.roll = roll;
     state.pitch = pitch;
     state.yaw = yaw;
@@ -34,8 +31,8 @@ ProjectionState make_projection_state(float roll, float pitch, float yaw)
     float rot[9] = {};
     rotation_from_rpy(roll, pitch, yaw, rot);
 
-    // The renderer rotates model pixels by 180 degrees. Prepending the
-    // road-axis flip makes that display transform cancel for every RPY.
+    // 렌더러는 모델 화소를 180도 돌린다. 도로 축 뒤집기를 앞에 붙이면 어떤 RPY에서도 그 표시 변환이
+    // 상쇄된다.
     float device_from_calib[9] = {};
     for (int col = 0; col < 3; ++col) {
         device_from_calib[0 * 3 + col] = rot[0 * 3 + col];
@@ -65,14 +62,10 @@ CameraIntrinsics g_camera;
 
 }  // namespace
 
-void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy)
-{
-    g_camera = {fx, fy, cx, cy};
-}
+void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy) { g_camera = {fx, fy, cx, cy}; }
 
-bool project_point_subpixel(const ProjectionState &projection, float x_forward, float y_right,
-                            float z_down, int width, int height, float *px, float *py)
-{
+bool project_point_subpixel(const ProjectionState &projection, float x_forward, float y_right, float z_down, int width,
+                            int height, float *px, float *py) {
     if (x_forward < 0.5f || x_forward > 120.0f) return false;
     // 가상 카메라가 오프셋만큼 오른쪽이라 모델은 실제 점을 y − 오프셋으로 본다. 실제 위치로 되돌린다.
     y_right += projection.lateral_offset_m;

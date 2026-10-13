@@ -5,10 +5,9 @@
 
 #include <cstddef>
 
-/* 기록 버전과 그대로 저장하는 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다. */
-static_assert(kRecordingVersion == 13 && sizeof(ModelState) == 3736 &&
-                  sizeof(ControlState) == 240 && sizeof(PandaState) == 96 &&
-                  sizeof(LearnerState) == 128 && sizeof(ImuSample) == 40 &&
+// 기록 버전과 그대로 저장하는 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다.
+static_assert(kRecordingVersion == 13 && sizeof(ModelState) == 3736 && sizeof(ControlState) == 240 &&
+                  sizeof(PandaState) == 96 && sizeof(LearnerState) == 128 && sizeof(ImuSample) == 40 &&
                   offsetof(ImuBatch, samples) == 16 && sizeof(LocalizationState) == 128,
               "recording v13 pins these payloads; bump kRecordingVersion together");
 
@@ -18,12 +17,9 @@ StateRecorder::StateRecorder(const std::string &topic_suffix)
       panda_topic_(kPandaStateTopic + topic_suffix),
       learner_topic_(kLearnerStateTopic + topic_suffix),
       imu_topic_(kImuTopic + topic_suffix),
-      localization_topic_(kLocalizationStateTopic + topic_suffix)
-{
-}
+      localization_topic_(kLocalizationStateTopic + topic_suffix) {}
 
-void StateRecorder::record(RecordingWriter &writer)
-{
+void StateRecorder::record(RecordingWriter &writer) {
     if (model_.attach(model_topic_.c_str()) && model_.poll()) {
         const ModelState &model = model_.latest();
         writer.write_state(RecordType::ModelState, model.model_timestamp_ns, &model, sizeof(model));
@@ -48,7 +44,6 @@ void StateRecorder::record(RecordingWriter &writer)
     }
     if (localization_.attach(localization_topic_.c_str()) && localization_.poll()) {
         const LocalizationState &localization = localization_.latest();
-        writer.write_state(RecordType::Localization, localization.timestamp_ns, &localization,
-                           sizeof(localization));
+        writer.write_state(RecordType::Localization, localization.timestamp_ns, &localization, sizeof(localization));
     }
 }

@@ -1,33 +1,30 @@
-"""Measure the lateral bias of a recorded drive and say where it comes from.
+"""녹화된 주행의 횡방향 치우침을 재고 그것이 어디서 오는지 밝힌다.
 
-The lateral planner steers toward the midpoint of laneLines[1] (left) and
-laneLines[2] (right) in a frame where +y is to the RIGHT, so
+횡방향 플래너는 +y가 오른쪽인 좌표계에서 laneLines[1](왼쪽)과
+laneLines[2](오른쪽)의 중점을 향해 조향하므로
 
     offset(x) = (left_y(x) + right_y(x)) / 2
 
-is where the model thinks the lane centre sits relative to the camera at
-distance x ahead. Positive means "the lane centre is to my right", i.e. the car
-is sitting LEFT of centre.
+는 모델이 보기에 앞쪽 거리 x에서 차선 중앙이 카메라 기준으로 놓인 자리다.
+양수는 "차선 중앙이 내 오른쪽에 있다", 곧 차가 중앙보다 왼쪽에 있다는
+뜻이다.
 
-Fitting offset(x) = a + b*x separates the two things that produce it:
+offset(x) = a + b*x로 맞추면 이를 만드는 두 원인이 갈린다:
 
-  a  translation, in metres. A camera that is not on the vehicle centreline,
-     or a car that is genuinely off-centre. Camera intrinsics CANNOT produce
-     this: a principal-point or focal-length error acts about the camera, so
-     its lateral effect is exactly zero at x=0.
-  b  rotation, in rad/m. This is the calibration-shaped term -- a yaw error
-     from the camera matrix or the online extrinsics. A wrong cx of dcx pixels
-     shows up here as roughly dcx/fx.
+  a  평행 이동(단위 m). 카메라가 차량 중심선 위에 있지 않거나, 차가 실제로
+     중앙에서 벗어나 있다. 카메라 내부 파라미터는 이것을 만들 수 없다: 주점이나
+     초점거리 오차는 카메라를 중심으로 작용하므로 x=0에서 횡방향 효과가 정확히 0이다.
+  b  회전(단위 rad/m). 보정 꼴의 항이다 -- 카메라 행렬이나 온라인 외부 파라미터에서
+     온 yaw 오차. cx가 dcx 픽셀 틀리면 여기에 대략 dcx/fx로 나타난다.
 
-So: a large `a` with a near-zero `b` means the bias is not a camera
-calibration problem, and re-deriving the camera matrix will not fix it.
+그러므로 `a`가 크고 `b`가 0에 가까우면 치우침은 카메라 보정 문제가 아니고,
+카메라 행렬을 다시 구해도 고쳐지지 않는다.
 
-Straightness is judged by the model's own 50 m path, NOT by the steering angle.
-Filtering on steering angle looks tempting and is wrong: when the car needs a
-non-zero angle to go straight, an |angle| < k filter keeps only one side of the
-curve distribution and manufactures a rotation term that is not there.
+직진 여부는 조향각이 아니라 모델 자신의 50 m 경로로 판단한다. 조향각으로 거르는
+쪽이 그럴듯해 보이지만 틀렸다: 차가 똑바로 가는 데 0이 아닌 각이 필요하면
+|angle| < k 필터는 커브 분포의 한쪽만 남겨 있지도 않은 회전 항을 만들어 낸다.
 
-Usage:
+사용:
     python tools/model/lane_bias.py <route_dir> [<route_dir> ...]
 """
 
@@ -44,25 +41,25 @@ from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,
                               TRAJECTORY_SIZE, iter_event_records,
                               route_event_files)
 
-# openpilot X_IDXS: the distance each trajectory point sits at.
+# openpilot X_IDXS: 궤적 점마다 놓인 거리.
 X_IDXS = np.array([192.0 * (i / (TRAJECTORY_SIZE - 1.0)) ** 2
                    for i in range(TRAJECTORY_SIZE)])
-FIT_POINTS = 20          # 0 .. 75 m; beyond that the lane lines get noisy
-STRAIGHT_PLAN_Y_M = 0.5  # |plan y| at 48 m below this counts as straight
+FIT_POINTS = 20          # 0 .. 75 m. 그 너머는 차선이 흔들린다
+STRAIGHT_PLAN_Y_M = 0.5  # 48 m에서 |plan y|가 이보다 작으면 직진으로 친다
 MIN_SPEED_KPH = 60.0
 MIN_LANE_PROB = 0.6
-MAX_DRIVER_TORQUE = 50   # ignore frames where the driver was nudging
+MAX_DRIVER_TORQUE = 50   # 운전자가 핸들을 살짝 건드린 프레임은 뺀다
 
 
 class RouteLateral:
-    """Per-frame lateral quantities, model records joined to control records."""
+    """프레임별 횡방향 값. 모델 레코드를 control 레코드와 이어 붙였다."""
 
     def __init__(self):
-        self.lane_offset = []    # [N, TRAJECTORY_SIZE] perceived lane centre
-        self.plan_y = []         # [N, TRAJECTORY_SIZE] model path
+        self.lane_offset = []    # [N, TRAJECTORY_SIZE] 인식한 차선 중앙
+        self.plan_y = []         # [N, TRAJECTORY_SIZE] 모델 경로
         self.left_prob = []
         self.right_prob = []
-        self.camera_offset = []  # [N] warp camera offset (recording v7+), else empty
+        self.camera_offset = []  # [N] 워프 카메라 오프셋(녹화 v7+), 아니면 비어 있다
         self.model_ts = []
         self.control = {k: [] for k in
                         ("ts", "active", "cluster_speed_kph", "steer_deg",
@@ -114,8 +111,8 @@ def read_route_lateral(route: Path) -> RouteLateral:
 
 
 def route_offsets(route: Path) -> dict[str, float]:
-    """The lateral tuning that was active when this drive started, from its
-    param snapshot. camera_offset_m lives in display.json (web device settings)."""
+    """이 주행이 시작될 때 적용되던 횡방향 튜닝. 주행의 param 스냅숏에서 읽는다.
+    camera_offset_m은 display.json(웹 기기 설정)에 있다."""
     out = {}
     for name, keys in (("steering.json", ("path_offset_m", "angle_offset_deg")),
                        ("display.json", ("camera_offset_m",))):
@@ -175,8 +172,8 @@ def analyse(route: Path) -> None:
         raw = intercept + tuning["path_offset_m"]
         print(f"  path_offset_m={tuning['path_offset_m']} is already applied, so the "
               f"uncompensated translation is about {raw * 100:+.1f} cm")
-    # The warp moves the model's viewpoint camera_offset_m to the right of the
-    # camera, so a lane centre at y (camera) reads y - offset in the model.
+    # 워프가 모델의 시점을 카메라에서 오른쪽으로 camera_offset_m만큼 옮기므로,
+    # (카메라 기준) y에 있는 차선 중앙은 모델에서 y - offset으로 읽힌다.
     if len(data.camera_offset):
         used = data.camera_offset[keep]
         offset = float(used.mean())

@@ -1,16 +1,17 @@
-/* 온라인 보정과 모델 입력 변환을 openpilot 참조식과 대조한다: OnlineCalibrator ↔ calibrationd.py,
- * calibration_service의 저장·복원·수동 보정, app_config 환경 변수, 투영 행렬과 YUV6 워프 ↔
- * openpilot OpenCL 워프. */
+// 온라인 보정과 모델 입력 변환을 openpilot 참조식과 대조한다: OnlineCalibrator ↔ calibrationd.py,
+// calibration_service의 저장·복원·수동 보정, app_config 환경 변수, 투영 행렬과 YUV6 워프 ↔
+// openpilot OpenCL 워프.
 #include "common/app_config.h"
-#include "model/calibration_service.h"
 #include "common/utils_math.h"
-#include "model/model_input_transform.h"
 #include "model/calibration_online.h"
+#include "model/calibration_service.h"
 #include "model/flow_calibration.h"
+#include "model/model_input_transform.h"
 
 #include <gtest/gtest.h>
 
-#include <filesystem>
+#include <time.h>
+#include <unistd.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -18,11 +19,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <vector>
-#include <time.h>
-#include <unistd.h>
 
 namespace {
 
@@ -52,21 +52,18 @@ constexpr int kBlockSize = 100;
 constexpr int kInputsNeeded = 5;
 constexpr int kInputsWanted = 50;
 
-void matmul3d(const double *a, const double *b, double *out)
-{
+void matmul3d(const double *a, const double *b, double *out) {
     for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
             double sum = 0.0;
-            for (int k = 0; k < 3; ++k)
-                sum += a[r * 3 + k] * b[k * 3 + c];
+            for (int k = 0; k < 3; ++k) sum += a[r * 3 + k] * b[k * 3 + c];
             out[r * 3 + c] = sum;
         }
     }
 }
 
 // rot = Rz(yaw)·Ry(pitch)·Rx(roll), openpilot rot_from_euler과 같은 순서
-void rot_from_euler_ref(const double rpy[3], double *rot)
-{
+void rot_from_euler_ref(const double rpy[3], double *rot) {
     const double cr = std::cos(rpy[0]);
     const double sr = std::sin(rpy[0]);
     const double cp = std::cos(rpy[1]);
@@ -74,6 +71,7 @@ void rot_from_euler_ref(const double rpy[3], double *rot)
     const double cy = std::cos(rpy[2]);
     const double sy = std::sin(rpy[2]);
 
+    // clang-format off
     const double rx[9] = {
         1.0, 0.0, 0.0,
         0.0, cr, -sr,
@@ -89,21 +87,20 @@ void rot_from_euler_ref(const double rpy[3], double *rot)
         sy, cy, 0.0,
         0.0, 0.0, 1.0,
     };
+    // clang-format on
 
     double tmp[9];
     matmul3d(ry, rx, tmp);
     matmul3d(rz, tmp, rot);
 }
 
-void euler_from_rot_ref(const double *rot, double rpy[3])
-{
+void euler_from_rot_ref(const double *rot, double rpy[3]) {
     rpy[0] = std::atan2(rot[2 * 3 + 1], rot[2 * 3 + 2]);
     rpy[1] = std::asin(std::max(-1.0, std::min(1.0, -rot[2 * 3 + 0])));
     rpy[2] = std::atan2(rot[1 * 3 + 0], rot[0 * 3 + 0]);
 }
 
-void compose_rpy_ref(const double base[3], const double observed[3], double out[3])
-{
+void compose_rpy_ref(const double base[3], const double observed[3], double out[3]) {
     double base_rot[9];
     double observed_rot[9];
     double composed[9];
@@ -113,12 +110,9 @@ void compose_rpy_ref(const double base[3], const double observed[3], double out[
     euler_from_rot_ref(composed, out);
 }
 
-bool finite3(const double v[3])
-{
-    return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);
-}
+bool finite3(const double v[3]) { return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]); }
 
-/* openpilot calibrationd.py의 Calibrator를 double로 옮긴 참조 구현. */
+// openpilot calibrationd.py의 Calibrator를 double로 옮긴 참조 구현.
 struct RefCalibrator {
     double rpys[kInputsWanted][3] = {};
     double heights[kInputsWanted] = {};
@@ -135,22 +129,18 @@ struct RefCalibrator {
     uint64_t rejected = 0;
 
     void reset(const double init[3], int blocks, const double *smooth_from = nullptr,
-               double height_init = kHeightInit)
-    {
+               double height_init = kHeightInit) {
         valid_blocks = std::max(0, std::min(blocks, kInputsWanted));
         height = std::isfinite(height_init) ? height_init : kHeightInit;
         for (int b = 0; b < kInputsWanted; ++b) heights[b] = height;
-        for (int i = 0; i < 3; ++i)
-            rpy[i] = std::isfinite(init[i]) ? init[i] : 0.0;
+        for (int i = 0; i < 3; ++i) rpy[i] = std::isfinite(init[i]) ? init[i] : 0.0;
         for (int b = 0; b < kInputsWanted; ++b) {
-            for (int i = 0; i < 3; ++i)
-                rpys[b][i] = rpy[i];
+            for (int i = 0; i < 3; ++i) rpys[b][i] = rpy[i];
         }
         idx = 0;
         block_idx = 0;
         if (smooth_from) {
-            for (int i = 0; i < 3; ++i)
-                old_rpy[i] = smooth_from[i];
+            for (int i = 0; i < 3; ++i) old_rpy[i] = smooth_from[i];
             old_rpy_weight = 1.0;
         } else {
             old_rpy[0] = old_rpy[1] = old_rpy[2] = 0.0;
@@ -159,25 +149,19 @@ struct RefCalibrator {
         update_status();
     }
 
-    void smooth_rpy(double out[3]) const
-    {
+    void smooth_rpy(double out[3]) const {
         if (old_rpy_weight > 0.0) {
-            for (int i = 0; i < 3; ++i)
-                out[i] = old_rpy_weight * old_rpy[i] + (1.0 - old_rpy_weight) * rpy[i];
+            for (int i = 0; i < 3; ++i) out[i] = old_rpy_weight * old_rpy[i] + (1.0 - old_rpy_weight) * rpy[i];
         } else {
-            for (int i = 0; i < 3; ++i)
-                out[i] = rpy[i];
+            for (int i = 0; i < 3; ++i) out[i] = rpy[i];
         }
     }
 
-    static bool is_valid(const double rpy_in[3])
-    {
-        return kPitchMin < rpy_in[1] && rpy_in[1] < kPitchMax &&
-               kYawMin < rpy_in[2] && rpy_in[2] < kYawMax;
+    static bool is_valid(const double rpy_in[3]) {
+        return kPitchMin < rpy_in[1] && rpy_in[1] < kPitchMax && kYawMin < rpy_in[2] && rpy_in[2] < kYawMax;
     }
 
-    static void sanity_clip(double rpy_in[3])
-    {
+    static void sanity_clip(double rpy_in[3]) {
         if (!finite3(rpy_in)) {
             rpy_in[0] = 0.0;
             rpy_in[1] = 0.0;
@@ -188,8 +172,7 @@ struct RefCalibrator {
         rpy_in[2] = std::max(kYawMin - kSanityMargin, std::min(kYawMax + kSanityMargin, rpy_in[2]));
     }
 
-    void update_status()
-    {
+    void update_status() {
         double sum[3] = {};
         double height_sum = 0.0;
         double min_v[3] = {};
@@ -199,8 +182,7 @@ struct RefCalibrator {
         for (int b = 0; b < valid_blocks; ++b) {
             if (b == block_idx) continue;
             if (valid_count == 0) {
-                for (int i = 0; i < 3; ++i)
-                    min_v[i] = max_v[i] = rpys[b][i];
+                for (int i = 0; i < 3; ++i) min_v[i] = max_v[i] = rpys[b][i];
             }
             height_sum += heights[b];
             for (int i = 0; i < 3; ++i) {
@@ -239,23 +221,19 @@ struct RefCalibrator {
         }
     }
 
-    bool update(const PoseObservation &pose, double v_ego = 20.0)
-    {
+    bool update(const PoseObservation &pose, double v_ego = 20.0) {
         old_rpy_weight = std::max(0.0, old_rpy_weight - 1.0 / kSmoothCycles);
 
         const double trans[3] = {pose.trans[0], pose.trans[1], pose.trans[2]};
         const double rot[3] = {pose.rot[0], pose.rot[1], pose.rot[2]};
         const double trans_std[3] = {pose.trans_std[0], pose.trans_std[1], pose.trans_std[2]};
-        const bool valid_numbers = finite3(trans) && finite3(rot) && finite3(trans_std) &&
-            std::isfinite(v_ego);
-        const bool straight_and_fast = valid_numbers &&
-            v_ego > kMinSpeedFilter &&
-            trans[0] > kMinSpeedFilter &&
-            std::fabs(rot[2]) < kMaxYawRateFilter;
+        const bool valid_numbers = finite3(trans) && finite3(rot) && finite3(trans_std) && std::isfinite(v_ego);
+        const bool straight_and_fast = valid_numbers && v_ego > kMinSpeedFilter && trans[0] > kMinSpeedFilter &&
+                                       std::fabs(rot[2]) < kMaxYawRateFilter;
         const bool rpy_certain = std::atan2(trans_std[1], trans[0]) < kMaxVelAngleStd;
         const bool height_certain = pose.road_trans_std[2] < kMaxHeightStd;
-        const bool certain_if_calib = valid_numbers &&
-            ((rpy_certain && height_certain) || (valid_blocks < kInputsNeeded));
+        const bool certain_if_calib =
+            valid_numbers && ((rpy_certain && height_certain) || (valid_blocks < kInputsNeeded));
 
         if (!straight_and_fast || !certain_if_calib) {
             ++rejected;
@@ -280,11 +258,10 @@ struct RefCalibrator {
 
         for (int i = 0; i < 3; ++i)
             rpys[block_idx][i] =
-                (idx * rpys[block_idx][i] + (kBlockSize - idx) * new_rpy[i]) /
-                static_cast<double>(kBlockSize);
+                (idx * rpys[block_idx][i] + (kBlockSize - idx) * new_rpy[i]) / static_cast<double>(kBlockSize);
         const double new_height = std::isfinite(pose.road_trans[2]) ? pose.road_trans[2] : kHeightInit;
-        heights[block_idx] = (idx * heights[block_idx] + (kBlockSize - idx) * new_height) /
-                             static_cast<double>(kBlockSize);
+        heights[block_idx] =
+            (idx * heights[block_idx] + (kBlockSize - idx) * new_height) / static_cast<double>(kBlockSize);
 
         idx = (idx + 1) % kBlockSize;
         ++accepted;
@@ -298,9 +275,8 @@ struct RefCalibrator {
     }
 };
 
-PoseObservation make_pose(float tx = 20.0f, float ty = 0.2f, float tz = -0.4f,
-                          float yaw_rate = 0.0f, float trans_std_y = 0.01f)
-{
+PoseObservation make_pose(float tx = 20.0f, float ty = 0.2f, float tz = -0.4f, float yaw_rate = 0.0f,
+                          float trans_std_y = 0.01f) {
     PoseObservation pose{};
     pose.trans[0] = tx;
     pose.trans[1] = ty;
@@ -321,18 +297,12 @@ PoseObservation make_pose(float tx = 20.0f, float ty = 0.2f, float tz = -0.4f,
     return pose;
 }
 
-void compare_snapshot(const OnlineCalibrator::Snapshot &actual, const RefCalibrator &expected,
-                      const char *label)
-{
+void compare_snapshot(const OnlineCalibrator::Snapshot &actual, const RefCalibrator &expected, const char *label) {
     EXPECT_EQ(actual.valid_blocks, expected.valid_blocks) << std::string(label) + " valid_blocks";
-    EXPECT_EQ(actual.block_sample_count, expected.idx)
-        << std::string(label) + " block_sample_count";
-    EXPECT_EQ(static_cast<int>(actual.status), static_cast<int>(expected.status))
-        << std::string(label) + " status";
-    EXPECT_NEAR(actual.accepted_samples, expected.accepted, 0.0)
-        << std::string(label) + " accepted";
-    EXPECT_NEAR(actual.rejected_samples, expected.rejected, 0.0)
-        << std::string(label) + " rejected";
+    EXPECT_EQ(actual.block_sample_count, expected.idx) << std::string(label) + " block_sample_count";
+    EXPECT_EQ(static_cast<int>(actual.status), static_cast<int>(expected.status)) << std::string(label) + " status";
+    EXPECT_NEAR(actual.accepted_samples, expected.accepted, 0.0) << std::string(label) + " accepted";
+    EXPECT_NEAR(actual.rejected_samples, expected.rejected, 0.0) << std::string(label) + " rejected";
     EXPECT_NEAR(actual.height_m, expected.height, 1e-5) << std::string(label) + " height";
     for (int i = 0; i < 3; ++i) {
         EXPECT_NEAR(actual.rpy[i], expected.rpy[i], 1e-5) << std::string(label) + " rpy";
@@ -340,8 +310,7 @@ void compare_snapshot(const OnlineCalibrator::Snapshot &actual, const RefCalibra
     }
 }
 
-TEST(CalibrationEquivalence, OnlineCalibrator)
-{
+TEST(CalibrationEquivalence, OnlineCalibrator) {
     const double zero[3] = {};
     RefCalibrator ref;
     ref.reset(zero, 0);
@@ -351,8 +320,7 @@ TEST(CalibrationEquivalence, OnlineCalibrator)
     EXPECT_FALSE(actual.update(low_speed, 20.0f).accepted) << "카메라 속도가 낮은 표본은 버린다";
 
     PoseObservation low_vehicle_speed = make_pose(20.0f, 0.0f, 0.0f, 0.01f, 0.0f);
-    EXPECT_FALSE(actual.update(low_vehicle_speed, 2.0f).accepted)
-        << "CAN vEgo가 낮은 표본은 버린다";
+    EXPECT_FALSE(actual.update(low_vehicle_speed, 2.0f).accepted) << "CAN vEgo가 낮은 표본은 버린다";
     EXPECT_FALSE(ref.update(low_speed)) << "참조식도 저속 표본을 버린다";
     EXPECT_FALSE(ref.update(low_vehicle_speed, 2.0)) << "참조식도 CAN vEgo가 낮은 표본을 버린다";
     compare_snapshot(actual.snapshot(), ref, "low_speed_reject");
@@ -382,22 +350,19 @@ TEST(CalibrationEquivalence, OnlineCalibrator)
         ref.update(accepted_pose);
     }
     compare_snapshot(actual.snapshot(), ref, "five_blocks");
-    EXPECT_EQ(static_cast<int>(actual.snapshot().status),
-              static_cast<int>(CalibrationStatus::Calibrated))
+    EXPECT_EQ(static_cast<int>(actual.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated))
         << "블록 5개가 차면 보정 완료";
 
     PoseObservation uncertain = make_pose();
     uncertain.trans_std[1] = 1.0f;
-    EXPECT_FALSE(actual.update(uncertain, 20.0f).accepted)
-        << "보정 뒤에도 trans 표준편차가 큰 표본은 버린다";
+    EXPECT_FALSE(actual.update(uncertain, 20.0f).accepted) << "보정 뒤에도 trans 표준편차가 큰 표본은 버린다";
     EXPECT_FALSE(ref.update(uncertain)) << "참조식도 보정 뒤 trans 표준편차가 큰 표본을 버린다";
     compare_snapshot(actual.snapshot(), ref, "uncertain_after_calib");
 }
 
-/* upstream처럼 road_transform z로 카메라 높이를 블록 평균하고, 보정 뒤에는 높이 표준편차가
- * e^-3.5보다 큰 표본을 버린다. 장착 변경으로 다시 모을 때 높이는 HEIGHT_INIT로 돌아간다. */
-TEST(CalibrationEquivalence, HeightFollowsUpstream)
-{
+// upstream처럼 road_transform z로 카메라 높이를 블록 평균하고, 보정 뒤에는 높이 표준편차가
+// e^-3.5보다 큰 표본을 버린다. 장착 변경으로 다시 모을 때 높이는 HEIGHT_INIT로 돌아간다.
+TEST(CalibrationEquivalence, HeightFollowsUpstream) {
     const double zero[3] = {};
     RefCalibrator ref;
     ref.reset(zero, 0);
@@ -421,9 +386,8 @@ TEST(CalibrationEquivalence, HeightFollowsUpstream)
     EXPECT_TRUE(fresh.update(unsure, 20.0f).accepted) << "보정 전에는 높이가 불확실해도 받는다";
 }
 
-/* upstream reset처럼 범위를 벗어난 저장값도 받아 Invalid로 두고, 저장된 높이로 시작한다. */
-TEST(CalibrationEquivalence, RestoreOutOfRangeLikeUpstream)
-{
+// upstream reset처럼 범위를 벗어난 저장값도 받아 Invalid로 두고, 저장된 높이로 시작한다.
+TEST(CalibrationEquivalence, RestoreOutOfRangeLikeUpstream) {
     OnlineCalibrator calibrator;
     const float out_of_range[3] = {0.0f, 0.0f, 0.10f};  // yaw 5.7도: 한계 0.069 rad 밖
     ASSERT_TRUE(calibrator.restore(out_of_range, 12, nullptr, 1.35f));
@@ -443,8 +407,7 @@ TEST(CalibrationEquivalence, RestoreOutOfRangeLikeUpstream)
         << "pitch 상한은 upstream 0.17";
 }
 
-TEST(CalibrationEquivalence, MountChangeRecalibratesLikeUpstream)
-{
+TEST(CalibrationEquivalence, MountChangeRecalibratesLikeUpstream) {
     const double zero[3] = {};
     RefCalibrator ref;
     ref.reset(zero, 0);
@@ -494,19 +457,18 @@ TEST(CalibrationEquivalence, MountChangeRecalibratesLikeUpstream)
         yawed_ref.update(still);
     }
     compare_snapshot(yawed_actual.snapshot(), yawed_ref, "recalibrating_4_blocks");
-    EXPECT_EQ(static_cast<int>(yawed_actual.snapshot().status),
-              static_cast<int>(CalibrationStatus::Recalibrating)) << "5블록 전에는 recalibrating";
+    EXPECT_EQ(static_cast<int>(yawed_actual.snapshot().status), static_cast<int>(CalibrationStatus::Recalibrating))
+        << "5블록 전에는 recalibrating";
     for (int i = 0; i < kBlockSize; ++i) {
         yawed_actual.update(still, 20.0f);
         yawed_ref.update(still);
     }
     compare_snapshot(yawed_actual.snapshot(), yawed_ref, "recalibrated");
-    EXPECT_EQ(static_cast<int>(yawed_actual.snapshot().status),
-              static_cast<int>(CalibrationStatus::Calibrated)) << "5블록이 다시 차면 보정 완료";
+    EXPECT_EQ(static_cast<int>(yawed_actual.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated))
+        << "5블록이 다시 차면 보정 완료";
 }
 
-ParsedModelOutput parsed_from_pose(const PoseObservation &pose)
-{
+ParsedModelOutput parsed_from_pose(const PoseObservation &pose) {
     ParsedModelOutput output{};
     output.valid = true;
     output.has_pose = true;
@@ -518,32 +480,27 @@ ParsedModelOutput parsed_from_pose(const PoseObservation &pose)
 struct TempParamsDir {
     std::string dir;
     explicit TempParamsDir(const char *name)
-        : dir((std::filesystem::temp_directory_path() / (std::string("edgepilot_test_") + name)).string())
-    {
+        : dir((std::filesystem::temp_directory_path() / (std::string("edgepilot_test_") + name)).string()) {
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
         setenv("EDGEPILOT_PARAMS_DIR", dir.c_str(), 1);
     }
-    ~TempParamsDir()
-    {
+    ~TempParamsDir() {
         unsetenv("EDGEPILOT_PARAMS_DIR");
         std::filesystem::remove_all(dir);
     }
     std::string file(const char *name) const { return dir + "/" + name; }
 };
 
-TEST(CalibrationEquivalence, CalibrationService)
-{
+TEST(CalibrationEquivalence, CalibrationService) {
     const TempParamsDir params("calibration_service");
 
     OnlineCalibrator restored_calibrator;
     const float restored_rpy[3] = {0.0f, deg_to_rad(2.0f), deg_to_rad(-0.75f)};
-    EXPECT_TRUE(restored_calibrator.restore(restored_rpy, 12))
-        << "저장된 유효 보정값을 복원한다";
+    EXPECT_TRUE(restored_calibrator.restore(restored_rpy, 12)) << "저장된 유효 보정값을 복원한다";
     float restored_output[3] = {};
     restored_calibrator.output_rpy(restored_output);
-    EXPECT_NEAR(restored_output[1], restored_rpy[1], 1e-7)
-        << "복원한 pitch로 보정기를 초기화한다";
+    EXPECT_NEAR(restored_output[1], restored_rpy[1], 1e-7) << "복원한 pitch로 보정기를 초기화한다";
     EXPECT_NEAR(restored_output[2], restored_rpy[2], 1e-7) << "복원한 yaw로 보정기를 초기화한다";
     EXPECT_EQ(restored_calibrator.snapshot().valid_blocks, 12) << "복원한 유효 블록 수";
 
@@ -554,15 +511,13 @@ TEST(CalibrationEquivalence, CalibrationService)
     CalibrationService service(auto_config);
 
     const ParsedModelOutput output = parsed_from_pose(make_pose());
-    for (int i = 0; i < kBlockSize; ++i)
-        service.update(output, 20.0f);
+    for (int i = 0; i < kBlockSize; ++i) service.update(output, 20.0f);
 
     float input_rpy[3] = {};
     service.input_rpy(input_rpy);
     const OnlineCalibrator::Snapshot snapshot = service.snapshot();
     for (int i = 0; i < 3; ++i)
-        EXPECT_NEAR(input_rpy[i], snapshot.rpy[i], 1e-7)
-            << "자동 모드의 input_rpy는 온라인 스냅샷을 따른다";
+        EXPECT_NEAR(input_rpy[i], snapshot.rpy[i], 1e-7) << "자동 모드의 input_rpy는 온라인 스냅샷을 따른다";
 
     AppConfig manual_config;
     manual_config.calibration_auto = true;
@@ -571,16 +526,14 @@ TEST(CalibrationEquivalence, CalibrationService)
     manual_config.manual_pitch = deg_to_rad(1.0f);
     manual_config.manual_yaw = deg_to_rad(-0.5f);
     CalibrationService manual(manual_config);
-    for (int i = 0; i < 5 * kBlockSize; ++i)
-        manual.update(output, 20.0f);
+    for (int i = 0; i < 5 * kBlockSize; ++i) manual.update(output, 20.0f);
 
     float manual_rpy[3] = {};
     manual.input_rpy(manual_rpy);
     EXPECT_NEAR(manual_rpy[0], manual_config.manual_roll, 1e-7) << "수동 roll이 우선한다";
     EXPECT_NEAR(manual_rpy[1], manual_config.manual_pitch, 1e-7) << "수동 pitch가 우선한다";
     EXPECT_NEAR(manual_rpy[2], manual_config.manual_yaw, 1e-7) << "수동 yaw가 우선한다";
-    EXPECT_EQ(manual.snapshot().valid_blocks, 5)
-        << "수동 보정도 저장된 보정값으로 남는다";
+    EXPECT_EQ(manual.snapshot().valid_blocks, 5) << "수동 보정도 저장된 보정값으로 남는다";
 
     AppConfig restored_config;
     restored_config.calibration_auto = true;
@@ -591,14 +544,11 @@ TEST(CalibrationEquivalence, CalibrationService)
     EXPECT_NEAR(persisted_rpy[0], manual_config.manual_roll, 1e-7) << "저장된 roll을 다시 읽는다";
     EXPECT_NEAR(persisted_rpy[1], manual_config.manual_pitch, 1e-7) << "저장된 pitch를 다시 읽는다";
     EXPECT_NEAR(persisted_rpy[2], manual_config.manual_yaw, 1e-7) << "저장된 yaw를 다시 읽는다";
-    EXPECT_EQ(static_cast<int>(restored.snapshot().status),
-              static_cast<int>(CalibrationStatus::Calibrated))
+    EXPECT_EQ(static_cast<int>(restored.snapshot().status), static_cast<int>(CalibrationStatus::Calibrated))
         << "다시 읽은 보정은 보정 완료 상태다";
-
 }
 
-TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
-{
+TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch) {
     const TempParamsDir params("calibration_reset");
     const std::string calibration = params.file("calibration.json");
     const std::string reset_request = params.file("calibration_reset");
@@ -607,7 +557,9 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
     AppConfig manual_config;
     manual_config.manual_calibration = true;
     manual_config.manual_pitch = deg_to_rad(2.3f);
-    { CalibrationService seed(manual_config); }  // pitch 2.3도, 5블록을 저장해 둔다
+    {
+        CalibrationService seed(manual_config);
+    }  // pitch 2.3도, 5블록을 저장해 둔다
 
     AppConfig auto_config;
     auto_config.calibration_auto = true;
@@ -629,8 +581,7 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
             service.update(no_pose, 0.0f);
         }
         EXPECT_EQ(service.snapshot().valid_blocks, 0) << "초기화하면 블록이 없다";
-        EXPECT_EQ(static_cast<int>(service.snapshot().status),
-                  static_cast<int>(CalibrationStatus::Uncalibrated));
+        EXPECT_EQ(static_cast<int>(service.snapshot().status), static_cast<int>(CalibrationStatus::Uncalibrated));
         float rpy[3] = {1.0f, 1.0f, 1.0f};
         service.input_rpy(rpy);
         EXPECT_NEAR(rpy[1], 0.0f, 1e-7) << "모델 입력도 0에서 다시 시작한다";
@@ -645,10 +596,9 @@ TEST(CalibrationEquivalence, ResetRequestRecalibratesFromScratch)
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
 }
 
-/* 초기화 뒤 다시 수렴한 보정은 저장된다(2026-10-01: 초기화의 삭제 표시가 남아 저장 대신 파일을
- * 지웠고, 재시작하면 저장소 기본값이 복원돼 laneless가 0.2 m 치우쳤다). */
-TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
-{
+// 초기화 뒤 다시 수렴한 보정은 저장된다(2026-10-01: 초기화의 삭제 표시가 남아 저장 대신 파일을
+// 지웠고, 재시작하면 저장소 기본값이 복원돼 laneless가 0.2 m 치우쳤다).
+TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved) {
     // ctest가 병렬로 돌리므로 ResetRequestRecalibratesFromScratch와 다른 디렉터리를 쓴다.
     const TempParamsDir params("calibration_reset_save");
     const std::string calibration = params.file("calibration.json");
@@ -658,7 +608,9 @@ TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
     AppConfig manual_config;
     manual_config.manual_calibration = true;
     manual_config.manual_pitch = deg_to_rad(2.3f);
-    { CalibrationService seed(manual_config); }
+    {
+        CalibrationService seed(manual_config);
+    }
 
     AppConfig auto_config;
     auto_config.calibration_auto = true;
@@ -692,10 +644,9 @@ TEST(CalibrationEquivalence, RecalibrationAfterResetIsSaved)
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
 }
 
-/* openpilot과 같이 저장된 블록 수를 그대로 쓴다: 5 미만(저장소 기본값 0)이면 rpy는 출발점일 뿐
- * 미보정이고, 직진 5블록이 모여야 보정 완료다. */
-TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated)
-{
+// openpilot과 같이 저장된 블록 수를 그대로 쓴다: 5 미만(저장소 기본값 0)이면 rpy는 출발점일 뿐
+// 미보정이고, 직진 5블록이 모여야 보정 완료다.
+TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated) {
     const float stored[3] = {0.0f, deg_to_rad(-1.0f), deg_to_rad(-1.12f)};
     OnlineCalibrator calibrator;
     ASSERT_TRUE(calibrator.restore(stored, 0));
@@ -718,8 +669,10 @@ TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated)
     {
         std::FILE *f = std::fopen(calibration.c_str(), "w");
         ASSERT_NE(f, nullptr);
-        std::fprintf(f, "{\n  \"version\": 1,\n  \"rpy_rad\": [0, %.9f, %.9f],\n  \"spread_rad\": [0, 0, 0],\n"
-                        "  \"valid_blocks\": 0\n}\n", stored[1], stored[2]);
+        std::fprintf(f,
+                     "{\n  \"version\": 1,\n  \"rpy_rad\": [0, %.9f, %.9f],\n  \"spread_rad\": [0, 0, 0],\n"
+                     "  \"valid_blocks\": 0\n}\n",
+                     stored[1], stored[2]);
         std::fclose(f);
     }
     AppConfig auto_config;
@@ -734,8 +687,7 @@ TEST(CalibrationEquivalence, StoredCalibrationBelowFiveBlocksStartsUncalibrated)
     }
 }
 
-TEST(CalibrationEquivalence, AppConfigEnvFeedback)
-{
+TEST(CalibrationEquivalence, AppConfigEnvFeedback) {
     unsetenv("EDGEPILOT_CALIB_ROLL_DEG");
     unsetenv("EDGEPILOT_CALIB_PITCH_DEG");
     unsetenv("EDGEPILOT_CALIB_YAW_DEG");
@@ -743,20 +695,15 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
     setenv("EDGEPILOT_CALIB_PITCH_DEG", "1.25", 1);
     setenv("EDGEPILOT_CALIB_YAW_DEG", "-0.75", 1);
     AppConfig fallback = AppConfig::from_env_defaults();
-    EXPECT_TRUE(fallback.manual_calibration)
-        << "수동 보정 환경 변수를 주면 수동 모드가 켜진다";
+    EXPECT_TRUE(fallback.manual_calibration) << "수동 보정 환경 변수를 주면 수동 모드가 켜진다";
     EXPECT_NEAR(fallback.manual_pitch, deg_to_rad(1.25f), 1e-7) << "수동 pitch 환경 변수 해석";
     EXPECT_NEAR(fallback.manual_yaw, deg_to_rad(-0.75f), 1e-7) << "수동 yaw 환경 변수 해석";
     EXPECT_EQ(fallback.nv12_width, kDefaultAiWidth) << "ISP 출력 폭 기본값은 오버스캔 폭";
     EXPECT_EQ(fallback.nv12_height, kDefaultAiHeight) << "ISP 출력 높이 기본값은 오버스캔 높이";
-    EXPECT_NEAR(fallback.input_warp_fx, kDefaultInputWarpFx, 1e-5)
-        << "ISP 출력 크기로 카메라 fx를 맞춘다";
-    EXPECT_NEAR(fallback.input_warp_fy, kDefaultInputWarpFy, 1e-5)
-        << "ISP 출력 크기로 카메라 fy를 맞춘다";
-    EXPECT_NEAR(fallback.input_warp_cx, kDefaultInputWarpCx, 1e-5)
-        << "ISP 출력 크기로 카메라 cx를 맞춘다";
-    EXPECT_NEAR(fallback.input_warp_cy, kDefaultInputWarpCy, 1e-5)
-        << "ISP 출력 크기로 카메라 cy를 맞춘다";
+    EXPECT_NEAR(fallback.input_warp_fx, kDefaultInputWarpFx, 1e-5) << "ISP 출력 크기로 카메라 fx를 맞춘다";
+    EXPECT_NEAR(fallback.input_warp_fy, kDefaultInputWarpFy, 1e-5) << "ISP 출력 크기로 카메라 fy를 맞춘다";
+    EXPECT_NEAR(fallback.input_warp_cx, kDefaultInputWarpCx, 1e-5) << "ISP 출력 크기로 카메라 cx를 맞춘다";
+    EXPECT_NEAR(fallback.input_warp_cy, kDefaultInputWarpCy, 1e-5) << "ISP 출력 크기로 카메라 cy를 맞춘다";
 
     // 다른 카메라의 1080p 내부 파라미터로 바꾸면 비례 환산된다
     setenv("EDGEPILOT_CAMERA_INTRINSICS", "1583.3981,1583.7622,954.9441,545.1774", 1);
@@ -774,19 +721,20 @@ TEST(CalibrationEquivalence, AppConfigEnvFeedback)
     unsetenv("EDGEPILOT_CALIB_YAW_DEG");
 }
 
-/* 모델 프레임 → 카메라 영상 투영 행렬의 참조식. openpilot common/transformations/model.py의
- * get_warp_matrix를 double로 옮겼다: intrinsics @ view_frame_from_device_frame @ rot_from_euler(rpy)
- * @ inv(model_intrinsics @ view_frame_from_device_frame). */
+// 모델 프레임 → 카메라 영상 투영 행렬의 참조식. openpilot common/transformations/model.py의
+// get_warp_matrix를 double로 옮겼다: intrinsics @ view_frame_from_device_frame @ rot_from_euler(rpy)
+// @ inv(model_intrinsics @ view_frame_from_device_frame).
 void projection_reference(float roll, float pitch, float yaw, float fx, float fy, float cx, float cy,
-                          double *projection, ModelFrame model_frame = ModelFrame::MedModel)
-{
+                          double *projection, ModelFrame model_frame = ModelFrame::MedModel) {
     const bool big = model_frame == ModelFrame::SmallBigModel;
     const double model_f = big ? 455.0 : 910.0;
+    // clang-format off
     const double model_k[9] = {
         model_f, 0.0, 256.0,
         0.0, model_f, big ? 0.5 * (256.0 + 47.6) : 47.6,
         0.0, 0.0, 1.0,
     };
+    // clang-format on
     const double view[9] = {0, 1, 0, 0, 0, 1, 1, 0, 0};
     const double k[9] = {fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0};
     const double rpy[3] = {roll, pitch, yaw};
@@ -798,8 +746,8 @@ void projection_reference(float roll, float pitch, float yaw, float fx, float fy
     matmul3d(model_k, view, mkv);
     // mkv의 역행렬(여인수 전개)
     const double *m = mkv;
-    const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
-                       m[2] * (m[3] * m[7] - m[4] * m[6]);
+    const double det =
+        m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
     const double inv[9] = {
         (m[4] * m[8] - m[5] * m[7]) / det, (m[2] * m[7] - m[1] * m[8]) / det, (m[1] * m[5] - m[2] * m[4]) / det,
         (m[5] * m[6] - m[3] * m[8]) / det, (m[0] * m[8] - m[2] * m[6]) / det, (m[2] * m[3] - m[0] * m[5]) / det,
@@ -809,8 +757,8 @@ void projection_reference(float roll, float pitch, float yaw, float fx, float fy
 }
 
 // Y 평면 투영을 UV 평면(scale 0.5)으로 옮긴다
-void transform_scale_buffer_ref(const double *in, double scale, double *out)
-{
+void transform_scale_buffer_ref(const double *in, double scale, double *out) {
+    // clang-format off
     const double transform_out[9] = {
         1.0 / scale, 0.0, 0.5,
         0.0, 1.0 / scale, 0.5,
@@ -821,20 +769,17 @@ void transform_scale_buffer_ref(const double *in, double scale, double *out)
         0.0, scale, -0.5 * scale,
         0.0, 0.0, 1.0,
     };
+    // clang-format on
     double tmp[9];
     matmul3d(in, transform_out, tmp);
     matmul3d(transform_in, tmp, out);
 }
 
-uint8_t clamp_u8(int value)
-{
-    return static_cast<uint8_t>(std::min(255, std::max(0, value)));
-}
+uint8_t clamp_u8(int value) { return static_cast<uint8_t>(std::min(255, std::max(0, value))); }
 
-/* openpilot modeld transform.cl의 warpPerspective 한 픽셀(INTER_BITS 5, 계수 15비트 고정소수점). */
-uint8_t warp_sample_opencl_ref(const uint8_t *src, int src_w, int src_h, int stride_bytes,
-                               int bytes_per_pixel, int channel, const double *m, int dx, int dy)
-{
+// openpilot modeld transform.cl의 warpPerspective 한 픽셀(INTER_BITS 5, 계수 15비트 고정소수점).
+uint8_t warp_sample_opencl_ref(const uint8_t *src, int src_w, int src_h, int stride_bytes, int bytes_per_pixel,
+                               int channel, const double *m, int dx, int dy) {
     constexpr int kInterBits = 5;
     constexpr int kInterTabSize = 1 << kInterBits;
     constexpr int kCoefBits = 15;
@@ -873,8 +818,7 @@ uint8_t warp_sample_opencl_ref(const uint8_t *src, int src_w, int src_h, int str
 }
 
 // 위치마다 값이 다른 합성 NV12
-void fill_nv12(std::vector<uint8_t> &nv12, int width, int height)
-{
+void fill_nv12(std::vector<uint8_t> &nv12, int width, int height) {
     uint8_t *y_plane = nv12.data();
     uint8_t *uv_plane = y_plane + width * height;
     for (int y = 0; y < height; ++y) {
@@ -890,8 +834,7 @@ void fill_nv12(std::vector<uint8_t> &nv12, int width, int height)
 }
 
 // 워프 없이 NV12 512x256을 openpilot YUV6 순서(Y00, Y10, Y01, Y11, U, V)로 싼다
-void pack_direct_openpilot_order(const uint8_t *nv12, float *out)
-{
+void pack_direct_openpilot_order(const uint8_t *nv12, float *out) {
     const uint8_t *y_plane = nv12;
     const uint8_t *uv_plane = nv12 + kModelW * kModelH;
     float *y00_plane = out;
@@ -918,9 +861,7 @@ void pack_direct_openpilot_order(const uint8_t *nv12, float *out)
 }
 
 // OpenCL 참조 샘플러로 워프한 뒤 YUV6로 싼다
-void warp_pack_opencl_ref(const uint8_t *nv12, int src_w, int src_h,
-                          const double *projection_y, float *out)
-{
+void warp_pack_opencl_ref(const uint8_t *nv12, int src_w, int src_h, const double *projection_y, float *out) {
     double projection_uv[9];
     transform_scale_buffer_ref(projection_y, 0.5, projection_uv);
 
@@ -938,18 +879,12 @@ void warp_pack_opencl_ref(const uint8_t *nv12, int src_w, int src_h,
             const int dst = y2 * kHalfW + x2;
             const int ox = x2 * 2;
             const int oy = y2 * 2;
-            y00_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0,
-                                                    projection_y, ox, oy);
-            y10_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0,
-                                                    projection_y, ox, oy + 1);
-            y01_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0,
-                                                    projection_y, ox + 1, oy);
-            y11_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0,
-                                                    projection_y, ox + 1, oy + 1);
-            u_plane[dst] = warp_sample_opencl_ref(uv_src, src_w / 2, src_h / 2, src_w, 2, 0,
-                                                  projection_uv, x2, y2);
-            v_plane[dst] = warp_sample_opencl_ref(uv_src, src_w / 2, src_h / 2, src_w, 2, 1,
-                                                  projection_uv, x2, y2);
+            y00_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0, projection_y, ox, oy);
+            y10_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0, projection_y, ox, oy + 1);
+            y01_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0, projection_y, ox + 1, oy);
+            y11_plane[dst] = warp_sample_opencl_ref(y_src, src_w, src_h, src_w, 1, 0, projection_y, ox + 1, oy + 1);
+            u_plane[dst] = warp_sample_opencl_ref(uv_src, src_w / 2, src_h / 2, src_w, 2, 0, projection_uv, x2, y2);
+            v_plane[dst] = warp_sample_opencl_ref(uv_src, src_w / 2, src_h / 2, src_w, 2, 1, projection_uv, x2, y2);
         }
     }
 }
@@ -962,8 +897,7 @@ struct DiffStats {
 };
 
 // YUV6 두 개의 절대 오차. inner는 가장자리 8픽셀을 뺀 영역
-DiffStats diff_stats(const std::vector<float> &a, const std::vector<float> &b)
-{
+DiffStats diff_stats(const std::vector<float> &a, const std::vector<float> &b) {
     DiffStats stats;
     double sum = 0.0;
     double inner_sum = 0.0;
@@ -990,16 +924,14 @@ DiffStats diff_stats(const std::vector<float> &a, const std::vector<float> &b)
     return stats;
 }
 
-TEST(CalibrationEquivalence, ProjectionAndYuv6)
-{
+TEST(CalibrationEquivalence, ProjectionAndYuv6) {
     AppConfig camera_config;
     ModelInputTransform camera_transform(camera_config);
     float camera_projection[9];
     double camera_reference[9];
     camera_transform.projection_matrix(camera_projection);
-    projection_reference(0.0, 0.0, 0.0, camera_config.input_warp_fx,
-                         camera_config.input_warp_fy, camera_config.input_warp_cx,
-                         camera_config.input_warp_cy, camera_reference);
+    projection_reference(0.0, 0.0, 0.0, camera_config.input_warp_fx, camera_config.input_warp_fy,
+                         camera_config.input_warp_cx, camera_config.input_warp_cy, camera_reference);
     for (int i = 0; i < 9; ++i)
         EXPECT_NEAR(camera_projection[i], camera_reference[i], 1e-4)
             << "기본 투영은 MaixCAM2 카메라 내부 파라미터를 쓴다";
@@ -1008,9 +940,9 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     float sbig_camera_projection[9];
     double sbig_camera_reference[9];
     sbig_camera_transform.projection_matrix(sbig_camera_projection);
-    projection_reference(0.0, 0.0, 0.0, camera_config.input_warp_fx,
-                         camera_config.input_warp_fy, camera_config.input_warp_cx,
-                         camera_config.input_warp_cy, sbig_camera_reference, ModelFrame::SmallBigModel);
+    projection_reference(0.0, 0.0, 0.0, camera_config.input_warp_fx, camera_config.input_warp_fy,
+                         camera_config.input_warp_cx, camera_config.input_warp_cy, sbig_camera_reference,
+                         ModelFrame::SmallBigModel);
     for (int i = 0; i < 9; ++i)
         EXPECT_NEAR(sbig_camera_projection[i], sbig_camera_reference[i], 1e-4)
             << "sbig 투영은 openpilot 가상 카메라를 쓴다";
@@ -1034,8 +966,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
         float actual[9];
         double expected[9];
         transform.projection_matrix(actual);
-        projection_reference(rpy[0], rpy[1], rpy[2], config.input_warp_fx,
-                             config.input_warp_fy, config.input_warp_cx,
+        projection_reference(rpy[0], rpy[1], rpy[2], config.input_warp_fx, config.input_warp_fy, config.input_warp_cx,
                              config.input_warp_cy, expected);
         for (int i = 0; i < 9; ++i) {
             const double tolerance = std::max(1e-4, std::fabs(expected[i]) * 1e-5);
@@ -1060,8 +991,7 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     ModelInputTransform identity(identity_config);
     identity.nv12_to_yuv6_warped(nv12.data(), kModelW, kModelH, warped);
     DiffStats identity_diff = diff_stats(direct, warped);
-    EXPECT_NEAR(identity_diff.max, 0.0, 0.0)
-        << "rpy가 0이면 워프한 YUV6가 직접 패킹과 비트까지 같다";
+    EXPECT_NEAR(identity_diff.max, 0.0, 0.0) << "rpy가 0이면 워프한 YUV6가 직접 패킹과 비트까지 같다";
 
     AppConfig pitch_config;
     pitch_config.input_warp_fx = kDefaultModelFx;
@@ -1073,26 +1003,23 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
     ModelInputTransform pitched(pitch_config);
     pitched.nv12_to_yuv6_warped(nv12.data(), kModelW, kModelH, warped);
     double projection_y[9];
-    projection_reference(0.0f, pitch_config.manual_pitch, pitch_config.manual_yaw,
-                         pitch_config.input_warp_fx, pitch_config.input_warp_fy,
-                         pitch_config.input_warp_cx, pitch_config.input_warp_cy, projection_y);
+    projection_reference(0.0f, pitch_config.manual_pitch, pitch_config.manual_yaw, pitch_config.input_warp_fx,
+                         pitch_config.input_warp_fy, pitch_config.input_warp_cx, pitch_config.input_warp_cy,
+                         projection_y);
     warp_pack_opencl_ref(nv12.data(), kModelW, kModelH, projection_y, ref.data());
     DiffStats warp_diff = diff_stats(ref, warped);
     EXPECT_LT(warp_diff.mean, 1.0) << "워프 평균 절대 오차(openpilot OpenCL 참조 대비)";
-    EXPECT_LT(warp_diff.inner_max, 8.0)
-        << "워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
+    EXPECT_LT(warp_diff.inner_max, 8.0) << "워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
 
     ModelInputTransform sbig_pitched(pitch_config, ModelFrame::SmallBigModel);
     sbig_pitched.nv12_to_yuv6_warped(nv12.data(), kModelW, kModelH, sbig_warped);
-    projection_reference(0.0f, pitch_config.manual_pitch, pitch_config.manual_yaw,
-                         pitch_config.input_warp_fx, pitch_config.input_warp_fy,
-                         pitch_config.input_warp_cx, pitch_config.input_warp_cy, projection_y,
-                         ModelFrame::SmallBigModel);
+    projection_reference(0.0f, pitch_config.manual_pitch, pitch_config.manual_yaw, pitch_config.input_warp_fx,
+                         pitch_config.input_warp_fy, pitch_config.input_warp_cx, pitch_config.input_warp_cy,
+                         projection_y, ModelFrame::SmallBigModel);
     warp_pack_opencl_ref(nv12.data(), kModelW, kModelH, projection_y, sbig_ref.data());
     DiffStats sbig_warp_diff = diff_stats(sbig_ref, sbig_warped);
     EXPECT_LT(sbig_warp_diff.mean, 1.0) << "sbig 워프 평균 절대 오차(openpilot OpenCL 참조 대비)";
-    EXPECT_LT(sbig_warp_diff.inner_max, 8.0)
-        << "sbig 워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
+    EXPECT_LT(sbig_warp_diff.inner_max, 8.0) << "sbig 워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
 
     constexpr int kSourceW = 640;
     constexpr int kSourceH = 360;
@@ -1116,35 +1043,28 @@ TEST(CalibrationEquivalence, ProjectionAndYuv6)
             transform.set_calibration(rpy[0], rpy[1], rpy[2]);
             float projection[9];
             transform.projection_matrix(projection);
-            transform.nv12_to_yuv6_warped(
-                source_nv12.data(), kSourceW, kSourceH, compact.data());
+            transform.nv12_to_yuv6_warped(source_nv12.data(), kSourceW, kSourceH, compact.data());
             double projection_opencl[9];
-            for (int i = 0; i < 9; ++i)
-                projection_opencl[i] = projection[i];
-            warp_pack_opencl_ref(source_nv12.data(), kSourceW, kSourceH,
-                                 projection_opencl, opencl.data());
+            for (int i = 0; i < 9; ++i) projection_opencl[i] = projection[i];
+            warp_pack_opencl_ref(source_nv12.data(), kSourceW, kSourceH, projection_opencl, opencl.data());
             const DiffStats opencl_diff = diff_stats(compact, opencl);
             opencl_worst.mean = std::max(opencl_worst.mean, opencl_diff.mean);
-            opencl_worst.inner_max =
-                std::max(opencl_worst.inner_max, opencl_diff.inner_max);
+            opencl_worst.inner_max = std::max(opencl_worst.inner_max, opencl_diff.inner_max);
         }
     }
     EXPECT_LT(opencl_worst.mean, 1.0) << "640x360 고정소수점 워프 평균 절대 오차(openpilot OpenCL 참조 대비)";
-    EXPECT_LT(opencl_worst.inner_max, 8.0)
-        << "640x360 고정소수점 워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
+    EXPECT_LT(opencl_worst.inner_max, 8.0) << "640x360 고정소수점 워프 안쪽 최대 오차(openpilot OpenCL 참조 대비)";
 }
 
-/* NV21(MaixCAM2 카메라)은 크로마 바이트 순서만 NV12와 반대다. 같은 영상을 두
- * 순서로 넣고 set_chroma_vu를 맞추면 워프 결과(uint8, 4번 평면 U·5번 평면 V)가
- * 비트까지 같아야 한다. */
-TEST(CalibrationEquivalence, Nv21ChromaOrder)
-{
+// NV21(MaixCAM2 카메라)은 크로마 바이트 순서만 NV12와 반대다. 같은 영상을 두
+// 순서로 넣고 set_chroma_vu를 맞추면 워프 결과(uint8, 4번 평면 U·5번 평면 V)가
+// 비트까지 같아야 한다.
+TEST(CalibrationEquivalence, Nv21ChromaOrder) {
     constexpr int kW = 640, kH = 360;
     std::vector<uint8_t> nv12(kW * kH * 3 / 2);
     fill_nv12(nv12, kW, kH);
     std::vector<uint8_t> nv21 = nv12;
-    for (size_t i = kW * kH; i + 1 < nv21.size(); i += 2)
-        std::swap(nv21[i], nv21[i + 1]);
+    for (size_t i = kW * kH; i + 1 < nv21.size(); i += 2) std::swap(nv21[i], nv21[i + 1]);
 
     AppConfig config;
     config.manual_pitch = deg_to_rad(1.0f);
@@ -1161,11 +1081,10 @@ TEST(CalibrationEquivalence, Nv21ChromaOrder)
         << "순서를 안 맞추면 U와 V가 뒤바뀐다";
 }
 
-/* 카메라 장착 보정(sunnypilot camera offset): 가상 카메라가 offset만큼 오른쪽에 있을 때 가상 기준
- * 도로면 점의 모델 픽셀은, 실제 카메라에서 그 도로 점(가상 위치 + offset)이 찍히는 픽셀로 간다.
- * offset 0이면 기존 행렬과 같다. */
-TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane)
-{
+// 카메라 장착 보정(sunnypilot camera offset): 가상 카메라가 offset만큼 오른쪽에 있을 때 가상 기준
+// 도로면 점의 모델 픽셀은, 실제 카메라에서 그 도로 점(가상 위치 + offset)이 찍히는 픽셀로 간다.
+// offset 0이면 기존 행렬과 같다.
+TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane) {
     AppConfig config;
     config.set_warp_source(1280, 720);
     const float roll = 0.004f, pitch = -0.012f, yaw = 0.009f;
@@ -1210,9 +1129,7 @@ TEST(CalibrationEquivalence, CameraMountShiftsGroundPlane)
     }
 }
 
-
-void write_text(const std::string &path, const std::string &text)
-{
+void write_text(const std::string &path, const std::string &text) {
     std::FILE *f = std::fopen(path.c_str(), "w");
     ASSERT_NE(f, nullptr) << path;
     std::fputs(text.c_str(), f);
@@ -1220,8 +1137,7 @@ void write_text(const std::string &path, const std::string &text)
 }
 
 // flow_calibration.json: 같은 값의 블록 n개
-std::string flow_json(float yaw_deg, float pitch_deg, int blocks)
-{
+std::string flow_json(float yaw_deg, float pitch_deg, int blocks) {
     std::string yaw, pitch;
     for (int i = 0; i < blocks; ++i) {
         yaw += (i ? ", " : "") + std::to_string(deg_to_rad(yaw_deg));
@@ -1231,13 +1147,9 @@ std::string flow_json(float yaw_deg, float pitch_deg, int blocks)
            "],\n  \"windows\": 200,\n  \"mount_changes\": 0\n}\n";
 }
 
-ParsedModelOutput no_pose_output()
-{
-    return ParsedModelOutput{};
-}
+ParsedModelOutput no_pose_output() { return ParsedModelOutput{}; }
 
-AppConfig auto_calibration()
-{
+AppConfig auto_calibration() {
     AppConfig config;
     config.calibration_auto = true;
     config.manual_calibration = false;
@@ -1253,20 +1165,17 @@ struct FakeFlowSource : FlowSource {
     uint32_t resets_requested = 0;
     uint32_t resets_applied = 0;
     bool apply_resets = true;  // false면 초기화를 아직 처리하지 않은 것처럼 군다
-    FlowCalibrationState state(uint32_t *applied) const override
-    {
+    FlowCalibrationState state(uint32_t *applied) const override {
         if (applied) *applied = resets_applied;
         return current;
     }
-    bool take_blocks(FlowBlocks *out) override
-    {
+    bool take_blocks(FlowBlocks *out) override {
         if (!blocks_ready) return false;
         *out = blocks;
         blocks_ready = false;
         return true;
     }
-    void request_reset() override
-    {
+    void request_reset() override {
         ++resets_requested;
         if (!apply_resets) return;
         ++resets_applied;
@@ -1275,8 +1184,7 @@ struct FakeFlowSource : FlowSource {
     }
 };
 
-FlowCalibrationState usable_flow_state(float yaw_deg, float pitch_deg, uint32_t blocks)
-{
+FlowCalibrationState usable_flow_state(float yaw_deg, float pitch_deg, uint32_t blocks) {
     FlowCalibrationState f;
     f.status = 2;
     f.blocks = f.estimate_blocks = blocks;
@@ -1286,14 +1194,15 @@ FlowCalibrationState usable_flow_state(float yaw_deg, float pitch_deg, uint32_t 
     return f;
 }
 
-TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn)
-{
+TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn) {
     const TempParamsDir params("calibration_flow_source");
     AppConfig manual_config;
     manual_config.manual_calibration = true;
     manual_config.manual_pitch = deg_to_rad(-0.6f);
     manual_config.manual_yaw = deg_to_rad(-0.5f);
-    { CalibrationService seed(manual_config); }  // 포즈 보정: pitch -0.6°, yaw -0.5°, 5블록
+    {
+        CalibrationService seed(manual_config);
+    }  // 포즈 보정: pitch -0.6°, yaw -0.5°, 5블록
     write_text(params.file("flow_calibration.json"), flow_json(-0.03f, -0.2f, 6));
     const AppConfig config = auto_calibration();
     {
@@ -1333,15 +1242,16 @@ TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn)
     flow.attach_flow(nullptr);
 }
 
-TEST(CalibrationFlowSource, PoseLoopPausesWhileFlowDrivesTheWarp)
-{
+TEST(CalibrationFlowSource, PoseLoopPausesWhileFlowDrivesTheWarp) {
     // upstream 루프는 모델이 자기 값으로 워프된 영상을 봤다고 가정하므로, 광류가 워프를 맡는 동안에는 멈춘다.
     // 광류 추정을 포즈 추정과 같게 두어 돌아갈 때 램프가 없게 한다(램프는 실제 시간으로 간다).
     const TempParamsDir params("calibration_flow_pause");
     AppConfig manual_config;
     manual_config.manual_calibration = true;
     manual_config.manual_yaw = deg_to_rad(-0.5f);
-    { CalibrationService seed(manual_config); }  // 포즈: yaw -0.5°, 5블록
+    {
+        CalibrationService seed(manual_config);
+    }  // 포즈: yaw -0.5°, 5블록
     write_text(params.file("flow_calibration.json"), flow_json(-0.5f, 0.0f, 6));
     CalibrationService service(auto_calibration(), true);
     ASSERT_EQ(service.source_state().source, 1u);
@@ -1357,13 +1267,13 @@ TEST(CalibrationFlowSource, PoseLoopPausesWhileFlowDrivesTheWarp)
     src = service.source_state();
     EXPECT_EQ(src.source, 0u);
     EXPECT_EQ(src.flags & kCalibrationSourceRamping, 0u);
-    // 복원한 보정기는 upstream reset()처럼 block_idx 0부터 덮어쓰므로 valid_blocks는 5에 머문다. 추정이 움직이는지 본다.
+    // 복원한 보정기는 upstream reset()처럼 block_idx 0부터 덮어쓰므로 valid_blocks는 5에 머문다.
+    // 추정이 움직이는지 본다.
     for (int i = 0; i < 2 * kBlockSize; ++i) service.update(biased, 20.0f, false, false);
     EXPECT_LT(service.source_state().pose_yaw, deg_to_rad(-0.55f)) << "포즈 보정기가 다시 돈다";
 }
 
-TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource)
-{
+TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource) {
     const TempParamsDir params("calibration_flow_reset");
     const std::string reset_request = params.file("calibration_reset");
     setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
@@ -1410,8 +1320,7 @@ TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource)
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
 }
 
-TEST(CalibrationFlowSource, ResetWaitsForDisengage)
-{
+TEST(CalibrationFlowSource, ResetWaitsForDisengage) {
     const TempParamsDir params("calibration_flow_reset_engaged");
     const std::string reset_request = params.file("calibration_reset");
     setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
@@ -1436,8 +1345,7 @@ TEST(CalibrationFlowSource, ResetWaitsForDisengage)
     unsetenv("EDGEPILOT_CALIBRATION_RESET_PATH");
 }
 
-TEST(CalibrationFlowSource, SavesFlowBlocksFromTheSource)
-{
+TEST(CalibrationFlowSource, SavesFlowBlocksFromTheSource) {
     const TempParamsDir params("calibration_flow_save");
     const ParsedModelOutput no_pose{};
     FakeFlowSource source;
@@ -1461,4 +1369,4 @@ TEST(CalibrationFlowSource, SavesFlowBlocksFromTheSource)
     EXPECT_NEAR(restarted.flow_state().pitch, deg_to_rad(-1.0f), 1e-6);
 }
 
-} // namespace
+}  // namespace

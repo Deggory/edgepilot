@@ -78,11 +78,12 @@ code { font-family: var(--mono); }
   background: var(--surface); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }
 .process-list { display: grid; gap: 2px; margin: 0 0 8px; padding: 0; list-style: none; }
-.process-list li { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; color: var(--bad); }
+.process-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 5px 0; font-size: 13px; color: var(--bad); }
 .process-list li.running { color: var(--faint); }
 .process-list li .dot { background: var(--bad); }
 .process-list li.running .dot { background: var(--good); }
 .process-list code { flex: 1; color: var(--text); font-size: 13px; }
+.process-list .process-version { flex-basis: 100%; padding-left: 16px; color: var(--warn); font: 11px var(--mono); overflow-wrap: anywhere; }
 .runtime-note { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .icon-button {
   width: 40px; height: 40px; flex: 0 0 auto; padding: 0;

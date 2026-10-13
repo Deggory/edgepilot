@@ -8,8 +8,8 @@ export function formatValue(value, meta) {
   return `${value}${meta.unit ? ` ${meta.unit}` : ""}`;
 }
 
-/* 항목 하나의 편집기. card가 있으면 저장하는 동안 그 카드를 흐리게 하고 끝나면 잠깐 테를 칠한다. onSaved는 저장이
- * 끝날 때마다(실패해도) 불린다. refresh()는 스냅샷 값으로 다시 그린다. */
+// 항목 하나의 편집기. card가 있으면 저장하는 동안 그 카드를 흐리게 하고 끝나면 잠깐 테를 칠한다. onSaved는 저장이
+// 끝날 때마다(실패해도) 불린다. refresh()는 스냅샷 값으로 다시 그린다.
 export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) {
   const meta = metaFor(group, key);
   const notify = params().groups[group].notify;
@@ -59,7 +59,7 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
   return {meta, control, status, modifiedBadge, resetButton, refresh, save};
 }
 
-/* 접힌 "바꾸면": 값을 줄이거나 끄면, 키우거나 켜면 어떻게 되는지. lead가 있으면 그 앞에 둔다(설명 등). */
+// 접힌 "바꾸면": 값을 줄이거나 끄면, 키우거나 켜면 어떻게 되는지. lead가 있으면 그 앞에 둔다(설명 등).
 export function effectsDetails(meta, boolean, {summary = "바꾸면", lead = null} = {}) {
   return el("details.param-effects",
     {},
@@ -71,8 +71,8 @@ export function effectsDetails(meta, boolean, {summary = "바꾸면", lead = nul
       el("div.effect.up", {}, el("b", {text: boolean ? "켜면" : "값을 키우면"}), meta.increase)));
 }
 
-/* 항목 카드: 이름·키·기본값, 설명(눌러 펼침), 컨트롤, 바꾸면, 되돌리기, 상태. 파라미터 탭의 검색이 쓰는 search와
- * isModified, 다시 그리는 refresh를 단다. */
+// 항목 카드: 이름·키·기본값, 설명(눌러 펼침), 컨트롤, 바꾸면, 되돌리기, 상태. 파라미터 탭의 검색이 쓰는 search와
+// isModified, 다시 그리는 refresh를 단다.
 export function paramCard(group, key) {
   const card = el("article.card.param", {dataset: {key}});
   const editor = paramEditor(group, key, {card});

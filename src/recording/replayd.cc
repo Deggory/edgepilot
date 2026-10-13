@@ -1,22 +1,23 @@
-/* 실차 전 리허설: 녹화 route를 카메라와 판다처럼 실시간으로 재생한다. camerad·pandad
- * 자리에서 돌고(manager.py EDGEPILOT_REPLAY_ROUTE), modeld·controlsd·overlayd·recordd는
- * 차에서와 똑같이 돈다.
- *  - 영상: segments/NNN/road.h264를 프레임 인덱스로 한 프레임씩 VDEC에
- *    넣고, 디코딩된 프레임을 IVPS로 프레임 링 슬롯(CMM)에 복사해 roadAiFrame을 낸다.
- *  - CAN·판다 상태: events/NNN.bin의 CanRx와 PandaState를 같은 시간축으로 판다 채널에
- *    낸다(pandad처럼 CAN은 녹화용 로그 큐에도 넣는다). controlsd의 송신 요청은 보내지
- *    않고 송신 로그로만 넘긴다(recordd가 기록한다).
- * 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
- * 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지) */
+// 실차 전 리허설: 녹화 route를 카메라와 판다처럼 실시간으로 재생한다. camerad·pandad
+// 자리에서 돌고(manager.py EDGEPILOT_REPLAY_ROUTE), modeld·controlsd·overlayd·recordd는
+// 차에서와 똑같이 돈다.
+//  - 영상: segments/NNN/road.h264를 프레임 인덱스로 한 프레임씩 VDEC에
+//    넣고, 디코딩된 프레임을 IVPS로 프레임 링 슬롯(CMM)에 복사해 roadAiFrame을 낸다.
+//  - CAN·판다 상태: events/NNN.bin의 CanRx와 PandaState를 같은 시간축으로 판다 채널에
+//    낸다(pandad처럼 CAN은 녹화용 로그 큐에도 넣는다). controlsd의 송신 요청은 보내지
+//    않고 송신 로그로만 넘긴다(recordd가 기록한다).
+// 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
+// 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지)
+#include "common/build_version.h"
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
+#include "common/utils_process.h"
+#include "common/utils_time.h"
 #include "maixcam2/maix_cmm.h"
 #include "maixcam2/maix_vdec.h"
 #include "recording/recorded_can.h"
 #include "recording/recording_format.h"
 #include "recording/replay_route.h"
-#include "common/utils_process.h"
-#include "common/utils_time.h"
 
 #include <linux/videodev2.h>
 #include <signal.h>
@@ -34,11 +35,11 @@ namespace {
 
 volatile sig_atomic_t g_stop = 0;
 
-} // namespace
+}  // namespace
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     install_stop_signal_handlers(&g_stop);
+    log_build_version("replayd");
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <route> [start_s] [duration_s]\n", argv[0]);
         return 2;
@@ -52,8 +53,7 @@ int main(int argc, char *argv[])
         const uint64_t route_start = route.frames.front().capture_ns;
         const uint64_t want = route_start + static_cast<uint64_t>(start_s * 1e9);
         size_t first = 0;
-        while (first < route.frames.size() &&
-               (route.frames[first].capture_ns < want || !route.frames[first].keyframe))
+        while (first < route.frames.size() && (route.frames[first].capture_ns < want || !route.frames[first].keyframe))
             ++first;
         if (first == route.frames.size()) throw std::runtime_error("no keyframe after start");
         const uint64_t t0 = route.frames[first].capture_ns;
@@ -66,13 +66,11 @@ int main(int argc, char *argv[])
         CanQueue can_pub, can_log_pub, sendcan_sub, sendcan_log_pub;
         if (!frame_pub.open(kRoadAiFrameTopic, sizeof(RoadAiFrame), true) ||
             !panda_pub.open(kPandaStateTopic, sizeof(PandaState), true) ||
-            !can_pub.open(kCanTopic, kCanQueueSlots, true) ||
-            !can_log_pub.open(kCanLogTopic, kCanQueueSlots, true) ||
+            !can_pub.open(kCanTopic, kCanQueueSlots, true) || !can_log_pub.open(kCanLogTopic, kCanQueueSlots, true) ||
             !sendcan_sub.open(kSendCanTopic, kCanQueueSlots, true) ||
             !sendcan_log_pub.open(kSendCanLogTopic, kCanQueueSlots, true))
             throw std::runtime_error("open ipc failed");
-        if (!ring.open(true, route.width, route.height))
-            throw std::runtime_error("open frame ring failed");
+        if (!ring.open(true, route.width, route.height)) throw std::runtime_error("open frame ring failed");
 
         VideoDecoder decoder(static_cast<int>(route.width), static_cast<int>(route.height));
         std::vector<CmmBlock> slots(ring.slot_count());
@@ -82,9 +80,9 @@ int main(int argc, char *argv[])
             ring.set_slot_phys(i, slots[i].phys);
             ring.attach_slot(i, slots[i].virt);
         }
-        std::fprintf(stderr, "replayd: %s from %.1f s (%zu frames, %zu CAN/panda events), %ux%u\n",
-                     route_dir.c_str(), (t0 - route_start) / 1e9, route.frames.size() - first,
-                     route.events.size() - next_event, route.width, route.height);
+        std::fprintf(stderr, "replayd: %s from %.1f s (%zu frames, %zu CAN/panda events), %ux%u\n", route_dir.c_str(),
+                     (t0 - route_start) / 1e9, route.frames.size() - first, route.events.size() - next_event,
+                     route.width, route.height);
 
         const uint64_t base = monotonic_now_ns() + 200000000ULL;  // 소비자가 붙을 여유
         auto due = [&](uint64_t recorded_ns) { return base + (recorded_ns - t0); };
@@ -157,10 +155,8 @@ int main(int argc, char *argv[])
             if (now - window >= 1000000000ULL) {
                 std::fprintf(stderr, "replayd: fps=%.2f t=%.1fs frames=%llu errors=%llu can=%llu tx=%llu          \r",
                              window_frames * 1e9 / (now - window), (now - base) / 1e9,
-                             static_cast<unsigned long long>(frame_id),
-                             static_cast<unsigned long long>(decode_errors),
-                             static_cast<unsigned long long>(can_batches),
-                             static_cast<unsigned long long>(tx_batches));
+                             static_cast<unsigned long long>(frame_id), static_cast<unsigned long long>(decode_errors),
+                             static_cast<unsigned long long>(can_batches), static_cast<unsigned long long>(tx_batches));
                 std::fflush(stderr);
                 window = now;
                 window_frames = 0;

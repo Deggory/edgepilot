@@ -1,14 +1,14 @@
-/* 광류 작업(보정 창과 앞차 확대율)을 녹화 구간 하나에 돌린다(보드 전용). VDEC로 디코딩한 Y 평면을 CMM에 실어
- * modeld와 같은 FlowTracker(IVE 피라미드·코너·LK, 풀이, 블록 집계, 앞차 창)에 넘기고, 받아들인 창마다 한 줄,
- * 앞차 확대율을 낸 프레임마다 한 줄, 끝의 요약을 출력한다. IVPS를 쓰지 않으므로 edgepilot이 도는 중에도 된다.
- *
- * 사용: flow_calibration_replay <segment_dir> [--open frames.txt] [--leads leads.txt]
- *   --open   조건이 열린 프레임 번호(frames.bin 순서) 목록. 없으면 모든 프레임을 곧은 길로 본다(빈 파일이면
- *            보정을 돌리지 않는다).
- *   --leads  프레임마다 "번호 시각(s) 유효 확률 x y roll pitch yaw 카메라높이 오프셋"(녹화 ModelState에서).
- *            없으면 앞차를 따라가지 않는다.
- * 출력: "window <끝 프레임> <yaw°> <pitch°> <회전°> <점> <맞는 점> <추정 yaw°> <추정 pitch°> <블록>",
- *       "lead <프레임> <확대율 1/s> <맞는 점> <점> <x m>" 줄들과 "summary ..." 한 줄. */
+// 광류 작업(보정 창과 앞차 확대율)을 녹화 구간 하나에 돌린다(보드 전용). VDEC로 디코딩한 Y 평면을 CMM에 실어
+// modeld와 같은 FlowTracker(IVE 피라미드·코너·LK, 풀이, 블록 집계, 앞차 창)에 넘기고, 받아들인 창마다 한 줄,
+// 앞차 확대율을 낸 프레임마다 한 줄, 끝의 요약을 출력한다. IVPS를 쓰지 않으므로 edgepilot이 도는 중에도 된다.
+//
+// 사용: flow_calibration_replay <segment_dir> [--open frames.txt] [--leads leads.txt]
+//   --open   조건이 열린 프레임 번호(frames.bin 순서) 목록. 없으면 모든 프레임을 곧은 길로 본다(빈 파일이면
+//            보정을 돌리지 않는다).
+//   --leads  프레임마다 "번호 시각(s) 유효 확률 x y roll pitch yaw 카메라높이 오프셋"(녹화 ModelState에서).
+//            없으면 앞차를 따라가지 않는다.
+// 출력: "window <끝 프레임> <yaw°> <pitch°> <회전°> <점> <맞는 점> <추정 yaw°> <추정 pitch°> <블록>",
+//       "lead <프레임> <확대율 1/s> <맞는 점> <점> <x m>" 줄들과 "summary ..." 한 줄.
 #include "common/app_config.h"
 #include "maixcam2/maix_cmm.h"
 #include "maixcam2/maix_vdec.h"
@@ -27,8 +27,7 @@ namespace {
 
 constexpr double kDeg = 57.29577951308232;
 
-std::vector<uint8_t> read_file(const std::string &path)
-{
+std::vector<uint8_t> read_file(const std::string &path) {
     std::vector<uint8_t> d;
     if (FILE *f = std::fopen(path.c_str(), "rb")) {
         std::fseek(f, 0, SEEK_END);
@@ -40,10 +39,9 @@ std::vector<uint8_t> read_file(const std::string &path)
     return d;
 }
 
-} // namespace
+}  // namespace
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <segment_dir> [--open frames.txt] [--leads leads.txt]\n", argv[0]);
         return 2;
@@ -103,8 +101,8 @@ int main(int argc, char **argv)
     const AppConfig config = AppConfig::from_env_defaults();
     const FlowIntrinsics k{config.input_warp_fx, config.input_warp_fy, config.input_warp_cx, config.input_warp_cy};
     FlowTracker tracker(k, w, h);
-    /* 원본 단은 복사하지 않으므로(LK가 이전 프레임을 그대로 읽는다) 링처럼 버퍼 둘을 번갈아 쓴다. NV12로 잡고
-     * UV는 회색으로 둔다(VPP가 NV12를 읽는다). */
+    // 원본 단은 복사하지 않으므로(LK가 이전 프레임을 그대로 읽는다) 링처럼 버퍼 둘을 번갈아 쓴다. NV12로 잡고
+    // UV는 회색으로 둔다(VPP가 NV12를 읽는다).
     CmmBlock slots[2];
     for (CmmBlock &b : slots) {
         if (!cmm_alloc(&b, static_cast<size_t>(w) * h * 3 / 2, "flow_replay")) {
@@ -129,7 +127,8 @@ int main(int argc, char **argv)
                 const uint64_t prefix = key && sent != 0 ? prefix_bytes : 0;
                 packet.resize(prefix + (r.file_offset + r.packet_size - begin));
                 bool ok = true;
-                if (prefix) ok = std::fseek(video, 0, SEEK_SET) == 0 && std::fread(packet.data(), 1, prefix, video) == prefix;
+                if (prefix)
+                    ok = std::fseek(video, 0, SEEK_SET) == 0 && std::fread(packet.data(), 1, prefix, video) == prefix;
                 ok = ok && std::fseek(video, static_cast<long>(begin), SEEK_SET) == 0 &&
                      std::fread(packet.data() + prefix, 1, packet.size() - prefix, video) == packet.size() - prefix;
                 if (!ok || !decoder.send(packet.data(), packet.size(), r.capture_timestamp_ns, 200)) {
@@ -164,7 +163,8 @@ int main(int argc, char **argv)
         tracker.process(job);
         const LeadFlowState lead = tracker.lead_state();
         if (lead.valid)
-            std::printf("lead %ld %+.5f %u %u %.2f\n", frame, lead.expansion_rate, lead.inliers, lead.points, lead.lead_x);
+            std::printf("lead %ld %+.5f %u %u %.2f\n", frame, lead.expansion_rate, lead.inliers, lead.points,
+                        lead.lead_x);
         const FlowCalibrationState st = tracker.calibrator().state();
         if (st.windows != windows) {
             windows = st.windows;
@@ -178,14 +178,15 @@ int main(int argc, char **argv)
     const FlowTracker::Stats &s = tracker.stats();
     const FlowCalibrationState st = tracker.calibrator().state();
     const double frames = s.frames ? static_cast<double>(s.frames) : 1.0;
-    std::printf("summary frames %zu ive_frames %llu windows %u done %llu lost %llu rejected %llu | lead frames %llu "
-                "rates %llu | %.2f ms wall %.3f ms cpu per IVE frame, pyramid %s | estimate status %u blocks %u "
-                "yaw %+.4f pitch %+.4f | %.1f s\n",
-                count, static_cast<unsigned long long>(s.frames), st.windows,
-                static_cast<unsigned long long>(s.windows_done), static_cast<unsigned long long>(s.windows_lost),
-                static_cast<unsigned long long>(s.rejected), static_cast<unsigned long long>(s.lead_frames),
-                static_cast<unsigned long long>(s.lead_rates), s.wall_ms / frames, s.cpu_ms / frames,
-                tracker.pyramid_engine(), st.status, st.blocks, st.yaw * kDeg, st.pitch * kDeg, seconds);
+    std::printf(
+        "summary frames %zu ive_frames %llu windows %u done %llu lost %llu rejected %llu | lead frames %llu "
+        "rates %llu | %.2f ms wall %.3f ms cpu per IVE frame, pyramid %s | estimate status %u blocks %u "
+        "yaw %+.4f pitch %+.4f | %.1f s\n",
+        count, static_cast<unsigned long long>(s.frames), st.windows, static_cast<unsigned long long>(s.windows_done),
+        static_cast<unsigned long long>(s.windows_lost), static_cast<unsigned long long>(s.rejected),
+        static_cast<unsigned long long>(s.lead_frames), static_cast<unsigned long long>(s.lead_rates),
+        s.wall_ms / frames, s.cpu_ms / frames, tracker.pyramid_engine(), st.status, st.blocks, st.yaw * kDeg,
+        st.pitch * kDeg, seconds);
     for (CmmBlock &b : slots) cmm_free(&b);
     std::fclose(video);
     return 0;

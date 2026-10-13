@@ -13,8 +13,8 @@
 
 namespace {
 
-/* 칸 후보의 문턱(최댓값 대비). 밤에는 불빛이 최댓값을 차지해 1%로는 37~46점만 남는 구간이 있었다
- * (2026-10 보드 재생). 칸마다 하나만 고르므로 문턱을 낮춰도 점은 고르게 퍼진다. */
+// 칸 후보의 문턱(최댓값 대비). 밤에는 불빛이 최댓값을 차지해 1%로는 37~46점만 남는 구간이 있었다
+// (2026-10 보드 재생). 칸마다 하나만 고르므로 문턱을 낮춰도 점은 고르게 퍼진다.
 constexpr double kCornerQuality = 0.002;
 constexpr size_t kQueueDepth = 3;
 constexpr uint64_t kLeadLogFrames = 1200;
@@ -23,25 +23,30 @@ constexpr double kRadToDeg = 57.29577951308232;
 constexpr int kStepPoints = kFlowMaxPoints + kLeadMaxPoints;
 static_assert(kStepPoints <= IveFlow::kMaxPoints, "one IVE LK call tracks both point sets");
 
-double now_ms()
-{
+double now_ms() {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-double thread_cpu_ms()
-{
+double thread_cpu_ms() {
     timespec ts{};
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
     return static_cast<double>(ts.tv_sec) * 1e3 + static_cast<double>(ts.tv_nsec) / 1e6;
 }
 
-} // namespace
+}  // namespace
 
 FlowTracker::FlowTracker(const FlowIntrinsics &k, int width, int height)
-    : k_(k), ive_(std::make_unique<IveFlow>(width, height)), lead_(k, width, height), start_(2 * kFlowMaxPoints),
-      cur_(2 * kFlowMaxPoints), alive_(kFlowMaxPoints), step_in_(2 * kStepPoints), step_out_(2 * kStepPoints),
-      step_ok_(kStepPoints), back_(2 * kLeadMaxPoints), back_ok_(kLeadMaxPoints)
-{
+    : k_(k),
+      ive_(std::make_unique<IveFlow>(width, height)),
+      lead_(k, width, height),
+      start_(2 * kFlowMaxPoints),
+      cur_(2 * kFlowMaxPoints),
+      alive_(kFlowMaxPoints),
+      step_in_(2 * kStepPoints),
+      step_out_(2 * kStepPoints),
+      step_ok_(kStepPoints),
+      back_(2 * kLeadMaxPoints),
+      back_ok_(kLeadMaxPoints) {
     live_.reserve(kFlowMaxPoints);
     fit_a_.reserve(2 * kFlowMaxPoints);
     fit_b_.reserve(2 * kFlowMaxPoints);
@@ -49,13 +54,9 @@ FlowTracker::FlowTracker(const FlowIntrinsics &k, int width, int height)
 
 FlowTracker::~FlowTracker() = default;
 
-const char *FlowTracker::pyramid_engine() const
-{
-    return ive_->pyramid_engine();
-}
+const char *FlowTracker::pyramid_engine() const { return ive_->pyramid_engine(); }
 
-void FlowTracker::start_window()
-{
+void FlowTracker::start_window() {
     const int16_t *resp = ive_->corner_response();
     n_ = resp ? pick_flow_corners(resp, ive_->width() / 2, IveFlow::kBandRows, 2, IveFlow::kBandTop, kCornerQuality,
                                   kFlowMaxPoints, start_.data())
@@ -66,9 +67,8 @@ void FlowTracker::start_window()
     in_window_ = n_ >= kFlowMinTracks;
 }
 
-/* 이번 걸음에 따라간 보정 점(step_out_ 앞쪽 tracked개)으로 창을 잇고, 창이 차면 이동 방향을 푼다. */
-void FlowTracker::advance_window(uint64_t frame_id, int tracked)
-{
+// 이번 걸음에 따라간 보정 점(step_out_ 앞쪽 tracked개)으로 창을 잇고, 창이 차면 이동 방향을 푼다.
+void FlowTracker::advance_window(uint64_t frame_id, int tracked) {
     int alive = 0;
     for (int j = 0; j < tracked; ++j) {
         const int i = live_[j];
@@ -107,8 +107,7 @@ void FlowTracker::advance_window(uint64_t frame_id, int tracked)
     in_window_ = false;
 }
 
-void FlowTracker::process(const FlowFrame &f)
-{
+void FlowTracker::process(const FlowFrame &f) {
     auto lose = [this] {
         if (in_window_) ++stats_.windows_lost;
         in_window_ = false;
@@ -179,15 +178,13 @@ void FlowTracker::process(const FlowFrame &f)
     stats_.cpu_ms += thread_cpu_ms() - cpu0;
 }
 
-void FlowTracker::reset_calibration()
-{
+void FlowTracker::reset_calibration() {
     calibrator_.reset();
     in_window_ = false;
 }
 
 FlowWorker::FlowWorker(const FlowIntrinsics &k, int width, int height, const FlowBlocks *restore)
-    : tracker_(k, width, height)
-{
+    : tracker_(k, width, height) {
     if (restore && !restore->yaw.empty()) {
         if (tracker_.restore(*restore))
             std::fprintf(stderr, "modeld: flow calibration restored %zu blocks\n", restore->yaw.size());
@@ -199,8 +196,7 @@ FlowWorker::FlowWorker(const FlowIntrinsics &k, int width, int height, const Flo
     thread_ = std::thread(&FlowWorker::run, this);
 }
 
-void FlowWorker::request_reset()
-{
+void FlowWorker::request_reset() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         reset_requested_ = true;
@@ -208,8 +204,7 @@ void FlowWorker::request_reset()
     cv_.notify_one();
 }
 
-bool FlowWorker::take_blocks(FlowBlocks *out)
-{
+bool FlowWorker::take_blocks(FlowBlocks *out) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!blocks_changed_) return false;
     *out = blocks_;
@@ -217,8 +212,7 @@ bool FlowWorker::take_blocks(FlowBlocks *out)
     return true;
 }
 
-FlowWorker::~FlowWorker()
-{
+FlowWorker::~FlowWorker() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stop_ = true;
@@ -227,8 +221,7 @@ FlowWorker::~FlowWorker()
     if (thread_.joinable()) thread_.join();
 }
 
-void FlowWorker::push(FlowFrame frame)
-{
+void FlowWorker::push(FlowFrame frame) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (queue_.size() >= kQueueDepth) {
@@ -240,21 +233,18 @@ void FlowWorker::push(FlowFrame frame)
     cv_.notify_one();
 }
 
-FlowCalibrationState FlowWorker::state(uint32_t *resets_applied) const
-{
+FlowCalibrationState FlowWorker::state(uint32_t *resets_applied) const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (resets_applied) *resets_applied = resets_applied_;
     return state_;
 }
 
-LeadFlowState FlowWorker::lead_state() const
-{
+LeadFlowState FlowWorker::lead_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return lead_state_;
 }
 
-void FlowWorker::run()
-{
+void FlowWorker::run() {
     // modeld는 nice -15로 돈다. 이 스레드는 IVE를 기다리는 시간이 대부분이라 보통 우선순위면 된다.
     setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 0);
     uint32_t logged_blocks = tracker_.calibrator().state().blocks;
@@ -321,16 +311,17 @@ void FlowWorker::run()
             std::fprintf(stderr, "\nflowcal: mount change detected (%u so far), kept the last %u blocks\n",
                          st.mount_changes, st.estimate_blocks);
         }
-        std::fprintf(stderr,
-                     "\nflowcal: block %u windows %u yaw %+.3f pitch %+.3f deg (sd %.3f/%.3f, %u blocks, %s) | "
-                     "last yaw %+.3f pitch %+.3f rot %.3f deg tracks %u inliers %u parallax %.1f px | frames %llu "
-                     "done %llu lost %llu rejected %llu dropped %llu | %.1f ms wall %.2f ms cpu per frame, pyramid %s\n",
-                     st.blocks, st.windows, st.yaw * kRadToDeg, st.pitch * kRadToDeg, st.sd_yaw * kRadToDeg,
-                     st.sd_pitch * kRadToDeg, st.estimate_blocks, st.status == 2 ? "estimate" : "collecting",
-                     st.window_yaw * kRadToDeg, st.window_pitch * kRadToDeg, st.window_rotation * kRadToDeg,
-                     st.window_tracks, st.window_inliers, st.window_parallax, static_cast<unsigned long long>(s.frames),
-                     static_cast<unsigned long long>(s.windows_done), static_cast<unsigned long long>(s.windows_lost),
-                     static_cast<unsigned long long>(s.rejected), static_cast<unsigned long long>(dropped),
-                     s.wall_ms / frames, s.cpu_ms / frames, tracker_.pyramid_engine());
+        std::fprintf(
+            stderr,
+            "\nflowcal: block %u windows %u yaw %+.3f pitch %+.3f deg (sd %.3f/%.3f, %u blocks, %s) | "
+            "last yaw %+.3f pitch %+.3f rot %.3f deg tracks %u inliers %u parallax %.1f px | frames %llu "
+            "done %llu lost %llu rejected %llu dropped %llu | %.1f ms wall %.2f ms cpu per frame, pyramid %s\n",
+            st.blocks, st.windows, st.yaw * kRadToDeg, st.pitch * kRadToDeg, st.sd_yaw * kRadToDeg,
+            st.sd_pitch * kRadToDeg, st.estimate_blocks, st.status == 2 ? "estimate" : "collecting",
+            st.window_yaw * kRadToDeg, st.window_pitch * kRadToDeg, st.window_rotation * kRadToDeg, st.window_tracks,
+            st.window_inliers, st.window_parallax, static_cast<unsigned long long>(s.frames),
+            static_cast<unsigned long long>(s.windows_done), static_cast<unsigned long long>(s.windows_lost),
+            static_cast<unsigned long long>(s.rejected), static_cast<unsigned long long>(dropped), s.wall_ms / frames,
+            s.cpu_ms / frames, tracker_.pyramid_engine());
     }
 }

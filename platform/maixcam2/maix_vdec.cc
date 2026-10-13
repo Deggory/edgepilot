@@ -17,14 +17,13 @@ constexpr AX_VDEC_GRP kGroup = 0;
 constexpr AX_U32 kFrameBuffers = 8;
 constexpr AX_U32 kWidthAlign = 16;  // MSP 샘플 AX_VDEC_WIDTH_ALIGN
 
-std::string hex(AX_S32 value)
-{
+std::string hex(AX_S32 value) {
     char text[16];
     std::snprintf(text, sizeof(text), "0x%x", static_cast<unsigned>(value));
     return text;
 }
 
-} // namespace
+}  // namespace
 
 struct VideoDecoder::Impl {
     int width = 0;
@@ -33,8 +32,7 @@ struct VideoDecoder::Impl {
     bool ivps = false, vdec = false, group = false, receiving = false;
 };
 
-VideoDecoder::VideoDecoder(int width, int height) : impl_(new Impl)
-{
+VideoDecoder::VideoDecoder(int width, int height) : impl_(new Impl) {
     Impl &m = *impl_;
     m.width = width;
     m.height = height;
@@ -84,8 +82,7 @@ VideoDecoder::VideoDecoder(int width, int height) : impl_(new Impl)
     m.receiving = true;
 }
 
-VideoDecoder::~VideoDecoder()
-{
+VideoDecoder::~VideoDecoder() {
     Impl &m = *impl_;
     if (m.receiving) AX_VDEC_StopRecvStream(kGroup);
     if (m.group) {
@@ -97,8 +94,7 @@ VideoDecoder::~VideoDecoder()
     if (m.ivps) AX_IVPS_Deinit();
 }
 
-bool VideoDecoder::send(const uint8_t *data, size_t size, uint64_t pts, int timeout_ms)
-{
+bool VideoDecoder::send(const uint8_t *data, size_t size, uint64_t pts, int timeout_ms) {
     AX_VDEC_STREAM_T stream = {};
     stream.u64PTS = pts;
     stream.bEndOfFrame = AX_TRUE;
@@ -107,8 +103,7 @@ bool VideoDecoder::send(const uint8_t *data, size_t size, uint64_t pts, int time
     return AX_VDEC_SendStream(kGroup, &stream, timeout_ms) == 0;
 }
 
-bool VideoDecoder::receive_to(unsigned long long dst_phys, uint64_t *pts, int timeout_ms)
-{
+bool VideoDecoder::receive_to(unsigned long long dst_phys, uint64_t *pts, int timeout_ms) {
     Impl &m = *impl_;
     AX_VIDEO_FRAME_INFO_T frame = {};
     if (AX_VDEC_GetFrame(kGroup, &frame, timeout_ms) != 0) return false;
@@ -122,7 +117,7 @@ bool VideoDecoder::receive_to(unsigned long long dst_phys, uint64_t *pts, int ti
     dst.u32FrameSize = static_cast<AX_U32>(static_cast<size_t>(m.width) * m.height * 3 / 2);
     AX_VIDEO_FRAME_T src = frame.stVFrame;
     src.s16CropX = src.s16CropY = 0;
-    src.s16CropWidth = static_cast<AX_S16>(m.width);   // 디코더 버퍼는 정렬로 더 클 수 있다
+    src.s16CropWidth = static_cast<AX_S16>(m.width);  // 디코더 버퍼는 정렬로 더 클 수 있다
     src.s16CropHeight = static_cast<AX_S16>(m.height);
     AX_IVPS_CROP_RESIZE_ATTR_T resize = {};
     resize.eSclType = AX_IVPS_SCL_TYPE_AUTO;
@@ -134,8 +129,7 @@ bool VideoDecoder::receive_to(unsigned long long dst_phys, uint64_t *pts, int ti
     return ok;
 }
 
-bool VideoDecoder::receive_luma(uint8_t *dst, int dst_stride, uint64_t *pts, int timeout_ms)
-{
+bool VideoDecoder::receive_luma(uint8_t *dst, int dst_stride, uint64_t *pts, int timeout_ms) {
     Impl &m = *impl_;
     AX_VIDEO_FRAME_INFO_T frame = {};
     if (AX_VDEC_GetFrame(kGroup, &frame, timeout_ms) != 0) return false;

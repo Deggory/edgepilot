@@ -1,0 +1,8 @@
+// cmake/build_version.cmake가 빌드할 때마다 만든다. 고치지 않는다.
+#include "common/build_version.h"
+
+// 웹 콘솔(web_console/process_status.py)이 실행 파일에서 이 표식을 찾아 버전을 읽는다. 부르는 곳이 없어도
+// 오브젝트에 남긴다.
+__attribute__((used)) const char kBuildVersionMarker[] = EDGEPILOT_VERSION_MARKER_PREFIX "@version@";
+
+const char *edgepilot_version() { return kBuildVersionMarker + sizeof(EDGEPILOT_VERSION_MARKER_PREFIX) - 1; }

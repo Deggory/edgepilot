@@ -1,9 +1,9 @@
 #ifndef MAIXCAM2_TOUCH_H
 #define MAIXCAM2_TOUCH_H
 
-/* MaixCAM2 터치스크린(hyn_ts, 멀티터치 B형)에서 짧은 탭만 화면 좌표(MaixDisplay 640x480)로
- * 알려 준다. 패널은 480x640 세로라 MaixCDK(maix_touchscreen_maixcam2.hpp)처럼 시계 방향
- * 90°로 돌린다. 장치는 막지 않고(O_NONBLOCK) 읽으며 첫 손가락(슬롯 0)만 본다. */
+// MaixCAM2 터치스크린(hyn_ts, 멀티터치 B형)에서 짧은 탭만 화면 좌표(MaixDisplay 640x480)로
+// 알려 준다. 패널은 480x640 세로라 MaixCDK(maix_touchscreen_maixcam2.hpp)처럼 시계 방향
+// 90°로 돌린다. 장치는 막지 않고(O_NONBLOCK) 읽으며 첫 손가락(슬롯 0)만 본다.
 
 #include <cstdint>
 

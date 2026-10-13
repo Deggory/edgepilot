@@ -1,8 +1,8 @@
 #ifndef REPLAY_SOURCE_H
 #define REPLAY_SOURCE_H
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -13,7 +13,7 @@ struct Nv12Frame {
     std::vector<uint8_t> data;
 };
 
-/* SCNV12R1 리플레이 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용. */
+// SCNV12R1 리플레이 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용.
 class ReplayNv12Source {
 public:
     explicit ReplayNv12Source(const std::string &path);

@@ -1,16 +1,16 @@
-/* HUD 스냅샷·타이밍 도구. 렌더러만 떼어 MaixCAM2 화면과 같은 640x480 BGRA 버퍼에 그리고
- * 시나리오별 프레임을 EDGEARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
- * ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 주지 않으면 합성
- * 장면을 쓰고, 준 파일을 읽지 못하거나 프레임을 쓰지 못하면 1로 끝난다. 호스트와 보드에서 같은
- * 소스로 빌드한다.
- * --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고(--flip-x/--flip-y는
- * 보드의 disp_flip/disp_mirror 축 뒤집기), 파일도 그 버퍼 그대로 쓴다. 리팩토링 전후 그림이
- * 바이트 단위로 같은지 비교할 때 쓴다.
- * 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
- *                    [--portrait [--flip-x] [--flip-y]] */
-#include "hud/hud_state.h"
+// HUD 스냅샷·타이밍 도구. 렌더러만 떼어 MaixCAM2 화면과 같은 640x480 BGRA 버퍼에 그리고
+// 시나리오별 프레임을 EDGEARGB 파일로 저장한다. model.bin / control.bin은 녹화 이벤트의
+// ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 주지 않으면 합성
+// 장면을 쓰고, 준 파일을 읽지 못하거나 프레임을 쓰지 못하면 1로 끝난다. 호스트와 보드에서 같은
+// 소스로 빌드한다.
+// --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고(--flip-x/--flip-y는
+// 보드의 disp_flip/disp_mirror 축 뒤집기), 파일도 그 버퍼 그대로 쓴다. 리팩토링 전후 그림이
+// 바이트 단위로 같은지 비교할 때 쓴다.
+// 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
+//                    [--portrait [--flip-x] [--flip-y]]
 #include "common/ipc_messages.h"
 #include "hud/hud_renderer.h"
+#include "hud/hud_state.h"
 
 #include <algorithm>
 #include <chrono>
@@ -23,15 +23,13 @@
 
 namespace {
 
-uint64_t now_ns()
-{
+uint64_t now_ns() {
     return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
-bool read_file(const std::string &path, void *dst, size_t size)
-{
+bool read_file(const std::string &path, void *dst, size_t size) {
     FILE *file = std::fopen(path.c_str(), "rb");
     if (!file) return false;
     const size_t got = std::fread(dst, 1, size, file);
@@ -39,9 +37,8 @@ bool read_file(const std::string &path, void *dst, size_t size)
     return got == size;
 }
 
-/* EDGEARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). 크기는 버퍼(세로면 480x640)다. */
-bool write_frame_file(const std::string &path, const HudTarget &target)
-{
+// EDGEARGB: magic 8 B, u32 width, u32 height, BGRA 픽셀(행 우선). 크기는 버퍼(세로면 480x640)다.
+bool write_frame_file(const std::string &path, const HudTarget &target) {
     FILE *file = std::fopen(path.c_str(), "wb");
     if (!file) return false;
     const bool transpose = target.orientation.transpose;
@@ -51,17 +48,15 @@ bool write_frame_file(const std::string &path, const HudTarget &target)
     const uint32_t dims[2] = {buffer_w, buffer_h};
     bool ok = std::fwrite(magic, 1, 8, file) == 8 && std::fwrite(dims, 4, 2, file) == 2;
     for (uint32_t row = 0; ok && row < buffer_h; ++row) {
-        const uint8_t *src = static_cast<const uint8_t *>(target.map) +
-                             static_cast<size_t>(row) * target.stride;
+        const uint8_t *src = static_cast<const uint8_t *>(target.map) + static_cast<size_t>(row) * target.stride;
         ok = std::fwrite(src, 4, buffer_w, file) == buffer_w;
     }
     std::fclose(file);
     return ok;
 }
 
-/* 직선 도로 합성 장면. 차선은 plan과 같은 지면에 놓이도록 z를 kModelHeight로 둔다. */
-ParsedModelOutput synthetic_output()
-{
+// 직선 도로 합성 장면. 차선은 plan과 같은 지면에 놓이도록 z를 kModelHeight로 둔다.
+ParsedModelOutput synthetic_output() {
     ParsedModelOutput output;
     output.valid = true;
     output.plan.valid = true;
@@ -96,20 +91,17 @@ struct Scenario {
     HudState hud;
 };
 
-void print_stats(const char *label, std::vector<double> values)
-{
+void print_stats(const char *label, std::vector<double> values) {
     std::sort(values.begin(), values.end());
     double sum = 0.0;
     for (double v : values) sum += v;
-    std::printf("  %-8s mean=%.3f med=%.3f p90=%.3f max=%.3f ms\n", label,
-                sum / values.size(), values[values.size() / 2],
-                values[values.size() * 9 / 10], values.back());
+    std::printf("  %-8s mean=%.3f med=%.3f p90=%.3f max=%.3f ms\n", label, sum / values.size(),
+                values[values.size() / 2], values[values.size() * 9 / 10], values.back());
 }
 
-} // namespace
+}  // namespace
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     std::string model_path;
     std::string control_path;
     std::string out_prefix = "hud_snapshot";
@@ -118,17 +110,25 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> const char * { return i + 1 < argc ? argv[++i] : ""; };
-        if (arg == "--model") model_path = next();
-        else if (arg == "--control") control_path = next();
-        else if (arg == "--iterations") iterations = std::max(1, std::atoi(next()));
-        else if (arg == "--out") out_prefix = next();
-        else if (arg == "--portrait") orientation.transpose = true;
-        else if (arg == "--flip-x") orientation.flip_x = true;
-        else if (arg == "--flip-y") orientation.flip_y = true;
+        if (arg == "--model")
+            model_path = next();
+        else if (arg == "--control")
+            control_path = next();
+        else if (arg == "--iterations")
+            iterations = std::max(1, std::atoi(next()));
+        else if (arg == "--out")
+            out_prefix = next();
+        else if (arg == "--portrait")
+            orientation.transpose = true;
+        else if (arg == "--flip-x")
+            orientation.flip_x = true;
+        else if (arg == "--flip-y")
+            orientation.flip_y = true;
         else {
             std::fprintf(stderr,
                          "usage: %s [--model model.bin] [--control control.bin] [--iterations N] "
-                         "[--out PREFIX] [--portrait [--flip-x] [--flip-y]]\n", argv[0]);
+                         "[--out PREFIX] [--portrait [--flip-x] [--flip-y]]\n",
+                         argv[0]);
             return 2;
         }
     }
@@ -147,8 +147,8 @@ int main(int argc, char **argv)
     }
 
     ParsedModelOutput output = have_model ? parsed_from_model_state(model_state) : synthetic_output();
-    ProjectionState projection = have_model ? projection_from_model_state(model_state)
-                                            : make_projection_state(0.0f, 0.0f, 0.0f);
+    ProjectionState projection =
+        have_model ? projection_from_model_state(model_state) : make_projection_state(0.0f, 0.0f, 0.0f);
 
     HudState idle;
     idle.services_healthy = true;
@@ -388,8 +388,7 @@ int main(int argc, char **argv)
     const HudTarget target{storage.data(), width, height, stride, orientation};
 
     HudRenderer renderer;
-    std::printf("inputs: model=%s control=%s target=%ux%u%s\n",
-                have_model ? model_path.c_str() : "synthetic",
+    std::printf("inputs: model=%s control=%s target=%ux%u%s\n", have_model ? model_path.c_str() : "synthetic",
                 have_control ? control_path.c_str() : "synthetic", width, height,
                 orientation.transpose ? " portrait" : "");
 

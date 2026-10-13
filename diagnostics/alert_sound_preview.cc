@@ -1,6 +1,6 @@
-/* 알림음 미리 듣기. overlayd가 보드 스피커로 내는 소리(alert_tones.h)를 100% 크기 48 kHz 모노
- * WAV로 쓴다. 보드에서는 pkill -USR1 overlayd 할 때마다 하나씩 차례로 울린다.
- * 사용: alert_sound_preview [--out PREFIX]  →  PREFIX_<이름>.wav */
+// 알림음 미리 듣기. overlayd가 보드 스피커로 내는 소리(alert_tones.h)를 100% 크기 48 kHz 모노
+// WAV로 쓴다. 보드에서는 pkill -USR1 overlayd 할 때마다 하나씩 차례로 울린다.
+// 사용: alert_sound_preview [--out PREFIX]  →  PREFIX_<이름>.wav
 #include "hud/alert_tones.h"
 
 #include <cstdint>
@@ -13,19 +13,16 @@ namespace {
 
 constexpr int kRate = 48000;
 
-void put_u32(std::vector<uint8_t> &out, uint32_t v)
-{
+void put_u32(std::vector<uint8_t> &out, uint32_t v) {
     for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));
 }
 
-void put_u16(std::vector<uint8_t> &out, uint16_t v)
-{
+void put_u16(std::vector<uint8_t> &out, uint16_t v) {
     out.push_back(static_cast<uint8_t>(v));
     out.push_back(static_cast<uint8_t>(v >> 8));
 }
 
-bool write_wav(const std::string &path, const std::vector<int16_t> &pcm)
-{
+bool write_wav(const std::string &path, const std::vector<int16_t> &pcm) {
     const uint32_t data_bytes = static_cast<uint32_t>(pcm.size() * 2);
     std::vector<uint8_t> out;
     out.insert(out.end(), {'R', 'I', 'F', 'F'});
@@ -50,8 +47,7 @@ bool write_wav(const std::string &path, const std::vector<int16_t> &pcm)
 
 }  // namespace
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     std::string prefix = "alert";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--out") == 0 && i + 1 < argc) {

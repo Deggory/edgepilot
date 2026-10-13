@@ -5,8 +5,8 @@
 
 namespace {
 
-constexpr double kProcessNoise = 4.0;      // 상대 가속도 잡음 세기((m/s^2)^2·s)
-constexpr double kDistanceStd0 = 0.5;      // 모델 거리 잡음 = 0.5 + 0.025·d (m)
+constexpr double kProcessNoise = 4.0;  // 상대 가속도 잡음 세기((m/s^2)^2·s)
+constexpr double kDistanceStd0 = 0.5;  // 모델 거리 잡음 = 0.5 + 0.025·d (m)
 constexpr double kDistanceStdPerM = 0.025;
 constexpr double kFlowRateStd = 0.09;      // 확대율 잡음 0.03/s를 창 겹침만큼 3배로
 constexpr double kGate = 9.0;              // 혁신의 제곱 / 분산(3 sigma)
@@ -14,22 +14,17 @@ constexpr double kInitSpeedStd = 3.0;      // 시작할 때 상대 속도의 불
 constexpr double kMaxGapS = 0.5;           // 프레임 사이가 이보다 길면 다시 시작한다
 constexpr double kFlowMinDistanceM = 5.0;  // 추정 거리가 이보다 가까우면 확대율을 쓰지 않는다
 
-double distance_variance(double d)
-{
+double distance_variance(double d) {
     const double s = kDistanceStd0 + kDistanceStdPerM * std::max(0.0, d);
     return s * s;
 }
 
 }  // namespace
 
-void LeadTracker::reset()
-{
-    state_ = LeadTrackState{};
-}
+void LeadTracker::reset() { state_ = LeadTrackState{}; }
 
 // 측정한 모델 거리와 상대 속도(모르면 0)에서 새로 시작한다
-void LeadTracker::start(const LeadTrackInput &in)
-{
+void LeadTracker::start(const LeadTrackInput &in) {
     misses_ = 0;
     x_[0] = in.distance_m;
     x_[1] = std::isfinite(in.relative_speed_mps) ? in.relative_speed_mps : 0.0;
@@ -39,8 +34,7 @@ void LeadTracker::start(const LeadTrackInput &in)
     state_.flags |= kLeadTrackStarted;
 }
 
-void LeadTracker::update(const LeadTrackInput &in)
-{
+void LeadTracker::update(const LeadTrackInput &in) {
     if (!in.lead_valid || !std::isfinite(in.distance_m)) {
         reset();
         return;

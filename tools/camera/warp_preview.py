@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Preview what the model sees from a MaixCAM2 frame.
+"""MaixCAM2 프레임에서 모델이 보는 영상을 미리 본다.
 
-Warps a 1280x720 NV21 capture with the runtime's fixed-point warp
-(tools/model/model_warp.py) and the calibrated MaixCAM2 intrinsics, then writes
-one PNG: the source frame with the medmodel/sbigmodel footprints and the
-model's vanishing point, plus both 512x256 model views. On a level road the
-vanishing point should sit on the horizon; the remaining offset is what online
-calibration (rpy) absorbs.
+1280x720 NV21 촬영 영상을 런타임과 같은 고정소수점 워프(tools/model/model_warp.py)와 보정한 MaixCAM2 내부
+파라미터로 워프한 뒤 PNG 하나를 쓴다. 원본 프레임에 medmodel/sbigmodel 영역과 모델의 소실점을 그리고, 512x256
+모델 뷰 두 개를 붙인다. 평평한 도로라면 소실점이 지평선 위에 있어야 하고, 남는 어긋남은 온라인 보정(rpy)이
+흡수한다.
 
-usage: warp_preview.py <frame_nv21.bin> <out.png> [roll pitch yaw (deg)]
+사용: warp_preview.py <frame_nv21.bin> <out.png> [roll pitch yaw (deg)]
 """
 import argparse
 import sys
@@ -45,18 +43,18 @@ def main():
     d = np.fromfile(args.frame, np.uint8)
     y = d[:W * H].reshape(H, W)
     vu = d[W * H:].reshape(H // 2, W // 2, 2)
-    u, v = vu[..., 1], vu[..., 0]                       # NV21: V first
+    u, v = vu[..., 1], vu[..., 0]                       # NV21: V가 먼저
     views, canvas = [], cv2.cvtColor(y, cv2.COLOR_GRAY2BGR)
     for sbig, color in ((False, (0, 200, 0)), (True, (0, 140, 255))):
         warp = ModelInputWarp(W, H, rpy.astype(np.float32), sbig=sbig, intrinsics=K720)
         views.append(cv2.cvtColor(yuv6_to_y(warp.warp(y, u, v)), cv2.COLOR_GRAY2BGR))
-        P = projection_matrix(*K720, rpy.astype(np.float32), sbig)   # model px -> source px
+        P = projection_matrix(*K720, rpy.astype(np.float32), sbig)   # 모델 화소 -> 원본 화소
         border = np.array([[x, 0] for x in range(0, 513, 32)] + [[512, yy] for yy in range(0, 257, 32)] +
                           [[x, 256] for x in range(512, -1, -32)] + [[0, yy] for yy in range(256, -1, -32)], np.float64)
         pts = np.c_[border, np.ones(len(border))] @ P.T
         pts = (pts[:, :2] / pts[:, 2:]).astype(np.int32)
         cv2.polylines(canvas, [pts], True, color, 2)
-    # vanishing point = medmodel principal point; map it into the sbig view too
+    # 소실점 = medmodel 주점. sbig 뷰에도 옮겨 그린다
     p_med = projection_matrix(*K720, rpy.astype(np.float32), False).astype(np.float64)
     p_sbig = projection_matrix(*K720, rpy.astype(np.float32), True).astype(np.float64)
     vp_h = p_med @ np.array([256.0, MODEL_CY, 1.0])

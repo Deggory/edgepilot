@@ -15,7 +15,7 @@ const restored = flag => (flag ? "이번 시동에 복원" : "새로 시작");
 const lagConfirmed = localization => Boolean(localization) && localization.state.lag_status === 1;
 const torqueCalculable = s => s.bucket_points.every(n => n > 0) && s.lat_accel_factor_raw !== 0;
 
-/* torqued 값의 원시값(필터 전)과 허용 폭. 원시값이 폭 밖이면 주의 톤. */
+// torqued 값의 원시값(필터 전)과 허용 폭. 원시값이 폭 밖이면 주의 톤.
 function torqueDetail(s, raw, prior, width, digits) {
   const calculable = torqueCalculable(s);
   const outside = calculable && (raw < prior * (1 - width) || raw > prior * (1 + width));
@@ -23,13 +23,13 @@ function torqueDetail(s, raw, prior, width, digits) {
           outside ? "warn" : ""];
 }
 
-/* 값마다 학습값을 읽는 법. live = {learner: LearnerState, localization: locationd 상태 또는 null}.
- *   learned(live)            학습값(파라미터 단위), 없으면 NaN. valid(live)는 그 값이 유효한가
- *   detail(live)             학습값 옆 작은 글씨(편차·범위), 또는 [글씨, 톤]
- *   digits, signed           학습값과 지금 쓰는 값의 자릿수·부호. 학습값을 수동값으로 저장할 때도 이 자릿수
- *   using(live, manual)      자동 학습 중 실제로 쓰는 값(없으면 학습값). both면 수동값도 함께 쓰인다
- *   learnedText, manualText  값 대신 보여 줄 글씨
- *   adopt                    수동값으로 저장할 값(없으면 학습값), false면 버튼 없음. adoptLabel은 그 값의 이름 */
+// 값마다 학습값을 읽는 법. live = {learner: LearnerState, localization: locationd 상태 또는 null}.
+//   learned(live)            학습값(파라미터 단위), 없으면 NaN. valid(live)는 그 값이 유효한가
+//   detail(live)             학습값 옆 작은 글씨(편차·범위), 또는 [글씨, 톤]
+//   digits, signed           학습값과 지금 쓰는 값의 자릿수·부호. 학습값을 수동값으로 저장할 때도 이 자릿수
+//   using(live, manual)      자동 학습 중 실제로 쓰는 값(없으면 학습값). both면 수동값도 함께 쓰인다
+//   learnedText, manualText  값 대신 보여 줄 글씨
+//   adopt                    수동값으로 저장할 값(없으면 학습값), false면 버튼 없음. adoptLabel은 그 값의 이름
 const LIVE = {
   steer_ratio: {
     digits: 2,
@@ -100,8 +100,8 @@ const LIVE = {
 };
 
 const LAG_STATUS = {0: ["추정 전", "warn"], 1: ["추정됨", "good"], 2: ["무효", "bad"]};
-/* 학습기마다: 지금 제어에 학습값을 쓰고 있는가(controlsd가 LearnerState 플래그로 알린다), 쓰기 전의 상태 이름, 상태
- * 배지, 한 줄 요약. */
+// 학습기마다: 지금 제어에 학습값을 쓰고 있는가(controlsd가 LearnerState 플래그로 알린다), 쓰기 전의 상태 이름, 상태
+// 배지, 한 줄 요약.
 const LEARNERS = {
   paramsd: {
     inUse: ({learner: s}) => s.flags.use_vehicle,
@@ -151,7 +151,7 @@ const LEARNERS = {
 };
 
 // ------------------------------------------------------------ 학습기 묶음
-/* 묶음 머리의 출처 선택: 자동 학습(학습 스위치 켬) | 수동(끔). 고르면 곧바로 저장하고 onChange를 부른다. */
+// 묶음 머리의 출처 선택: 자동 학습(학습 스위치 켬) | 수동(끔). 고르면 곧바로 저장하고 onChange를 부른다.
 function sourceControl(switchKey, label, onChange) {
   const auto = el("button", {type: "button", text: "자동 학습"});
   const manual = el("button", {type: "button", text: "수동"});
@@ -181,7 +181,7 @@ function sourceControl(switchKey, label, onChange) {
   return {element, sync};
 }
 
-/* 값 카드: 지금 쓰는 값과 출처, 학습값, 수동값(편집기)과 자동 학습 중 그 쓰임, 학습값을 수동값으로 저장, 설명. */
+// 값 카드: 지금 쓰는 값과 출처, 학습값, 수동값(편집기)과 자동 학습 중 그 쓰임, 학습값을 수동값으로 저장, 설명.
 function quantityCard(key, switchKey, learner) {
   const meta = metaFor("steering", key);
   const spec = LIVE[key];
@@ -305,7 +305,7 @@ function quantityCard(key, switchKey, learner) {
   };
 }
 
-/* 학습기 묶음 하나: 이름·학습기·설명, 출처 선택, 상태 배지, 값 카드들, 한 줄 요약. */
+// 학습기 묶음 하나: 이름·학습기·설명, 출처 선택, 상태 배지, 값 카드들, 한 줄 요약.
 function learnerGroup(name, spec, keys) {
   const learner = LEARNERS[spec.learner];
   const cards = keys.map(key => quantityCard(key, spec.switch, learner));
@@ -354,9 +354,9 @@ const CALIBRATION_STATUS = {
 };
 const POSE_STATUS_TEXT = {calibrated: "보정 완료", uncalibrated: "수렴 중", invalid: "범위 밖", recalibrating: "재보정 중"};
 
-/* 워프 보정(modeld calibration)과 그 출처. 출처 버튼은 display.json의 calibration_use_flow를 바꾼다(결합 중에는 서버가
- * 막고 modeld도 해제를 기다린다). 표는 워프에 쓴 값, 광류 추정, 모델 포즈 보정기 자신의 추정과 둘의 차이(모델 pose의
- * 치우침)다. 초기화는 두 보정을 다 지운다. */
+// 워프 보정(modeld calibration)과 그 출처. 출처 버튼은 display.json의 calibration_use_flow를 바꾼다(결합 중에는 서버가
+// 막고 modeld도 해제를 기다린다). 표는 워프에 쓴 값, 광류 추정, 모델 포즈 보정기 자신의 추정과 둘의 차이(모델 pose의
+// 치우침)다. 초기화는 두 보정을 다 지운다.
 function calibrationCard() {
   let latest = null;
   let saving = false;

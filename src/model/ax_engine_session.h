@@ -1,18 +1,17 @@
 #ifndef AX_ENGINE_SESSION_H
 #define AX_ENGINE_SESSION_H
 
-/* axmodel 하나를 AX620E NPU에서 돌리는 최소 세션. 입출력마다 캐시 가능한 CMM
- * 버퍼를 한 번 잡아 두고, 호출자는 input(i)/output(i)에 직접 읽고 쓴다. run()이
- * 입력 캐시를 밀어내고 실행한 뒤 출력 캐시를 무효화한다. ax_engine 심볼은
- * 이 클래스 안에만 둔다. */
+// axmodel 하나를 AX620E NPU에서 돌리는 최소 세션. 입출력마다 캐시 가능한 CMM
+// 버퍼를 한 번 잡아 두고, 호출자는 input(i)/output(i)에 직접 읽고 쓴다. run()이
+// 입력 캐시를 밀어내고 실행한 뒤 출력 캐시를 무효화한다. ax_engine 심볼은
+// 이 클래스 안에만 둔다.
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-class AxEngineSession
-{
+class AxEngineSession {
 public:
     enum class DataType { Unknown, UInt8, UInt16, Float32, Other };
 
@@ -37,8 +36,14 @@ public:
     // 이름으로 찾는다. 없으면 -1.
     int input_index(const std::string &name) const;
 
-    template <class T> T *input(size_t i) { return static_cast<T *>(inputs_[i].virt); }
-    template <class T> const T *output(size_t i) const { return static_cast<const T *>(outputs_[i].virt); }
+    template <class T>
+    T *input(size_t i) {
+        return static_cast<T *>(inputs_[i].virt);
+    }
+    template <class T>
+    const T *output(size_t i) const {
+        return static_cast<const T *>(outputs_[i].virt);
+    }
 
     bool run();
     const std::string &tools_version() const { return tools_version_; }

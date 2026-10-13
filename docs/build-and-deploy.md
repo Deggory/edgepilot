@@ -55,6 +55,28 @@ board gives the same bytes.
 CMake stops with a clear message if `libax_engine`/`libax_sys`, the MaixCDK
 headers, or the board OpenCV are missing.
 
+### Build version
+
+Every board binary carries the `git describe` of the tree it was built from,
+such as `v0.0.4-6-g1a2b3c4`: the last release tag, the commits since, and the
+commit. `-dirty` means tracked files had uncommitted changes; `unknown` means
+there was no git. `cmake/build_version.cmake` runs on every build and rewrites
+the generated `build_version.cc` only when the value changes, so an unchanged
+tree does not recompile or relink. `build.sh` reads the value on the host and
+passes it into the container as `EDGEPILOT_VERSION`. Set that variable yourself
+to pin it, for example to check that two builds differing only in comments or
+formatting give the same bytes:
+
+```sh
+EDGEPILOT_VERSION=pinned tools/docker_ax630/build.sh
+```
+
+The value shows in three places:
+
+- the first log line of each process, `modeld: edgepilot v0.0.4-6-g1a2b3c4`
+- the web console's process panel ([Runtime options](runtime-options.md#web-console))
+- the binary itself: `grep -ao 'EDGEPILOT_VERSION=[A-Za-z0-9._+-]*' modeld`
+
 > [!WARNING]
 > Do not build on the board: a native build runs out of its 1 GB of memory.
 
@@ -95,5 +117,5 @@ scripts/run_host_tests.sh
 ```
 
 Builds `build-host/` with the runtime off and runs every test through `ctest`:
-196 googletest cases, `check_web_console.py` and `check_recording_reader.py`. It needs neither the board nor
+260 googletest cases, `check_web_console.py` and `check_recording_reader.py`. It needs neither the board nor
 `deps/`; googletest is downloaded on the first configure.

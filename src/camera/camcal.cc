@@ -1,9 +1,10 @@
+#include "common/build_version.h"
+#include "common/utils_process.h"
+#include "common/utils_time.h"
 #include "hud/alert_sound.h"
 #include "maixcam2/maix_camera.h"
 #include "maixcam2/maix_cmm.h"
 #include "maixcam2/maix_display.h"
-#include "common/utils_process.h"
-#include "common/utils_time.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -31,17 +32,17 @@
 #include <thread>
 #include <vector>
 
-/* 카메라 내부 파라미터 측정용 스틸 캡처.
- *
- * 런타임과 같은 MaixCamera 경로(센서 2560x1440 전체 화각을 크롭 없이 줄임, 보드
- * cam_flip/mirror, AI-ISP 설정)로 1920x1080을 받아, LCD에는 전체 화면을 원본 비율로
- * (위아래 검은 띠) 보여 주고, Func 키·화면 터치·터미널 Enter를 누르면 그 프레임을 무손실
- * PNG로 저장한다. 저장은 별도 스레드가 하므로 미리보기는 멈추지 않고, 파일이 디스크에
- * 쓰이면 확인음이 난다. 카메라를 독점하므로 edgepilot 런타임을 먼저 멈춘다.
- *
- * 환경: CAMCAL_DIR(기본 /root/camcal/snapshots), CAMCAL_WIDTH/HEIGHT(1920/1080),
- * CAMCAL_FORMAT(png|jpg), CAMCAL_MAX_SHUTTER_US(기본 10000: 손떨림 번짐을 줄인다),
- * CAMCAL_INPUTS(기본 /dev/input/event0,/dev/input/event1). */
+// 카메라 내부 파라미터 측정용 스틸 캡처.
+//
+// 런타임과 같은 MaixCamera 경로(센서 2560x1440 전체 화각을 크롭 없이 줄임, 보드
+// cam_flip/mirror, AI-ISP 설정)로 1920x1080을 받아, LCD에는 전체 화면을 원본 비율로
+// (위아래 검은 띠) 보여 주고, Func 키·화면 터치·터미널 Enter를 누르면 그 프레임을 무손실
+// PNG로 저장한다. 저장은 별도 스레드가 하므로 미리보기는 멈추지 않고, 파일이 디스크에
+// 쓰이면 확인음이 난다. 카메라를 독점하므로 edgepilot 런타임을 먼저 멈춘다.
+//
+// 환경: CAMCAL_DIR(기본 /root/camcal/snapshots), CAMCAL_WIDTH/HEIGHT(1920/1080),
+// CAMCAL_FORMAT(png|jpg), CAMCAL_MAX_SHUTTER_US(기본 10000: 손떨림 번짐을 줄인다),
+// CAMCAL_INPUTS(기본 /dev/input/event0,/dev/input/event1).
 
 namespace {
 
@@ -55,8 +56,7 @@ struct Shot {
     int index = 0;
 };
 
-int next_index(const std::string &dir)
-{
+int next_index(const std::string &dir) {
     int best = 0;
     if (DIR *d = opendir(dir.c_str())) {
         while (dirent *e = readdir(d)) {
@@ -68,14 +68,12 @@ int next_index(const std::string &dir)
     return best + 1;
 }
 
-void make_dirs(const std::string &path)
-{
+void make_dirs(const std::string &path) {
     for (size_t i = 1; i <= path.size(); ++i)
         if (i == path.size() || path[i] == '/') mkdir(path.substr(0, i).c_str(), 0755);
 }
 
-std::string timestamp()
-{
+std::string timestamp() {
     char buf[32];
     const std::time_t t = std::time(nullptr);
     std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", std::localtime(&t));
@@ -85,10 +83,8 @@ std::string timestamp()
 class Saver {
 public:
     Saver(std::string dir, int width, int height, bool png, AlertSound &sound)
-        : dir_(std::move(dir)), width_(width), height_(height), png_(png), sound_(sound),
-          thread_(&Saver::loop, this) {}
-    ~Saver()
-    {
+        : dir_(std::move(dir)), width_(width), height_(height), png_(png), sound_(sound), thread_(&Saver::loop, this) {}
+    ~Saver() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stop_ = true;
@@ -98,8 +94,7 @@ public:
     }
 
     bool busy() const { return busy_; }
-    void submit(Shot shot)
-    {
+    void submit(Shot shot) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             pending_ = std::move(shot);
@@ -115,8 +110,7 @@ public:
     std::atomic<bool> changed{false};
 
 private:
-    void loop()
-    {
+    void loop() {
         std::unique_lock<std::mutex> lock(mutex_);
         while (true) {
             cv_.wait(lock, [this] { return has_pending_ || stop_; });
@@ -131,8 +125,7 @@ private:
         }
     }
 
-    void save(const Shot &shot)
-    {
+    void save(const Shot &shot) {
         const uint64_t start = monotonic_now_ns();
         cv::Mat yuv(height_ * 3 / 2, width_, CV_8UC1, const_cast<uint8_t *>(shot.nv12.data()));
         const cv::Mat y = yuv.rowRange(0, height_);
@@ -144,32 +137,31 @@ private:
         cv::Mat bgr;
         cv::cvtColor(yuv, bgr, cv::COLOR_YUV2BGR_NV12);
         char name[64];
-        std::snprintf(name, sizeof(name), "snap_%04d_%s.%s", shot.index, timestamp().c_str(),
-                      png_ ? "png" : "jpg");
+        std::snprintf(name, sizeof(name), "snap_%04d_%s.%s", shot.index, timestamp().c_str(), png_ ? "png" : "jpg");
         const std::string path = dir_ + "/" + name;
-        const std::vector<int> params = png_
-            ? std::vector<int>{cv::IMWRITE_PNG_COMPRESSION, 1}
-            : std::vector<int>{cv::IMWRITE_JPEG_QUALITY, 95};
+        const std::vector<int> params =
+            png_ ? std::vector<int>{cv::IMWRITE_PNG_COMPRESSION, 1} : std::vector<int>{cv::IMWRITE_JPEG_QUALITY, 95};
         bool ok = false;
         try {
             ok = cv::imwrite(path, bgr, params);
         } catch (const cv::Exception &e) {
             std::fprintf(stderr, "\ncamcal: imwrite: %s\n", e.what());
         }
-        if (ok) ok = [&] {  // 확인음은 파일이 디스크에 있을 때 낸다
-            const int fd = ::open(path.c_str(), O_RDONLY);
-            if (fd < 0) return false;
-            const bool synced = fsync(fd) == 0;
-            ::close(fd);
-            return synced;
-        }();
+        if (ok)
+            ok = [&] {  // 확인음은 파일이 디스크에 있을 때 낸다
+                const int fd = ::open(path.c_str(), O_RDONLY);
+                if (fd < 0) return false;
+                const bool synced = fsync(fd) == 0;
+                ::close(fd);
+                return synced;
+            }();
         const double ms = (monotonic_now_ns() - start) / 1e6;
         if (ok) {
             ++saved;
             last_sharp = sharp;
             sound_.play(AlertSoundId::signal_changed);
-            std::fprintf(stderr, "\ncamcal: %d saved %s sharp=%.0f write=%.0fms\n", saved.load(),
-                         path.c_str(), sharp, ms);
+            std::fprintf(stderr, "\ncamcal: %d saved %s sharp=%.0f write=%.0fms\n", saved.load(), path.c_str(), sharp,
+                         ms);
         } else {
             ++failed;
             sound_.play(AlertSoundId::unable);
@@ -190,11 +182,10 @@ private:
     std::thread thread_;
 };
 
-/* Func 키(gpio_keys)와 터치스크린의 누름, 터미널의 Enter/스페이스를 셔터로, q를 종료로. */
+// Func 키(gpio_keys)와 터치스크린의 누름, 터미널의 Enter/스페이스를 셔터로, q를 종료로.
 class Inputs {
 public:
-    explicit Inputs(const std::string &devices)
-    {
+    explicit Inputs(const std::string &devices) {
         std::stringstream list(devices);
         std::string path;
         while (std::getline(list, path, ',')) {
@@ -215,15 +206,13 @@ public:
             tty_ = tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0;
         }
     }
-    ~Inputs()
-    {
+    ~Inputs() {
         for (int fd : fds_) ::close(fd);
         if (tty_) tcsetattr(STDIN_FILENO, TCSANOW, &saved_tty_);
     }
 
     // 누른 횟수(셔터)를 돌려준다. q면 quit을 켠다.
-    int poll(bool *quit)
-    {
+    int poll(bool *quit) {
         int presses = 0;
         for (int fd : fds_) {
             input_event ev;
@@ -246,9 +235,7 @@ private:
     bool tty_ = false;
 };
 
-void draw_osd(MaixDisplay &display, int width, int height, int saved, double sharp, bool saving,
-              bool flash)
-{
+void draw_osd(MaixDisplay &display, int width, int height, int saved, double sharp, bool saving, bool flash) {
     const MaixDisplay::OverlayBuffer buffer = display.begin_overlay();
     if (!buffer.pixels) return;
     // 가로 화면 좌표로 그린 뒤 세로 패널 방향 그림판으로 옮긴다(transpose, 보드 방향만큼 뒤집기).
@@ -265,9 +252,7 @@ void draw_osd(MaixDisplay &display, int width, int height, int saved, double sha
     cv::putText(osd, top, cv::Point(12, 40), cv::FONT_HERSHEY_SIMPLEX, 0.8, white, 2, cv::LINE_8);
     cv::putText(osd, bottom, cv::Point(12, MaixDisplay::kHeight - 20), cv::FONT_HERSHEY_SIMPLEX, 0.8,
                 saving ? yellow : white, 2, cv::LINE_8);
-    if (flash)
-        cv::rectangle(osd, cv::Rect(0, kBarH, MaixDisplay::kWidth, MaixDisplay::kHeight - 2 * kBarH),
-                      white, 8);
+    if (flash) cv::rectangle(osd, cv::Rect(0, kBarH, MaixDisplay::kWidth, MaixDisplay::kHeight - 2 * kBarH), white, 8);
     cv::Mat panel(MaixDisplay::kWidth, MaixDisplay::kHeight, CV_8UC4, buffer.pixels, buffer.stride);
     cv::transpose(osd, panel);
     if (buffer.flip_x) cv::flip(panel, panel, 1);
@@ -275,11 +260,11 @@ void draw_osd(MaixDisplay &display, int width, int height, int saved, double sha
     display.end_overlay();
 }
 
-} // namespace
+}  // namespace
 
-int main()
-{
+int main() {
     install_stop_signal_handlers(&g_stop);
+    log_build_version("camcal");
 
     try {
         const int width = static_cast<int>(env_float("CAMCAL_WIDTH", 1920));
@@ -303,8 +288,8 @@ int main()
         for (auto &slot : slots)
             if (!cmm_alloc(&slot, frame_bytes, "camcal")) throw std::runtime_error("CMM alloc failed");
 
-        std::fprintf(stderr, "camcal: %dx%d NV12 -> %s (%s). Func/touch/Enter = shoot, q = quit\n",
-                     width, height, dir.c_str(), png ? "png" : "jpg");
+        std::fprintf(stderr, "camcal: %dx%d NV12 -> %s (%s). Func/touch/Enter = shoot, q = quit\n", width, height,
+                     dir.c_str(), png ? "png" : "jpg");
 
         uint64_t frames = 0, errors = 0, window_frames = 0;
         uint64_t window_start = monotonic_now_ns(), flash_until = 0;
@@ -351,8 +336,8 @@ int main()
 
             if (now - window_start >= 1000000000ULL) {
                 std::fprintf(stderr, "camcal: fps=%.1f saved=%d failed=%d errors=%llu          \r",
-                             window_frames * 1e9 / (now - window_start), saver.saved.load(),
-                             saver.failed.load(), static_cast<unsigned long long>(errors));
+                             window_frames * 1e9 / (now - window_start), saver.saved.load(), saver.failed.load(),
+                             static_cast<unsigned long long>(errors));
                 window_start = now;
                 window_frames = 0;
             }

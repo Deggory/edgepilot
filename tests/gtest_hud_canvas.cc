@@ -1,7 +1,7 @@
-/* HUD 캔버스와 렌더러: 스트레이트 알파 합성을 부동소수 기준식과, 다각형 커버리지 합을 기하
- * 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
- * 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
- * 아래 모서리 카드, 상태 알약 터치 영역도 본다. */
+// HUD 캔버스와 렌더러: 스트레이트 알파 합성을 부동소수 기준식과, 다각형 커버리지 합을 기하
+// 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
+// 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
+// 아래 모서리 카드, 상태 알약 터치 영역도 본다.
 #include "hud/hud_canvas.h"
 #include "hud/hud_renderer.h"
 
@@ -59,7 +59,8 @@ TEST(HudCanvas, PolygonCoverageMatchesArea) {
     const HudPoint triangle[] = {{20.3f, 30.7f}, {170.6f, 60.2f}, {60.1f, 180.9f}};
     canvas.fill_polygon(triangle, 3, hud_argb(255, 255, 255, 255));
     const double area = std::fabs((triangle[1].x - triangle[0].x) * (triangle[2].y - triangle[0].y) -
-                                  (triangle[2].x - triangle[0].x) * (triangle[1].y - triangle[0].y)) / 2.0;
+                                  (triangle[2].x - triangle[0].x) * (triangle[1].y - triangle[0].y)) /
+                        2.0;
     EXPECT_NEAR(s.ink(), area, area * 0.003) << "커버리지 합이 넓이와 같다";
     EXPECT_EQ(s.at(80, 90) >> 24, 255) << "안쪽은 불투명";
     EXPECT_EQ(s.at(5, 5) >> 24, 0) << "바깥은 비어 있다";
@@ -87,7 +88,7 @@ TEST(HudCanvas, RoundRectStraightRowsMatchPolygon) {
     const double area = 150.0 * 90.0 - (4.0 - 3.14159265) * 10.0 * 10.0;
     EXPECT_NEAR(s.ink(), area, area * 0.003);
     for (int y = 20; y < 90; ++y) {
-        EXPECT_EQ(s.at(20, y) >> 24, 255) << y;   // 곧은 행 왼쪽 끝 화소
+        EXPECT_EQ(s.at(20, y) >> 24, 255) << y;  // 곧은 행 왼쪽 끝 화소
         EXPECT_EQ(s.at(19, y) >> 24, 0) << y;
     }
     EXPECT_EQ(s.at(95, 19) >> 24, 255) << "위 모서리 띠와 곧은 행 사이";
@@ -98,9 +99,9 @@ TEST(HudCanvas, ClearOnlyDamagedTiles) {
     Surface s(640, 60);
     HudCanvas canvas = s.canvas();
     canvas.clear(false);
-    canvas.fill_rect(10, 5, 20, 10, hud_argb(255, 255, 0, 0));      // 칸 0
+    canvas.fill_rect(10, 5, 20, 10, hud_argb(255, 255, 0, 0));               // 칸 0
     canvas.text(600, 30, "OK", kHudBodyFont, hud_argb(255, 255, 255, 255));  // 칸 9
-    s.pixels[50 * 640 + 300] = hud_argb(255, 1, 2, 3);             // 캔버스 밖에서 쓴 화소
+    s.pixels[50 * 640 + 300] = hud_argb(255, 1, 2, 3);                       // 캔버스 밖에서 쓴 화소
     canvas.clear(true);
     // 그린 칸은 비고, 그리지 않은 칸(직접 쓴 화소)은 그대로다
     for (int y = 0; y < 60; ++y)

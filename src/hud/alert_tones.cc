@@ -6,8 +6,8 @@
 
 namespace {
 
-/* 음 하나: 시작 시각, 음높이, 감쇠 시간 상수(진폭이 1/e가 되는 시간), 크기. 앞 음이 다 사라지기
- * 전에 다음 음이 겹쳐 울린다. */
+// 음 하나: 시작 시각, 음높이, 감쇠 시간 상수(진폭이 1/e가 되는 시간), 크기. 앞 음이 다 사라지기
+// 전에 다음 음이 겹쳐 울린다.
 struct Note {
     unsigned at_ms;
     double hz;
@@ -15,16 +15,15 @@ struct Note {
     double level;
 };
 
-/* 알림 하나: 음들과 밝기(2·3배음 비율). 거부·경고일수록 밝아 작은 스피커에서 또렷하다. 배음은
- * 작은 스피커가 거칠게 울리지 않을 만큼만 섞는다. */
+// 알림 하나: 음들과 밝기(2·3배음 비율). 거부·경고일수록 밝아 작은 스피커에서 또렷하다. 배음은
+// 작은 스피커가 거칠게 울리지 않을 만큼만 섞는다.
 struct Tone {
     const char *name;
     std::vector<Note> notes;
     double brightness;
 };
 
-constexpr double kE5 = 659.26, kF5 = 698.46, kG5 = 783.99, kA5 = 880.0, kB5 = 987.77, kD6 = 1174.66,
-                 kG6 = 1567.98;
+constexpr double kE5 = 659.26, kF5 = 698.46, kG5 = 783.99, kA5 = 880.0, kB5 = 987.77, kD6 = 1174.66, kG6 = 1567.98;
 
 // AlertSoundId 순서.
 const Tone kTones[] = {
@@ -41,19 +40,17 @@ const Tone kTones[] = {
 };
 static_assert(std::size(kTones) == static_cast<size_t>(AlertSoundId::count), "one tone per AlertSoundId");
 
-constexpr double kAttackMs = 4.0;  // 반코사인으로 올려 딸깍 소리 없이 시작
-constexpr double kTailMs = 10.0;   // 끝을 0으로 접는다
+constexpr double kAttackMs = 4.0;     // 반코사인으로 올려 딸깍 소리 없이 시작
+constexpr double kTailMs = 10.0;      // 끝을 0으로 접는다
 constexpr double kQuietDecays = 7.0;  // 감쇠 상수의 7배면 -60 dB
 
 }  // namespace
 
-const char *alert_sound_name(AlertSoundId id)
-{
+const char *alert_sound_name(AlertSoundId id) {
     return id < AlertSoundId::count ? kTones[static_cast<int>(id)].name : "none";
 }
 
-std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate)
-{
+std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate) {
     if (id >= AlertSoundId::count) return {};
     const Tone &tone = kTones[static_cast<int>(id)];
     double end_ms = 0.0;

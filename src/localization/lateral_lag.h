@@ -1,13 +1,13 @@
 #ifndef LATERAL_LAG_H
 #define LATERAL_LAG_H
 
-/* openpilot lagd(selfdrive/locationd/lagd.py)의 C++ 이식: 조향 지연을 주행 중에 추정한다.
- *
- * 20 Hz로 목표 횡가속(desired curvature · v²)과 실제 횡가속(요레이트 · v)을 60초 창에 모으고,
- * 조건(조향 활성, 핸들 비조작, 비포화, 고속, 센서·횡가속 정상, 2초 회복)을 만족하는 점만
- * 마스크해 정규화 상호상관의 봉우리를 찾는다. 추정값은 100개씩 블록 평균을 내고, 5블록이
- * 모이면 유효하다(블록 사이 표준편차 0.1 s를 넘으면 무효). upstream은 전체 상관을 FFT로 구하지만
- * 쓰는 지연 범위(−0.25~1.25 s)만 직접 계산해도 값은 같다. 하드웨어에 의존하지 않는다. */
+// openpilot lagd(selfdrive/locationd/lagd.py)의 C++ 이식: 조향 지연을 주행 중에 추정한다.
+//
+// 20 Hz로 목표 횡가속(desired curvature · v²)과 실제 횡가속(요레이트 · v)을 60초 창에 모으고,
+// 조건(조향 활성, 핸들 비조작, 비포화, 고속, 센서·횡가속 정상, 2초 회복)을 만족하는 점만
+// 마스크해 정규화 상호상관의 봉우리를 찾는다. 추정값은 100개씩 블록 평균을 내고, 5블록이
+// 모이면 유효하다(블록 사이 표준편차 0.1 s를 넘으면 무효). upstream은 전체 상관을 FFT로 구하지만
+// 쓰는 지연 범위(−0.25~1.25 s)만 직접 계산해도 값은 같다. 하드웨어에 의존하지 않는다.
 
 #include <cstdint>
 #include <deque>
@@ -15,7 +15,7 @@
 #include <vector>
 
 struct LateralLagConfig {
-    double dt = 0.05;               // 점 주기(20 Hz)
+    double dt = 0.05;  // 점 주기(20 Hz)
     int block_count = 50;
     int min_valid_block_count = 5;
     int block_size = 100;
@@ -32,7 +32,7 @@ struct LateralLagConfig {
     double max_lat_accel_diff = 0.6;
     double min_lat_accel_range = 0.5;
     double min_confidence = 0.7;
-    double initial_lag = 0.42;      // steering.json steer_actuator_delay
+    double initial_lag = 0.42;  // steering.json steer_actuator_delay
 };
 
 struct LateralLagInput {
@@ -42,7 +42,7 @@ struct LateralLagInput {
     bool saturated = false;
     double desired_curvature = 0.0;  // 오른쪽 양수(우리 제어 관례)
     double v_ego = 0.0;
-    double yaw_rate = 0.0;           // 같은 관례(오른쪽 회전 양수), rad/s
+    double yaw_rate = 0.0;  // 같은 관례(오른쪽 회전 양수), rad/s
     double yaw_rate_std = 0.0;
     bool pose_valid = false;
     bool calib_valid = false;
@@ -51,8 +51,8 @@ struct LateralLagInput {
 enum class LateralLagStatus : uint32_t { Unestimated = 0, Estimated = 1, Invalid = 2 };
 
 struct LateralLagOutput {
-    double lateral_delay = 0.0;          // 쓸 값: 추정되면 추정, 아니면 초기값
-    double estimate = 0.0;               // 진행 중 블록 포함 평균
+    double lateral_delay = 0.0;  // 쓸 값: 추정되면 추정, 아니면 초기값
+    double estimate = 0.0;       // 진행 중 블록 포함 평균
     double estimate_std = 0.0;
     int valid_blocks = 0;
     int cal_perc = 0;

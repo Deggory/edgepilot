@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Bake the HUD fonts into src/hud/hud_font_data.inc.
+"""HUD 글꼴을 src/hud/hud_font_data.inc로 굽는다.
 
   make_hud_font.py [out.inc]
 
-The glyphs come from Pillow's default scalable font, Aileron Regular (Sora
-Sagano, dotcolon.net, released as CC0), so nothing outside Pillow is needed and
-the result may be committed. Heavier weights are drawn with a stroke. Coverage
-is stored as 4-bit nibbles, two pixels per byte, glyph after glyph; the C++
-side (hud_font.cc) expands it to 8 bits at compile time.
+글리프는 Pillow의 기본 가변 크기 글꼴인 Aileron Regular(Sora Sagano, dotcolon.net, CC0 공개)에서 가져오므로
+Pillow 밖의 것이 필요 없고 결과를 커밋해도 된다. 굵은 글씨는 획을 더해 그린다. 덮임 정도는 4비트 니블로
+바이트당 화소 두 개씩 글리프를 차례로 저장하고, C++ 쪽(hud_font.cc)이 컴파일할 때 8비트로 늘린다.
 """
 
 import sys
@@ -19,14 +17,14 @@ from PIL import Image, ImageDraw, ImageFont
 PRINTABLE = "".join(map(chr, range(32, 127)))
 DIGITS = " -0123456789"
 GEARS = "PRNDS"  # 기어 카드
-DEGREE = "\u00b0"  # Latin-1 0xB0, written as "\xb0" in C++ strings
+DEGREE = "\u00b0"  # Latin-1 0xB0. C++ 문자열에서는 "\xb0"으로 쓴다
 
 
 class Spec(NamedTuple):
-    name: str     # C++ identifier stem: k<Name>Glyphs / k<Name>Packed
-    size: int     # pixel size
-    stroke: int   # extra weight in pixels (0 = regular)
-    chars: str    # the table spans min(chars)..max(chars); others in that range are empty
+    name: str     # C++ 식별자 줄기: k<Name>Glyphs / k<Name>Packed
+    size: int     # 화소 크기
+    stroke: int   # 더하는 굵기(화소, 0이면 보통)
+    chars: str    # 표는 min(chars)..max(chars)를 덮고, 그 범위의 다른 글자는 비어 있다
 
 
 SPECS = [
@@ -54,7 +52,7 @@ def render(spec: Spec):
         image = Image.new("L", (x1 - x0, y1 - y0), 0)
         ImageDraw.Draw(image).text((-x0, -y0), ch, font=font, fill=255,
                                    stroke_width=spec.stroke, stroke_fill=255)
-        # The stroke spreads outward, so shift the glyph in by it to keep pen and line top fixed.
+        # 획은 바깥으로 퍼지므로 그만큼 글리프를 안으로 옮겨 펜 위치와 줄 위쪽을 고정한다.
         glyphs.append((len(nibbles), x1 - x0, y1 - y0, x0 + spec.stroke, y0 + spec.stroke, advance))
         nibbles.extend((value + 8) // 17 for value in image.tobytes())
     if len(nibbles) % 2:

@@ -7,13 +7,9 @@ using namespace model_output_layout;
 
 namespace {
 
-float sigmoid_impl(float x)
-{
-    return 1.0f / (1.0f + std::exp(-x));
-}
+float sigmoid_impl(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
-void softmax(const float *input, float *output, int size)
-{
+void softmax(const float *input, float *output, int size) {
     const float max_value = *std::max_element(input, input + size);
     float denominator = 0.0f;
     for (int i = 0; i < size; ++i) {
@@ -21,19 +17,14 @@ void softmax(const float *input, float *output, int size)
         denominator += output[i];
     }
     const float inv_denominator = 1.0f / denominator;
-    for (int i = 0; i < size; ++i)
-        output[i] *= inv_denominator;
+    for (int i = 0; i < size; ++i) output[i] *= inv_denominator;
 }
 
-} // namespace
+}  // namespace
 
-float ModelOutputParser::sigmoid(float x)
-{
-    return sigmoid_impl(x);
-}
+float ModelOutputParser::sigmoid(float x) { return sigmoid_impl(x); }
 
-bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *lead, float *probability) const
-{
+bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *lead, float *probability) const {
     if (!valid || !lead) return false;
     const int idx = std::max(0, std::min(kLeadMhpSelection - 1, time_idx));
     const float global_prob = global_probabilities[idx];
@@ -44,8 +35,7 @@ bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *
     return true;
 }
 
-ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
-{
+ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
     ParsedModelOutput output;
     // axmodel 계약이 2576 float로 고정이라 부분 길이를 받아줄 이유가 없다.
     output.valid = raw.size() >= static_cast<size_t>(kModelOutputFloats);
@@ -112,8 +102,7 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw)
         output.leads.global_probabilities[sel] = sigmoid(raw[kLeadProbOffset + sel]);
     }
 
-    softmax(raw.data() + kDesireStateOffset,
-            output.meta.desire_state.data(), kDesireLen);
+    softmax(raw.data() + kDesireStateOffset, output.meta.desire_state.data(), kDesireLen);
     for (int i = 0; i < kMetaPressHorizons; ++i) {
         output.meta.gas_press[i] = sigmoid(raw[kMetaOffset + kMetaGasPressIndex + i * kMetaPressStride]);
         output.meta.brake_press[i] = sigmoid(raw[kMetaOffset + kMetaBrakePressIndex + i * kMetaPressStride]);

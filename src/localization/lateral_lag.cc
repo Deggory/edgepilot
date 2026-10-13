@@ -16,8 +16,7 @@ constexpr double kSmoothSigma = 1.0;
 constexpr double kMaxYawRateSanityCheck = 1.0;
 constexpr int kCacheVersion = 1;
 
-double parabolic_peak_interp(const std::vector<double> &r, size_t i)
-{
+double parabolic_peak_interp(const std::vector<double> &r, size_t i) {
     if (i == 0 || i + 1 >= r.size()) return static_cast<double>(i);
     const double ym1 = r[i - 1], y0 = r[i], yp1 = r[i + 1];
     const double denom = 2 * y0 - yp1 - ym1;
@@ -27,13 +26,11 @@ double parabolic_peak_interp(const std::vector<double> &r, size_t i)
 
 }  // namespace
 
-LateralLagEstimator::LateralLagEstimator(const LateralLagConfig &config) : config_(config)
-{
+LateralLagEstimator::LateralLagEstimator(const LateralLagConfig &config) : config_(config) {
     reset(config_.initial_lag, 0);
 }
 
-void LateralLagEstimator::reset(double initial_lag, int valid_blocks)
-{
+void LateralLagEstimator::reset(double initial_lag, int valid_blocks) {
     config_.initial_lag = initial_lag;
     // upstream Points는 창 길이만큼 0(무효)으로 채워 시작한다.
     points_.assign(static_cast<size_t>(std::lround(config_.window_s / config_.dt)), Point{0.0, 0.0, 0.0, false});
@@ -42,8 +39,7 @@ void LateralLagEstimator::reset(double initial_lag, int valid_blocks)
     last_estimate_t_ = 0.0;
 }
 
-void LateralLagEstimator::Blocks::init(int n, int size, int valid, double initial)
-{
+void LateralLagEstimator::Blocks::init(int n, int size, int valid, double initial) {
     num_blocks = n;
     block_size = size;
     valid_blocks = std::clamp(valid, 0, n);
@@ -52,8 +48,7 @@ void LateralLagEstimator::Blocks::init(int n, int size, int valid, double initia
     values.assign(static_cast<size_t>(n), initial);
 }
 
-void LateralLagEstimator::Blocks::update(double v)
-{
+void LateralLagEstimator::Blocks::update(double v) {
     double &cur = values[static_cast<size_t>(block_idx)];
     cur = (idx * cur + v) / (idx + 1);
     idx = (idx + 1) % block_size;
@@ -64,8 +59,7 @@ void LateralLagEstimator::Blocks::update(double v)
 }
 
 void LateralLagEstimator::Blocks::get(double *valid_mean, double *valid_std, double *current_mean,
-                                      double *current_std) const
-{
+                                      double *current_std) const {
     auto stats = [&](bool include_current, double *mean, double *std) {
         std::vector<double> v;
         for (int i = 0; i < valid_blocks; ++i)
@@ -87,14 +81,13 @@ void LateralLagEstimator::Blocks::get(double *valid_mean, double *valid_std, dou
     stats(true, current_mean, current_std);
 }
 
-void LateralLagEstimator::update_points(const LateralLagInput &in)
-{
+void LateralLagEstimator::update_points(const LateralLagInput &in) {
     t_ = in.t;
     const double la_desired = in.desired_curvature * in.v_ego * in.v_ego;
     const double la_actual = in.yaw_rate * in.v_ego;
     const bool fast = in.v_ego > config_.min_vego;
-    const bool sensors_valid = in.pose_valid && std::fabs(in.yaw_rate) < kMaxYawRateSanityCheck &&
-                               in.yaw_rate_std < kMaxYawRateSanityCheck;
+    const bool sensors_valid =
+        in.pose_valid && std::fabs(in.yaw_rate) < kMaxYawRateSanityCheck && in.yaw_rate_std < kMaxYawRateSanityCheck;
     const bool la_valid = std::fabs(la_actual) <= config_.max_lat_accel &&
                           std::fabs(la_desired - la_actual) <= config_.max_lat_accel_diff;
     if (!in.lat_active) last_lat_inactive_t_ = t_;
@@ -104,16 +97,15 @@ void LateralLagEstimator::update_points(const LateralLagInput &in)
     const double r = config_.min_recovery_buffer_s;
     const bool recovered = t_ - last_lat_inactive_t_ >= r && t_ - last_steering_pressed_t_ >= r &&
                            t_ - last_saturated_t_ >= r && t_ - last_pose_invalid_t_ >= r;
-    const bool okay = in.lat_active && !in.steering_pressed && !in.saturated && fast && recovered &&
-                      in.calib_valid && sensors_valid && la_valid;
+    const bool okay = in.lat_active && !in.steering_pressed && !in.saturated && fast && recovered && in.calib_valid &&
+                      sensors_valid && la_valid;
     if (points_.front().okay) --okay_count_;
     points_.pop_front();
     points_.push_back({t_, la_desired, la_actual, okay});
     if (okay) ++okay_count_;
 }
 
-std::vector<double> LateralLagEstimator::masked_smooth(const std::vector<double> &x, const std::vector<bool> &mask)
-{
+std::vector<double> LateralLagEstimator::masked_smooth(const std::vector<double> &x, const std::vector<bool> &mask) {
     // upstream masked_symmetric_moving_average: 가우시안 가중, 양끝은 가장자리 값으로 채움
     const int pad = kSmoothK / 2;
     double w[kSmoothK];
@@ -142,8 +134,7 @@ std::vector<double> LateralLagEstimator::masked_smooth(const std::vector<double>
 LateralLagEstimator::DelayResult LateralLagEstimator::actuator_delay(const std::vector<double> &expected,
                                                                      const std::vector<double> &actual,
                                                                      const std::vector<bool> &mask, double dt,
-                                                                     double min_lag, double max_lag)
-{
+                                                                     double min_lag, double max_lag) {
     const int n = static_cast<int>(expected.size());
     const int min_s = static_cast<int>(std::lround(min_lag / dt));
     const int max_s = static_cast<int>(std::lround(max_lag / dt));
@@ -214,8 +205,7 @@ LateralLagEstimator::DelayResult LateralLagEstimator::actuator_delay(const std::
     return out;
 }
 
-bool LateralLagEstimator::update_estimate()
-{
+bool LateralLagEstimator::update_estimate() {
     const size_t okay_needed = static_cast<size_t>(std::lround(config_.okay_window_s / config_.dt));
     if (points_.size() < okay_needed) return false;
     double amin = 1e18, amax = -1e18;
@@ -253,15 +243,14 @@ bool LateralLagEstimator::update_estimate()
     return true;
 }
 
-LateralLagOutput LateralLagEstimator::output() const
-{
+LateralLagOutput LateralLagEstimator::output() const {
     LateralLagOutput out;
     double vm, vs, cm, cs;
     blocks_.get(&vm, &vs, &cm, &cs);
     if (blocks_.valid_blocks >= config_.min_valid_block_count && std::isfinite(vm) && std::isfinite(vs))
         out.status = vs > config_.max_lag_std ? LateralLagStatus::Invalid : LateralLagStatus::Estimated;
-    out.lateral_delay = out.status == LateralLagStatus::Estimated
-        ? std::clamp(vm, config_.min_lag, config_.max_lag) : config_.initial_lag;
+    out.lateral_delay = out.status == LateralLagStatus::Estimated ? std::clamp(vm, config_.min_lag, config_.max_lag)
+                                                                  : config_.initial_lag;
     out.estimate = std::isfinite(cm) ? cm : config_.initial_lag;
     out.estimate_std = std::isfinite(cs) ? cs : 0.0;
     out.valid_blocks = blocks_.valid_blocks;
@@ -270,8 +259,7 @@ LateralLagOutput LateralLagEstimator::output() const
     return out;
 }
 
-std::string LateralLagEstimator::cache_json() const
-{
+std::string LateralLagEstimator::cache_json() const {
     const LateralLagOutput o = output();
     char buf[256];
     std::snprintf(buf, sizeof(buf),
@@ -281,8 +269,7 @@ std::string LateralLagEstimator::cache_json() const
     return buf;
 }
 
-bool LateralLagEstimator::restore(const std::string &json)
-{
+bool LateralLagEstimator::restore(const std::string &json) {
     // upstream retrieve_initial_lag: 같은 버전·차량(단일 차종이라 버전만)이고 무효가 아니면
     // 추정값과 유효 블록 수로 다시 시작한다. 초기값(steer_actuator_delay)이 바뀌어도 측정한 블록은
     // 차의 지연이라 그대로 쓴다(상류도 steerActuatorDelay로 거르지 않는다).

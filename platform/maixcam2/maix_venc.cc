@@ -13,11 +13,10 @@
 namespace {
 
 constexpr VENC_CHN kChannel = 0;
-constexpr AX_U32 kPoolBlocks = 6;           // 인코더 입력 FIFO(4) + 복사 중 1 + 여유 1
+constexpr AX_U32 kPoolBlocks = 6;              // 인코더 입력 FIFO(4) + 복사 중 1 + 여유 1
 constexpr unsigned kPoolRebuildFailures = 20;  // camerad 재시작으로 풀이 무효가 되면 다시 만든다
 
-AX_POOL make_pool(AX_U64 block_size)
-{
+AX_POOL make_pool(AX_U64 block_size) {
     AX_POOL_CONFIG_T cfg = {};
     cfg.MetaSize = 512;
     cfg.BlkCnt = kPoolBlocks;
@@ -27,8 +26,7 @@ AX_POOL make_pool(AX_U64 block_size)
     return AX_POOL_CreatePool(&cfg);
 }
 
-AX_VIDEO_FRAME_T nv12(int w, int h, AX_U64 phys)
-{
+AX_VIDEO_FRAME_T nv12(int w, int h, AX_U64 phys) {
     AX_VIDEO_FRAME_T f = {};
     f.u32Width = w;
     f.u32Height = h;
@@ -40,7 +38,7 @@ AX_VIDEO_FRAME_T nv12(int w, int h, AX_U64 phys)
     return f;
 }
 
-} // namespace
+}  // namespace
 
 struct VideoEncoder::Impl {
     int width = 0;
@@ -54,8 +52,7 @@ struct VideoEncoder::Impl {
     bool ivps = false, venc = false, channel = false, receiving = false;
 };
 
-VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : impl_(new Impl)
-{
+VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : impl_(new Impl) {
     Impl &m = *impl_;
     m.width = width;
     m.height = height;
@@ -105,8 +102,7 @@ VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : i
     m.receiving = true;
 }
 
-VideoEncoder::~VideoEncoder()
-{
+VideoEncoder::~VideoEncoder() {
     Impl &m = *impl_;
     if (m.receiving) AX_VENC_StopRecvFrame(kChannel);
     if (m.channel) AX_VENC_DestroyChn(kChannel);
@@ -116,8 +112,7 @@ VideoEncoder::~VideoEncoder()
 }
 
 bool VideoEncoder::submit(unsigned long long src_phys, uint64_t frame_id,
-                      const std::function<bool()> &source_still_valid)
-{
+                          const std::function<bool()> &source_still_valid) {
     Impl &m = *impl_;
     // 풀은 처음 쓸 때 만든다: camerad가 VI를 열며 AX 공용 풀을 다시 설정하면 그 전에
     // 만든 풀은 무효가 된다.
@@ -155,8 +150,7 @@ bool VideoEncoder::submit(unsigned long long src_phys, uint64_t frame_id,
 }
 
 unsigned VideoEncoder::drain(const std::function<void(const uint8_t *, size_t)> &on_config,
-                         const std::function<void(const Packet &)> &on_packet, int timeout_ms)
-{
+                             const std::function<void(const Packet &)> &on_packet, int timeout_ms) {
     Impl &m = *impl_;
     unsigned count = 0;
     AX_VENC_STREAM_T stream;

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <vector>
 
-/* 모델 좌표 3x3을 절반 해상도(크로마) 좌표계로 옮긴다. */
+// 모델 좌표 3x3을 절반 해상도(크로마) 좌표계로 옮긴다.
 void projection_scale_buffer(const float *in, float scale, float *out);
 
 enum class ModelFrame {
@@ -16,26 +16,24 @@ enum class ModelFrame {
     SmallBigModel,
 };
 
-class ModelInputTransform
-{
+class ModelInputTransform {
 public:
-    explicit ModelInputTransform(const AppConfig &config,
-                                 ModelFrame model_frame = ModelFrame::MedModel);
+    explicit ModelInputTransform(const AppConfig &config, ModelFrame model_frame = ModelFrame::MedModel);
 
     void set_calibration(float roll, float pitch, float yaw);
-    /* 카메라 좌우 장착 보정(sunnypilot camera offset과 같다). 모델이 offset_m만큼 오른쪽(+)에 있는
-     * 가상 카메라에서 본 영상을 받도록, 높이 height_m 아래 도로면 기준 호모그래피를 워프에 더한다.
-     * 모델은 카메라 위치를 차 중심으로 보므로 +면 차가 왼쪽으로 간다. */
+    // 카메라 좌우 장착 보정(sunnypilot camera offset과 같다). 모델이 offset_m만큼 오른쪽(+)에 있는
+    // 가상 카메라에서 본 영상을 받도록, 높이 height_m 아래 도로면 기준 호모그래피를 워프에 더한다.
+    // 모델은 카메라 위치를 차 중심으로 보므로 +면 차가 왼쪽으로 간다.
     void set_camera_mount(float offset_m, float height_m);
-    /* 크로마 평면의 바이트 순서. NV12는 U,V(기본), NV21은 V,U. 워프 출력의
-     * 4번 평면은 항상 U, 5번은 V다. */
+    // 크로마 평면의 바이트 순서. NV12는 U,V(기본), NV21은 V,U. 워프 출력의
+    // 4번 평면은 항상 U, 5번은 V다.
     void set_chroma_vu(bool vu) { chroma_vu_ = vu; }
     void projection_matrix(float *projection) const;
-    /* CPU 워프(GDC를 못 쓸 때의 대체 경로와 호스트 검사). 고정소수점 쌍선형 보간. */
+    // CPU 워프(GDC를 못 쓸 때의 대체 경로와 호스트 검사). 고정소수점 쌍선형 보간.
     void nv12_to_yuv6_warped(const uint8_t *nv12, int src_w, int src_h, std::vector<float> &out);
     void nv12_to_yuv6_warped(const uint8_t *nv12, int src_w, int src_h, float *out);
-    /* uint8 입력 axmodel용 경로. 같은 고정소수점 보간의 반올림 값을 float 변환
-     * 없이 그대로 쓰므로 float 경로와 비트 동일한 픽셀 값을 만든다. */
+    // uint8 입력 axmodel용 경로. 같은 고정소수점 보간의 반올림 값을 float 변환
+    // 없이 그대로 쓰므로 float 경로와 비트 동일한 픽셀 값을 만든다.
     void nv12_to_yuv6_warped(const uint8_t *nv12, int src_w, int src_h, uint8_t *out);
 
 private:
@@ -57,12 +55,9 @@ private:
     static constexpr int kWeightScale = 1 << kWeightBits;
 
     void rebuild_maps(int src_w, int src_h);
-    void build_sample_map(const float *projection, int src_w, int src_h,
-                          int dst_w, int dst_h, int src_stride_pixels,
-                          int bytes_per_pixel, int dst_scale,
-                          int dst_x_offset, int dst_y_offset, SampleMap &map) const;
-    static uint8_t sample(const uint8_t *base, const SampleMap &map,
-                          size_t index, int channel);
+    void build_sample_map(const float *projection, int src_w, int src_h, int dst_w, int dst_h, int src_stride_pixels,
+                          int bytes_per_pixel, int dst_scale, int dst_x_offset, int dst_y_offset, SampleMap &map) const;
+    static uint8_t sample(const uint8_t *base, const SampleMap &map, size_t index, int channel);
     template <typename OutT>
     void warp(const uint8_t *nv12, int src_w, int src_h, OutT *out);
 

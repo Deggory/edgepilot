@@ -3,10 +3,10 @@
 #include "panda/panda_can_codec.h"
 #include "panda/panda_protocol.h"
 
+#include <unistd.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <unistd.h>
 
 namespace {
 
@@ -19,15 +19,11 @@ constexpr int kUsbTxSoftLimit = 0x100;
 constexpr int kUsbBulkWriteRetries = 3;
 constexpr uint32_t kMaxConsecutiveMalformedRx = 3;
 
-} // namespace
+}  // namespace
 
-PandaClient::~PandaClient()
-{
-    close();
-}
+PandaClient::~PandaClient() { close(); }
 
-bool PandaClient::connect(const std::string &serial)
-{
+bool PandaClient::connect(const std::string &serial) {
     close();
     int err = libusb_init(&ctx_);
     if (err != 0) {
@@ -43,7 +39,7 @@ bool PandaClient::connect(const std::string &serial)
     }
 
     for (ssize_t i = 0; i < count; ++i) {
-        libusb_device_descriptor desc {};
+        libusb_device_descriptor desc{};
         if (libusb_get_device_descriptor(dev_list[i], &desc) != 0) continue;
         if (desc.idVendor != kPandaVendorId || desc.idProduct != kPandaAppProductId) continue;
 
@@ -51,11 +47,11 @@ bool PandaClient::connect(const std::string &serial)
         if (libusb_open(dev_list[i], &handle) != 0 || !handle) continue;
 
         unsigned char desc_serial[64] = {};
-        const int serial_len = libusb_get_string_descriptor_ascii(
-            handle, desc.iSerialNumber, desc_serial, sizeof(desc_serial));
-        const std::string found_serial = serial_len > 0
-            ? std::string(reinterpret_cast<char *>(desc_serial), static_cast<size_t>(serial_len))
-            : std::string();
+        const int serial_len =
+            libusb_get_string_descriptor_ascii(handle, desc.iSerialNumber, desc_serial, sizeof(desc_serial));
+        const std::string found_serial =
+            serial_len > 0 ? std::string(reinterpret_cast<char *>(desc_serial), static_cast<size_t>(serial_len))
+                           : std::string();
         if (!serial.empty() && serial != found_serial) {
             libusb_close(handle);
             continue;
@@ -72,8 +68,7 @@ bool PandaClient::connect(const std::string &serial)
         return false;
     }
 
-    if (libusb_kernel_driver_active(dev_handle_, 0) == 1)
-        libusb_detach_kernel_driver(dev_handle_, 0);
+    if (libusb_kernel_driver_active(dev_handle_, 0) == 1) libusb_detach_kernel_driver(dev_handle_, 0);
 
     err = libusb_set_configuration(dev_handle_, 1);
     if (err != 0 && err != LIBUSB_ERROR_BUSY) {
@@ -90,12 +85,9 @@ bool PandaClient::connect(const std::string &serial)
 
     uint8_t packet_versions[2] = {};
     if (!control_read(kPandaRequestPacketVersions, 0, 0, packet_versions, sizeof(packet_versions)) ||
-        packet_versions[0] != kPandaHealthPacketVersion ||
-        packet_versions[1] != kPandaCanPacketVersion) {
-        std::fprintf(stderr,
-                     "panda: unsupported packet versions health=%u can=%u (expected %u/%u)\n",
-                     packet_versions[0], packet_versions[1],
-                     kPandaHealthPacketVersion, kPandaCanPacketVersion);
+        packet_versions[0] != kPandaHealthPacketVersion || packet_versions[1] != kPandaCanPacketVersion) {
+        std::fprintf(stderr, "panda: unsupported packet versions health=%u can=%u (expected %u/%u)\n",
+                     packet_versions[0], packet_versions[1], kPandaHealthPacketVersion, kPandaCanPacketVersion);
         close();
         return false;
     }
@@ -103,22 +95,18 @@ bool PandaClient::connect(const std::string &serial)
     can_packet_version_ = packet_versions[1];
 
     uint8_t hw_query = 0;
-    if (control_read(kPandaRequestHwType, 0, 0, &hw_query, sizeof(hw_query)))
-        hw_type_ = hw_query;
+    if (control_read(kPandaRequestHwType, 0, 0, &hw_query, sizeof(hw_query))) hw_type_ = hw_query;
     // 버전 문자열은 길이가 정해져 있지 않아(널 없이 올 수도 있다) 받은 만큼만 쓴다
     char version[kPandaVersionMaxBytes] = {};
-    const int version_len = libusb_control_transfer(
-        dev_handle_, kUsbRequestIn, kPandaRequestVersion, 0, 0,
-        reinterpret_cast<unsigned char *>(version), sizeof(version), 1000);
-    if (version_len > 0)
-        firmware_version_.assign(version, strnlen(version, static_cast<size_t>(version_len)));
+    const int version_len = libusb_control_transfer(dev_handle_, kUsbRequestIn, kPandaRequestVersion, 0, 0,
+                                                    reinterpret_cast<unsigned char *>(version), sizeof(version), 1000);
+    if (version_len > 0) firmware_version_.assign(version, strnlen(version, static_cast<size_t>(version_len)));
     comms_healthy_ = true;
     consecutive_malformed_rx_ = 0;
     return true;
 }
 
-void PandaClient::close()
-{
+void PandaClient::close() {
     if (dev_handle_) {
         libusb_release_interface(dev_handle_, 0);
         libusb_close(dev_handle_);
@@ -136,11 +124,9 @@ void PandaClient::close()
     comms_healthy_ = true;
 }
 
-bool PandaClient::control_write(uint8_t request, uint16_t value, uint16_t index, unsigned timeout_ms)
-{
+bool PandaClient::control_write(uint8_t request, uint16_t value, uint16_t index, unsigned timeout_ms) {
     if (!dev_handle_) return false;
-    const int err = libusb_control_transfer(dev_handle_, kUsbRequestOut, request, value, index,
-                                            nullptr, 0, timeout_ms);
+    const int err = libusb_control_transfer(dev_handle_, kUsbRequestOut, request, value, index, nullptr, 0, timeout_ms);
     if (err < 0) {
         mark_usb_error(err, "control_write");
         return false;
@@ -148,9 +134,8 @@ bool PandaClient::control_write(uint8_t request, uint16_t value, uint16_t index,
     return true;
 }
 
-bool PandaClient::control_read(uint8_t request, uint16_t value, uint16_t index,
-                               void *data, uint16_t length, unsigned timeout_ms)
-{
+bool PandaClient::control_read(uint8_t request, uint16_t value, uint16_t index, void *data, uint16_t length,
+                               unsigned timeout_ms) {
     if (!dev_handle_) return false;
     const int err = libusb_control_transfer(dev_handle_, kUsbRequestIn, request, value, index,
                                             static_cast<unsigned char *>(data), length, timeout_ms);
@@ -161,14 +146,13 @@ bool PandaClient::control_read(uint8_t request, uint16_t value, uint16_t index,
     return err == length;
 }
 
-int PandaClient::bulk_read(uint8_t endpoint, uint8_t *data, int length, unsigned timeout_ms)
-{
+int PandaClient::bulk_read(uint8_t endpoint, uint8_t *data, int length, unsigned timeout_ms) {
     if (!dev_handle_) return 0;
     int transferred = 0;
     const int err = libusb_bulk_transfer(dev_handle_, endpoint, data, length, &transferred, timeout_ms);
     if (err == LIBUSB_ERROR_TIMEOUT) {
-        // libusb may return a timeout after transferring part of the requested
-        // buffer. Those bytes are a valid prefix of the Panda CAN stream.
+        // libusb는 요청한 버퍼의 일부를 옮긴 뒤 시간 초과를 돌려줄 수 있다. 옮긴 바이트는 Panda CAN
+        // 스트림의 올바른 앞부분이다.
         return transferred;
     }
     if (err == LIBUSB_ERROR_OVERFLOW) {
@@ -183,18 +167,13 @@ int PandaClient::bulk_read(uint8_t endpoint, uint8_t *data, int length, unsigned
     return transferred;
 }
 
-int PandaClient::bulk_write(uint8_t endpoint, const uint8_t *data, int length, unsigned timeout_ms)
-{
+int PandaClient::bulk_write(uint8_t endpoint, const uint8_t *data, int length, unsigned timeout_ms) {
     if (!dev_handle_) return 0;
     int total_transferred = 0;
-    for (int attempt = 0;
-         attempt <= kUsbBulkWriteRetries && total_transferred < length;
-         ++attempt) {
+    for (int attempt = 0; attempt <= kUsbBulkWriteRetries && total_transferred < length; ++attempt) {
         int transferred = 0;
-        const int err = libusb_bulk_transfer(
-            dev_handle_, endpoint,
-            const_cast<uint8_t *>(data + total_transferred),
-            length - total_transferred, &transferred, timeout_ms);
+        const int err = libusb_bulk_transfer(dev_handle_, endpoint, const_cast<uint8_t *>(data + total_transferred),
+                                             length - total_transferred, &transferred, timeout_ms);
         total_transferred += transferred;
         if (err == 0) {
             if (transferred == 0 && total_transferred < length) {
@@ -208,11 +187,9 @@ int PandaClient::bulk_write(uint8_t endpoint, const uint8_t *data, int length, u
             ++usb_tx_timeouts_;
             return total_transferred;
         }
-        const bool retryable =
-            err == LIBUSB_ERROR_IO || err == LIBUSB_ERROR_OVERFLOW ||
-            err == LIBUSB_ERROR_INTERRUPTED || err == LIBUSB_ERROR_BUSY;
-        if (retryable && attempt < kUsbBulkWriteRetries &&
-            total_transferred < length) {
+        const bool retryable = err == LIBUSB_ERROR_IO || err == LIBUSB_ERROR_OVERFLOW ||
+                               err == LIBUSB_ERROR_INTERRUPTED || err == LIBUSB_ERROR_BUSY;
+        if (retryable && attempt < kUsbBulkWriteRetries && total_transferred < length) {
             ++usb_tx_retries_;
             usleep(1000);
             continue;
@@ -223,28 +200,24 @@ int PandaClient::bulk_write(uint8_t endpoint, const uint8_t *data, int length, u
     return total_transferred;
 }
 
-void PandaClient::mark_usb_error(int err, const char *where)
-{
-    std::fprintf(stderr, "panda: usb error %d (%s) in %s\n",
-                 err, libusb_strerror(static_cast<libusb_error>(err)), where);
+void PandaClient::mark_usb_error(int err, const char *where) {
+    std::fprintf(stderr, "panda: usb error %d (%s) in %s\n", err, libusb_strerror(static_cast<libusb_error>(err)),
+                 where);
     if (err == LIBUSB_ERROR_NO_DEVICE) close();
     comms_healthy_ = false;
 }
 
-bool PandaClient::set_safety_model(uint16_t safety_model, uint16_t safety_param)
-{
+bool PandaClient::set_safety_model(uint16_t safety_model, uint16_t safety_param) {
     return control_write(kPandaRequestSafetyModel, safety_model, safety_param);
 }
 
-bool PandaClient::send_heartbeat(bool engaged)
-{
+bool PandaClient::send_heartbeat(bool engaged) {
     return control_write(kPandaRequestHeartbeat, engaged ? 1 : 0, 0, 100);
 }
 
-bool PandaClient::get_health(PandaHealth *health)
-{
+bool PandaClient::get_health(PandaHealth *health) {
     if (!health) return false;
-    PandaHealthPacket packet {};
+    PandaHealthPacket packet{};
     if (!control_read(kPandaRequestHealth, 0, 0, &packet, sizeof(packet), 100)) return false;
     health->uptime = packet.uptime_pkt;
     health->voltage = packet.voltage_pkt;
@@ -271,8 +244,7 @@ bool PandaClient::get_health(PandaHealth *health)
     return true;
 }
 
-bool PandaClient::receive(std::vector<PandaCanFrame> *frames, int timeout_ms)
-{
+bool PandaClient::receive(std::vector<PandaCanFrame> *frames, int timeout_ms) {
     if (!frames) return false;
     frames->clear();
     uint8_t data[kRecvSize] = {};
@@ -282,8 +254,7 @@ bool PandaClient::receive(std::vector<PandaCanFrame> *frames, int timeout_ms)
     return unpack_can_buffer(data, recv, frames);
 }
 
-bool PandaClient::send(const std::vector<PandaCanFrame> &frames)
-{
+bool PandaClient::send(const std::vector<PandaCanFrame> &frames) {
     if (frames.empty()) return true;
     std::vector<uint8_t> packed;
     if (!pack_can_buffer(frames, &packed)) return false;
@@ -296,14 +267,12 @@ bool PandaClient::send(const std::vector<PandaCanFrame> &frames)
     return true;
 }
 
-bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, std::vector<PandaCanFrame> *frames)
-{
+bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, std::vector<PandaCanFrame> *frames) {
     std::string error;
     if (!panda_can_unpack_buffer(data, size, &recv_buf_, frames, &error)) {
         ++malformed_rx_batches_;
         ++consecutive_malformed_rx_;
-        std::fprintf(stderr, "panda: dropping malformed CAN USB batch: %s\n",
-                     error.c_str());
+        std::fprintf(stderr, "panda: dropping malformed CAN USB batch: %s\n", error.c_str());
         recv_buf_.clear();
         frames->clear();
         if (consecutive_malformed_rx_ >= kMaxConsecutiveMalformedRx) {
@@ -316,8 +285,7 @@ bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, std::vector<P
     return true;
 }
 
-bool PandaClient::pack_can_buffer(const std::vector<PandaCanFrame> &frames, std::vector<uint8_t> *out)
-{
+bool PandaClient::pack_can_buffer(const std::vector<PandaCanFrame> &frames, std::vector<uint8_t> *out) {
     std::string error;
     if (!panda_can_pack_buffer(frames, out, &error)) {
         std::fprintf(stderr, "panda: %s\n", error.c_str());

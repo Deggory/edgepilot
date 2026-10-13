@@ -1,5 +1,5 @@
-/* 워프 보정 출처 고르기(model/calibration_source): 설정이 포즈면 포즈 값 그대로, 광류면 쓸 만할 때 광류의
- * pitch·yaw, 결합 중 설정 변경은 해제까지 대기, 바뀔 때는 천천히 옮긴다. */
+// 워프 보정 출처 고르기(model/calibration_source): 설정이 포즈면 포즈 값 그대로, 광류면 쓸 만할 때 광류의
+// pitch·yaw, 결합 중 설정 변경은 해제까지 대기, 바뀔 때는 천천히 옮긴다.
 #include "model/calibration_source.h"
 
 #include "model/flow_calibration.h"
@@ -13,8 +13,7 @@ namespace {
 constexpr float kDeg = 3.14159265358979323846f / 180.0f;
 constexpr float kFrameS = 0.05f;
 
-FlowCalibrationState usable_flow(float pitch_deg, float yaw_deg)
-{
+FlowCalibrationState usable_flow(float pitch_deg, float yaw_deg) {
     FlowCalibrationState f;
     f.status = 2;
     f.blocks = 10;
@@ -30,8 +29,7 @@ struct Rpy {
     float v[3];
 };
 
-Rpy out(const CalibrationSourceSelector &sel)
-{
+Rpy out(const CalibrationSourceSelector &sel) {
     Rpy r{};
     sel.rpy(r.v);
     return r;
@@ -39,14 +37,12 @@ Rpy out(const CalibrationSourceSelector &sel)
 
 // 같은 입력으로 seconds초 동안 프레임마다 부른다
 void run(CalibrationSourceSelector *sel, const float pose[3], const FlowCalibrationState &flow, bool requested,
-         bool engaged, float seconds)
-{
+         bool engaged, float seconds) {
     for (int i = 0; i < static_cast<int>(std::lround(seconds / kFrameS)); ++i)
         sel->update(pose, flow, requested, engaged, kFrameS);
 }
 
-TEST(CalibrationSource, PoseSettingPassesThePoseValueThrough)
-{
+TEST(CalibrationSource, PoseSettingPassesThePoseValueThrough) {
     CalibrationSourceSelector sel;
     const FlowCalibrationState flow = usable_flow(-0.2f, -0.03f);
     float pose[3] = {0.001f, -0.5f * kDeg, -0.3f * kDeg};
@@ -59,8 +55,7 @@ TEST(CalibrationSource, PoseSettingPassesThePoseValueThrough)
     for (int i = 0; i < 3; ++i) EXPECT_FLOAT_EQ(out(sel).v[i], pose[i]);
 }
 
-TEST(CalibrationSource, StartsOnTheFlowValueWhenSet)
-{
+TEST(CalibrationSource, StartsOnTheFlowValueWhenSet) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.001f, -0.5f * kDeg, -0.3f * kDeg};
     sel.update(pose, usable_flow(-0.2f, -0.03f), true, false, 0.0f);
@@ -71,8 +66,7 @@ TEST(CalibrationSource, StartsOnTheFlowValueWhenSet)
     EXPECT_EQ(sel.flags() & kCalibrationSourceRamping, 0u) << "시작할 때는 바로";
 }
 
-TEST(CalibrationSource, RampsWhenTheFlowEstimateArrives)
-{
+TEST(CalibrationSource, RampsWhenTheFlowEstimateArrives) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     FlowCalibrationState collecting = usable_flow(-0.2f, -0.03f);
@@ -96,8 +90,7 @@ TEST(CalibrationSource, RampsWhenTheFlowEstimateArrives)
     EXPECT_EQ(sel.flags() & kCalibrationSourceRamping, 0u);
 }
 
-TEST(CalibrationSource, LargeChangesFollowWithinSeconds)
-{
+TEST(CalibrationSource, LargeChangesFollowWithinSeconds) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, 0.0f, 0.0f};
     sel.update(pose, usable_flow(0.0f, 0.0f), true, false, 0.0f);
@@ -110,8 +103,7 @@ TEST(CalibrationSource, LargeChangesFollowWithinSeconds)
     EXPECT_NEAR(out(sel).v[2], 2.0f * kDeg, 1e-6f);
 }
 
-TEST(CalibrationSource, SettingWaitsWhileEngaged)
-{
+TEST(CalibrationSource, SettingWaitsWhileEngaged) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     const FlowCalibrationState flow = usable_flow(-0.2f, -0.03f);
@@ -132,8 +124,7 @@ TEST(CalibrationSource, SettingWaitsWhileEngaged)
     EXPECT_FLOAT_EQ(out(sel).v[2], -0.03f * kDeg);
 }
 
-TEST(CalibrationSource, FlowReadyWhileEngagedWaitsForDisengage)
-{
+TEST(CalibrationSource, FlowReadyWhileEngagedWaitsForDisengage) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     FlowCalibrationState collecting = usable_flow(-0.2f, -0.03f);
@@ -149,8 +140,7 @@ TEST(CalibrationSource, FlowReadyWhileEngagedWaitsForDisengage)
     EXPECT_EQ(sel.flags() & kCalibrationSourcePending, 0u);
 }
 
-TEST(CalibrationSource, FallsBackToPoseEvenWhileEngaged)
-{
+TEST(CalibrationSource, FallsBackToPoseEvenWhileEngaged) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     sel.update(pose, usable_flow(-0.2f, -0.03f), true, false, 0.0f);
@@ -162,8 +152,7 @@ TEST(CalibrationSource, FallsBackToPoseEvenWhileEngaged)
     EXPECT_NE(sel.flags() & kCalibrationSourceRamping, 0u) << "천천히 돌아간다";
 }
 
-TEST(CalibrationSource, HysteresisKeepsAnAppliedEstimate)
-{
+TEST(CalibrationSource, HysteresisKeepsAnAppliedEstimate) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     FlowCalibrationState flow = usable_flow(-0.2f, -0.03f);
@@ -181,8 +170,7 @@ TEST(CalibrationSource, HysteresisKeepsAnAppliedEstimate)
     EXPECT_FALSE(sel.flow_applied());
 }
 
-TEST(CalibrationSource, AppliedEstimateIsFollowedWhileEngaged)
-{
+TEST(CalibrationSource, AppliedEstimateIsFollowedWhileEngaged) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, 0.0f, 0.0f};
     sel.update(pose, usable_flow(0.0f, 0.0f), true, false, 0.0f);
@@ -191,8 +179,7 @@ TEST(CalibrationSource, AppliedEstimateIsFollowedWhileEngaged)
     EXPECT_NEAR(out(sel).v[2], 1.5f * kDeg, 1e-6f) << "쓰고 있는 광류 추정의 변화는 결합 중에도 따라간다";
 }
 
-TEST(CalibrationSource, BackToPoseRampsThenPassesThrough)
-{
+TEST(CalibrationSource, BackToPoseRampsThenPassesThrough) {
     CalibrationSourceSelector sel;
     float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     const FlowCalibrationState flow = usable_flow(-0.2f, -0.03f);
@@ -208,8 +195,7 @@ TEST(CalibrationSource, BackToPoseRampsThenPassesThrough)
     EXPECT_FLOAT_EQ(out(sel).v[2], pose[2]) << "다 돌아온 뒤에는 포즈 값 그대로";
 }
 
-TEST(CalibrationSource, UnusableFlowIsNotApplied)
-{
+TEST(CalibrationSource, UnusableFlowIsNotApplied) {
     const FlowCalibrationState good = usable_flow(-0.2f, -0.03f);
     EXPECT_TRUE(CalibrationSourceSelector::flow_usable(good));
     FlowCalibrationState f = good;
@@ -236,8 +222,7 @@ TEST(CalibrationSource, UnusableFlowIsNotApplied)
     EXPECT_EQ(sel.flags() & kCalibrationSourceFlowUsable, 0u);
 }
 
-TEST(CalibrationSource, SnapToJumpsAfterAReset)
-{
+TEST(CalibrationSource, SnapToJumpsAfterAReset) {
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};
     sel.update(pose, usable_flow(-0.2f, -0.03f), true, false, 0.0f);
@@ -251,4 +236,4 @@ TEST(CalibrationSource, SnapToJumpsAfterAReset)
     EXPECT_FLOAT_EQ(out(sel).v[2], 0.0f) << "초기화 뒤 포즈 0에서 다시 시작한다";
 }
 
-} // namespace
+}  // namespace

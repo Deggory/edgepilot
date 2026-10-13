@@ -2,9 +2,7 @@
 
 #include "common/utils_json.h"
 
-float SteeringParams::center_to_front_m() const {
-  return wheelbase_m * center_to_front_ratio;
-}
+float SteeringParams::center_to_front_m() const { return wheelbase_m * center_to_front_ratio; }
 
 namespace {
 
@@ -43,20 +41,22 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
 
 }  // namespace
 
-bool load_steering_params_json(const std::string &path,
-                               SteeringParams *params,
-                               std::string *error) {
-  if (!params) return false;
-  return load_json_param_file(path, [params](const std::string &text) {
-    // 2026-09-24 이전 raw 표기. 조용히 기본값으로 떨어지지 않게 거부한다.
-    for (const char *key : {"torque_max_lat_accel_raw", "torque_kp_raw", "torque_kf_raw",
-                            "torque_ki_raw", "torque_friction_raw"}) {
-      if (text.find(std::string("\"") + key + "\"") != std::string::npos)
-        throw std::runtime_error(std::string(key) + " was replaced by torque_lat_accel_factor/"
-                                 "torque_kp/torque_ki/torque_friction");
-    }
-    parse_json_fields(text, kSteeringBools, params);
-    parse_json_fields(text, kSteeringInts, params);
-    parse_json_fields(text, kSteeringFloats, params);
-  }, error);
+bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error) {
+    if (!params) return false;
+    return load_json_param_file(
+        path,
+        [params](const std::string &text) {
+            // 2026-09-24 이전 raw 표기. 조용히 기본값으로 떨어지지 않게 거부한다.
+            for (const char *key : {"torque_max_lat_accel_raw", "torque_kp_raw", "torque_kf_raw", "torque_ki_raw",
+                                    "torque_friction_raw"}) {
+                if (text.find(std::string("\"") + key + "\"") != std::string::npos)
+                    throw std::runtime_error(std::string(key) +
+                                             " was replaced by torque_lat_accel_factor/"
+                                             "torque_kp/torque_ki/torque_friction");
+            }
+            parse_json_fields(text, kSteeringBools, params);
+            parse_json_fields(text, kSteeringInts, params);
+            parse_json_fields(text, kSteeringFloats, params);
+        },
+        error);
 }

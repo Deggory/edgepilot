@@ -1,8 +1,8 @@
-/* LateralMpc가 openpilot 0.8.16 lat_mpc의 OCP를 실제로 최적화하는지 검증한다.
- * 동역학/코스트를 여기서 독립으로 다시 구현해, 수렴점에서 참 목적함수의
- * 기울기가 0인지 유한차분으로 본다. 감도 A/B가 틀리면 이 검사가 걸린다. */
-#include "planning/lateral_mpc.h"
+// LateralMpc가 openpilot 0.8.16 lat_mpc의 OCP를 실제로 최적화하는지 검증한다.
+// 동역학/코스트를 여기서 독립으로 다시 구현해, 수렴점에서 참 목적함수의
+// 기울기가 0인지 유한차분으로 본다. 감도 A/B가 틀리면 이 검사가 걸린다.
 #include "common/model_output.h"
+#include "planning/lateral_mpc.h"
 
 #include <gtest/gtest.h>
 
@@ -45,8 +45,7 @@ Reference build_reference(const Scenario &s) {
 }
 
 // 솔버와 독립인 RK4 적분. 상태는 (y, psi, curvature).
-void simulate_step(const double *z, double u, double v, double rr, double dt,
-                   double *out) {
+void simulate_step(const double *z, double u, double v, double rr, double dt, double *out) {
     auto f = [&](const double *s, double *d) {
         d[0] = v * std::sin(s[1]) + rr * std::cos(s[1]) * (v * s[2]);
         d[1] = v * s[2];
@@ -60,14 +59,13 @@ void simulate_step(const double *z, double u, double v, double rr, double dt,
     f(tmp, k3);
     for (int r = 0; r < 3; ++r) tmp[r] = z[r] + dt * k3[r];
     f(tmp, k4);
-    for (int r = 0; r < 3; ++r)
-        out[r] = z[r] + dt / 6.0 * (k1[r] + 2.0 * k2[r] + 2.0 * k3[r] + k4[r]);
+    for (int r = 0; r < 3; ++r) out[r] = z[r] + dt / 6.0 * (k1[r] + 2.0 * k2[r] + 2.0 * k3[r] + k4[r]);
 }
 
-/* 입력열만으로 결정되는 참 목적함수. 상태를 전방 적분으로 소거했으므로
- * 결손이 0인 수렴점에서는 솔버가 푸는 NLP와 같은 값이다. */
-double objective(const std::array<double, kLatMpcN> &u, const Scenario &s,
-                 const Reference &ref, const LateralMpcWeights &w) {
+// 입력열만으로 결정되는 참 목적함수. 상태를 전방 적분으로 소거했으므로
+// 결손이 0인 수렴점에서는 솔버가 푸는 NLP와 같은 값이다.
+double objective(const std::array<double, kLatMpcN> &u, const Scenario &s, const Reference &ref,
+                 const LateralMpcWeights &w) {
     const double v = s.v_ego;
     const double speed = v + 5.0;
     double z[3] = {0.0, 0.0, s.curvature0};
@@ -80,14 +78,12 @@ double objective(const std::array<double, kLatMpcN> &u, const Scenario &s,
         double stage = w.path * e_y * e_y + w.heading * e_psi * e_psi;
         if (!terminal) {
             const double rate = u[i];
-            stage += w.rate * (4.0 * speed * rate) * (4.0 * speed * rate) +
-                     w.steering_rate * rate * rate;
+            stage += w.rate * (4.0 * speed * rate) * (4.0 * speed * rate) + w.steering_rate * rate * rate;
         }
         total += 0.5 * scale * stage;
         if (!terminal) {
             double next[3];
-            simulate_step(z, u[i], v, s.rotation_radius, LateralMpc::time_step(i),
-                          next);
+            simulate_step(z, u[i], v, s.rotation_radius, LateralMpc::time_step(i), next);
             for (int r = 0; r < 3; ++r) z[r] = next[r];
         }
     }
@@ -100,14 +96,12 @@ void check_scenario(const Scenario &s) {
     LateralMpc mpc;
     // 20 Hz 워밍스타트를 흉내내 같은 입력으로 반복 수렴시킨다.
     for (int iter = 0; iter < 60; ++iter)
-        mpc.run(s.curvature0, s.v_ego, s.rotation_radius, ref.y, ref.heading,
-                s.weights);
+        mpc.run(s.curvature0, s.v_ego, s.rotation_radius, ref.y, ref.heading, s.weights);
     EXPECT_EQ(mpc.status(), 0);
 
     // 초기 상태 등식 제약.
     const auto &nodes = mpc.nodes();
-    double init_err = std::fabs(nodes[0].y) + std::fabs(nodes[0].psi) +
-                      std::fabs(nodes[0].curvature - s.curvature0);
+    double init_err = std::fabs(nodes[0].y) + std::fabs(nodes[0].psi) + std::fabs(nodes[0].curvature - s.curvature0);
     EXPECT_LT(init_err, 1e-12) << "초기 상태 제약 오차";
 
     // 다중슈팅 결손: 수렴점에서 궤적이 동역학적으로 타당해야 한다.
@@ -115,16 +109,15 @@ void check_scenario(const Scenario &s) {
     for (int i = 0; i < kLatMpcN; ++i) {
         const double z[3] = {nodes[i].y, nodes[i].psi, nodes[i].curvature};
         double next[3];
-        simulate_step(z, mpc.rates()[i], s.v_ego, s.rotation_radius,
-                      LateralMpc::time_step(i), next);
+        simulate_step(z, mpc.rates()[i], s.v_ego, s.rotation_radius, LateralMpc::time_step(i), next);
         max_defect = std::max(max_defect, std::fabs(next[0] - nodes[i + 1].y));
         max_defect = std::max(max_defect, std::fabs(next[1] - nodes[i + 1].psi));
         max_defect = std::max(max_defect, std::fabs(next[2] - nodes[i + 1].curvature));
     }
     EXPECT_LT(max_defect, 1e-10) << "결손 최대값";
 
-    /* 참 목적함수의 기울기. 스케일이 커서 절대값 대신 코스트에 대한
-     * 상대 기울기를 본다(입력 1e-6 변화당 코스트 변화 비율). */
+    // 참 목적함수의 기울기. 스케일이 커서 절대값 대신 코스트에 대한
+    // 상대 기울기를 본다(입력 1e-6 변화당 코스트 변화 비율).
     auto u = mpc.rates();
     const double base = objective(u, s, ref, s.weights);
     double max_grad = 0.0;
@@ -133,9 +126,7 @@ void check_scenario(const Scenario &s) {
         auto plus = u, minus = u;
         plus[i] += step;
         minus[i] -= step;
-        const double grad = (objective(plus, s, ref, s.weights) -
-                             objective(minus, s, ref, s.weights)) /
-                            (2.0 * step);
+        const double grad = (objective(plus, s, ref, s.weights) - objective(minus, s, ref, s.weights)) / (2.0 * step);
         max_grad = std::max(max_grad, std::fabs(grad));
     }
     const double relative = max_grad / std::max(1.0, base);
@@ -164,11 +155,12 @@ TEST(LateralMpc, OptimizesTheOcp) {
         {"급곡률 초기값", 20.0, 0.5, 0.25, 0.0, fast},
         {"steering_rate 없음(저속)", 3.0, 0.4, 0.0, 0.2, bare_slow},
         {"steering_rate 없음(고속)", 20.0, 0.5, 0.0, 2.0, bare},
-        {"steering_rate 2000", 3.0, 0.4, 0.0, 0.3, [&] {
-            LateralMpcWeights w = slow;
-            w.steering_rate = 2000.0;
-            return w;
-        }()},
+        {"steering_rate 2000", 3.0, 0.4, 0.0, 0.3,
+         [&] {
+             LateralMpcWeights w = slow;
+             w.steering_rate = 2000.0;
+             return w;
+         }()},
     };
     for (const auto &s : scenarios) {
         SCOPED_TRACE(s.name);

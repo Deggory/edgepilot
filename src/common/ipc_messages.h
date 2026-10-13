@@ -1,9 +1,9 @@
 #ifndef IPC_MESSAGES_H
 #define IPC_MESSAGES_H
 
-/* 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 채널 매직·버전과 이름, 크기 상한, 채널
- * 헤더, 상태 스냅샷. 채널 구현은 ipc_channels.h에, ModelState를 채우고 되돌리는 변환은
- * model_state_fill.h와 hud_state.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다. */
+// 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 채널 매직·버전과 이름, 크기 상한, 채널
+// 헤더, 상태 스냅샷. 채널 구현은 ipc_channels.h에, ModelState를 채우고 되돌리는 변환은
+// model_state_fill.h와 hud_state.h에 있다. 메시지를 쓰기만 하는 코드는 이 헤더만 본다.
 
 #include "common/app_config.h"
 #include "common/model_output.h"
@@ -60,8 +60,7 @@ struct IpcHeader {
     uint32_t reserved1 = 0;
 };
 
-static_assert(sizeof(IpcHeader) == 40,
-              "IpcHeader layout is part of the Python manager ABI");
+static_assert(sizeof(IpcHeader) == 40, "IpcHeader layout is part of the Python manager ABI");
 
 struct FrameRingHeader {
     uint32_t magic = kFrameRingMagic;
@@ -74,7 +73,7 @@ struct FrameRingHeader {
     uint32_t reserved1 = 0;
     std::atomic<uint64_t> slot_seq[kFrameSlots]{};
     std::atomic<uint64_t> slot_frame_id[kFrameSlots]{};
-    /* 슬롯 픽셀이 있는 CMM 블록의 물리 주소. 0이면 아직 붙지 않았다. */
+    // 슬롯 픽셀이 있는 CMM 블록의 물리 주소. 0이면 아직 붙지 않았다.
     uint64_t slot_phys[kFrameSlots]{};
 };
 
@@ -114,11 +113,11 @@ struct PoseState {
     float rot_std[3] = {};
 };
 
-/* 모델 입력 워프의 보정. 모든 필드가 워프에 쓴 보정과 그 출처(calibration_source.source)의 것이다.
- * - 포즈 출처: status·valid_blocks·spread는 포즈 보정기 그대로(5블록이면 Calibrated, spread는 블록 범위).
- * - 광류 출처: status는 Calibrated(쓸 만할 때만 쓴다), valid_blocks는 광류 추정에 든 블록 수(3블록부터 쓴다),
- *   spread는 roll이 포즈 보정기 범위, pitch·yaw가 광류 블록 중앙값의 표준편차다.
- * 출처마다 블록의 크기와 통계가 다르니 출처와 함께 읽는다. */
+// 모델 입력 워프의 보정. 모든 필드가 워프에 쓴 보정과 그 출처(calibration_source.source)의 것이다.
+// - 포즈 출처: status·valid_blocks·spread는 포즈 보정기 그대로(5블록이면 Calibrated, spread는 블록 범위).
+// - 광류 출처: status는 Calibrated(쓸 만할 때만 쓴다), valid_blocks는 광류 추정에 든 블록 수(3블록부터 쓴다),
+//   spread는 roll이 포즈 보정기 범위, pitch·yaw가 광류 블록 중앙값의 표준편차다.
+// 출처마다 블록의 크기와 통계가 다르니 출처와 함께 읽는다.
 struct CalibrationState {
     uint32_t status = 0;
     int32_t valid_blocks = 0;
@@ -128,9 +127,9 @@ struct CalibrationState {
     float spread[3] = {};
 };
 
-/* 광류 보정기(model/flow_calibration)의 상태. 카메라가 실제로 움직이는 방향을 영상에서 직접 잰
- * 절대 측정이다. 웹 기기 설정이 광류이고 추정이 쓸 만하면 워프의 pitch·yaw가 된다(calibration_source).
- * 각도는 calibration과 같은 규약(rad)이다. */
+// 광류 보정기(model/flow_calibration)의 상태. 카메라가 실제로 움직이는 방향을 영상에서 직접 잰
+// 절대 측정이다. 웹 기기 설정이 광류이고 추정이 쓸 만하면 워프의 pitch·yaw가 된다(calibration_source).
+// 각도는 calibration과 같은 규약(rad)이다.
 struct FlowCalibrationState {
     uint64_t window_frame_id = 0;  // 마지막으로 받아들인 측정 창의 끝 프레임(0이면 아직 없음)
     uint32_t status = 0;           // 0 꺼짐, 1 모으는 중(블록 부족), 2 추정 있음
@@ -138,65 +137,66 @@ struct FlowCalibrationState {
     uint32_t blocks = 0;           // 끝난 블록 수(창 kFlowBlockWindows개마다 하나)
     float pitch = 0.0f;            // 블록 중앙값들의 평균
     float yaw = 0.0f;
-    float sd_pitch = 0.0f;         // 블록 중앙값의 표준편차(v10 녹화는 이 자리가 spread_*, 범위였다)
+    float sd_pitch = 0.0f;  // 블록 중앙값의 표준편차(v10 녹화는 이 자리가 spread_*, 범위였다)
     float sd_yaw = 0.0f;
-    float window_pitch = 0.0f;     // 마지막 창 하나의 결과
+    float window_pitch = 0.0f;  // 마지막 창 하나의 결과
     float window_yaw = 0.0f;
     float window_rotation = 0.0f;  // 그 창(0.4초) 동안 카메라가 돈 각도
     uint32_t window_tracks = 0;    // 끝까지 따라간 점
     uint32_t window_inliers = 0;   // 그중 풀이에 맞는 점
     // 녹화 v11부터
-    uint32_t mount_changes = 0;    // 장착 변경으로 보고 예전 블록을 버린 횟수(저장 파일과 함께 이어진다)
-    float window_parallax = 0.0f;  // 마지막으로 푼 창의 점 이동량 중앙값(px). 작으면 방향이 서지 않아 버린다
-    uint32_t estimate_blocks = 0;  // 지금 추정에 든 블록 수(최대 kFlowMaxBlocks). blocks는 누적이다
-    uint32_t rejected_windows = 0; // 끝까지 갔지만 풀이가 맞지 않거나 이동량이 작아 버린 창
+    uint32_t mount_changes = 0;     // 장착 변경으로 보고 예전 블록을 버린 횟수(저장 파일과 함께 이어진다)
+    float window_parallax = 0.0f;   // 마지막으로 푼 창의 점 이동량 중앙값(px). 작으면 방향이 서지 않아 버린다
+    uint32_t estimate_blocks = 0;   // 지금 추정에 든 블록 수(최대 kFlowMaxBlocks). blocks는 누적이다
+    uint32_t rejected_windows = 0;  // 끝까지 갔지만 풀이가 맞지 않거나 이동량이 작아 버린 창
 };
 static_assert(sizeof(FlowCalibrationState) == 72, "FlowCalibrationState is recorded as-is");
 
-/* 워프에 쓴 보정의 출처와 모델 포즈 보정기 자신의 추정(녹화 v11부터). calibration은 언제나 워프에 쓴
- * 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다(upstream 루프는 모델이 자기 값으로 워프된 영상을
- * 봤다고 가정한다). 광류가 워프를 맡는 동안 pose_*는 멈춘 마지막 추정이다. */
+// 워프에 쓴 보정의 출처와 모델 포즈 보정기 자신의 추정(녹화 v11부터). calibration은 언제나 워프에 쓴
+// 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다(upstream 루프는 모델이 자기 값으로 워프된 영상을
+// 봤다고 가정한다). 광류가 워프를 맡는 동안 pose_*는 멈춘 마지막 추정이다.
 struct CalibrationSourceState {
-    uint32_t source = 0;             // 0 모델 포즈, 1 광류
-    uint32_t requested = 0;          // 웹 기기 설정(display.json calibration_use_flow). 결합 중에는 바뀌어도 기다린다
-    uint32_t flags = 0;              // kCalibrationSource* 비트
-    uint32_t pose_status = 0;        // 포즈 보정기의 CalibrationStatus
+    uint32_t source = 0;       // 0 모델 포즈, 1 광류
+    uint32_t requested = 0;    // 웹 기기 설정(display.json calibration_use_flow). 결합 중에는 바뀌어도 기다린다
+    uint32_t flags = 0;        // kCalibrationSource* 비트
+    uint32_t pose_status = 0;  // 포즈 보정기의 CalibrationStatus
     int32_t pose_valid_blocks = 0;
-    float pose_roll = 0.0f;          // rad
+    float pose_roll = 0.0f;  // rad
     float pose_pitch = 0.0f;
     float pose_yaw = 0.0f;
 };
 static_assert(sizeof(CalibrationSourceState) == 32, "CalibrationSourceState is recorded as-is");
-constexpr uint32_t kCalibrationSourceFlowUsable = 1u << 0;   // 광류 추정을 워프에 쓸 수 있다
-constexpr uint32_t kCalibrationSourcePending = 1u << 1;      // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
-constexpr uint32_t kCalibrationSourceRamping = 1u << 2;      // 워프가 새 목표로 천천히 옮겨 가는 중
+constexpr uint32_t kCalibrationSourceFlowUsable = 1u << 0;  // 광류 추정을 워프에 쓸 수 있다
+constexpr uint32_t kCalibrationSourcePending = 1u << 1;     // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
+constexpr uint32_t kCalibrationSourceRamping = 1u << 2;     // 워프가 새 목표로 천천히 옮겨 가는 중
 
-/* 앞차 확대율(녹화 v12부터, model/lead_flow). 모델 앞차 상자 안의 점을 광류로 따라가 창(약 0.5초) 동안의 크기
- * 비를 잰다. 상대 속도(거리 변화율)는 -lead_x * expansion_rate(m/s, 음수면 가까워진다), 충돌까지 시간은 1 / expansion_rate다.
- * 모델이 내는 앞차 속도는 25 m 밖에서 실제 접근 속도를 거의 따라가지 못해 따로 잰다. */
+// 앞차 확대율(녹화 v12부터, model/lead_flow). 모델 앞차 상자 안의 점을 광류로 따라가 창(약 0.5초) 동안의 크기 비를
+// 잰다. 상대 속도(거리 변화율)는 -lead_x * expansion_rate(m/s, 음수면 가까워진다),
+// 충돌까지 시간은 1 / expansion_rate다. 모델이 내는 앞차 속도는 25 m 밖에서 실제 접근 속도를 거의 따라가지 못해
+// 따로 잰다.
 struct LeadFlowState {
-    uint64_t frame_id = 0;          // 창의 끝 프레임
-    uint32_t valid = 0;             // 1이면 expansion_rate가 있다
-    uint32_t points = 0;            // 창 내내 따라가 다듬은 점(맞춤에 넣은 수)
-    uint32_t inliers = 0;           // 그중 같은 확대·이동에 맞는 점
-    float expansion_rate = 0.0f;    // 1/s, ln(크기 비) / window_s. +면 가까워진다
-    float window_s = 0.0f;          // 창 길이(s)
-    float lead_x = 0.0f;            // 창 끝 프레임의 모델 앞차 거리(m, 카메라 기준)
+    uint64_t frame_id = 0;        // 창의 끝 프레임
+    uint32_t valid = 0;           // 1이면 expansion_rate가 있다
+    uint32_t points = 0;          // 창 내내 따라가 다듬은 점(맞춤에 넣은 수)
+    uint32_t inliers = 0;         // 그중 같은 확대·이동에 맞는 점
+    float expansion_rate = 0.0f;  // 1/s, ln(크기 비) / window_s. +면 가까워진다
+    float window_s = 0.0f;        // 창 길이(s)
+    float lead_x = 0.0f;          // 창 끝 프레임의 모델 앞차 거리(m, 카메라 기준)
 };
 static_assert(sizeof(LeadFlowState) == 32, "LeadFlowState is recorded as-is");
 
-/* 앞차 추적(녹화 v13부터, model/lead_tracker). 모델 앞차 거리와 광류 확대율을 칼만 필터로 섞은 거리와
- * 상대 속도. 비전 크루즈가 쓴다(controls_tick observe_cruise_lead). */
+// 앞차 추적(녹화 v13부터, model/lead_tracker). 모델 앞차 거리와 광류 확대율을 칼만 필터로 섞은 거리와
+// 상대 속도. 비전 크루즈가 쓴다(controls_tick observe_cruise_lead).
 constexpr uint32_t kLeadTrackFlowUsed = 1u << 0;          // 이 프레임에 확대율을 넣었다
 constexpr uint32_t kLeadTrackFlowRejected = 1u << 1;      // 확대율이 문 밖이라 버렸다
 constexpr uint32_t kLeadTrackDistanceRejected = 1u << 2;  // 모델 거리가 문 밖이라 버렸다
 constexpr uint32_t kLeadTrackStarted = 1u << 3;           // 이 프레임에 (다시) 시작했다
 struct LeadTrackState {
-    uint32_t valid = 0;                 // 1이면 아래 값이 있다
-    uint32_t flags = 0;                 // kLeadTrack*
-    float distance_m = 0.0f;            // 앞차 거리(m, 카메라 기준: lead.x와 같다)
-    float relative_speed_mps = 0.0f;    // 앞차 - 자차(m/s, 음수면 가까워진다)
-    float distance_std_m = 0.0f;        // 필터의 표준편차
+    uint32_t valid = 0;               // 1이면 아래 값이 있다
+    uint32_t flags = 0;               // kLeadTrack*
+    float distance_m = 0.0f;          // 앞차 거리(m, 카메라 기준: lead.x와 같다)
+    float relative_speed_mps = 0.0f;  // 앞차 - 자차(m/s, 음수면 가까워진다)
+    float distance_std_m = 0.0f;      // 필터의 표준편차
     float relative_speed_std_mps = 0.0f;
 };
 static_assert(sizeof(LeadTrackState) == 24, "LeadTrackState is recorded as-is");
@@ -224,12 +224,12 @@ struct ModelState {
     // 녹화 v6부터. plan의 yaw·yaw rate(laneless 모드가 openpilot 메인처럼 곡률을 만든다).
     float plan_yaw[kTrajectorySize] = {};
     float plan_yaw_rate[kTrajectorySize] = {};
-    /* 녹화 v7부터. 이 프레임 워프에 쓴 카메라 장착(웹 기기 설정, modeld가 천천히 옮긴 값).
-     * 모델 점은 이만큼 오른쪽 가상 카메라 기준이라 HUD가 같은 값으로 되돌려 그린다. */
+    // 녹화 v7부터. 이 프레임 워프에 쓴 카메라 장착(웹 기기 설정, modeld가 천천히 옮긴 값).
+    // 모델 점은 이만큼 오른쪽 가상 카메라 기준이라 HUD가 같은 값으로 되돌려 그린다.
     float camera_offset_m = 0.0f;
     float camera_height_m = 0.0f;
-    /* 녹화 v8부터. 운전자가 0, 2, …, 10초 뒤 가속·브레이크 페달을 밟고 있을 확률(모델 meta). 정차
-     * 출발 알림이 2초 가속 확률로 녹색 신호를 잡는다(경로보다 빨리, 경로가 안 열려도 오른다). */
+    // 녹화 v8부터. 운전자가 0, 2, …, 10초 뒤 가속·브레이크 페달을 밟고 있을 확률(모델 meta). 정차
+    // 출발 알림이 2초 가속 확률로 녹색 신호를 잡는다(경로보다 빨리, 경로가 안 열려도 오른다).
     float gas_press_probs[kMetaPressHorizons] = {};
     float brake_press_probs[kMetaPressHorizons] = {};
     // 녹화 v10부터. 광류 보정기의 상태(v11부터 끝에 네 필드가 붙었다).
@@ -242,26 +242,23 @@ struct ModelState {
     LeadTrackState lead_track;
 };
 
-/* 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
- * 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
- * kRecordingVersion도 함께 올려야 한다. */
+// 이 크기가 녹화 ModelState 레코드의 페이로드 크기다. 바뀌면 기존 녹화를
+// 읽는 tools/model/recording_reader.py와 어긋나므로 recording_format.h의
+// kRecordingVersion도 함께 올려야 한다.
 static_assert(sizeof(ModelState) == 3736 && offsetof(ModelState, plan_yaw) == 3256 &&
-                  offsetof(ModelState, camera_offset_m) == 3520 &&
-                  offsetof(ModelState, gas_press_probs) == 3528 &&
-                  offsetof(ModelState, flow_calibration) == 3576 &&
-                  offsetof(ModelState, calibration_source) == 3648 &&
+                  offsetof(ModelState, camera_offset_m) == 3520 && offsetof(ModelState, gas_press_probs) == 3528 &&
+                  offsetof(ModelState, flow_calibration) == 3576 && offsetof(ModelState, calibration_source) == 3648 &&
                   offsetof(ModelState, lead_flow) == 3680 && offsetof(ModelState, lead_track) == 3712,
               "ModelState layout is shared with the recording reader");
-/* 웹 콘솔(web_console/state_layout.py MODEL_CALIBRATION_AT, MODEL_FLOW_CALIBRATION_AT,
- * MODEL_CALIBRATION_SOURCE_AT)이 이 위치에서 보정 상태를 읽는다. */
+// 웹 콘솔(web_console/state_layout.py MODEL_CALIBRATION_AT, MODEL_FLOW_CALIBRATION_AT,
+// MODEL_CALIBRATION_SOURCE_AT)이 이 위치에서 보정 상태를 읽는다.
 static_assert(offsetof(ModelState, calibration) == 3224 && sizeof(CalibrationState) == 32,
               "ModelState.calibration is read by the web console");
-/* 웹 BEV 탭(scripts/web_console/static/bev_data.js)이 위치로 읽는 필드. 서버는 페이로드를 그대로 보내고
- * 웹 콘솔(web_console/state_layout.py MODEL_STATE_AT)이 페이지에 위치를 알려 준다(check_web_console.py가
- * 대조). */
+// 웹 BEV 탭(scripts/web_console/static/bev_data.js)이 위치로 읽는 필드. 서버는 페이로드를 그대로 보내고
+// 웹 콘솔(web_console/state_layout.py MODEL_STATE_AT)이 페이지에 위치를 알려 준다(check_web_console.py가
+// 대조).
 #define EDGEPILOT_MODEL_STATE_AT(field, expected) \
-    static_assert(offsetof(ModelState, field) == (expected), \
-                  "ModelState." #field " moved: web BEV")
+    static_assert(offsetof(ModelState, field) == (expected), "ModelState." #field " moved: web BEV")
 EDGEPILOT_MODEL_STATE_AT(capture_timestamp_ns, 8);
 EDGEPILOT_MODEL_STATE_AT(model_timestamp_ns, 16);
 EDGEPILOT_MODEL_STATE_AT(valid, 28);
@@ -291,8 +288,7 @@ struct ProcessState {
     uint32_t running = 0;
 };
 
-static_assert(sizeof(ProcessState) == 20,
-              "ProcessState layout is shared with the Python manager");
+static_assert(sizeof(ProcessState) == 20, "ProcessState layout is shared with the Python manager");
 
 struct ManagerState {
     uint64_t timestamp_ns = 0;
@@ -301,8 +297,7 @@ struct ManagerState {
     ProcessState processes[kMaxProcesses] = {};
 };
 
-static_assert(sizeof(ManagerState) == 256,
-              "ManagerState layout is shared with the Python manager");
+static_assert(sizeof(ManagerState) == 256, "ManagerState layout is shared with the Python manager");
 
 struct IpcCanFrame {
     uint32_t address = 0;
@@ -322,23 +317,19 @@ struct CanBatch {
     IpcCanFrame frames[kCanBatchMaxFrames] = {};
 };
 
-inline bool can_batch_is_fresh(const CanBatch &batch, uint64_t now_ns,
-                                    uint64_t max_age_ns)
-{
+inline bool can_batch_is_fresh(const CanBatch &batch, uint64_t now_ns, uint64_t max_age_ns) {
     return batch.valid && timestamp_fresh_ns(batch.timestamp_ns, now_ns, max_age_ns);
 }
 
-/* 프레임 목록을 배치 하나로 담는다. 256개를 넘는 꼬리는 dropped로 센다.
- * fill(dst, src)이 프레임별 필드를 옮긴다. controlsd(CanFrame)와 pandad
- * (PandaCanFrame)가 같은 껍데기를 쓴다. */
+// 프레임 목록을 배치 하나로 담는다. 256개를 넘는 꼬리는 dropped로 센다.
+// fill(dst, src)이 프레임별 필드를 옮긴다. controlsd(CanFrame)와 pandad
+// (PandaCanFrame)가 같은 껍데기를 쓴다.
 template <class Frame, class Fill>
-CanBatch make_can_batch(const std::vector<Frame> &frames, Fill fill)
-{
+CanBatch make_can_batch(const std::vector<Frame> &frames, Fill fill) {
     CanBatch batch;
     batch.timestamp_ns = monotonic_now_ns();
     batch.valid = 1;
-    batch.count = static_cast<uint32_t>(
-        std::min<size_t>(frames.size(), kCanBatchMaxFrames));
+    batch.count = static_cast<uint32_t>(std::min<size_t>(frames.size(), kCanBatchMaxFrames));
     batch.dropped = static_cast<uint32_t>(frames.size() - batch.count);
     for (uint32_t i = 0; i < batch.count; ++i) fill(&batch.frames[i], frames[i]);
     return batch;
@@ -383,14 +374,14 @@ struct PandaState {
 // ---- ControlState::hud_flags 비트 ----
 constexpr uint32_t kHudFlagLaneless = 1U << 0;
 constexpr uint32_t kHudFlagBrakeHold = 1U << 1;
-constexpr uint32_t kHudFlagSoftDisabling = 1U << 2;   // 3초 뒤 해제 예고(active_block이 사유)
-constexpr uint32_t kHudFlagSteerSaturated = 1U << 3;  // 커브가 조향 한계를 넘음
-constexpr uint32_t kHudFlagLaneChangePending = 1U << 4;  // 차선 변경 대기: 운전자가 그쪽으로 핸들을 밀어야 시작
-constexpr uint32_t kHudFlagLaneChanging = 1U << 5;       // 차선 변경 중(시작·마무리)
-constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;    // 차선 변경 방향(없으면 왼쪽)
-constexpr uint32_t kHudFlagSteerPaused = 1U << 7;        // 85도 위에서 조향 요청을 끄고 쉰다
+constexpr uint32_t kHudFlagSoftDisabling = 1U << 2;        // 3초 뒤 해제 예고(active_block이 사유)
+constexpr uint32_t kHudFlagSteerSaturated = 1U << 3;       // 커브가 조향 한계를 넘음
+constexpr uint32_t kHudFlagLaneChangePending = 1U << 4;    // 차선 변경 대기: 운전자가 그쪽으로 핸들을 밀어야 시작
+constexpr uint32_t kHudFlagLaneChanging = 1U << 5;         // 차선 변경 중(시작·마무리)
+constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;      // 차선 변경 방향(없으면 왼쪽)
+constexpr uint32_t kHudFlagSteerPaused = 1U << 7;          // 85도 위에서 조향 요청을 끄고 쉰다
 constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받아 15도 아래에서 손을 떼야 다시 조향
-constexpr uint32_t kHudFlagBrakeLights = 1U << 9;        // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
+constexpr uint32_t kHudFlagBrakeLights = 1U << 9;  // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
 
 struct ControlState {
     uint64_t timestamp_ns = 0;
@@ -440,8 +431,8 @@ struct ControlState {
     uint32_t reserved = 0;  // 정렬 꼬리를 0으로 채워 발행·기록 바이트가 매번 같다
 };
 
-/* paramsd·torqued 출력(상류 vehicleParameters·lateralTorqueParameters). controlsd가
- * paramsd 출력마다(20 Hz) 발행하고 recordd가 LearnerState로 저장한다. */
+// paramsd·torqued 출력(상류 vehicleParameters·lateralTorqueParameters). controlsd가
+// paramsd 출력마다(20 Hz) 발행하고 recordd가 LearnerState로 저장한다.
 constexpr uint32_t kLearnerVehicleInputsOk = 1U << 0;
 constexpr uint32_t kLearnerVehicleValid = 1U << 1;
 constexpr uint32_t kLearnerSensorValid = 1U << 2;
@@ -451,11 +442,11 @@ constexpr uint32_t kLearnerOffsetAverageValid = 1U << 5;
 constexpr uint32_t kLearnerOffsetValid = 1U << 6;
 constexpr uint32_t kLearnerTorqueInputsOk = 1U << 7;
 constexpr uint32_t kLearnerTorqueValid = 1U << 8;
-constexpr uint32_t kLearnerUseVehicle = 1U << 9;   // 스위치 적용 후 실제 사용
+constexpr uint32_t kLearnerUseVehicle = 1U << 9;  // 스위치 적용 후 실제 사용
 constexpr uint32_t kLearnerUseTorque = 1U << 10;
 constexpr uint32_t kLearnerVehicleRestored = 1U << 11;
 constexpr uint32_t kLearnerTorqueRestored = 1U << 12;
-constexpr uint32_t kLearnerUseDelay = 1U << 13;    // 경로 지연에 lagd 추정 사용 중
+constexpr uint32_t kLearnerUseDelay = 1U << 13;         // 경로 지연에 lagd 추정 사용 중
 constexpr uint32_t kLearnerLocalizerInputs = 1U << 14;  // paramsd·torqued 입력이 locationd
 
 struct LearnerState {
@@ -489,11 +480,10 @@ struct LearnerState {
     int16_t bucket_points[8] = {};
     float plan_delay_s = 0.0f;  // 실제 쓴 경로 지연(lagd 사용 중이면 추정값). 예전 기록은 0
 };
-/* recordd가 그대로 저장하고 tools/model/recording_reader.py LEARNER_STATE와
- * 웹 콘솔(web_console/learner_monitor.py LEARNER_FIELDS)이 위치로 읽는다(check_web_console.py가 대조). */
+// recordd가 그대로 저장하고 tools/model/recording_reader.py LEARNER_STATE와
+// 웹 콘솔(web_console/learner_monitor.py LEARNER_FIELDS)이 위치로 읽는다(check_web_console.py가 대조).
 #define EDGEPILOT_LEARNER_STATE_AT(field, expected) \
-    static_assert(offsetof(LearnerState, field) == (expected), \
-                  "LearnerState." #field " moved")
+    static_assert(offsetof(LearnerState, field) == (expected), "LearnerState." #field " moved")
 EDGEPILOT_LEARNER_STATE_AT(flags, 8);
 EDGEPILOT_LEARNER_STATE_AT(steer_ratio, 12);
 EDGEPILOT_LEARNER_STATE_AT(yaw_bias_rad_s, 48);
@@ -507,11 +497,11 @@ EDGEPILOT_LEARNER_STATE_AT(plan_delay_s, 124);
 #undef EDGEPILOT_LEARNER_STATE_AT
 static_assert(sizeof(LearnerState) == 128, "LearnerState size");
 
-/* 보드 IMU(LSM6DSOW, i2c-1 0x6B) 원시 샘플. imud가 104 Hz로 읽어 100 ms마다 묶어 발행하고
- * recordd가 RecordType::Imu로 그대로 남긴다. 축은 칩 좌표(보정·회전 없음)이고 자이로
- * 바이어스도 빼지 않는다: 차량/카메라 축과의 관계와 바이어스는 분석에서 구한다. */
+// 보드 IMU(LSM6DSOW, i2c-1 0x6B) 원시 샘플. imud가 104 Hz로 읽어 100 ms마다 묶어 발행하고
+// recordd가 RecordType::Imu로 그대로 남긴다. 축은 칩 좌표(보정·회전 없음)이고 자이로
+// 바이어스도 빼지 않는다: 차량/카메라 축과의 관계와 바이어스는 분석에서 구한다.
 struct ImuSample {
-    uint64_t timestamp_ns = 0;   // CLOCK_BOOTTIME, 데이터 준비를 본 시각
+    uint64_t timestamp_ns = 0;  // CLOCK_BOOTTIME, 데이터 준비를 본 시각
     float accel_mps2[3] = {};
     float gyro_rad_s[3] = {};
     float temperature_c = 0.0f;
@@ -523,18 +513,17 @@ static_assert(sizeof(ImuSample) == 40, "ImuSample layout is shared with the reco
 constexpr unsigned kImuBatchMaxSamples = 16;
 
 struct ImuBatch {
-    uint64_t timestamp_ns = 0;   // 발행 시각
+    uint64_t timestamp_ns = 0;  // 발행 시각
     uint32_t count = 0;
-    uint32_t dropped = 0;        // 누적: 읽기 전에 덮어쓰인 샘플(데이터 준비 두 번 이상 놓침)
+    uint32_t dropped = 0;  // 누적: 읽기 전에 덮어쓰인 샘플(데이터 준비 두 번 이상 놓침)
     ImuSample samples[kImuBatchMaxSamples] = {};
 };
 
-static_assert(sizeof(ImuBatch) == 16 + 40 * kImuBatchMaxSamples,
-              "ImuBatch layout is shared with the recording reader");
+static_assert(sizeof(ImuBatch) == 16 + 40 * kImuBatchMaxSamples, "ImuBatch layout is shared with the recording reader");
 
-/* locationd 출력: 자세 칼만 필터(상류 livePose)와 조향 지연 추정(상류 liveDelay).
- * IMU 묶음마다(약 20 Hz) 발행하고 recordd가 RecordType::Localization으로 그대로 남긴다.
- * 보정(차량) 좌표계는 x 앞, y 오른쪽, z 아래라 요레이트는 오른쪽 회전이 양수(곡률 관례와 같다). */
+// locationd 출력: 자세 칼만 필터(상류 livePose)와 조향 지연 추정(상류 liveDelay).
+// IMU 묶음마다(약 20 Hz) 발행하고 recordd가 RecordType::Localization으로 그대로 남긴다.
+// 보정(차량) 좌표계는 x 앞, y 오른쪽, z 아래라 요레이트는 오른쪽 회전이 양수(곡률 관례와 같다).
 constexpr uint32_t kLocalizationFilterValid = 1U << 0;
 constexpr uint32_t kLocalizationInputsOk = 1U << 1;
 constexpr uint32_t kLocalizationSensorsOk = 1U << 2;
@@ -548,39 +537,38 @@ constexpr uint32_t kLocalizationInvalidCamera = 1U << 2;
 constexpr uint32_t kLocalizationCameraGuarded = 1U << 3;
 
 struct LocalizationState {
-    uint64_t timestamp_ns = 0;             // 추정 시각 = 마지막 IMU 샘플 시각(CLOCK_BOOTTIME)
+    uint64_t timestamp_ns = 0;  // 추정 시각 = 마지막 IMU 샘플 시각(CLOCK_BOOTTIME)
     uint32_t flags = 0;
     uint32_t lag_status = 0;               // LateralLagStatus: 0 미추정, 1 추정, 2 무효
     float orientation_calib[3] = {};       // roll(오른쪽 아래 +), pitch, yaw
     float orientation_std[3] = {};         // 기기 좌표계 표준편차
     float angular_velocity_calib[3] = {};  // rad/s
     float angular_velocity_calib_std[3] = {};
-    float velocity_device[3] = {};         // m/s
+    float velocity_device[3] = {};  // m/s
     float velocity_device_std[3] = {};
-    float acceleration_calib[3] = {};      // m/s², 중력 제외
-    float lateral_delay_s = 0.0f;          // 쓸 지연: 추정되면 추정, 아니면 초기값
-    float lag_estimate_s = 0.0f;           // 진행 중 블록 포함 평균
+    float acceleration_calib[3] = {};  // m/s², 중력 제외
+    float lateral_delay_s = 0.0f;      // 쓸 지연: 추정되면 추정, 아니면 초기값
+    float lag_estimate_s = 0.0f;       // 진행 중 블록 포함 평균
     float lag_estimate_std_s = 0.0f;
     int32_t lag_valid_blocks = 0;
     int32_t lag_cal_perc = 0;
-    uint32_t lag_points = 0;               // 창 안의 조건 만족 점 수
-    uint32_t input_flags = 0;              // kLocalizationInvalid*, kLocalizationCameraGuarded
+    uint32_t lag_points = 0;   // 창 안의 조건 만족 점 수
+    uint32_t input_flags = 0;  // kLocalizationInvalid*, kLocalizationCameraGuarded
 };
 static_assert(sizeof(LocalizationState) == 128, "LocalizationState layout is shared with the recording reader");
 
-/* recordd가 0.5초마다 발행하고 overlayd가 녹화 표시(REC)에 쓴다. */
+// recordd가 0.5초마다 발행하고 overlayd가 녹화 표시(REC)에 쓴다.
 struct RecordState {
     uint64_t timestamp_ns = 0;
     uint32_t active = 0;           // route를 쓰는 중
     uint32_t storage_blocked = 0;  // 저장 공간 여유가 모자라 녹화를 거부했거나 멈춤
 };
 
-/* controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이
- * 구조체를 그대로 저장하고 tools/model/recording_reader.py가 위치로 디코드하므로 필드
- * 순서까지 전부 고정한다. 같은 크기 필드 둘을 맞바꿔도 여기서 걸린다. */
+// controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이
+// 구조체를 그대로 저장하고 tools/model/recording_reader.py가 위치로 디코드하므로 필드
+// 순서까지 전부 고정한다. 같은 크기 필드 둘을 맞바꿔도 여기서 걸린다.
 #define EDGEPILOT_CONTROL_STATE_AT(field, expected) \
-    static_assert(offsetof(ControlState, field) == (expected), \
-                  "ControlState." #field " moved: recording v5 layout")
+    static_assert(offsetof(ControlState, field) == (expected), "ControlState." #field " moved: recording v5 layout")
 EDGEPILOT_CONTROL_STATE_AT(timestamp_ns, 0);
 EDGEPILOT_CONTROL_STATE_AT(enabled, 8);
 EDGEPILOT_CONTROL_STATE_AT(engaged, 12);
@@ -626,10 +614,8 @@ EDGEPILOT_CONTROL_STATE_AT(engage_reject_event_id, 196);
 EDGEPILOT_CONTROL_STATE_AT(engage_reject_block, 200);
 EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
 #undef EDGEPILOT_CONTROL_STATE_AT
-static_assert(sizeof(ControlState) == 240,
-              "ControlState layout is shared by controlsd, overlayd and the recording");
-/* recordd가 RecordType::PandaState로 그대로 저장한다. */
-static_assert(sizeof(PandaState) == 96,
-              "PandaState is recorded as-is: bump kRecordingVersion");
+static_assert(sizeof(ControlState) == 240, "ControlState layout is shared by controlsd, overlayd and the recording");
+// recordd가 RecordType::PandaState로 그대로 저장한다.
+static_assert(sizeof(PandaState) == 96, "PandaState is recorded as-is: bump kRecordingVersion");
 
 #endif

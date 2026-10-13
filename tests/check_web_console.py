@@ -56,7 +56,9 @@ from scripts.web_console.process_status import (
     MANAGER_STATE_TOPIC,
     MAX_PROCESSES,
     PROCESS_STATE,
+    VERSION_MARKER,
     ProcessStatus,
+    read_binary_version,
 )
 from scripts.web_console.shm_channel import IPC_HEADER, IPC_MAGIC, IPC_VERSION, boottime_ns
 from scripts.web_console.state_layout import (
@@ -318,8 +320,8 @@ class ParamMetadataTest(unittest.TestCase):
         self.assertFalse([key for key, meta in steering.items() if meta.get("learned_role") and key not in learned])
 
     def test_ui_ranges_match_runtime_clamps(self):
-        """The loaders clamp to their Json*Field tables; the editor must show
-        the same min/max or it accepts values the runtime silently changes."""
+        """로더는 Json*Field 표대로 값을 자른다. 편집기도 같은 min/max를 보여야 하고, 아니면 런타임이 말없이
+        바꾸는 값을 받아들인다."""
         row = re.compile(r'\{"(\w+)",\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?,\s*&\w+::\w+\}')
         tables = {
             "steering": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
@@ -488,8 +490,7 @@ class CalibrationControlTest(unittest.TestCase):
         for name, bit in (("FlowUsable", 0), ("Pending", 1), ("Ramping", 2)):
             self.assertIn(f"kCalibrationSource{name} = 1u << {bit};", cpp())
         service = cpp(ROOT / "src" / "model" / "calibration_service.cc")
-        self.assertIn(f'"EDGEPILOT_CALIBRATION_RESET_PATH",\n                                     "{CALIBRATION_RESET_PATH}"',
-                      service)
+        self.assertRegex(service, rf'"EDGEPILOT_CALIBRATION_RESET_PATH",\s*"{re.escape(CALIBRATION_RESET_PATH)}"')
 
     def test_status_decodes_model_state(self):
         self.assertFalse(self.calibration.status()["available"])
@@ -680,26 +681,75 @@ class ProcessStatusTest(unittest.TestCase):
         self.assertIn(f'kManagerStateTopic[] = "{MANAGER_STATE_TOPIC}";', cpp())
         self.assertIn(f'LatestPublisher("{MANAGER_STATE_TOPIC}"', cpp(ROOT / "scripts" / "manager.py"))
 
+    @staticmethod
+    def publish_processes(path, entries, stamp=None):
+        stamp = boottime_ns() if stamp is None else stamp
+        payload = bytearray(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES)
+        MANAGER_STATE_HEAD.pack_into(payload, 0, stamp, len(entries), 0)
+        for index, (name, running) in enumerate(entries):
+            PROCESS_STATE.pack_into(payload, MANAGER_STATE_HEAD.size + index * PROCESS_STATE.size, name.encode(), running)
+        publish(path, bytes(payload), stamp=stamp)
+
     def test_status_lists_processes_and_goes_stale(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "edgepilot_manager_state"
-            processes = ProcessStatus(str(path))
+            processes = ProcessStatus(str(path), install_dir=Path(directory), proc=Path(directory) / "proc")
             self.assertEqual(processes.status(), {"available": False, "age_s": 0.0, "processes": []})
 
-            def write(stamp):
-                payload = bytearray(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES)
-                MANAGER_STATE_HEAD.pack_into(payload, 0, stamp, 2, 0)
-                PROCESS_STATE.pack_into(payload, MANAGER_STATE_HEAD.size, b"controlsd", 1)
-                PROCESS_STATE.pack_into(payload, MANAGER_STATE_HEAD.size + PROCESS_STATE.size, b"web_console", 0)
-                publish(path, bytes(payload), stamp=stamp)
-
-            write(boottime_ns())
+            self.publish_processes(path, [("controlsd", 1), ("web_console", 0)])
             status = processes.status()
             self.assertTrue(status["available"])
-            self.assertEqual(status["processes"], [{"name": "controlsd", "running": True},
-                                                   {"name": "web_console", "running": False}])
-            write(boottime_ns() - 10_000_000_000)
+            self.assertEqual(status["processes"], [
+                {"name": "controlsd", "running": True, "version": None, "installed_version": None},
+                {"name": "web_console", "running": False, "version": None, "installed_version": None}])
+            self.publish_processes(path, [("controlsd", 1), ("web_console", 0)], stamp=boottime_ns() - 10_000_000_000)
             self.assertFalse(processes.status()["available"])
+
+    def test_versions_come_from_the_running_and_installed_binaries(self):
+        """버전은 실행 중인 실행 파일(/proc/<pid>/exe)과 설치된 실행 파일에 새긴 표식에서 읽는다. 리허설에서는 replayd가
+        camerad 칸에서 돈다."""
+        def binary(path, version, pad=5000):
+            path.write_bytes(b"\x7fELF" + b"\0" * pad + VERSION_MARKER + version.encode() + b"\0more")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proc, install = root / "proc", root / "install"
+            install.mkdir()
+            for pid, argv0, version in ((101, "./controlsd", "v0.0.4-6-gaaaaaaa"), (102, "./replayd", "v0.0.4-6-gaaaaaaa"),
+                                        (103, "/usr/bin/python3", "")):
+                (proc / str(pid)).mkdir(parents=True)
+                (proc / str(pid) / "cmdline").write_bytes(argv0.encode() + b"\0-m\0")
+                if version:
+                    binary(proc / str(pid) / "exe", version)
+            binary(install / "controlsd", "v0.0.4-7-gbbbbbbb-dirty")  # 배포했지만 아직 다시 뜨지 않았다
+            binary(install / "replayd", "v0.0.4-6-gaaaaaaa")
+            binary(install / "modeld", "v0.0.4-6-gaaaaaaa")
+            path = root / "edgepilot_manager_state"
+            processes = ProcessStatus(str(path), install_dir=install, proc=proc)
+            self.publish_processes(path, [("camerad", 1), ("controlsd", 1), ("modeld", 0), ("web_console", 1)])
+            by_name = {p["name"]: (p["version"], p["installed_version"]) for p in processes.status()["processes"]}
+            self.assertEqual(by_name, {"camerad": ("v0.0.4-6-gaaaaaaa", "v0.0.4-6-gaaaaaaa"),
+                                       "controlsd": ("v0.0.4-6-gaaaaaaa", "v0.0.4-7-gbbbbbbb-dirty"),
+                                       "modeld": (None, "v0.0.4-6-gaaaaaaa"),
+                                       "web_console": (None, None)})
+
+    def test_binary_version_marker(self):
+        header = cpp(ROOT / "src" / "common" / "build_version.h")
+        self.assertIn(f'#define EDGEPILOT_VERSION_MARKER_PREFIX "{VERSION_MARKER.decode()}"', header)
+        template = cpp(ROOT / "cmake" / "build_version.cc.in")
+        self.assertIn('EDGEPILOT_VERSION_MARKER_PREFIX "@version@"', template)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "binary"
+            for content, expected in ((VERSION_MARKER + b"unknown\0", "unknown"),
+                                      (b"x" * 100 + VERSION_MARKER + b"\0", None),          # 빈 버전
+                                      (VERSION_MARKER + b"v0.0.4", None),                    # 끝나지 않았다
+                                      (VERSION_MARKER + b"v" * 65 + b"\0", None),           # 64자보다 길다
+                                      (b"no marker here\0", None),
+                                      # 같은 글자로 시작하는 다른 문자열(테스트의 식 문자열 같은)은 건너뛴다
+                                      (VERSION_MARKER + b'" + version\0' + VERSION_MARKER + b"v1\0", "v1")):
+                path.write_bytes(content)
+                self.assertEqual(read_binary_version(path), expected, content[:40])
+            self.assertIsNone(read_binary_version(Path(directory) / "missing"))
 
     def test_manager_starts_the_package(self):
         from scripts import manager

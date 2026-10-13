@@ -1,40 +1,35 @@
-// The ego car for the BEV (bev.js): EGO_SIZE and makeEgo(renderer) are all the BEV knows of it, so
-// another car takes another model behind the same two exports. This one is the car edgepilot drives
-// today, a 2017 Kia K7 (YG, "All New K7") in Aurora Black Pearl, built in code from its published
-// dimensions (4970 x 1870 x 1470 mm, wheelbase 2855, tracks 1602 / 1610, 245/45R18) and from
-// measurements of Kia's studio photographs of it from the side, the front and the back (Kia Heritage,
-// All-New K7), with owners' photographs for the details. Metres, x forward, y left, z up, centred on
-// x and y, standing on z = 0.
+// BEV(bev.js)의 자차: BEV가 이 차에 대해 아는 것은 EGO_SIZE와 makeEgo(renderer)뿐이라, 다른 차는 같은 두
+// export 뒤에 다른 모델을 두면 된다. 이것은 지금 edgepilot이 모는 차, Aurora Black Pearl 색의 2017 Kia K7
+// (YG, "All New K7")이다. 공개 제원(4970 x 1870 x 1470 mm, 휠베이스 2855, 윤거 1602 / 1610, 245/45R18)과
+// Kia가 옆·앞·뒤에서 찍은 스튜디오 사진(Kia Heritage, All-New K7)에서 잰 치수로 코드에서 만들었고, 세부는
+// 차주들의 사진을 따랐다. 미터 단위, x는 앞, y는 왼쪽, z는 위. x와 y로는 가운데에 두고 z = 0 위에 선다.
 //
-// What makes it a K7 rather than a sedan:
-//   - a high body under a slim glasshouse: the hood rises from 0.75 m at its nose to 1.04 m at the
-//     windshield, and the sills run at 1.0 m and sweep up behind the rear doors
-//   - the wide grille of vertical chrome blades, its top meeting the headlamps
-//   - the headlamps swept up and back into the fenders, two projectors and a Z of running light each
-//   - the four-cube fog lamps over a chrome hockey stick
-//   - the chrome window surround, and the chrome strip low on the doors
-//   - the fastback roofline peaking behind the B-pillar, with a small quarter window
-//   - the tail lamps under a chrome line that runs across the whole tail
-//   - the plate low on the bumper between red reflectors, the trapezoid exhaust tips, and the 18-inch
-//     twenty-spoke wheels
+// 그냥 세단이 아니라 K7로 보이게 하는 것:
+//   - 얇은 글래스하우스 아래의 높은 차체: 후드는 앞코의 0.75 m에서 윈드실드의 1.04 m까지 오르고, 창턱은
+//     1.0 m 높이로 이어지다 뒷문 뒤에서 위로 휘어 오른다
+//   - 세로 크롬 날로 된 넓은 그릴, 그 윗변이 헤드램프와 만난다
+//   - 위로, 뒤로 펜더 속까지 쓸어 올린 헤드램프, 각각 프로젝터 둘과 Z자 주간주행등
+//   - 크롬 하키스틱 위의 큐브 네 개짜리 안개등
+//   - 크롬 창 둘레와 문 아래쪽의 크롬 띠
+//   - B필러 뒤에서 가장 높아지는 패스트백 지붕선과 작은 쿼터 글라스
+//   - 꼬리 전체를 가로지르는 크롬 선 아래의 테일램프
+//   - 붉은 반사판 사이 범퍼 아래쪽의 번호판, 사다리꼴 배기구 팁, 18인치 20스포크 휠
 //
-// Unlike the other cars (bev_car.js) it is made once and drawn as itself, not as an instance. Its
-// body is a surface with smooth normals, and it takes PBR materials that reflect a dark studio lit by
-// light strips overhead and along the sides, so black paint reads as black paint, with the long
-// highlights it has in the photographs, on the BEV's dark ground. Its tail lamps are lit, as at
-// night; setLamps() flashes its turn signals and lights its brake lights.
+// 다른 차들(bev_car.js)과 달리 한 번만 만들어 인스턴스가 아니라 그 자체로 그린다. 차체는 매끈한 법선을 가진
+// 곡면이고, 머리 위와 양옆의 조명 띠로 밝힌 어두운 스튜디오를 비추는 PBR 재질을 써서, BEV의 어두운 바닥
+// 위에서도 검은 도장이 사진에서처럼 긴 하이라이트를 지닌 검은 도장으로 보인다. 테일램프는 밤처럼 켜져 있고,
+// setLamps()가 방향지시등을 깜박이고 브레이크등을 켠다.
 
 import * as THREE from "three";
 
 export const EGO_SIZE = {length: 4.97, width: 1.87, height: 1.47};
 const X = EGO_SIZE.length / 2, W = EGO_SIZE.width / 2;
-const AXLES = [X - 0.975, X - 0.975 - 2.855];        // front overhang 975 mm (the rest of 4970 - 2855 behind)
+const AXLES = [X - 0.975, X - 0.975 - 2.855];        // 앞 오버행 975 mm (4970 - 2855의 나머지는 뒤)
 const TRACKS = [1.602 / 2, 1.610 / 2];
 const TYRE = {radius: 0.339, width: 0.245, rim: 0.2286};        // 245/45R18
 const ARCH = 0.385;
-// Along x, on the centre line: the windshield's foot, the roof's front, top and back, the deck (the
-// backlight's foot). The side windows: the A-pillar's foot, the end of the black sail under the
-// mirror, the B-pillar, the rear door glass's end, the quarter window's tail.
+// 중심선 위의 x 위치: 윈드실드 아래끝, 지붕의 앞·꼭대기·뒤, 데크(뒷유리 아래끝). 옆 창: A필러 아래끝,
+// 미러 아래 검은 세일의 끝, B필러, 뒷문 유리의 끝, 쿼터 글라스의 꼬리.
 const COWL = 1.08, ROOF_FRONT = 0.15, ROOF_TOP = -0.45, ROOF_REAR = -1.25, DECK = -2.1;
 const DLO = {front: 1.0, sail: 0.64, pillar: [-0.157, -0.075], divider: -1.0, tip: -1.365};
 
@@ -47,8 +42,8 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const unit = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
 const vec = (a) => new THREE.Vector3(...a);
 
-// A smooth curve through [x, value] knots, x rising: monotone between them (Fritsch-Carlson), level
-// beyond the ends.
+// x가 커지는 [x, value] 매듭점을 지나는 매끈한 곡선: 매듭 사이에서는 단조(Fritsch-Carlson), 양 끝 너머는
+// 평평하다.
 function curve(knots) {
   const n = knots.length, xs = knots.map(([x]) => x), vs = knots.map(([, v]) => v);
   const d = xs.slice(1).map((x, i) => (vs[i + 1] - vs[i]) / (x - xs[i]));
@@ -68,7 +63,7 @@ function curve(knots) {
   };
 }
 
-// Where a polyline of [y, z] points crosses |y| = a first: its z, or null.
+// [y, z] 점들의 꺾은선이 |y| = a를 처음 지나는 곳의 z, 없으면 null.
 function crossing(path, a) {
   for (let k = 1; k < path.length; k++) {
     const [y0, z0] = path[k - 1], [y1, z1] = path[k];
@@ -77,21 +72,21 @@ function crossing(path, a) {
   return null;
 }
 
-// -- the body's shape ------------------------------------------------------------------------------
-// The half width at the shoulder, rounding off at the nose and the tail.
+// -- 차체 형상 ------------------------------------------------------------------------------------
+// 숄더에서의 반폭. 앞코와 꼬리에서 둥글게 줄어든다.
 const halfWidth = (x) => W - 0.17 * clamp((x - (X - 0.9)) / 0.9, 0, 1) ** 2 - 0.09 * clamp((-X + 0.62 - x) / 0.62, 0, 1) ** 2;
-// The top of the lower body on the centre line and at its edges: the hood, high at the cowl and
-// dipping at the nose below its corners; the sills under the windows; the deck out to its lip.
+// 하부 차체 윗면의 중심선과 가장자리 높이: 카울에서 높고 앞코에서는 모서리보다 낮게 처지는 후드, 창 아래의
+// 창턱, 립까지 이어지는 데크.
 const hood = curve([[COWL, 1.035], [1.3, 1.025], [1.64, 0.99], [1.99, 0.935], [2.24, 0.87], [2.34, 0.835], [2.43, 0.79], [X, 0.752]]);
 const fender = curve([[COWL, 0.99], [1.5, 0.955], [1.9, 0.918], [2.15, 0.895], [2.33, 0.882], [X, 0.875]]);
 const belt = curve([[DECK, 1.075], [-1.3, 1.055], [-0.74, 1.03], [-0.17, 1.008], [0.675, 0.991], [COWL, 0.99]]);
 const deck = curve([[-X, 1.075], [-2.38, 1.105], [DECK, 1.12]]);
 const deckEdge = curve([[-X, 1.035], [-2.38, 1.06], [DECK, 1.075]]);
 const top = (x) => (x >= COWL ? [hood(x), fender(x)] : x > DECK ? [belt(x), belt(x)] : [deck(x), deckEdge(x)]);
-// The shoulder: a crease along the side from the headlamps, over the door handles, into the tail lamps.
+// 숄더: 헤드램프에서 도어 핸들 위를 지나 테일램프로 들어가는, 옆면을 따라가는 꺾임선.
 const shoulder = curve([[-X, 0.94], [-1.875, 0.93], [-1.0, 0.895], [0.07, 0.885], [1.5, 0.86], [2.1, 0.84], [X, 0.80]]);
 
-// The underside: the bumpers' lips higher than the sills, and the wheel arches.
+// 밑면: 사이드실보다 높은 범퍼 립과 휠 아치.
 function bottom(x) {
   let z = 0.165 + 0.095 * clamp((x - (X - 0.45)) / 0.45, 0, 1) ** 2 + 0.14 * clamp((-X + 0.6 - x) / 0.6, 0, 1) ** 2;
   for (const c of AXLES) {
@@ -101,9 +96,8 @@ function bottom(x) {
   return z;
 }
 
-// The lower body's section at x, half of it from the top centre round to the bottom centre: [y, z].
-// The hood's two ridges (1), the shoulder (5) and the bottom edge (9) are creases; below the
-// shoulder the door dips in and swells again where its chrome strip runs.
+// x에서 하부 차체의 단면, 위 중앙에서 돌아 아래 중앙까지의 절반: [y, z]. 후드의 두 능선(1), 숄더(5),
+// 아래 모서리(9)는 꺾임선이다. 숄더 아래에서 문은 안으로 들어갔다가 크롬 띠가 지나는 곳에서 다시 부푼다.
 const ridge = (x) => 0.012 * ease(COWL, COWL + 0.15, x) * (1 - ease(X - 0.3, X - 0.08, x));
 function lowerHalf(x) {
   const w = halfWidth(x), zb = bottom(x), [centre, edge] = top(x);
@@ -123,12 +117,11 @@ function lowerHalf(x) {
   ];
 }
 
-// The ends are not flat walls. In plan they curve back towards their corners, the front's lower
-// corners deepest, round the fog lamps; in elevation they lean back: the nose under the hood and the
-// chin, the trunk lid's face up to its lip and the bumper's foot. SETBACK(y, z) is how far, fully on
-// the faces, fading out FADE in. Everything near the ends goes through bend(), the body and what lies
-// on it alike.
-const sweep = (y, far, y0, y1) => far * clamp((Math.abs(y) - y0) / (y1 - y0), 0, 1) ** 1.5;    // steepening out to the corners
+// 양 끝은 평평한 벽이 아니다. 평면에서는 모서리 쪽으로 휘어 들어가고(앞쪽 아래 모서리가 안개등을 둘러
+// 가장 깊다), 입면에서는 뒤로 기운다: 후드 아래의 앞코와 턱, 립까지 올라가는 트렁크 리드 면, 범퍼 아랫부분.
+// SETBACK(y, z)는 그 깊이로, 끝면에서는 온전히 들어가고 FADE만큼 안쪽에서 사라진다. 끝 근처의 모든 것은
+// 차체든 그 위에 놓인 것이든 똑같이 bend()를 거친다.
+const sweep = (y, far, y0, y1) => far * clamp((Math.abs(y) - y0) / (y1 - y0), 0, 1) ** 1.5;    // 모서리로 갈수록 가팔라진다
 const SETBACK = {
   front: (y, z) => sweep(y, lerp(0.30, 0.20, ease(0.42, 0.62, z)), 0.40, 0.84) + 0.06 * ease(0.62, 0.86, z) ** 1.5 + 0.045 * ease(0.40, 0.20, z) ** 1.5,
   rear: (y, z) => sweep(y, 0.16, 0.35, 0.85) + 0.14 * clamp((z - 0.6) / 0.5, 0, 1) ** 2 + 0.08 * ease(0.45, 0.27, z) ** 1.5,
@@ -138,7 +131,7 @@ function bend([x, y, z]) {
   return [x - SETBACK.front(y, z) * ease(X - FADE.front, X, x) + SETBACK.rear(y, z) * ease(-X + FADE.rear, -X, x), y, z];
 }
 
-// How far out the side is at height z (between the top's edge and the sill), for what lies on it.
+// 높이 z(윗면 가장자리와 사이드실 사이)에서 옆면이 얼마나 바깥에 있는지. 옆면에 놓이는 것들이 쓴다.
 function sideY(x, z) {
   const half = lowerHalf(x);
   for (let k = 2; k < 9; k++) {
@@ -148,7 +141,7 @@ function sideY(x, z) {
   return z > half[2][1] ? half[2][0] : half[9][0];
 }
 
-// The glasshouse's top on the centre line: the windshield, the roof, the long backlight.
+// 중심선 위 글래스하우스의 윗선: 윈드실드, 지붕, 긴 뒷유리.
 const roofArc = (x) => 1.47 - 0.111 * (x - ROOF_TOP) ** 2;
 function roofRaw(x) {
   if (x >= ROOF_FRONT) {
@@ -160,31 +153,30 @@ function roofRaw(x) {
   return roofArc(ROOF_REAR) - (roofArc(ROOF_REAR) - deck(DECK)) * s ** 1.15;
 }
 
-function roofLine(x) {          // filleted where the glass meets the roof, exact at the ends
+function roofLine(x) {          // 유리와 지붕이 만나는 곳은 필렛, 양 끝에서는 정확히
   const r = Math.min(0.05, (x - DECK) / 2, (COWL - x) / 2);
   let sum = 0;
   for (let k = -2; k <= 2; k++) sum += roofRaw(x + k * r);
   return sum / 5;
 }
 
-// The side windows' opening: its top, along the A-pillar and the roof rail and down to the quarter
-// window's tail, and its sill, which sweeps up behind the rear door to meet it there.
+// 옆 창의 개구부: A필러와 루프 레일을 따라 쿼터 글라스의 꼬리까지 내려가는 윗선, 그리고 뒷문 뒤에서 위로
+// 휘어 올라 거기서 윗선과 만나는 창턱.
 const dloTop = curve([[DLO.tip, 1.209], [-1.282, 1.247], [-1.0, 1.333], [-0.604, 1.392], [-0.233, 1.389], [-0.032, 1.37],
                       [0.311, 1.299], [0.668, 1.143], [DLO.front, 0.995]]);
 const sweepUp = curve([[DLO.tip, 1.209], [-1.33, 1.16], [-1.3, 1.135], [-1.2, 1.105], [-1.074, 1.082], [-0.9, 1.06], [-0.74, 1.045]]);
 const sill = (x) => Math.max(belt(x) + 0.015, x < -0.74 ? sweepUp(x) : 0);
 
-// Where the glasshouse's top turns down into its side: above the windows' chrome; at the
-// windshield's corners; and on the C-pillars, along the backlight's edges down to the deck.
+// 글래스하우스의 윗면이 옆면으로 꺾여 내려가는 곳: 창 크롬의 위, 윈드실드의 모서리, 그리고 C필러에서는
+// 뒷유리 가장자리를 따라 데크까지.
 function sideTop(x) {
   if (x > DLO.front) return lerp(dloTop(DLO.front) + 0.03, belt(COWL) + 0.004, ease(DLO.front, COWL, x));
   if (x >= DLO.tip) return dloTop(x) + 0.03;
   return lerp(belt(DECK) + 0.02, dloTop(DLO.tip) + 0.03, ((x - DECK) / (DLO.tip - DECK)) ** 0.85);
 }
 
-// The glasshouse's section at x, half of it from the roof's centre down to its foot on the sill:
-// [y, z]. Its side leans in (tumblehome) and carries the windows between chrome: their top (5) and
-// their sill (7).
+// x에서 글래스하우스의 단면, 지붕 중앙에서 창턱 위의 아래끝까지의 절반: [y, z]. 옆면은 안으로 기울고
+// (텀블홈) 크롬 사이에 창을 담는다: 창의 윗선(5)과 창턱(7).
 function glassHalf(x) {
   const zb = belt(x), zt = Math.max(roofLine(x), zb + 0.001), zTop = clamp(sideTop(x), zb + 0.0005, zt - 0.0005);
   const wb = halfWidth(x) - 0.085 - 0.05 * ease(0.6, COWL, x), at = (z) => wb - (z - zb) * 0.42;
@@ -192,14 +184,13 @@ function glassHalf(x) {
   const upper = open ? clamp(dloTop(x), zb, zTop - 0.014) : lerp(zb, zTop, 0.6), rail = Math.min(upper + 0.012, zTop);
   const lower = open ? clamp(sill(x), zb + 0.0002, upper) : lerp(zb, zTop, 0.4), chrome = Math.max(zb + 0.0001, lower - 0.013);
   const ye = at(zTop) - 0.01, drop = zt - zTop;
-  const edge = x < ROOF_REAR ? lerp(0.9, 0.78, (ROOF_REAR - x) / (ROOF_REAR - DECK)) : 0.9;   // the backlight narrows to its foot
+  const edge = x < ROOF_REAR ? lerp(0.9, 0.78, (ROOF_REAR - x) / (ROOF_REAR - DECK)) : 0.9;   // 뒷유리는 아래끝으로 갈수록 좁아진다
   return [[0, zt], [ye * 0.55, zt - drop * 0.18], [ye * edge, zt - drop * 0.62], [ye, zTop], [at(rail), rail], [at(upper), upper],
           [at((upper + lower) / 2), (upper + lower) / 2], [at(lower), lower], [at(chrome), chrome], [wb, zb]];
 }
 
-// What each band of the glasshouse is, by where it is: 0 and 1 the roof or the glass, 2 their edge,
-// 3 the side above the windows, 4 the chrome over them, 5 and 6 the windows (or the pillars and the
-// sail under the mirror), 7 the chrome on their sill, 8 the side below it.
+// 글래스하우스의 각 띠가 위치에 따라 무엇인지: 0과 1은 지붕 또는 유리, 2는 그 가장자리, 3은 창 위쪽 옆면,
+// 4는 창 위를 두른 크롬, 5와 6은 창(또는 필러와 미러 아래 세일), 7은 창턱의 크롬, 8은 그 아래 옆면.
 function glassPart(band, x) {
   const roof = x < ROOF_FRONT + 0.02 && x > ROOF_REAR - 0.02, open = x > DLO.tip && x < DLO.front;
   if (band <= 1) return roof ? "paint" : "glass";
@@ -213,7 +204,7 @@ function glassPart(band, x) {
   return "paint";
 }
 
-// Stations from x0 to x1: at every mark inside, and at least every step.
+// x0에서 x1까지의 스테이션: 안쪽의 marks마다, 그리고 적어도 step마다 하나씩.
 function stations(x0, x1, step, marks = []) {
   const xs = [x0, x1, ...marks.filter((x) => x > x0 && x < x1)];
   for (let x = x0 + step; x < x1; x += step) xs.push(x);
@@ -224,7 +215,7 @@ function stations(x0, x1, step, marks = []) {
 const archMarks = (steps) => AXLES.flatMap((c) => Array.from({length: steps + 1}, (_, i) => c - ARCH * Math.cos(Math.PI * i / steps))
                                                     .concat([c - ARCH - 0.01, c + ARCH + 0.01]));
 
-// -- collecting triangles by material ------------------------------------------------------------------
+// -- 재질별 삼각형 모으기 ------------------------------------------------------------------------------
 class Parts {
   constructor() { this.lists = new Map(); }
 
@@ -239,21 +230,21 @@ class Parts {
     list.n.push(...na, ...nb, ...nc);
   }
 
-  // A flat polygon of [x, y, z] corners (convex, or a fan from its first corner), facing toward.
+  // [x, y, z] 꼭짓점으로 된 평평한 다각형(볼록하거나, 첫 꼭짓점에서 부채꼴로), toward 쪽을 향한다.
   face(name, points, toward) {
     let n = unit(cross(sub(points[1], points[0]), sub(points[2], points[0])));
     if (dot(n, toward) < 0) { points = points.slice().reverse(); n = n.map((v) => -v); }
     for (let i = 1; i + 1 < points.length; i++) this.tri(name, points[0], points[i], points[i + 1], n, n, n);
   }
 
-  // The same with a normal at each corner, for a piece of a curved surface.
+  // 같은 것에 꼭짓점마다 법선을 주어, 곡면의 한 조각용.
   smooth(name, points, normals, toward) {
     const n = unit(cross(sub(points[1], points[0]), sub(points[2], points[0])));
     if (dot(n, toward) < 0) { points = points.slice().reverse(); normals = normals.slice().reverse(); }
     for (let i = 1; i + 1 < points.length; i++) this.tri(name, points[0], points[i], points[i + 1], normals[0], normals[i], normals[i + 1]);
   }
 
-  // A three.js geometry with its normals, moved by matrix (no mirroring).
+  // 법선이 있는 three.js geometry를 matrix로 옮겨 넣는다(거울 반전 없이).
   geometry(name, geometry, matrix = null) {
     const g = geometry.index ? geometry.toNonIndexed() : geometry.clone();
     if (matrix) g.applyMatrix4(matrix);
@@ -263,13 +254,12 @@ class Parts {
     g.dispose();
   }
 
-  // A surface through rows of points, rows[i][j] = [x, y, z]: quads between rows i, i + 1 and
-  // columns j, j + 1 (the rows closed into rings if closed), each in pick(i, j) (null leaves it
-  // out), facing away from inside(i). Normals are smoothed over the surface, except across the
-  // columns in creases.
+  // 점의 행들을 지나는 곡면, rows[i][j] = [x, y, z]: 행 i, i + 1과 열 j, j + 1 사이의 사각형들(closed면
+  // 행을 고리로 닫는다), 각각 pick(i, j)에 담고(null이면 뺀다) inside(i)에서 바깥쪽을 향하게 한다. 법선은
+  // 곡면 전체에서 매끈하게 하되, creases에 있는 열을 가로질러서는 하지 않는다.
   surface(rows, {closed = false, creases = [], pick, inside}) {
     const n = rows[0].length, m = closed ? n : n - 1, crease = new Set(creases);
-    const normals = rows.map(() => Array.from({length: n}, () => [[0, 0, 0], [0, 0, 0]]));   // [left of the column, right of it]
+    const normals = rows.map(() => Array.from({length: n}, () => [[0, 0, 0], [0, 0, 0]]));   // [열의 왼쪽, 열의 오른쪽]
     const faces = [];
     for (let i = 0; i + 1 < rows.length; i++) {
       const centre = inside(i);
@@ -316,9 +306,9 @@ class Parts {
   }
 }
 
-// -- the body -----------------------------------------------------------------------------------------
+// -- 차체 -------------------------------------------------------------------------------------------
 function body(parts) {
-  // the lower body: a ring per station, the left half then the right
+  // 하부 차체: 스테이션마다 고리 하나, 왼쪽 절반 다음 오른쪽
   const ring = (x, half) => [...half.map(([y, z]) => [x, y, z]), ...half.slice(1, -1).reverse().map(([y, z]) => [x, -y, z])];
   const xs = stations(-X, X, 0.05, [...archMarks(10), X - 0.15, X - 0.08, X - 0.04, X - 0.015, -X + 0.15, -X + 0.08, -X + 0.04, -X + 0.015,
                                     -2.38, COWL, DECK]);
@@ -326,13 +316,13 @@ function body(parts) {
   const middle = (row) => [row[0][0], 0, (row[0][2] + row[10][2]) / 2];
   parts.surface(rows, {closed: true, creases: [1, 19, 5, 15, 9, 11], inside: (i) => middle(rows[i]),
                        pick: (i, j) => (j === 9 || j === 10 ? "under" : "paint")});
-  // the end faces, in cells that follow their curves
+  // 끝면: 그 곡면을 따르는 셀로
   for (const out of [1, -1]) {
     const half = lowerHalf(out * X);
     onFace(parts, "paint", out, [...half, ...half.slice(1, -1).reverse().map(([y, z]) => [-y, z])], 0, false, false);
   }
 
-  // the glasshouse: from the left foot over the roof to the right foot
+  // 글래스하우스: 왼쪽 아래끝에서 지붕을 넘어 오른쪽 아래끝까지
   const glassXs = stations(DECK, COWL, 0.04, [ROOF_FRONT - 0.02, ROOF_FRONT + 0.02, ROOF_REAR - 0.02, ROOF_REAR + 0.02, ...DLO.pillar,
                                               DLO.divider - 0.015, DLO.divider + 0.015, DLO.tip, DLO.tip + 0.01, -1.33, -1.3, DLO.sail, DLO.front]);
   const glassRows = glassXs.map((x) => {
@@ -343,14 +333,14 @@ function body(parts) {
                             pick: (i, j) => glassPart(j < 9 ? 8 - j : j - 9, (glassXs[i] + glassXs[i + 1]) / 2)});
 }
 
-// -- what lies on the body ------------------------------------------------------------------------------
-// A polygon on the front (out 1) or rear (out -1) face from [y, z] corners, lifted off it, on both
-// sides when mirrored; every y must cut it once. It goes on in cells 25 x 30 mm, so it follows the
-// face's curves, and is clipped to the face's outline unless told not to be.
+// -- 차체 위에 놓이는 것 --------------------------------------------------------------------------------
+// 앞(out 1) 또는 뒤(out -1) 끝면 위에 [y, z] 꼭짓점으로 만든 다각형. 면에서 띄우고, mirrored면 양쪽에
+// 놓는다. 모든 y가 다각형을 한 번만 잘라야 한다. 25 x 30 mm 셀로 붙여 면의 곡면을 따르고, 하지 말라고
+// 하지 않으면 면의 윤곽으로 잘린다.
 function onFace(parts, name, out, corners, lift = 0.004, mirrored = true, clip = true) {
   const ys = corners.map(([y]) => y), y0 = Math.min(...ys), y1 = Math.max(...ys), slices = Math.max(1, Math.ceil((y1 - y0) / 0.025));
   const outline = clip ? lowerHalf(out * X) : null;
-  const span = (y) => {                                          // [lowest, highest] z of it at y, inside the face
+  const span = (y) => {                                          // y에서 다각형의 [가장 낮은, 가장 높은] z, 면 안쪽만
     const zs = [];
     corners.forEach(([ya, za], k) => {
       const [yb, zb] = corners[(k + 1) % corners.length];
@@ -370,7 +360,7 @@ function onFace(parts, name, out, corners, lift = 0.004, mirrored = true, clip =
   };
   for (let k = 0; k < slices; k++) {
     const ya = lerp(y0, y1, k / slices), yb = lerp(y0, y1, (k + 1) / slices), a = span(ya), b = span(yb);
-    if (!a || !b || Math.max(a[1] - a[0], b[1] - b[0]) < 1e-6) continue;  // a slice may narrow to a point at one end
+    if (!a || !b || Math.max(a[1] - a[0], b[1] - b[0]) < 1e-6) continue;  // 조각은 한쪽 끝에서 점으로 좁아질 수 있다
     const [la, ha] = a, [lb, hb] = b;
     const rows = Math.max(1, Math.ceil(Math.max(ha - la, hb - lb) / 0.03));
     for (let r = 0; r < rows; r++) {
@@ -385,15 +375,15 @@ function onFace(parts, name, out, corners, lift = 0.004, mirrored = true, clip =
   }
 }
 
-// Which way the front (out 1) or rear (out -1) face looks at [y, z].
+// 앞(out 1) 또는 뒤(out -1) 끝면이 [y, z]에서 향하는 방향.
 function faceNormal(out, y, z) {
   const at = (dy, dz) => bend([out * X, y + dy, z + dz]);
   const n = unit(cross(sub(at(0.004, 0), at(-0.004, 0)), sub(at(0, 0.004), at(0, -0.004))));
   return n[0] * out < 0 ? n.map((c) => -c) : n;
 }
 
-// Where a point on the front (out 1) or rear (out -1) face is, lifted off it, and how the face lies
-// there: {p, u, v, n}, a right-handed frame with v up the face and n out of it.
+// 앞(out 1) 또는 뒤(out -1) 끝면 위 한 점의 위치(면에서 띄운)와 거기서 면이 놓인 방향: {p, u, v, n}, v가
+// 면을 따라 위로, n이 면 바깥으로 향하는 오른손 좌표계.
 function facePlace(out, y, z, lift = 0) {
   const at = (dy, dz) => bend([out * X, y + dy, z + dz]);
   const n = faceNormal(out, y, z), rise = unit(sub(at(0, 0.005), at(0, -0.005)));
@@ -403,13 +393,13 @@ function facePlace(out, y, z, lift = 0) {
 
 const frame = ({p, u, v, n}) => new THREE.Matrix4().makeBasis(vec(u), vec(v), vec(n)).setPosition(...p);
 
-// A band on the sides from x0 to x1, between heights low(x) and high(x), lifted off them.
+// 옆면 위 x0에서 x1까지, 높이 low(x)와 high(x) 사이의 띠. 면에서 띄운다.
 function onSide(parts, name, x0, x1, low, high, lift = 0.004, steps = 10, sides = [1, -1]) {
   for (const s of sides) {
     for (let k = 0; k < steps; k++) {
       const xa = lerp(x0, x1, k / steps), xb = lerp(x0, x1, (k + 1) / steps), xm = (xa + xb) / 2;
       const corners = [[xa, low(xa)], [xb, low(xb)], [xb, high(xb)], [xa, high(xa)]];
-      const out = 0.6 * (ease(X - 0.4, X, xm) - ease(-X + 0.4, -X, xm));       // the sides turn into the faces at the ends
+      const out = 0.6 * (ease(X - 0.4, X, xm) - ease(-X + 0.4, -X, xm));       // 양 끝에서 옆면이 끝면으로 돌아 들어간다
       const at = (x, z) => bend([x, s * (sideY(x, z) + lift), z]);
       const normal = (x, z) => {
         const n = unit(cross(sub(at(x + 0.004, z), at(x - 0.004, z)), sub(at(x, z + 0.004), at(x, z - 0.004))));
@@ -420,13 +410,13 @@ function onSide(parts, name, x0, x1, low, high, lift = 0.004, steps = 10, sides 
   }
 }
 
-// A thin band along a path of [y, z] points on a face, mitred at its bends, in pieces 20 mm long.
+// 끝면 위 [y, z] 점 경로를 따르는 얇은 띠. 꺾이는 곳은 마이터로 잇고, 20 mm 길이 조각으로 놓는다.
 function lineOnFace(parts, name, out, path, width, lift = 0.006, mirrored = true) {
-  const normals = path.slice(1).map(([y1, z1], k) => {                  // of each segment, in the face
+  const normals = path.slice(1).map(([y1, z1], k) => {                  // 각 선분의 법선(면 안에서)
     const [y0, z0] = path[k], length = Math.hypot(y1 - y0, z1 - z0) || 1;
     return [-(z1 - z0) / length, (y1 - y0) / length];
   });
-  const offsets = path.map((_, k) => {                                   // half the width out, mitred
+  const offsets = path.map((_, k) => {                                   // 폭의 절반만큼 바깥으로, 마이터 처리
     const a = normals[Math.max(0, k - 1)], b = normals[Math.min(normals.length - 1, k)];
     const m = [a[0] + b[0], a[1] + b[1]], scale = width / 2 / Math.max(0.3, (m[0] * b[0] + m[1] * b[1]));
     return [m[0] * scale, m[1] * scale];
@@ -444,7 +434,7 @@ function lineOnFace(parts, name, out, path, width, lift = 0.006, mirrored = true
   }
 }
 
-// An ellipse ring (and its inside) at centre, in the plane spanned by u and v (unit vectors), facing toward.
+// centre에 놓인 타원 고리(와 그 안쪽). u와 v(단위 벡터)가 펼치는 평면 위에서 toward 쪽을 향한다.
 function emblem(parts, centre, u, v, a, b, toward) {
   const at = (r, t) => centre.map((c, q) => c + Math.cos(t) * (a - r) * u[q] + Math.sin(t) * (b - r) * v[q]);
   for (let k = 0; k < 24; k++) {
@@ -455,8 +445,8 @@ function emblem(parts, centre, u, v, a, b, toward) {
 }
 
 function front(parts) {
-  // the grille: wide at the top, where it meets the headlamps, its foot curving down to the middle; a
-  // chrome frame round vertical blades, each a V of two facets
+  // 그릴: 헤드램프와 만나는 위쪽이 넓고, 아랫변은 가운데로 휘어 내려간다. 세로 날들을 두른 크롬 테, 날은
+  // 각각 두 면으로 된 V자
   const grille = [[0, 0.735], [0.2, 0.731], [0.4, 0.718], [0.515, 0.702], [0.497, 0.655], [0.472, 0.61], [0.452, 0.586], [0.40, 0.571],
                   [0.30, 0.554], [0.15, 0.537], [0, 0.528]];
   onFace(parts, "grille", 1, [...grille, ...grille.slice(1, -1).reverse().map(([y, z]) => [-y, z])], 0.002, false);
@@ -471,13 +461,13 @@ function front(parts) {
       parts.geometry("chrome", new THREE.BoxGeometry(0.013, length, 0.004), m);
     }
   }
-  // the KIA badge on the hood's nose
+  // 후드 앞코의 KIA 엠블럼
   const n = unit([0.53, 0, 0.85]);
   emblem(parts, bend([X - 0.05, 0, hood(X - 0.05) + 0.004]), [0, 1, 0], unit(cross(n, [0, 1, 0])).map((c) => -c), 0.064, 0.032, n);
 
-  // the headlamps: from the grille's top corners up and out under the hood's edge, round into the
-  // fenders, on a chrome line; two projectors each, and a Z of running light along the foot, up the
-  // outer end, and in a block at the inner end
+  // 헤드램프: 그릴의 위 모서리에서 후드 가장자리 아래로 위로·바깥으로 올라 펜더로 돌아 들어가며, 크롬 선
+  // 위에 놓인다. 각각 프로젝터 둘, 그리고 아랫변을 따라가다 바깥 끝을 오르고 안쪽 끝에서는 블록이 되는 Z자
+  // 주간주행등
   onFace(parts, "lens", 1, [[0.496, 0.758], [0.52, 0.688], [0.65, 0.697], [0.78, 0.713], [0.80, 0.80], [0.78, 0.87], [0.62, 0.81]]);
   onSide(parts, "lens", X - 0.55, X, (x) => lerp(0.84, 0.72, ease(X - 0.55, X - 0.46, x)) - 0.02 * ease(X - 0.46, X, x),
          (x) => lerp(0.84, 0.868, ease(X - 0.5, X - 0.2, x)), 0.004, 14);
@@ -490,15 +480,14 @@ function front(parts) {
   }
   lineOnFace(parts, "drl", 1, [[0.53, 0.699], [0.758, 0.716], [0.766, 0.79]], 0.008, 0.008);
   onFace(parts, "drl", 1, [[0.506, 0.724], [0.59, 0.727], [0.59, 0.752], [0.506, 0.756]], 0.007);
-  for (const [s, name] of [[1, "turnLeft"], [-1, "turnRight"]]) {              // turning, that block flashes amber
+  for (const [s, name] of [[1, "turnLeft"], [-1, "turnRight"]]) {              // 방향지시 때 그 블록이 호박색 점멸
     onFace(parts, name, 1, [[s * 0.506, 0.724], [s * 0.59, 0.727], [s * 0.59, 0.752], [s * 0.506, 0.756]], 0.009, false);
   }
   onSide(parts, "drl", X - 0.45, X, (x) => lerp(0.728, 0.712, ease(X - 0.45, X, x)), (x) => lerp(0.737, 0.721, ease(X - 0.45, X, x)), 0.008, 12);
   lineOnFace(parts, "chrome", 1, [[0.515, 0.684], [0.768, 0.712]], 0.007);
   onSide(parts, "chrome", X - 0.47, X, (x) => lerp(0.712, 0.69, ease(X - 0.47, X, x)), (x) => lerp(0.719, 0.697, ease(X - 0.47, X, x)), 0.005, 12);
 
-  // the bumper: the fog lamps' four cubes in a chrome bezel, the hockey stick under them, the plate,
-  // the lower intake with its slats
+  // 범퍼: 크롬 베젤 속 안개등의 큐브 네 개, 그 아래의 하키스틱, 번호판, 슬랫이 달린 아래 흡기구
   onFace(parts, "trim", 1, [[0.57, 0.305], [0.79, 0.305], [0.79, 0.455], [0.57, 0.455]], 0.002);
   onFace(parts, "chrome", 1, [[0.605, 0.321], [0.757, 0.321], [0.757, 0.433], [0.605, 0.433]], 0.004);
   onFace(parts, "under", 1, [[0.611, 0.327], [0.751, 0.327], [0.751, 0.427], [0.611, 0.427]], 0.005);
@@ -514,9 +503,9 @@ function front(parts) {
 }
 
 function rear(parts) {
-  // the tail lamps: under a chrome line that runs across the whole tail, from a rounded outer end on
-  // the fender to a diagonal on the trunk lid, and round the corner along the fender to a point;
-  // the turn signal (amber) and the reversing lamp (clear) along their tops, light guides below
+  // 테일램프: 꼬리 전체를 가로지르는 크롬 선 아래, 펜더 위의 둥근 바깥 끝에서 트렁크 리드의 사선까지,
+  // 그리고 모서리를 돌아 펜더를 따라 뾰족한 끝까지. 윗부분을 따라 방향지시등(호박색)과 후진등(투명), 그
+  // 아래에 라이트 가이드
   onFace(parts, "tailLens", -1, [[0.322, 0.985], [0.464, 0.847], [0.80, 0.86], [0.86, 0.90], [0.86, 0.975], [0.80, 0.995], [0.34, 0.995]]);
   const tailLow = (x) => lerp(0.864, 0.983, ease(-2.05, -1.875, x)), tailTop = (x) => lerp(0.995, 0.983, ease(-X, -1.875, x));
   onSide(parts, "tailLens", -X, -1.875, tailLow, tailTop);
@@ -531,13 +520,13 @@ function rear(parts) {
   lineOnFace(parts, "chrome", -1, [[0.79, 1.0], [0, 1.0]], 0.007);
   onFace(parts, "chrome", -1, [[0.322, 0.976], [0.322, 0.998], [-0.322, 0.998], [-0.322, 0.976]], 0.005, false);
   lineOnFace(parts, "chrome", -1, [[0.778, 0.863], [0.464, 0.843], [0.322, 0.976]], 0.005);
-  // the trunk lid's lower edge, a U round the badges: KIA on the lid, K7 low on its left
+  // 트렁크 리드의 아래 모서리, 엠블럼을 두르는 U자: 리드 위의 KIA, 그 왼쪽 아래의 K7
   lineOnFace(parts, "under", -1, [[0.62, 0.845], [0.60, 0.74], [0.577, 0.687], [0.508, 0.637], [0, 0.637]], 0.004, 0.003);
   const badge = facePlace(-1, 0, 0.895, 0.005);
   emblem(parts, badge.p, badge.u, badge.v, 0.07, 0.035, badge.n);
   onFace(parts, "chrome", -1, [[0.44, 0.73], [0.497, 0.73], [0.497, 0.76], [0.44, 0.76]], 0.005, false);
-  // the bumper: the plate low on it over a chrome strip, red reflectors running round its corners
-  // into chrome spears along its sides, the exhaust tips under them, a silver line over the diffuser
+  // 범퍼: 크롬 띠 위에 낮게 단 번호판, 모서리를 돌아 옆면의 크롬 스피어로 이어지는 붉은 반사판, 그 아래의
+  // 배기구 팁, 디퓨저 위의 은색 선
   onFace(parts, "trim", -1, [[0.275, 0.442], [0.275, 0.566], [-0.275, 0.566], [-0.275, 0.442]], 0.003, false);
   onFace(parts, "plate", -1, [[0.26, 0.452], [0.26, 0.556], [-0.26, 0.556], [-0.26, 0.452]], 0.006, false);
   onFace(parts, "chrome", -1, [[0.37, 0.408], [0.37, 0.416], [-0.37, 0.416], [-0.37, 0.408]], 0.004, false);
@@ -551,8 +540,8 @@ function rear(parts) {
 }
 
 function sides(parts) {
-  // the mirrors on the doors behind their sails: a shell rounded at the front, the glass behind, an
-  // arm, and a repeater along the shell's outer edge
+  // 세일 뒤 문 위의 미러: 앞이 둥근 하우징, 그 뒤의 거울, 암, 그리고 하우징 바깥 가장자리를 따라가는
+  // 리피터
   for (const s of [1, -1]) {
     const y = s * 0.965;
     parts.geometry("paint", new THREE.SphereGeometry(1, 24, 14, Math.PI / 2, Math.PI), new THREE.Matrix4().makeTranslation(0.66, y, 1.058)
@@ -562,19 +551,19 @@ function sides(parts) {
     parts.geometry("gloss", new THREE.BoxGeometry(0.09, 0.07, 0.035), new THREE.Matrix4().makeTranslation(0.70, s * 0.885, 1.005));
     parts.geometry("amberLens", new THREE.BoxGeometry(0.075, 0.012, 0.012), new THREE.Matrix4().makeTranslation(0.72, s * 1.042, 1.03));
     parts.geometry(s > 0 ? "turnLeft" : "turnRight", new THREE.BoxGeometry(0.077, 0.014, 0.014), new THREE.Matrix4().makeTranslation(0.72, s * 1.042, 1.03));
-    // the door handles, just under the shoulder
+    // 숄더 바로 아래의 도어 핸들
     for (const [x, z] of [[0.066, 0.846], [-0.996, 0.863]]) {
       parts.geometry("chrome", new THREE.BoxGeometry(0.17, 0.014, 0.028), new THREE.Matrix4().makeTranslation(x, s * (sideY(x, z) + 0.003), z));
     }
   }
-  // the chrome strip low along the doors, rising to the rear
+  // 문 아래쪽을 따라 뒤로 갈수록 올라가는 크롬 띠
   onSide(parts, "chrome", -0.93, 0.87, (x) => lerp(0.386, 0.334, (x + 0.93) / 1.8), (x) => lerp(0.4, 0.348, (x + 0.93) / 1.8), 0.006, 12);
-  // the fuel door, on the left behind the rear wheel
+  // 왼쪽 뒷바퀴 뒤의 주유구 덮개
   const fuel = [[-1.74, -1.53], [0.78, 0.93]], line = 0.004;
   onSide(parts, "under", fuel[0][0], fuel[0][1], () => fuel[1][0], () => fuel[1][0] + line, 0.002, 4, [1]);
   onSide(parts, "under", fuel[0][0], fuel[0][1], () => fuel[1][1] - line, () => fuel[1][1], 0.002, 4, [1]);
   for (const x of fuel[0]) onSide(parts, "under", x - line / 2, x + line / 2, () => fuel[1][0], () => fuel[1][1], 0.002, 1, [1]);
-  // the shark fin at the back of the roof, and the high brake light along the top of the backlight
+  // 지붕 뒤쪽의 샤크핀, 그리고 뒷유리 위쪽을 따라가는 보조 브레이크등
   parts.geometry("gloss", new THREE.SphereGeometry(1, 20, 10), new THREE.Matrix4().makeTranslation(-1.145, 0, roofLine(-1.145) + 0.012)
                                                                .scale(new THREE.Vector3(0.085, 0.026, 0.06)));
   const hx = ROOF_REAR - 0.04, slope = (roofLine(hx + 0.02) - roofLine(hx - 0.02)) / 0.04;
@@ -583,8 +572,8 @@ function sides(parts) {
                       [hx - 0.012, -0.28, hz - slope * 0.012], [hx + 0.012, -0.28, hz + slope * 0.012]], up);
 }
 
-// A wheel standing at x, y (outer face out, + left), on the ground: the tyre, the rim's lip and
-// twenty spokes in pairs over a dark well, the hub, and the brake disc and caliper behind.
+// x, y(바깥면이 바깥쪽, + 왼쪽)에서 지면에 선 바퀴: 타이어, 림의 립과 어두운 웰 위에 쌍으로 놓인 스무 개의
+// 스포크, 허브, 그리고 뒤쪽의 브레이크 디스크와 캘리퍼.
 function wheel(parts, x, y) {
   const out = Math.sign(y);
   const place = (geometry, local, name) => {
@@ -596,7 +585,7 @@ function wheel(parts, x, y) {
   const profile = [[rim, -half + 0.008], [0.29, -half - 0.004], [0.325, -half + 0.006], [r, -half + 0.03], [r, half - 0.03],
                    [0.325, half - 0.006], [0.29, half + 0.004], [rim, half - 0.008]].map(([a, b]) => new THREE.Vector2(a, b));
   place(new THREE.LatheGeometry(profile, 40), new THREE.Matrix4(), "rubber");
-  const face = new THREE.Matrix4().makeRotationX(-Math.PI / 2);                 // circles and rings face +y
+  const face = new THREE.Matrix4().makeRotationX(-Math.PI / 2);                 // 원과 고리는 +y를 향한다
   place(new THREE.RingGeometry(rim - 0.018, rim + 0.002, 40), new THREE.Matrix4().makeTranslation(0, half - 0.012, 0).multiply(face), "rim");
   place(new THREE.CircleGeometry(rim - 0.016, 40), new THREE.Matrix4().makeTranslation(0, half - 0.05, 0).multiply(face), "rimDark");
   for (let k = 0; k < 20; k++) {
@@ -611,12 +600,12 @@ function wheel(parts, x, y) {
   place(new THREE.BoxGeometry(0.11, 0.05, 0.08), new THREE.Matrix4().makeTranslation(-0.09, 0.04, 0.12).multiply(new THREE.Matrix4().makeRotationY(0.6)), "trim");
 }
 
-// -- materials ---------------------------------------------------------------------------------------
+// -- 재질 -------------------------------------------------------------------------------------------
 function materials([dark, light]) {
   const env = {envMap: dark, envMapIntensity: 1}, shine = {envMap: light, envMapIntensity: 1};
   const unlit = (color) => new THREE.MeshBasicMaterial({color, toneMapped: false}), turn = unlit("#ffa31a");
   return {
-    // Aurora Black Pearl: black under a clear coat that mirrors the studio
+    // Aurora Black Pearl: 스튜디오를 비추는 클리어코트 아래의 검정
     paint: new THREE.MeshPhysicalMaterial({color: "#0a0a0c", metalness: 0, roughness: 0.5, clearcoat: 1, clearcoatRoughness: 0.035, ...env}),
     gloss: new THREE.MeshPhysicalMaterial({color: "#040405", metalness: 0, roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.02, ...env}),
     trim: new THREE.MeshStandardMaterial({color: "#16181b", roughness: 0.8}),
@@ -624,7 +613,7 @@ function materials([dark, light]) {
     grille: new THREE.MeshStandardMaterial({color: "#060708", roughness: 0.6}),
     glass: new THREE.MeshPhysicalMaterial({color: "#05080c", metalness: 0, roughness: 0.02, clearcoat: 1, ...env}),
     chrome: new THREE.MeshStandardMaterial({color: "#f2f4f7", metalness: 1, roughness: 0.1, ...shine, envMapIntensity: 1.2}),
-    lens: new THREE.MeshStandardMaterial({color: "#9aa3ad", metalness: 0.85, roughness: 0.32, ...shine}),     // reflectors behind the glass
+    lens: new THREE.MeshStandardMaterial({color: "#9aa3ad", metalness: 0.85, roughness: 0.32, ...shine}),     // 유리 뒤의 반사경
     reverse: new THREE.MeshStandardMaterial({color: "#c3c8ce", metalness: 0.9, roughness: 0.22, ...shine}),
     amberLens: new THREE.MeshStandardMaterial({color: "#6b3a0c", metalness: 0.3, roughness: 0.3, ...shine}),
     rubber: new THREE.MeshStandardMaterial({color: "#161718", roughness: 0.92}),
@@ -638,33 +627,31 @@ function materials([dark, light]) {
   };
 }
 
-// The lamps braking changes: [tail lamps lit, braking]. The high brake light is dark until then.
+// 제동이 바꾸는 램프: [테일램프 켜짐, 제동 중]. 보조 브레이크등은 제동 전까지 꺼져 있다.
 const BRAKE_LAMPS = {tailLens: ["#4a0708", "#a8130e"], tail: ["#e8261c", "#ff7a66"], stop: ["#2e0606", "#ff3a2a"]};
 
-// The studio the car reflects: a dark room (the BEV's) ringed by a band of bright windows at eye
-// height, with two long light strips overhead and one along each side, as a showroom lights a black
-// car: the hood, the roof and the deck stay black under two thin highlights. Upright faces seen from
-// above mirror the floor: the paint and the glass get a dark one, so the sides stay black under the
-// highlights; the chrome, the wheels and the lamps' reflectors a light one round a dark patch under
-// the car, or they would read black from every view the BEV has. Made once per renderer, for each
-// floor.
+// 차가 비추는 스튜디오: 눈높이에 밝은 창의 띠를 두른 어두운 방(BEV의 것)에, 머리 위로 긴 조명 띠 둘과
+// 양옆에 하나씩, 쇼룸이 검은 차를 비추듯 놓는다: 후드, 지붕, 데크는 가는 하이라이트 둘 아래 검게 남는다.
+// 위에서 본 서 있는 면은 바닥을 비춘다: 도장과 유리는 어두운 바닥을 받아 옆면이 하이라이트 아래 검게 남고,
+// 크롬, 휠, 램프 반사경은 차 밑의 어두운 자리를 두른 밝은 바닥을 받는다. 그러지 않으면 BEV의 어느 시점에서
+// 봐도 검게 보인다. 렌더러마다 한 번, 바닥마다 만든다.
 function studioScene(lightFloor) {
   const scene = new THREE.Scene();
   const room = new THREE.Mesh(new THREE.BoxGeometry(40, 40, 20), new THREE.MeshBasicMaterial({color: "#0b0e13", side: THREE.BackSide}));
   const floor = new THREE.Mesh(new THREE.RingGeometry(2.1, 40, 48), new THREE.MeshBasicMaterial({color: lightFloor ? "#7d848f" : "#20242b",
                                                                                                  side: THREE.DoubleSide}));
   const under = new THREE.Mesh(new THREE.CircleGeometry(2.1, 48), new THREE.MeshBasicMaterial({color: "#14171c", side: THREE.DoubleSide}));
-  floor.position.z = under.position.z = -1.2;                     // the light floor from 30 degrees below the horizon outwards
+  floor.position.z = under.position.z = -1.2;                     // 밝은 바닥은 수평선 아래 30도부터 바깥쪽
   const canvas = Object.assign(document.createElement("canvas"), {width: 512, height: 8});
   const c = canvas.getContext("2d");
   c.fillStyle = "#1a1d22";
   c.fillRect(0, 0, 512, 8);
   c.fillStyle = "#ffffff";
-  for (let k = 0; k < 14; k++) c.fillRect(k * 512 / 14 + 6, 0, 512 / 14 - 12, 8);       // windows between pillars
+  for (let k = 0; k < 14; k++) c.fillRect(k * 512 / 14 + 6, 0, 512 / 14 - 12, 8);       // 기둥 사이의 창
   const windows = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, 2.4, 56, 1, true),
                                  new THREE.MeshBasicMaterial({map: new THREE.CanvasTexture(canvas), color: new THREE.Color(1.1, 1.1, 1.1),
                                                               side: THREE.BackSide}));
-  windows.rotation.x = Math.PI / 2;                               // its axis up (z)
+  windows.rotation.x = Math.PI / 2;                               // 축이 위(z)로
   windows.position.z = 1.4;
   scene.add(room, floor, under, windows);
   const panel = (w, h, position, rotation, intensity) => {
@@ -675,9 +662,9 @@ function studioScene(lightFloor) {
     scene.add(light);
   };
   for (const s of [1, -1]) {
-    panel(9, 0.4, [0, s * 0.9, 7], [0, 0, 0], 3);                     // overhead, along the car
-    panel(14, 0.6, [0, s * 8, 2.6], [Math.PI / 2, 0, 0], 3.2);         // a strip along each side
-    panel(0.6, 6, [s * 9, 0, 3], [0, Math.PI / 2, 0], 1.6);            // and fore and aft
+    panel(9, 0.4, [0, s * 0.9, 7], [0, 0, 0], 3);                     // 머리 위, 차를 따라
+    panel(14, 0.6, [0, s * 8, 2.6], [Math.PI / 2, 0, 0], 3.2);         // 양옆에 하나씩 띠
+    panel(0.6, 6, [s * 9, 0, 3], [0, Math.PI / 2, 0], 1.6);            // 그리고 앞뒤
   }
   return scene;
 }
@@ -692,9 +679,9 @@ function studio(renderer) {
   return studios.get(renderer);
 }
 
-// The car as a group of meshes, one per material, for the renderer that draws it. Its lamps switch
-// with group.setLamps({left, right, brake}): the turn signals' lit lenses show while they are on, and
-// braking brightens the tail lamps and lights the high brake light. It returns whether anything changed.
+// 이 차를 그릴 renderer용으로 재질마다 메시 하나씩 묶은 그룹. 램프는 group.setLamps({left, right, brake})로
+// 바꾼다: 방향지시등이 켜진 동안 그 켜진 렌즈가 보이고, 제동은 테일램프를 밝히고 보조 브레이크등을 켠다.
+// setLamps()는 바뀐 것이 있는지를 돌려준다.
 export function makeEgo(renderer) {
   const parts = new Parts();
   body(parts);

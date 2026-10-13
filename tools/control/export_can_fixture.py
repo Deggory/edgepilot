@@ -16,7 +16,7 @@ from recording_reader import RECORD_CAN_RX, iter_event_records  # noqa: E402
 BATCH_HEADER = struct.Struct("<II")        # RecordedCanBatchHeader
 RECORDED_FRAME = struct.Struct("<IIIII64s")  # RecordedCanFrame
 FIXTURE_MAGIC = b"EDGECAN1"
-FIXTURE_RECORD = struct.Struct("<QIBB8s2x")  # timestamp_us, address, bus, len, data, pad
+FIXTURE_RECORD = struct.Struct("<QIBB8s2x")  # 열: timestamp_us, address, bus, len, data, pad
 
 
 def export(src: Path, dst: Path) -> tuple[int, float]:

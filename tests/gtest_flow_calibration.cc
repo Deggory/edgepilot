@@ -1,5 +1,5 @@
-/* 광류 보정기의 하드웨어 무관 부분: 이동 방향 풀이(알려진 장면을 투영한 합성 점), 코너 고르기, 곧은 길
- * 조건, 블록 집계. IVE 부분은 보드에서 녹화를 재생해 확인한다(diagnostics/flow_calibration_replay). */
+// 광류 보정기의 하드웨어 무관 부분: 이동 방향 풀이(알려진 장면을 투영한 합성 점), 코너 고르기, 곧은 길
+// 조건, 블록 집계. IVE 부분은 보드에서 녹화를 재생해 확인한다(diagnostics/flow_calibration_replay).
 #include "model/flow_calibration.h"
 
 #include <gtest/gtest.h>
@@ -15,21 +15,19 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kDeg = kPi / 180.0;
 const FlowIntrinsics kK{754.16, 753.9, 626.7533, 368.4};  // MaixCAM2 1280x720
 
-void rotation(const double w[3], double r[9])
-{
+void rotation(const double w[3], double r[9]) {
     const double th = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
     const double kx = w[0] / th, ky = w[1] / th, kz = w[2] / th, s = std::sin(th), c = 1.0 - std::cos(th);
-    const double m[9] = {1 + c * (-ky * ky - kz * kz), -s * kz + c * kx * ky, s * ky + c * kx * kz,
-                         s * kz + c * kx * ky, 1 + c * (-kx * kx - kz * kz), -s * kx + c * ky * kz,
-                         -s * ky + c * kx * kz, s * kx + c * ky * kz, 1 + c * (-kx * kx - ky * ky)};
+    const double m[9] = {1 + c * (-ky * ky - kz * kz), -s * kz + c * kx * ky,        s * ky + c * kx * kz,
+                         s * kz + c * kx * ky,         1 + c * (-kx * kx - kz * kz), -s * kx + c * ky * kz,
+                         -s * ky + c * kx * kz,        s * kx + c * ky * kz,         1 + c * (-kx * kx - ky * ky)};
     for (int i = 0; i < 9; ++i) r[i] = m[i];
 }
 
-/* 카메라가 yaw·pitch 방향으로 dist m 가고 w만큼 도는 동안 앞의 정지한 점들이 화면에서 움직인 자리.
- * 점은 카메라 좌표(x 오른쪽, y 아래, z 앞)로 뿌린다. 끝 점에 noise_px 잡음, outlier_frac만큼 엉뚱한 점. */
+// 카메라가 yaw·pitch 방향으로 dist m 가고 w만큼 도는 동안 앞의 정지한 점들이 화면에서 움직인 자리.
+// 점은 카메라 좌표(x 오른쪽, y 아래, z 앞)로 뿌린다. 끝 점에 noise_px 잡음, outlier_frac만큼 엉뚱한 점.
 void synth_tracks(double yaw, double pitch, double dist, const double w[3], double noise_px, double outlier_frac,
-                  int want, unsigned seed, std::vector<float> *a, std::vector<float> *b)
-{
+                  int want, unsigned seed, std::vector<float> *a, std::vector<float> *b) {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> ux(-15.0, 15.0), uy(-1.0, 3.0), uz(8.0, 80.0), u01(0.0, 1.0);
     std::normal_distribution<double> noise(0.0, noise_px);
@@ -63,8 +61,7 @@ void synth_tracks(double yaw, double pitch, double dist, const double w[3], doub
     }
 }
 
-TEST(FlowSolve, RecoversDirectionAndRotation)
-{
+TEST(FlowSolve, RecoversDirectionAndRotation) {
     const double w[3] = {0.0004, -0.0012, 0.0003};
     std::vector<float> a, b;
     synth_tracks(-0.6 * kDeg, -1.0 * kDeg, 5.0, w, 0.05, 0.1, 300, 7, &a, &b);
@@ -77,8 +74,7 @@ TEST(FlowSolve, RecoversDirectionAndRotation)
     EXPECT_LE(s.inliers, 285);
 }
 
-TEST(FlowSolve, SignsFollowTheCalibrationConvention)
-{
+TEST(FlowSolve, SignsFollowTheCalibrationConvention) {
     // 오른쪽·위로 가면 yaw·pitch가 양수(calibration rpy와 같은 규약, 10-10 데이터에서 보정기와 맞춘 방향)
     const double w[3] = {0.0, 0.0, 1e-9};
     std::vector<float> a, b;
@@ -89,8 +85,7 @@ TEST(FlowSolve, SignsFollowTheCalibrationConvention)
     EXPECT_NEAR(s.pitch / kDeg, 0.5, 1e-3);
 }
 
-TEST(FlowSolve, StaticSceneIsRejectedByParallax)
-{
+TEST(FlowSolve, StaticSceneIsRejectedByParallax) {
     // 서 있는 장면: 끝 점 = 시작 점 + 0.05 px 잡음. 어떤 방향이든 식을 맞춰 무작위 방향이 통과했다(데스크 테스트).
     std::mt19937 rng(3);
     std::uniform_real_distribution<double> ux(20.0, 1260.0), uy(100.0, 600.0);
@@ -109,8 +104,7 @@ TEST(FlowSolve, StaticSceneIsRejectedByParallax)
     EXPECT_EQ(s.points, 300);
 }
 
-TEST(FlowSolve, ReportsParallax)
-{
+TEST(FlowSolve, ReportsParallax) {
     const double w[3] = {0.0002, 0.0001, 0.0001};
     std::vector<float> a, b;
     synth_tracks(-0.3 * kDeg, -0.5 * kDeg, 4.4, w, 0.05, 0.0, 300, 11, &a, &b);  // 40 km/h, 0.4초
@@ -120,8 +114,7 @@ TEST(FlowSolve, ReportsParallax)
     EXPECT_NEAR(s.yaw / kDeg, -0.3, 0.05);
 }
 
-TEST(FlowSolve, RejectsTooFewPointsAndLargeRotation)
-{
+TEST(FlowSolve, RejectsTooFewPointsAndLargeRotation) {
     const double small[3] = {0.0, 0.0002, 0.0};
     std::vector<float> a, b;
     synth_tracks(0.0, 0.0, 5.0, small, 0.05, 0.0, 60, 11, &a, &b);
@@ -132,8 +125,7 @@ TEST(FlowSolve, RejectsTooFewPointsAndLargeRotation)
     EXPECT_FALSE(solve_flow_direction(kK, a.data(), b.data(), 200).valid);
 }
 
-TEST(FlowCorners, StrongestPerCellSpacedAndScaled)
-{
+TEST(FlowCorners, StrongestPerCellSpacedAndScaled) {
     constexpr int w = 64, h = 32;  // 8 x 4 칸
     std::vector<int16_t> resp(w * h, 1);
     auto at = [&](int x, int y, int v) { resp[static_cast<size_t>(y) * w + x] = static_cast<int16_t>(v); };
@@ -156,8 +148,7 @@ TEST(FlowCorners, StrongestPerCellSpacedAndScaled)
     EXPECT_EQ(pick_flow_corners(resp.data(), w, h, 2, 10, 0.1, 2, xy), 2);
 }
 
-TEST(FlowGate, OnlyStraightAndFast)
-{
+TEST(FlowGate, OnlyStraightAndFast) {
     FlowGateInput in;
     in.v_ego = 100.0f / 3.6f;
     in.curvature = 1.0e-4f;
@@ -180,8 +171,7 @@ TEST(FlowGate, OnlyStraightAndFast)
     EXPECT_FALSE(flow_gate_open(in));
 }
 
-FlowSolution window(double yaw_deg, double pitch_deg)
-{
+FlowSolution window(double yaw_deg, double pitch_deg) {
     FlowSolution s;
     s.valid = true;
     s.yaw = yaw_deg * kDeg;
@@ -191,8 +181,7 @@ FlowSolution window(double yaw_deg, double pitch_deg)
     return s;
 }
 
-TEST(FlowCalibratorTest, BlockMediansAndStatus)
-{
+TEST(FlowCalibratorTest, BlockMediansAndStatus) {
     FlowCalibrator cal;
     EXPECT_EQ(cal.state().status, 1U);
     uint64_t frame = 100;
@@ -217,8 +206,7 @@ TEST(FlowCalibratorTest, BlockMediansAndStatus)
     EXPECT_EQ(st.window_inliers, 100U);
 }
 
-TEST(FlowCalibratorTest, KeepsTheLatestBlocks)
-{
+TEST(FlowCalibratorTest, KeepsTheLatestBlocks) {
     FlowCalibrator cal;
     for (int blk = 0; blk < kFlowMaxBlocks + 5; ++blk)
         for (int i = 0; i < kFlowBlockWindows; ++i) cal.add(window(blk < 5 ? 3.0 : -0.5, 0.0), 100, 1);
@@ -231,13 +219,11 @@ TEST(FlowCalibratorTest, KeepsTheLatestBlocks)
     EXPECT_EQ(cal.state().status, 1U);
 }
 
-void add_block(FlowCalibrator *cal, double yaw_deg, double pitch_deg)
-{
+void add_block(FlowCalibrator *cal, double yaw_deg, double pitch_deg) {
     for (int i = 0; i < kFlowBlockWindows; ++i) cal->add(window(yaw_deg, pitch_deg), 100, 1);
 }
 
-TEST(FlowCalibratorTest, RestoreRoundTrip)
-{
+TEST(FlowCalibratorTest, RestoreRoundTrip) {
     FlowCalibrator cal;
     for (int blk = 0; blk < 5; ++blk) add_block(&cal, -0.1 * (blk + 1), -1.0 + 0.05 * blk);
     const FlowBlocks saved = cal.blocks();
@@ -277,8 +263,7 @@ TEST(FlowCalibratorTest, RestoreRoundTrip)
     EXPECT_NEAR(restored.state().yaw / kDeg, -0.4, 1e-5) << "실패하면 그대로다";
 }
 
-TEST(FlowCalibratorTest, MountChangeKeepsTheRecentBlocks)
-{
+TEST(FlowCalibratorTest, MountChangeKeepsTheRecentBlocks) {
     FlowCalibrator cal;
     for (int blk = 0; blk < 10; ++blk) add_block(&cal, -0.2, -1.0);
     add_block(&cal, 1.0, -1.0);
@@ -312,8 +297,7 @@ TEST(FlowCalibratorTest, MountChangeKeepsTheRecentBlocks)
     EXPECT_EQ(scattered.state().mount_changes, 0U) << "새 블록끼리 0.5° 넘게 흩어지면 장착 변경으로 보지 않는다";
 }
 
-TEST(FlowCalibratorTest, CountsRejectedWindows)
-{
+TEST(FlowCalibratorTest, CountsRejectedWindows) {
     FlowCalibrator cal;
     FlowSolution bad;
     bad.parallax = 0.3;
@@ -325,4 +309,4 @@ TEST(FlowCalibratorTest, CountsRejectedWindows)
     EXPECT_EQ(cal.state().rejected_windows, 0U);
 }
 
-} // namespace
+}  // namespace

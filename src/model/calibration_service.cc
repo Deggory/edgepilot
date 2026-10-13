@@ -2,9 +2,11 @@
 
 #include "common/utils_file.h"
 #include "common/utils_json.h"
-#include "common/utils_process.h"
 #include "common/utils_math.h"
+#include "common/utils_process.h"
 
+#include <sys/stat.h>
+#include <unistd.h>
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -13,8 +15,6 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
-#include <sys/stat.h>
-#include <unistd.h>
 
 namespace {
 
@@ -30,9 +30,7 @@ struct StoredCalibration {
     float height_m = OnlineCalibrator::kHeightInit;  // 없으면(예전 파일) HEIGHT_INIT
 };
 
-bool load_stored_calibration(const std::string &path, StoredCalibration *stored,
-                             std::string *error)
-{
+bool load_stored_calibration(const std::string &path, StoredCalibration *stored, std::string *error) {
     if (!stored) return false;
     const std::string text = read_text_file(path);
     if (text.empty()) return false;
@@ -50,8 +48,7 @@ bool load_stored_calibration(const std::string &path, StoredCalibration *stored,
         }
         parse_json_float_array(text, "spread_rad", &spread);
         float height = OnlineCalibrator::kHeightInit;
-        if (parse_json_float_value(text, "height_m", &height) && std::isfinite(height))
-            stored->height_m = height;
+        if (parse_json_float_value(text, "height_m", &height) && std::isfinite(height)) stored->height_m = height;
         for (int i = 0; i < 3; ++i) {
             stored->rpy[i] = rpy[static_cast<size_t>(i)];
             stored->spread[i] = spread[static_cast<size_t>(i)];
@@ -64,43 +61,37 @@ bool load_stored_calibration(const std::string &path, StoredCalibration *stored,
     }
 }
 
-bool ensure_params_dir(const std::string &path)
-{
+bool ensure_params_dir(const std::string &path) {
     if (mkdir(path.c_str(), 0755) == 0 || errno == EEXIST) return true;
-    std::fprintf(stderr, "calibration: mkdir %s failed: %s\n",
-                 path.c_str(), std::strerror(errno));
+    std::fprintf(stderr, "calibration: mkdir %s failed: %s\n", path.c_str(), std::strerror(errno));
     return false;
 }
 
-bool save_stored_calibration(const std::string &params_dir, const std::string &path,
-                             const float rpy[3], const OnlineCalibrator::Snapshot &snapshot)
-{
+bool save_stored_calibration(const std::string &params_dir, const std::string &path, const float rpy[3],
+                             const OnlineCalibrator::Snapshot &snapshot) {
     if (!ensure_params_dir(params_dir)) return false;
     std::ostringstream json;
-    json << std::setprecision(9)
-         << "{\n"
+    json << std::setprecision(9) << "{\n"
          << "  \"version\": " << kPersistVersion << ",\n"
          << "  \"rpy_rad\": [" << rpy[0] << ", " << rpy[1] << ", " << rpy[2] << "],\n"
-         << "  \"spread_rad\": [" << snapshot.spread[0] << ", "
-         << snapshot.spread[1] << ", " << snapshot.spread[2] << "],\n"
+         << "  \"spread_rad\": [" << snapshot.spread[0] << ", " << snapshot.spread[1] << ", " << snapshot.spread[2]
+         << "],\n"
          << "  \"valid_blocks\": " << snapshot.valid_blocks << ",\n"
          << "  \"height_m\": " << snapshot.height_m << "\n"
          << "}\n";
     if (!write_file_atomic(path, json.str())) {
-        std::fprintf(stderr, "calibration: write %s failed: %s\n",
-                     path.c_str(), std::strerror(errno));
+        std::fprintf(stderr, "calibration: write %s failed: %s\n", path.c_str(), std::strerror(errno));
         return false;
     }
     return true;
 }
 
-/* 광류 블록(flow_calibration.json). 블록 중앙값을 오래된 것부터 담는다. 범위·유한성은 FlowCalibrator::restore가
- * 다시 본다. */
+// 광류 블록(flow_calibration.json). 블록 중앙값을 오래된 것부터 담는다. 범위·유한성은 FlowCalibrator::restore가
+// 다시 본다.
 constexpr int kFlowPersistVersion = 1;
 constexpr size_t kFlowMaxStoredBlocks = 64;
 
-bool load_stored_flow(const std::string &path, FlowBlocks *blocks, std::string *error)
-{
+bool load_stored_flow(const std::string &path, FlowBlocks *blocks, std::string *error) {
     const std::string text = read_text_file(path);
     if (text.empty()) return false;
     try {
@@ -127,16 +118,14 @@ bool load_stored_flow(const std::string &path, FlowBlocks *blocks, std::string *
     }
 }
 
-bool save_stored_flow(const std::string &params_dir, const std::string &path, const FlowBlocks &blocks)
-{
+bool save_stored_flow(const std::string &params_dir, const std::string &path, const FlowBlocks &blocks) {
     if (!ensure_params_dir(params_dir)) return false;
     std::ostringstream json;
     json << std::setprecision(9) << "{\n  \"version\": " << kFlowPersistVersion << ",\n  \"yaw_rad\": [";
     for (size_t i = 0; i < blocks.yaw.size(); ++i) json << (i ? ", " : "") << blocks.yaw[i];
     json << "],\n  \"pitch_rad\": [";
     for (size_t i = 0; i < blocks.pitch.size(); ++i) json << (i ? ", " : "") << blocks.pitch[i];
-    json << "],\n  \"windows\": " << blocks.windows << ",\n  \"mount_changes\": " << blocks.mount_changes
-         << "\n}\n";
+    json << "],\n  \"windows\": " << blocks.windows << ",\n  \"mount_changes\": " << blocks.mount_changes << "\n}\n";
     if (!write_file_atomic(path, json.str())) {
         std::fprintf(stderr, "calibration: write %s failed: %s\n", path.c_str(), std::strerror(errno));
         return false;
@@ -144,18 +133,15 @@ bool save_stored_flow(const std::string &params_dir, const std::string &path, co
     return true;
 }
 
-float max_rpy_delta(const float a[3], const float b[3])
-{
-    return std::max(std::fabs(a[0] - b[0]),
-                    std::max(std::fabs(a[1] - b[1]), std::fabs(a[2] - b[2])));
+float max_rpy_delta(const float a[3], const float b[3]) {
+    return std::max(std::fabs(a[0] - b[0]), std::max(std::fabs(a[1] - b[1]), std::fabs(a[2] - b[2])));
 }
 
-void copy_rpy(float dst[3], const float src[3])
-{
+void copy_rpy(float dst[3], const float src[3]) {
     for (int i = 0; i < 3; ++i) dst[i] = src[i];
 }
 
-} // namespace
+}  // namespace
 
 CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
     : auto_enabled_(config.calibration_auto),
@@ -164,10 +150,8 @@ CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
       params_dir_(params_dir()),
       calibration_path_(param_path("calibration.json")),
       flow_path_(param_path("flow_calibration.json")),
-      reset_request_path_(env_string("EDGEPILOT_CALIBRATION_RESET_PATH",
-                                     "/dev/shm/edgepilot_calibration_reset")),
-      use_flow_(use_flow)
-{
+      reset_request_path_(env_string("EDGEPILOT_CALIBRATION_RESET_PATH", "/dev/shm/edgepilot_calibration_reset")),
+      use_flow_(use_flow) {
     fixed_rpy_[0] = config.manual_roll;
     fixed_rpy_[1] = config.manual_pitch;
     fixed_rpy_[2] = config.manual_yaw;
@@ -176,8 +160,7 @@ CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
     std::string load_error;
     const bool loaded = load_stored_calibration(calibration_path_, &stored, &load_error);
     if (!loaded && !load_error.empty())
-        std::fprintf(stderr, "calibration: ignoring %s: %s\n",
-                     calibration_path_.c_str(), load_error.c_str());
+        std::fprintf(stderr, "calibration: ignoring %s: %s\n", calibration_path_.c_str(), load_error.c_str());
 
     if (manual_override_) {
         restored_ = calibrator_.restore(fixed_rpy_, 5);
@@ -192,8 +175,7 @@ CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
             copy_rpy(persisted_rpy_, stored.rpy);
             has_persisted_ = true;
         }
-    } else if (loaded && calibrator_.restore(stored.rpy, stored.valid_blocks, stored.spread,
-                                             stored.height_m)) {
+    } else if (loaded && calibrator_.restore(stored.rpy, stored.valid_blocks, stored.spread, stored.height_m)) {
         restored_ = true;
         copy_rpy(persisted_rpy_, stored.rpy);
         has_persisted_ = true;
@@ -212,8 +194,8 @@ CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
         last_snapshot_ = calibrator_.snapshot();
     }
 
-    /* 광류: 저장해 둔 블록과 시작 설정으로 첫 프레임 워프부터 출처를 정한다. 측정원이 없어도 저장된 추정은
-     * 장착의 성질이라 그대로 쓸 수 있다. */
+    // 광류: 저장해 둔 블록과 시작 설정으로 첫 프레임 워프부터 출처를 정한다. 측정원이 없어도 저장된 추정은
+    // 장착의 성질이라 그대로 쓸 수 있다.
     std::string flow_error;
     if (load_stored_flow(flow_path_, &stored_flow_, &flow_error)) {
         FlowCalibrator restored;
@@ -233,22 +215,19 @@ CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
 
     persist_thread_ = std::thread(&CalibrationService::persist_loop, this);
 
-    const char *mode = manual_override_ ? "manual" :
-        (can_apply_online() ? (restored_ ? "auto-pose-restored" : "auto-pose-live") :
-         (restored_ ? "stored" : "fixed"));
-    std::fprintf(stderr, "calibration mode=%s overlay_auto=%d manual_override=%d\n",
-                 mode, can_apply_online() ? 1 : 0, manual_override_ ? 1 : 0);
+    const char *mode = manual_override_ ? "manual"
+                                        : (can_apply_online() ? (restored_ ? "auto-pose-restored" : "auto-pose-live")
+                                                              : (restored_ ? "stored" : "fixed"));
+    std::fprintf(stderr, "calibration mode=%s overlay_auto=%d manual_override=%d\n", mode, can_apply_online() ? 1 : 0,
+                 manual_override_ ? 1 : 0);
     const ProjectionState current = projection_;
-    std::fprintf(stderr,
-                 "projection calibration deg roll=%.3f pitch=%.3f yaw=%.3f params=%s source=%s (setting %s)\n",
+    std::fprintf(stderr, "projection calibration deg roll=%.3f pitch=%.3f yaw=%.3f params=%s source=%s (setting %s)\n",
                  rad_to_deg(current.roll), rad_to_deg(current.pitch), rad_to_deg(current.yaw),
-                 calibration_path_.c_str(), selector_.flow_applied() ? "flow" : "pose",
-                 use_flow_ ? "flow" : "pose");
+                 calibration_path_.c_str(), selector_.flow_applied() ? "flow" : "pose", use_flow_ ? "flow" : "pose");
     logged_flow_applied_ = selector_.flow_applied();
 }
 
-CalibrationService::~CalibrationService()
-{
+CalibrationService::~CalibrationService() {
     maybe_persist_flow(std::chrono::steady_clock::now(), true);  // 마지막 광류 블록을 남긴다
     {
         std::lock_guard<std::mutex> lock(persist_mutex_);
@@ -258,8 +237,7 @@ CalibrationService::~CalibrationService()
     if (persist_thread_.joinable()) persist_thread_.join();
 }
 
-void CalibrationService::persist_loop()
-{
+void CalibrationService::persist_loop() {
     std::unique_lock<std::mutex> lock(persist_mutex_);
     while (true) {
         persist_cv_.wait(lock, [this] { return persist_pending_ || flow_persist_pending_ || persist_stop_; });
@@ -289,36 +267,31 @@ void CalibrationService::persist_loop()
             if (std::remove(calibration_path_.c_str()) == 0 || errno == ENOENT)
                 std::fprintf(stderr, "calibration: removed %s\n", calibration_path_.c_str());
             else
-                std::fprintf(stderr, "calibration: remove %s failed: %s\n",
-                             calibration_path_.c_str(), std::strerror(errno));
+                std::fprintf(stderr, "calibration: remove %s failed: %s\n", calibration_path_.c_str(),
+                             std::strerror(errno));
         } else if (save_stored_calibration(params_dir_, calibration_path_, job.rpy, job.snapshot))
-            std::fprintf(stderr,
-                         "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) height=%.3f m validBlocks=%d\n",
-                         calibration_path_.c_str(), rad_to_deg(job.rpy[0]),
-                         rad_to_deg(job.rpy[1]), rad_to_deg(job.rpy[2]),
-                         job.snapshot.height_m, job.snapshot.valid_blocks);
+            std::fprintf(stderr, "calibration: saved %s rpy_deg=(%.3f %.3f %.3f) height=%.3f m validBlocks=%d\n",
+                         calibration_path_.c_str(), rad_to_deg(job.rpy[0]), rad_to_deg(job.rpy[1]),
+                         rad_to_deg(job.rpy[2]), job.snapshot.height_m, job.snapshot.valid_blocks);
         lock.lock();
     }
 }
 
-void CalibrationService::set_fixed_projection()
-{
+void CalibrationService::set_fixed_projection() {
     projection_ = make_projection_state(fixed_rpy_[0], fixed_rpy_[1], fixed_rpy_[2]);
 }
 
-void CalibrationService::input_rpy(float rpy[3]) const
-{
+void CalibrationService::input_rpy(float rpy[3]) const {
     const float *src = can_apply_online() ? applied_rpy_ : fixed_rpy_;
     rpy[0] = src[0];
     rpy[1] = src[1];
     rpy[2] = src[2];
 }
 
-/* 워프에 쓸 값을 정한다. 수동 보정이면 그 값 그대로, 아니면 출처 선택기가 포즈 보정기 출력과 광류 추정과
- * 설정으로 정한다(설정이 포즈면 포즈 보정기 출력 그대로). snapshot의 모든 필드는 그 출처의 것이다
- * (ipc_messages.h CalibrationState). */
-void CalibrationService::apply_selection(float dt_s)
-{
+// 워프에 쓸 값을 정한다. 수동 보정이면 그 값 그대로, 아니면 출처 선택기가 포즈 보정기 출력과 광류 추정과
+// 설정으로 정한다(설정이 포즈면 포즈 보정기 출력 그대로). snapshot의 모든 필드는 그 출처의 것이다
+// (ipc_messages.h CalibrationState).
+void CalibrationService::apply_selection(float dt_s) {
     if (!can_apply_online()) {
         copy_rpy(applied_rpy_, fixed_rpy_);
         applied_snapshot_ = last_snapshot_;
@@ -338,7 +311,8 @@ void CalibrationService::apply_selection(float dt_s)
     }
     if (selector_.flow_applied() != logged_flow_applied_) {
         logged_flow_applied_ = selector_.flow_applied();
-        std::fprintf(stderr, "\ncalibration: warp source %s target pitch=%.3f yaw=%.3f deg (pose %.3f %.3f, flow %.3f %.3f)\n",
+        std::fprintf(stderr,
+                     "\ncalibration: warp source %s target pitch=%.3f yaw=%.3f deg (pose %.3f %.3f, flow %.3f %.3f)\n",
                      logged_flow_applied_ ? "flow" : "pose",
                      rad_to_deg(logged_flow_applied_ ? flow_state_.pitch : online_rpy_[1]),
                      rad_to_deg(logged_flow_applied_ ? flow_state_.yaw : online_rpy_[2]), rad_to_deg(online_rpy_[1]),
@@ -348,13 +322,11 @@ void CalibrationService::apply_selection(float dt_s)
     if (pending != logged_pending_) {
         logged_pending_ = pending;
         if (pending)
-            std::fprintf(stderr, "\ncalibration: switching to %s waits for disengage\n",
-                         use_flow_ ? "flow" : "pose");
+            std::fprintf(stderr, "\ncalibration: switching to %s waits for disengage\n", use_flow_ ? "flow" : "pose");
     }
 }
 
-CalibrationSourceState CalibrationService::source_state() const
-{
+CalibrationSourceState CalibrationService::source_state() const {
     CalibrationSourceState out;
     const bool online = can_apply_online();
     out.source = online && selector_.flow_applied() ? 1u : 0u;
@@ -369,10 +341,9 @@ CalibrationSourceState CalibrationService::source_state() const
     return out;
 }
 
-/* 광류 측정원과 주고받는다: 초기화 요청을 보내고, 상태를 읽고(초기화를 처리하기 전의 상태와 블록은 버린다),
- * 끝난 블록을 받아 저장할 거리로 둔다. */
-void CalibrationService::poll_flow_source(std::chrono::steady_clock::time_point now)
-{
+// 광류 측정원과 주고받는다: 초기화 요청을 보내고, 상태를 읽고(초기화를 처리하기 전의 상태와 블록은 버린다),
+// 끝난 블록을 받아 저장할 거리로 둔다.
+void CalibrationService::poll_flow_source(std::chrono::steady_clock::time_point now) {
     if (flow_source_) {
         while (flow_resets_sent_ < flow_resets_requested_) {
             flow_source_->request_reset();
@@ -391,8 +362,7 @@ void CalibrationService::poll_flow_source(std::chrono::steady_clock::time_point 
     maybe_persist_flow(now, false);
 }
 
-void CalibrationService::maybe_persist_flow(std::chrono::steady_clock::time_point now, bool flush)
-{
+void CalibrationService::maybe_persist_flow(std::chrono::steady_clock::time_point now, bool flush) {
     if (!flow_blocks_dirty_ || latest_flow_blocks_.yaw.empty()) return;
     const bool first = !has_flow_persisted_;
     const bool mount_changed = latest_flow_blocks_.mount_changes != persisted_mount_changes_;
@@ -410,20 +380,16 @@ void CalibrationService::maybe_persist_flow(std::chrono::steady_clock::time_poin
     flow_blocks_dirty_ = false;
 }
 
-const char *CalibrationService::mode_name(const OnlineCalibrator::Snapshot &snapshot) const
-{
+const char *CalibrationService::mode_name(const OnlineCalibrator::Snapshot &snapshot) const {
     if (!can_apply_online()) return "manual";
-    return snapshot.status == CalibrationStatus::Calibrated
-        ? "auto-pose-valid"
-        : "auto-pose-unvalid";
+    return snapshot.status == CalibrationStatus::Calibrated ? "auto-pose-valid" : "auto-pose-unvalid";
 }
 
-/* 웹 콘솔의 "캘리브레이션 초기화"는 요청 파일을 만들기만 한다. 마운트를
- * 바꾼 뒤 SSH 없이 처음부터 다시 수렴시키려는 것이다. 모델 루프에서 1초에 한 번 tmpfs의
- * 파일 하나를 확인할 뿐이라 비용은 없다. 주행 중 초기화는 웹 콘솔이 해제 상태에서만
- * 받는다(openpilot의 Reset Calibration처럼). */
-void CalibrationService::poll_reset_request()
-{
+// 웹 콘솔의 "캘리브레이션 초기화"는 요청 파일을 만들기만 한다. 마운트를
+// 바꾼 뒤 SSH 없이 처음부터 다시 수렴시키려는 것이다. 모델 루프에서 1초에 한 번 tmpfs의
+// 파일 하나를 확인할 뿐이라 비용은 없다. 주행 중 초기화는 웹 콘솔이 해제 상태에서만
+// 받는다(openpilot의 Reset Calibration처럼).
+void CalibrationService::poll_reset_request() {
     const auto now = std::chrono::steady_clock::now();
     if (now - last_reset_poll_ < kResetPollInterval) return;
     last_reset_poll_ = now;
@@ -432,17 +398,15 @@ void CalibrationService::poll_reset_request()
         return;
     }
     if (engaged_) {
-        /* 웹 콘솔은 해제 상태에서만 요청하지만, 요청과 이 확인 사이에 결합했을 수 있다. 워프가 그 자리에서 0으로
-         * 뛰지 않게 해제될 때까지 요청 파일을 둔다. */
-        if (!logged_reset_deferred_)
-            std::fprintf(stderr, "calibration: reset request waits for disengage\n");
+        // 웹 콘솔은 해제 상태에서만 요청하지만, 요청과 이 확인 사이에 결합했을 수 있다. 워프가 그 자리에서 0으로
+        // 뛰지 않게 해제될 때까지 요청 파일을 둔다.
+        if (!logged_reset_deferred_) std::fprintf(stderr, "calibration: reset request waits for disengage\n");
         logged_reset_deferred_ = true;
         return;
     }
     logged_reset_deferred_ = false;
     if (unlink(reset_request_path_.c_str()) != 0 && errno != ENOENT) {
-        std::fprintf(stderr, "calibration: unlink %s failed: %s\n",
-                     reset_request_path_.c_str(), std::strerror(errno));
+        std::fprintf(stderr, "calibration: unlink %s failed: %s\n", reset_request_path_.c_str(), std::strerror(errno));
         return;
     }
     if (!can_apply_online()) {
@@ -452,8 +416,7 @@ void CalibrationService::poll_reset_request()
     reset_online();
 }
 
-void CalibrationService::reset_online()
-{
+void CalibrationService::reset_online() {
     calibrator_ = OnlineCalibrator();
     calibrator_.output_rpy(online_rpy_);
     last_snapshot_ = calibrator_.snapshot();
@@ -486,14 +449,13 @@ void CalibrationService::reset_online()
     std::fprintf(stderr, "calibration: reset requested, recalibrating from scratch (pose and flow)\n");
 }
 
-void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bool engaged, bool use_flow)
-{
+void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bool engaged, bool use_flow) {
     engaged_ = engaged;
     use_flow_ = use_flow;
     poll_reset_request();
     const auto now = std::chrono::steady_clock::now();
-    const float dt_s = last_update_.time_since_epoch().count() == 0
-        ? 0.0f : std::chrono::duration<float>(now - last_update_).count();
+    const float dt_s =
+        last_update_.time_since_epoch().count() == 0 ? 0.0f : std::chrono::duration<float>(now - last_update_).count();
     last_update_ = now;
     poll_flow_source(now);
     if (!can_apply_online()) {
@@ -501,9 +463,9 @@ void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bo
         return;
     }
 
-    /* 포즈 보정기는 upstream처럼 모델이 자기 값으로 워프된 영상을 봤다고 보고 관측을 자기 값 위에 더한다. 워프가
-     * 그 값과 다를 때(광류를 쓰거나 포즈로 돌아오는 중)는 그 가정이 깨지니 멈춰 둔다. 그동안 자기 추정과 저장
-     * 파일은 그대로다. */
+    // 포즈 보정기는 upstream처럼 모델이 자기 값으로 워프된 영상을 봤다고 보고 관측을 자기 값 위에 더한다. 워프가
+    // 그 값과 다를 때(광류를 쓰거나 포즈로 돌아오는 중)는 그 가정이 깨지니 멈춰 둔다. 그동안 자기 추정과 저장
+    // 파일은 그대로다.
     const bool warp_is_pose = !selector_.flow_applied() && (selector_.flags() & kCalibrationSourceRamping) == 0;
     if (output.has_pose && warp_is_pose) {
         const OnlineCalibrator::UpdateResult result = calibrator_.update(output.pose, v_ego);
@@ -515,10 +477,8 @@ void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bo
     apply_selection(dt_s);
 }
 
-void CalibrationService::maybe_persist(const OnlineCalibrator::UpdateResult &result)
-{
-    if (!result.block_completed || result.snapshot.status != CalibrationStatus::Calibrated)
-        return;
+void CalibrationService::maybe_persist(const OnlineCalibrator::UpdateResult &result) {
+    if (!result.block_completed || result.snapshot.status != CalibrationStatus::Calibrated) return;
 
     const auto now = std::chrono::steady_clock::now();
     if (has_persisted_) {
@@ -540,15 +500,14 @@ void CalibrationService::maybe_persist(const OnlineCalibrator::UpdateResult &res
     last_persist_ = now;
 }
 
-void CalibrationService::maybe_log(const OnlineCalibrator::UpdateResult &result)
-{
+void CalibrationService::maybe_log(const OnlineCalibrator::UpdateResult &result) {
     if (!log_enabled_) return;
 
     const auto now = std::chrono::steady_clock::now();
     const bool first = last_log_.time_since_epoch().count() == 0;
     const bool elapsed = first || now - last_log_ >= std::chrono::seconds(1);
-    const bool status_changed = result.snapshot.status != last_status_ ||
-        result.snapshot.valid_blocks != last_valid_blocks_;
+    const bool status_changed =
+        result.snapshot.status != last_status_ || result.snapshot.valid_blocks != last_valid_blocks_;
     if (!elapsed && !result.block_completed && !status_changed) return;
 
     last_log_ = now;
@@ -559,18 +518,12 @@ void CalibrationService::maybe_log(const OnlineCalibrator::UpdateResult &result)
                  "\ncalib mode=%s status=%s accepted=%llu rejected=%llu "
                  "validBlocks=%d blockSamples=%d last=%s rpy_deg=(%.3f %.3f %.3f) "
                  "spread_deg=(%.3f %.3f %.3f) height=%.3f m\n",
-                 mode_name(result.snapshot),
-                 calibration_status_name(result.snapshot.status),
+                 mode_name(result.snapshot), calibration_status_name(result.snapshot.status),
                  static_cast<unsigned long long>(result.snapshot.accepted_samples),
-                 static_cast<unsigned long long>(result.snapshot.rejected_samples),
-                 result.snapshot.valid_blocks,
-                 result.snapshot.block_sample_count,
-                 result.accepted ? "accepted" : "rejected",
-                 rad_to_deg(result.snapshot.rpy[0]),
-                 rad_to_deg(result.snapshot.rpy[1]),
-                 rad_to_deg(result.snapshot.rpy[2]),
-                 rad_to_deg(result.snapshot.spread[0]),
-                 rad_to_deg(result.snapshot.spread[1]),
-                 rad_to_deg(result.snapshot.spread[2]),
+                 static_cast<unsigned long long>(result.snapshot.rejected_samples), result.snapshot.valid_blocks,
+                 result.snapshot.block_sample_count, result.accepted ? "accepted" : "rejected",
+                 rad_to_deg(result.snapshot.rpy[0]), rad_to_deg(result.snapshot.rpy[1]),
+                 rad_to_deg(result.snapshot.rpy[2]), rad_to_deg(result.snapshot.spread[0]),
+                 rad_to_deg(result.snapshot.spread[1]), rad_to_deg(result.snapshot.spread[2]),
                  result.snapshot.height_m);
 }

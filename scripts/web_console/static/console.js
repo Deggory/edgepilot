@@ -18,8 +18,8 @@ let tabs = [];
 const views = new Map();
 let current = null;
 
-/* 탭 순서: 조향, 차량 특성(조향 값 중 차의 성질), 나머지 파라미터 그룹, BEV. keep: 다시 불러와도 새로 만들지
- * 않는다(파라미터를 읽지 않는 탭). */
+// 탭 순서: 조향, 차량 특성(조향 값 중 차의 성질), 나머지 파라미터 그룹, BEV. keep: 다시 불러와도 새로 만들지
+// 않는다(파라미터를 읽지 않는 탭).
 function tabSpecs() {
   const groups = Object.entries(params().groups).map(([id, group]) => ({
     id, label: group.label, create: () => createParamView(id, {extras: (PARAM_EXTRAS[id] || (() => []))()}),
@@ -56,7 +56,7 @@ function route() {
   show(id);
 }
 
-/* 파라미터를 (다시) 읽고 탭을 만든다. 다시 읽을 때는 파라미터를 쓰는 화면을 버리고 새로 만든다. */
+// 파라미터를 (다시) 읽고 탭을 만든다. 다시 읽을 때는 파라미터를 쓰는 화면을 버리고 새로 만든다.
 async function load() {
   await loadParams();
   if (current) view(current).stop();
@@ -83,7 +83,24 @@ const runtime = document.getElementById("runtime");
 const runtimeText = runtime.querySelector(".runtime-text");
 const runtimePanel = document.getElementById("runtime-panel");
 
-/* 머리 줄의 상태: 매니저가 내는 프로세스 실행 여부(누르면 목록)와 백라이트. failure는 웹 콘솔에 닿지 못했을 때. */
+// 실행 파일에 새긴 빌드 버전(process_status.py). 대개 모두 같아서 가장 많은 하나를 목록 아래에 쓰고, 칸에는 다를
+// 때만 쓴다: 다른 빌드가 돌고 있거나, 설치된 실행 파일이 바뀌었는데 아직 다시 뜨지 않았을 때.
+function commonBuild(processes) {
+  const counts = new Map();
+  for (const process of processes) {
+    if (process.running && process.version) counts.set(process.version, (counts.get(process.version) || 0) + 1);
+  }
+  const common = [...counts].sort((a, b) => b[1] - a[1])[0];
+  return {common: common ? common[0] : null, mixed: counts.size > 1};
+}
+
+function versionNote(process, common) {
+  if (process.running && process.installed_version && process.installed_version !== process.version)
+    return `설치본 ${process.installed_version} · 다시 띄우면 바뀜`;
+  return process.running && process.version && process.version !== common ? process.version : "";
+}
+
+// 머리 줄의 상태: 매니저가 내는 프로세스 실행 여부(누르면 목록)와 백라이트. failure는 웹 콘솔에 닿지 못했을 때.
 function showRuntime(status, failure = "") {
   if (failure) {
     runtime.dataset.state = "bad";
@@ -98,11 +115,16 @@ function showRuntime(status, failure = "") {
     ? (processes.length ? `매니저 응답 없음 · ${Math.round(status.age_s)}초` : "매니저 없음")
     : `프로세스 ${running}/${processes.length}`;
   const backlight = status.backlight;
+  const build = commonBuild(processes);
   runtimePanel.replaceChildren(
     processes.length
-      ? el("ul.process-list", {}, processes.map(process => el(`li${process.running ? ".running" : ""}`,
-        {}, el("span.dot"), el("code", {text: process.name}), el("span", {text: process.running ? "실행 중" : "멈춤"}))))
+      ? el("ul.process-list", {}, processes.map(process => {
+        const note = versionNote(process, build.common);
+        return el(`li${process.running ? ".running" : ""}`, {}, el("span.dot"), el("code", {text: process.name}),
+          el("span", {text: process.running ? "실행 중" : "멈춤"}), note && el("span.process-version", {text: note}));
+      }))
       : el("p.runtime-note", {text: "매니저가 프로세스 상태를 내지 않습니다."}),
+    build.common && el("p.runtime-note", {text: `빌드 ${build.common}${build.mixed ? " · 다른 빌드가 섞여 있음" : ""}`}),
     el("p.runtime-note", {
       text: backlight.error ? `백라이트 오류: ${backlight.error}`
         : !backlight.available ? "백라이트 제어 없음"

@@ -34,7 +34,7 @@ from recording_reader import RECORD_CONTROL_STATE, iter_event_records  # noqa: E
 # ---------------------------------------------------------------- fit ----
 
 # openpilot torqued 상수
-MIN_SPEED_KPH = 54.0          # MIN_VEL 15 m/s
+MIN_SPEED_KPH = 54.0          # torqued MIN_VEL 15 m/s와 같다
 STEER_MIN_THRESHOLD = 0.02
 FRICTION_FACTOR = 1.5         # 잔차 표준편차의 ~85% 커버
 STEER_BUCKET_BOUNDS = [(-0.5, -0.3), (-0.3, -0.2), (-0.2, -0.1), (-0.1, 0.0),
@@ -197,7 +197,7 @@ def cmd_fit(args):
 
 MIN_LAG_S = 0.10
 MAX_LAG_S = 0.65
-MIN_CORR = 0.95   # lagd MIN_NCC
+MIN_CORR = 0.95   # lagd MIN_NCC와 같다
 GRID_DT = 0.01
 WINDOW_S = 60.0
 MIN_SPEED_LAG_KPH = 54.0
@@ -205,7 +205,7 @@ MIN_LAT_ACCEL_RANGE = 0.5   # 창 안에 이만큼의 횡가속 변화가 있어
 
 
 def read_control_states(paths):
-    """[t_s, active, wheel_speed_kph, desired_curv, actual_curv] per ControlState record.
+    """ControlState 기록마다 [t_s, active, wheel_speed_kph, desired_curv, actual_curv].
 
     속도는 ego_speed_kph(컨트롤러가 그 틱에 쓴 네 바퀴 평균, openpilot vEgo와 같은 기준)다.
     휠 속도가 끊긴 틱은 NaN이다. 계기판 속도(cluster_speed_kph)는 K7에서 ~6.6% 크다."""

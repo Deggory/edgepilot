@@ -1,7 +1,7 @@
 // 웹 콘솔 공용 도구: DOM 만들기, 카드·배지·표, 토스트, 확인 창, API 호출, 주기 폴링, 숫자 표기.
 
-/* el("div.card.live", {title: "..."}, child, "text", ...): 태그 이름 뒤 .클래스, 속성(on<event>는 리스너),
- * 자식(노드·문자열·배열, null·false는 건너뜀). */
+// el("div.card.live", {title: "..."}, child, "text", ...): 태그 이름 뒤 .클래스, 속성(on<event>는 리스너),
+// 자식(노드·문자열·배열, null·false는 건너뜀).
 export function el(spec, attributes = {}, ...children) {
   const [tag, ...classes] = spec.split(".");
   const node = document.createElement(tag || "div");
@@ -52,7 +52,7 @@ export function badges(list) {
   return list.filter(Boolean).map(([text, tone]) => el(`span.badge.${tone || "muted"}`, {text}));
 }
 
-/* 머리 줄과 행들. 셀은 문자열이나 [문자열, 톤]. 둘째 열은 값(굵게), 넷째 열은 설명(흐리게). */
+// 머리 줄과 행들. 셀은 문자열이나 [문자열, 톤]. 둘째 열은 값(굵게), 넷째 열은 설명(흐리게).
 export function infoTable(head, rows) {
   const cell = (tag, value, kind) => {
     const [text, tone] = Array.isArray(value) ? value : [value, ""];
@@ -65,8 +65,8 @@ export function infoTable(head, rows) {
       cell("td", value, index === 1 ? "value" : index === 3 ? "note" : ""))))));
 }
 
-/* 상태 카드: 제목·배지·(머리의 컨트롤)·본문·버튼 줄. 머리와 버튼은 한 번 만들고 본문과 배지만 바꾼다
- * (누르는 중인 스위치를 매초 갈아엎지 않게). */
+// 상태 카드: 제목·배지·(머리의 컨트롤)·본문·버튼 줄. 머리와 버튼은 한 번 만들고 본문과 배지만 바꾼다
+// (누르는 중인 스위치를 매초 갈아엎지 않게).
 export function liveCard(title, {control = null, actions = []} = {}) {
   const badgeRow = el("span.badge-row");
   const body = el("div.card-body");
@@ -84,7 +84,7 @@ export function liveCard(title, {control = null, actions = []} = {}) {
   };
 }
 
-/* 카드 아래쪽의 큰 버튼: 아이콘, 제목, 작은 설명 줄들. danger면 붉은 테. */
+// 카드 아래쪽의 큰 버튼: 아이콘, 제목, 작은 설명 줄들. danger면 붉은 테.
 export function actionButton({icon, danger = false, onclick}) {
   const button = el(`button.action${danger ? ".danger" : ""}`, {type: "button", onclick});
   button.setContent = (title, ...notes) => {
@@ -140,8 +140,8 @@ export const api = {
   patch: (url, body) => request("PATCH", url, body),
 };
 
-/* fn을 interval_ms마다 부른다(겹치지 않게). start()는 곧바로 한 번 부르고, stop() 뒤에는 늦게 끝난 호출도
- * 버린다. */
+// fn을 interval_ms마다 부른다(겹치지 않게). start()는 곧바로 한 번 부르고, stop() 뒤에는 늦게 끝난 호출도
+// 버린다.
 export function poller(fn, intervalMs) {
   let timer = null;
   let generation = 0;

@@ -1,26 +1,25 @@
-"""Give each output head of the extracted core its own quantization range.
+"""잘라 낸 코어의 출력 헤드마다 고유한 양자화 범위를 준다.
 
-The core ends in one Concat of 13 heads ([1, 2576]). Pulsar2 quantizes a tensor
-with one U16 scale, so that Concat forced every value onto the step of the
-widest head: about 0.007 (plan x reaches ~200 m). That is fine for positions
-but not for the plan yaw and yaw rate (a few mrad on a straight road): they
-came out as 0 or +-0.007 and the laneless curvature law 2*psi/(v*t) jumped by
-~0.6 m/s^2 per step (2026-09-29 road test: wheel swinging left and right).
+코어는 헤드 13개를 잇는 Concat 하나([1, 2576])로 끝난다. Pulsar2는 텐서 하나를
+U16 스케일 하나로 양자화하므로, 그 Concat 때문에 모든 값이 가장 넓은 헤드의
+간격에 맞춰졌다: 약 0.007(plan x가 ~200 m까지 간다). 위치에는 괜찮지만
+plan yaw와 yaw rate(직선 도로에서 몇 mrad)에는 맞지 않는다: 이 값들이 0이나
++-0.007로 나와서 laneless 곡률 법칙 2*psi/(v*t)가 한 간격마다 ~0.6 m/s^2씩
+뛰었다(2026-09-29 도로 시험: 핸들이 좌우로 흔들렸다).
 
-This removes the Concats and makes every head a graph output (the policy's
-Slice of the hidden state out of the vision Concat is fed from the hidden head
-directly). The plan head
-(Gemm 990x256 then Mul by a per-row scale) is split by rows into three Gemms
-so the small orientation columns get a range of their own:
+이 스크립트는 Concat을 없애고 모든 헤드를 그래프 출력으로 만든다(policy가 vision
+Concat에서 hidden state를 꺼내던 Slice는 hidden 헤드에서 바로 받는다). plan 헤드
+(Gemm 990x256 뒤에 행별 scale을 곱하는 Mul)는 행으로 나눠 Gemm 세 개로 쪼개서
+작은 orientation 열들이 자기 범위를 갖게 한다:
 
-  out_plan_motion  mean columns 0-8 (position, velocity, acceleration), 33x9
-  out_plan_orient  mean columns 9-14 (euler, orientation rate), 33x6
-  out_plan_std     the 495 log-std values
+  out_plan_motion  평균 열 0-8(위치, 속도, 가속도), 33x9
+  out_plan_orient  평균 열 9-14(euler, orientation rate), 33x6
+  out_plan_std     log-std 값 495개
 
-src/model/model_output_assembly.h puts the outputs back into the 2576 layout; keep
-the names and the row order in sync with it.
+src/model/model_output_assembly.h가 출력을 2576 배치로 다시 맞춘다. 이름과 행 순서를
+그 파일과 맞춰 둔다.
 
-usage: python3 split_outputs.py core_fp32.onnx core_split.onnx
+사용: python3 split_outputs.py core_fp32.onnx core_split.onnx
 """
 import sys
 import numpy as np
@@ -51,7 +50,7 @@ assert pad_t in inits and int(np.prod(inits[pad_t].dims)) == 2, "expected a 2-wi
 
 
 def rename(old, new):
-    """Rename tensor `old` to `new` everywhere (producer output and all consumers)."""
+    """텐서 `old`의 이름을 모든 곳(생산 노드 출력과 모든 소비 노드)에서 `new`로 바꾼다."""
     n = prod[old]
     n.output[list(n.output).index(old)] = new
     for c in consumers.get(old, []):
@@ -64,9 +63,9 @@ def rename(old, new):
 for t, name in zip(vision_cat.input, VISION):
     rename(t, name)
 
-# The policy reads the hidden state back out of the vision Concat with a Slice
-# [1064:1576]. Feed it from the hidden head directly: the Concat goes away, and
-# the policy input no longer carries the Concat's coarse step.
+# policy는 vision Concat에서 Slice [1064:1576]로 hidden state를 다시 꺼낸다.
+# hidden 헤드에서 바로 넣는다: Concat이 없어지고, policy 입력도 더는
+# Concat의 거친 간격을 물려받지 않는다.
 drop_extra = []
 for n in consumers.get(vision_cat.output[0], []):
     if n is top:
@@ -83,7 +82,7 @@ for n in consumers.get(vision_cat.output[0], []):
     drop_extra.append(n)
 rename(desire_state_t, "out_desire_state")
 
-# plan: Mul(Gemm(x, W, b), scale) -> three row groups
+# plan: Mul(Gemm(x, W, b), scale) -> 행 그룹 세 개
 mul = prod[plan_t]
 assert mul.op_type == "Mul", mul
 gemm_t, scale_t = (mul.input if mul.input[1] in inits else mul.input[::-1])

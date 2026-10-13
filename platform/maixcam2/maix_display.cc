@@ -20,15 +20,22 @@ using namespace maix::middleware::maixcam2;
 
 namespace {
 
-/* MaixCDK DisplayAx::__config_vo_param(rotate=1)과 같다. 패널은 480x640 DSI. */
-void config_vo(ax_vo_param_t *param, int width, int height)
-{
+// MaixCDK DisplayAx::__config_vo_param(rotate=1)과 같다. 패널은 480x640 DSI.
+void config_vo(ax_vo_param_t *param, int width, int height) {
     std::memset(param, 0, sizeof(*param));
     AX_VO_SYNC_INFO_T sync = {};
-    sync.u16Vact = 640; sync.u16Vbb = 30; sync.u16Vfb = 30;
-    sync.u16Hact = 480; sync.u16Hbb = 30; sync.u16Hfb = 30;
-    sync.u16Hpw = 40; sync.u16Vpw = 11; sync.u32Pclk = 24750;
-    sync.bIdv = AX_TRUE; sync.bIhs = AX_FALSE; sync.bIvs = AX_TRUE;
+    sync.u16Vact = 640;
+    sync.u16Vbb = 30;
+    sync.u16Vfb = 30;
+    sync.u16Hact = 480;
+    sync.u16Hbb = 30;
+    sync.u16Hfb = 30;
+    sync.u16Hpw = 40;
+    sync.u16Vpw = 11;
+    sync.u32Pclk = 24750;
+    sync.bIdv = AX_TRUE;
+    sync.bIhs = AX_FALSE;
+    sync.bIvs = AX_TRUE;
     SAMPLE_VO_CONFIG_S cfg = {};
     cfg.u32VDevNr = 1;
     cfg.stVoDev[0].u32VoDev = 0;
@@ -56,8 +63,7 @@ void config_vo(ax_vo_param_t *param, int width, int height)
     std::memcpy(&param->sync_info, &sync, sizeof(sync));
 }
 
-AX_POOL make_pool(AX_U64 block_size, AX_U32 count)
-{
+AX_POOL make_pool(AX_U64 block_size, AX_U32 count) {
     AX_POOL_CONFIG_T cfg = {};
     cfg.MetaSize = 512;
     cfg.BlkCnt = count;
@@ -67,10 +73,9 @@ AX_POOL make_pool(AX_U64 block_size, AX_U32 count)
     return AX_POOL_CreatePool(&cfg);
 }
 
-/* 16:9 소스의 가운데를 화면 비율(kWidth:kHeight = 4:3)로 자른다. IVPS 정렬(폭 16,
- * 위치 2)을 맞춘다. app_config.h kPreviewAspect와 같은 영역이다. */
-void center_crop(AX_VIDEO_FRAME_T *frame, int width, int height)
-{
+// 16:9 소스의 가운데를 화면 비율(kWidth:kHeight = 4:3)로 자른다. IVPS 정렬(폭 16,
+// 위치 2)을 맞춘다. app_config.h kPreviewAspect와 같은 영역이다.
+void center_crop(AX_VIDEO_FRAME_T *frame, int width, int height) {
     int crop_w = height * MaixDisplay::kWidth / MaixDisplay::kHeight;
     if (crop_w > width) crop_w = width;
     crop_w &= ~15;
@@ -80,9 +85,8 @@ void center_crop(AX_VIDEO_FRAME_T *frame, int width, int height)
     frame->s16CropHeight = static_cast<AX_S16>(height);
 }
 
-/* /boot/board의 key=value (disp_flip 등). 없으면 기본값. */
-int board_config(const char *key, int fallback)
-{
+// /boot/board의 key=value (disp_flip 등). 없으면 기본값.
+int board_config(const char *key, int fallback) {
     std::ifstream file("/boot/board");
     std::string line;
     const std::string want = std::string(key) + "=";
@@ -91,10 +95,9 @@ int board_config(const char *key, int fallback)
     return fallback;
 }
 
-/* 백라이트는 PWM3(pwmchip0/pwm3). MaixCDK 화면이 닫히며 0으로 두므로 다시 켠다.
- * 밝기는 /boot/configs maix_backlight_value(%) x disp_max_backlight(%). */
-void enable_backlight()
-{
+// 백라이트는 PWM3(pwmchip0/pwm3). MaixCDK 화면이 닫히며 0으로 두므로 다시 켠다.
+// 밝기는 /boot/configs maix_backlight_value(%) x disp_max_backlight(%).
+void enable_backlight() {
     int percent = 50;
     std::ifstream configs("/boot/configs");
     std::string line;
@@ -109,11 +112,11 @@ void enable_backlight()
     std::ofstream(pwm + "/enable") << 1;
 }
 
-} // namespace
+}  // namespace
 
-/* HUD를 쓰는 그래픽 레이어 fb0. MaixCDK VO의 레이어 1 채널은 fb0를 화면에 묶어 두려고 그대로
- * 만들되 프레임은 보내지 않는다. 그림판은 캐시 가능한 보통 메모리이고 fb0(쓰기 결합, 순차 쓰기
- * 약 1 GB/s)에는 바뀐 칸만 옮긴다. */
+// HUD를 쓰는 그래픽 레이어 fb0. MaixCDK VO의 레이어 1 채널은 fb0를 화면에 묶어 두려고 그대로
+// 만들되 프레임은 보내지 않는다. 그림판은 캐시 가능한 보통 메모리이고 fb0(쓰기 결합, 순차 쓰기
+// 약 1 GB/s)에는 바뀐 칸만 옮긴다.
 struct Framebuffer {
     int fd = -1;
     uint8_t *map = nullptr;
@@ -132,7 +135,7 @@ struct MaixDisplay::Impl {
     AX_POOL dst_pool = AX_INVALID_POOLID;
     int errors = 0;
     Framebuffer fb;
-    std::vector<uint32_t> canvas;     // 세로 HUD 그림판(kHeight x kWidth)
+    std::vector<uint32_t> canvas;      // 세로 HUD 그림판(kHeight x kWidth)
     std::vector<uint16_t> last_dirty;  // 지난번 옮긴 칸(행마다 비트)
     bool copy_all = true;              // 다음엔 전부 옮긴다(처음, 칸 정보 없음)
     bool flip_x = false;
@@ -141,12 +144,11 @@ struct MaixDisplay::Impl {
 
 namespace {
 
-bool open_framebuffer(Framebuffer *fb, int width, int height)
-{
+bool open_framebuffer(Framebuffer *fb, int width, int height) {
     fb->fd = open("/dev/fb0", O_RDWR | O_CLOEXEC);
     if (fb->fd < 0) return false;
-    fb_fix_screeninfo fix {};
-    fb_var_screeninfo var {};
+    fb_fix_screeninfo fix{};
+    fb_var_screeninfo var{};
     if (ioctl(fb->fd, FBIOGET_FSCREENINFO, &fix) != 0 || ioctl(fb->fd, FBIOGET_VSCREENINFO, &var) != 0 ||
         var.bits_per_pixel != 32 || static_cast<int>(var.xres) != width || static_cast<int>(var.yres) != height) {
         std::fprintf(stderr, "display: fb0 is not %dx%d 32 bpp\n", width, height);
@@ -163,8 +165,7 @@ bool open_framebuffer(Framebuffer *fb, int width, int height)
 
 }  // namespace
 
-MaixDisplay::MaixDisplay() : impl_(new Impl)
-{
+MaixDisplay::MaixDisplay() : impl_(new Impl) {
     if (impl_->sys.init() != maix::err::ERR_NONE) throw std::runtime_error("AX SYS init failed");
     impl_->video_ptr.reset(new VO());
     impl_->osd_ptr.reset(new VO());
@@ -175,22 +176,23 @@ MaixDisplay::MaixDisplay() : impl_(new Impl)
     ax_vo_param_t param;
     config_vo(&param, kWidth, kHeight);
     if (video_vo.init(&param) != maix::err::ERR_NONE) throw std::runtime_error("VO init failed");
-    ax_vo_channel_param_t video = {kWidth, kHeight, AX_FORMAT_YUV420_SEMIPLANAR,
-                                   AX_FORMAT_YUV420_SEMIPLANAR_VU, 60, 0, mirror, flip, 0, 90, -1, -1};
+    ax_vo_channel_param_t video = {
+        kWidth, kHeight, AX_FORMAT_YUV420_SEMIPLANAR, AX_FORMAT_YUV420_SEMIPLANAR_VU, 60, 0, mirror, flip, 0, 90,
+        -1,     -1};
     impl_->video_ch = video_vo.get_unused_channel(0);
     if (impl_->video_ch < 0 || video_vo.add_channel(0, impl_->video_ch, &video) != maix::err::ERR_NONE)
         throw std::runtime_error("VO video channel failed");
 
     config_vo(&param, kWidth, kHeight);
     if (osd_vo.init(&param) != maix::err::ERR_NONE) throw std::runtime_error("VO OSD init failed");
-    ax_vo_channel_param_t osd = {kWidth, kHeight, AX_FORMAT_BGRA8888,
-                                 AX_FORMAT_YUV420_SEMIPLANAR_VU, 60, 0, mirror, flip, 0, 90, -1, -1};
+    ax_vo_channel_param_t osd = {
+        kWidth, kHeight, AX_FORMAT_BGRA8888, AX_FORMAT_YUV420_SEMIPLANAR_VU, 60, 0, mirror, flip, 0, 90, -1, -1};
     impl_->osd_ch = osd_vo.get_unused_channel(1);
     if (impl_->osd_ch < 0 || osd_vo.add_channel(1, impl_->osd_ch, &osd) != maix::err::ERR_NONE)
         throw std::runtime_error("VO OSD channel failed");
-    /* MaixCDK가 레이어 1을 TDP(90°, disp_flip이면 FLIP, disp_mirror면 MIRROR)로 fb0에 넣던 방향과
-     * 같게: 그림판 열 = 화면 y(disp_flip=0이면 거꾸로), 그림판 행 = 화면 x(disp_mirror면 거꾸로).
-     * disp_flip=1, disp_mirror=0인 이 보드는 그대로 transpose다(fb0 덤프로 확인). */
+    // MaixCDK가 레이어 1을 TDP(90°, disp_flip이면 FLIP, disp_mirror면 MIRROR)로 fb0에 넣던 방향과
+    // 같게: 그림판 열 = 화면 y(disp_flip=0이면 거꾸로), 그림판 행 = 화면 x(disp_mirror면 거꾸로).
+    // disp_flip=1, disp_mirror=0인 이 보드는 그대로 transpose다(fb0 덤프로 확인).
     impl_->flip_x = flip == 0;
     impl_->flip_y = mirror != 0;
     if (!open_framebuffer(&impl_->fb, kHeight, kWidth)) throw std::runtime_error("fb0 open failed");
@@ -200,8 +202,7 @@ MaixDisplay::MaixDisplay() : impl_(new Impl)
     enable_backlight();
 }
 
-MaixDisplay::~MaixDisplay()
-{
+MaixDisplay::~MaixDisplay() {
     Framebuffer &fb = impl_->fb;
     if (fb.map) {  // 멈춘 HUD가 화면에 남지 않게 비운다
         for (int y = 0; y < kWidth; ++y) std::memset(fb.page + static_cast<size_t>(y) * fb.line, 0, kHeight * 4);
@@ -224,8 +225,7 @@ MaixDisplay::~MaixDisplay()
 }
 
 bool MaixDisplay::show_video_phys(unsigned long long phys, int width, int height, bool nv21,
-                                  const std::function<bool()> &source_still_valid)
-{
+                                  const std::function<bool()> &source_still_valid) {
     // 풀은 첫 프레임 때 만든다. camerad가 VI를 열며 AX 공용 풀을 다시 설정하므로
     // 그 전에 만든 풀은 무효가 될 수 있다.
     if (impl_->dst_pool == AX_INVALID_POOLID) {
@@ -254,33 +254,31 @@ bool MaixDisplay::show_video_phys(unsigned long long phys, int width, int height
         attr.tAspectRatio.eAligns[1] = AX_IVPS_ASPECT_RATIO_VERTICAL_CENTER;
         attr.tAspectRatio.nBgColor = 0x000000;
         const int ivps = AX_IVPS_CropResizeTdp(&src, &dst, &attr);
-        ok = ivps == 0 && source_still_valid() &&
-             impl_->video_ptr->push(0, impl_->video_ch, out) == maix::err::ERR_NONE;
+        ok =
+            ivps == 0 && source_still_valid() && impl_->video_ptr->push(0, impl_->video_ch, out) == maix::err::ERR_NONE;
         if (ivps != 0 && impl_->errors++ % 100 == 0)
             std::fprintf(stderr, "display: IVPS crop-resize failed 0x%x (%d so far)\n", ivps, impl_->errors);
     } catch (const std::exception &e) {
-        if (impl_->errors++ % 100 == 0)
-            std::fprintf(stderr, "display: video frame failed: %s\n", e.what());
+        if (impl_->errors++ % 100 == 0) std::fprintf(stderr, "display: video frame failed: %s\n", e.what());
         ok = false;
     }
     delete out;
     return ok;
 }
 
-MaixDisplay::OverlayBuffer MaixDisplay::begin_overlay()
-{
+MaixDisplay::OverlayBuffer MaixDisplay::begin_overlay() {
     return {reinterpret_cast<uint8_t *>(impl_->canvas.data()), kHeight * 4, impl_->flip_x, impl_->flip_y};
 }
 
-/* 그림판 행마다 이번(dirty)과 지난번에 그린 칸을 합쳐, 이어진 칸끼리 한 번에 fb0로 옮긴다. 지난번
- * 칸은 이번에 지워져 0이 된 자리라 함께 옮겨야 한다. */
-bool MaixDisplay::end_overlay(const uint16_t *dirty, int tile_shift)
-{
+// 그림판 행마다 이번(dirty)과 지난번에 그린 칸을 합쳐, 이어진 칸끼리 한 번에 fb0로 옮긴다. 지난번
+// 칸은 이번에 지워져 0이 된 자리라 함께 옮겨야 한다.
+bool MaixDisplay::end_overlay(const uint16_t *dirty, int tile_shift) {
     Framebuffer &fb = impl_->fb;
     if (!fb.page) return false;
     constexpr int kRowBytes = kHeight * 4;
     for (int y = 0; y < kWidth; ++y) {
-        const uint8_t *src = reinterpret_cast<const uint8_t *>(impl_->canvas.data()) + static_cast<size_t>(y) * kRowBytes;
+        const uint8_t *src =
+            reinterpret_cast<const uint8_t *>(impl_->canvas.data()) + static_cast<size_t>(y) * kRowBytes;
         uint8_t *dst = fb.page + static_cast<size_t>(y) * fb.line;
         uint16_t &last = impl_->last_dirty[y];
         if (!dirty || impl_->copy_all) {

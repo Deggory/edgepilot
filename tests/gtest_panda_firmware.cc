@@ -22,8 +22,7 @@ namespace {
 constexpr uint64_t kNow = 100000000000ULL;
 
 // sign.py의 꼴: [본문 길이][코드 ... 버전 문자열 ...][VERS][2] 뒤에 서명 128바이트
-std::vector<uint8_t> make_image(const std::string &version, size_t body = 1024)
-{
+std::vector<uint8_t> make_image(const std::string &version, size_t body = 1024) {
     std::vector<uint8_t> bytes(body, 0x11);
     for (int i = 0; i < 4; ++i) bytes[static_cast<size_t>(i)] = static_cast<uint8_t>(body >> (8 * i));
     bytes[63] = 0;
@@ -35,8 +34,7 @@ std::vector<uint8_t> make_image(const std::string &version, size_t body = 1024)
     return bytes;
 }
 
-ControlState parked()
-{
+ControlState parked() {
     ControlState control;
     control.timestamp_ns = kNow - 50000000ULL;
     control.vehicle_fresh = 1;
@@ -44,26 +42,23 @@ ControlState parked()
     return control;
 }
 
-std::string source(const std::string &path)
-{
+std::string source(const std::string &path) {
     std::ifstream file("firmware/panda/" + path);
     std::stringstream text;
     text << file.rdbuf();
     return text.str();
 }
 
-long define_value(const std::string &path, const std::string &name)
-{
+long define_value(const std::string &path, const std::string &name) {
     std::smatch match;
     const std::string text = source(path);
     if (!std::regex_search(text, match, std::regex("#define " + name + " (0x[0-9A-Fa-f]+|[0-9]+)U?\\b"))) return -1;
     return std::stol(match[1].str(), nullptr, 0);
 }
 
-} // namespace
+}  // namespace
 
-TEST(PandaFirmware, ParsesASignedImage)
-{
+TEST(PandaFirmware, ParsesASignedImage) {
     PandaImage image;
     std::string error;
     ASSERT_TRUE(parse_panda_image(make_image("EDGE-f9907afb-DEBUG"), &image, &error)) << error;
@@ -71,15 +66,13 @@ TEST(PandaFirmware, ParsesASignedImage)
     EXPECT_EQ(image.bytes.size(), 1024 + kPandaSignatureBytes);
 }
 
-TEST(PandaFirmware, ReadsTheOldFixedVersion)
-{
+TEST(PandaFirmware, ReadsTheOldFixedVersion) {
     PandaImage image;
     ASSERT_TRUE(parse_panda_image(make_image("DEV-23456789-DEBUG"), &image, nullptr));
     EXPECT_EQ(image.version, "DEV-23456789-DEBUG");
 }
 
-TEST(PandaFirmware, RejectsImagesTheBootstubWouldNot)
-{
+TEST(PandaFirmware, RejectsImagesTheBootstubWouldNot) {
     std::string error;
     EXPECT_FALSE(parse_panda_image(make_image("EDGE-f9907afb-DEBUG", kPandaAppMaxBytes), nullptr, &error));
     EXPECT_NE(error.find("does not fit"), std::string::npos) << error;
@@ -102,8 +95,7 @@ TEST(PandaFirmware, RejectsImagesTheBootstubWouldNot)
     EXPECT_FALSE(parse_panda_image(std::vector<uint8_t>(64, 0), nullptr, &error));
 }
 
-TEST(PandaFirmware, FlashesOnlyAParkedCar)
-{
+TEST(PandaFirmware, FlashesOnlyAParkedCar) {
     std::string reason;
     EXPECT_TRUE(panda_flash_allowed(parked(), kNow, &reason));
     EXPECT_EQ(reason, "");
@@ -145,15 +137,13 @@ TEST(PandaFirmware, FlashesOnlyAParkedCar)
     EXPECT_EQ(reason, "moving");
 }
 
-TEST(PandaFirmware, FlashesOnlyF413Boards)
-{
+TEST(PandaFirmware, FlashesOnlyF413Boards) {
     for (uint8_t hw : {kPandaHwBlack, kPandaHwUno, kPandaHwDos}) EXPECT_TRUE(panda_hw_type_flashable(hw)) << int(hw);
     for (uint8_t hw : {0, 1, 2, 4, 7, 8}) EXPECT_FALSE(panda_hw_type_flashable(static_cast<uint8_t>(hw))) << hw;
     EXPECT_STREQ(panda_hw_type_name(kPandaHwBlack), "black panda");
 }
 
-TEST(PandaFirmware, StatusJsonEscapesStrings)
-{
+TEST(PandaFirmware, StatusJsonEscapesStrings) {
     PandaLinkStatus link;
     link.mode = "app";
     link.serial = "a\"b\\c\n";
@@ -172,8 +162,7 @@ TEST(PandaFirmware, StatusJsonEscapesStrings)
 
 #define EXPECT_SAME_OFFSET(field) EXPECT_EQ(offsetof(PandaHealthPacket, field), offsetof(health_t, field)) << #field
 
-TEST(PandaProtocol, HealthPacketIsTheFirmwares)
-{
+TEST(PandaProtocol, HealthPacketIsTheFirmwares) {
     static_assert(sizeof(PandaHealthPacket) == sizeof(health_t), "pandad's health packet differs from health_t");
     EXPECT_EQ(HEALTH_PACKET_VERSION, kPandaHealthPacketVersion);
     EXPECT_SAME_OFFSET(uptime_pkt);
@@ -190,8 +179,7 @@ TEST(PandaProtocol, HealthPacketIsTheFirmwares)
     EXPECT_SAME_OFFSET(interrupt_load);
 }
 
-TEST(PandaProtocol, ConstantsMatchTheFirmwareSources)
-{
+TEST(PandaProtocol, ConstantsMatchTheFirmwareSources) {
     EXPECT_EQ(define_value("board/can_definitions.h", "CAN_PACKET_VERSION"), kPandaCanPacketVersion);
     EXPECT_EQ(define_value("board/panda.h", "USB_VID"), kPandaVendorId);
     const std::string usb = source("board/panda.h");

@@ -10,8 +10,7 @@
 
 namespace {
 
-std::vector<std::string> numbered_entries(const std::string &dir, const char *suffix)
-{
+std::vector<std::string> numbered_entries(const std::string &dir, const char *suffix) {
     std::vector<std::string> names;
     if (DIR *d = opendir(dir.c_str())) {
         while (dirent *e = readdir(d)) {
@@ -27,8 +26,7 @@ std::vector<std::string> numbered_entries(const std::string &dir, const char *su
     return names;
 }
 
-std::vector<uint8_t> read_file(const std::string &path)
-{
+std::vector<uint8_t> read_file(const std::string &path) {
     std::vector<uint8_t> data;
     FILE *f = std::fopen(path.c_str(), "rb");
     if (!f) return data;
@@ -42,8 +40,7 @@ std::vector<uint8_t> read_file(const std::string &path)
 
 }  // namespace
 
-ReplayRoute::ReplayRoute(const std::string &dir)
-{
+ReplayRoute::ReplayRoute(const std::string &dir) {
     for (const std::string &seg_dir : numbered_entries(dir + "/segments", nullptr)) {
         const std::vector<uint8_t> index = read_file(seg_dir + "/frames.bin");
         if (index.size() < sizeof(FrameIndexHeader)) continue;
@@ -63,8 +60,8 @@ ReplayRoute::ReplayRoute(const std::string &dir)
             FrameIndexRecord r;
             std::memcpy(&r, index.data() + header.header_size + i * sizeof(r), sizeof(r));
             if (i == 0) segment.header_bytes = r.file_offset;
-            frames.push_back({segments.size(), r.file_offset, r.packet_size, r.capture_timestamp_ns,
-                              (r.flags & 1U) != 0, i == 0});
+            frames.push_back(
+                {segments.size(), r.file_offset, r.packet_size, r.capture_timestamp_ns, (r.flags & 1U) != 0, i == 0});
         }
         segments.push_back(segment);
     }
@@ -81,14 +78,12 @@ ReplayRoute::ReplayRoute(const std::string &dir)
     std::stable_sort(events.begin(), events.end(),
                      [](const Event &a, const Event &b) { return a.timestamp_ns < b.timestamp_ns; });
 }
-ReplayRoute::~ReplayRoute()
-{
+ReplayRoute::~ReplayRoute() {
     for (Segment &s : segments)
         if (s.file) std::fclose(s.file);
 }
 
-bool ReplayRoute::read_frame(const VideoFrame &frame, std::vector<uint8_t> *out)
-{
+bool ReplayRoute::read_frame(const VideoFrame &frame, std::vector<uint8_t> *out) {
     Segment &s = segments[frame.segment];
     if (!s.file && !(s.file = std::fopen(s.video_path.c_str(), "rb"))) return false;
     const uint64_t begin = frame.keyframe ? (frame.segment_first ? 0 : frame.offset) : frame.offset;

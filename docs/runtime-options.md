@@ -220,7 +220,10 @@ cd /root/edgepilot && python3 -m web_console --host 0.0.0.0 --port 8080
 
 The header shows the processes the manager runs (its `ManagerState`, a red or
 amber pill when one is down or the manager stopped publishing) and the
-backlight. There is one tab per parameter file, with 차량 특성 after 조향, and
+backlight. The process panel also names the build most processes run, read
+from the running binaries ([Build version](build-and-deploy.md#build-version)),
+and marks a process that runs a different build, or whose installed binary
+has changed since it started (a copied binary that needs a restart). There is one tab per parameter file, with 차량 특성 after 조향, and
 BEV. The address keeps the tab (`#steering`, `#vehicle`, `#bev`), so a reload
 stays on it, and only the tab on screen polls the board. Parameter tabs search,
 show only the changed items, mark each item's default and put it back with one

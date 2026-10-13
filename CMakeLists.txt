@@ -107,12 +107,13 @@ if(EDGEPILOT_BUILD_RUNTIME)
   # (#include "maixcam2/maix_display.h").
   add_subdirectory(platform/maixcam2)
 
-  # 보드 실행 파일: 로컬 헤더, 경고, 공용 시스템 라이브러리. 폴더마다 자기 프로세스를 정의한다.
+  # 보드 실행 파일: 로컬 헤더, 경고, 빌드 버전(common/build_version.h), 공용 시스템 라이브러리. 폴더마다 자기
+  # 프로세스를 정의한다.
   function(configure_board_target target)
     target_include_directories(${target} PRIVATE ${PROJECT_LOCAL_INCLUDES})
     target_compile_options(${target} PRIVATE ${PROJECT_WARNINGS})
     target_link_options(${target} PRIVATE "-Wl,-rpath,${AX_RPATH}" "-Wl,-rpath-link,${AX_LIB_DIR}")
-    target_link_libraries(${target} PRIVATE ${ARGN} pthread dl rt)
+    target_link_libraries(${target} PRIVATE ${ARGN} build_version pthread dl rt)
   endfunction()
 endif()
 

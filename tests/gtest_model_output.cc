@@ -1,14 +1,14 @@
-/* supercombo(openpilot master) raw 출력 파서와 시간축 입력 규약(desire 펄스·풀링,
- * 특징 이력, 이미지 이력). SCODMP1 덤프(EDGEPILOT_RAW_DUMP)를 인자로 주면 테스트
- * 대신 첫 프레임을 파싱해 출력한다. */
+// supercombo(openpilot master) raw 출력 파서와 시간축 입력 규약(desire 펄스·풀링,
+// 특징 이력, 이미지 이력). SCODMP1 덤프(EDGEPILOT_RAW_DUMP)를 인자로 주면 테스트
+// 대신 첫 프레임을 파싱해 출력한다.
 #include "common/model_output.h"
 #include "model/model_temporal.h"
 
 #include "model/model_output_assembly.h"
 
 #include <gtest/gtest.h>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -19,9 +19,8 @@ namespace {
 
 using namespace model_output_layout;
 
-/* openpilot master 출력 레이아웃 검사. */
-TEST(ModelOutputParser, Master)
-{
+// openpilot master 출력 레이아웃 검사.
+TEST(ModelOutputParser, Master) {
     std::vector<float> raw(kModelOutputFloats, 0.0f);
 
     raw[kPlanOffset + 7 * kPlanWidth + 0] = 23.0f;
@@ -63,8 +62,7 @@ TEST(ModelOutputParser, Master)
     ASSERT_NEAR(parsed.meta.gas_press[1], 1.0f / (1.0f + std::exp(-2.0f)), 1e-6f);
     ASSERT_NEAR(parsed.meta.gas_press[0], 0.5f, 1e-6f) << "로짓 0은 확률 0.5";
     ASSERT_NEAR(parsed.meta.brake_press[0], 1.0f / (1.0f + std::exp(-3.0f)), 1e-6f);
-    for (int i = 1; i < kMetaPressHorizons; ++i)
-        ASSERT_NEAR(parsed.meta.brake_press[i], 0.5f, 1e-6f) << i;
+    for (int i = 1; i < kMetaPressHorizons; ++i) ASSERT_NEAR(parsed.meta.brake_press[i], 0.5f, 1e-6f) << i;
     ASSERT_TRUE(parsed.has_pose);
     ASSERT_NEAR(parsed.pose.trans[2], 22.0f, 1e-6f);
     ASSERT_NEAR(parsed.pose.trans_std[0], 0.05f, 1e-6f);
@@ -73,9 +71,8 @@ TEST(ModelOutputParser, Master)
     ASSERT_FALSE(ModelOutputParser::parse(std::vector<float>(100, 0.0f)).valid);
 }
 
-/* desire: rising-edge 펄스, 100틱 이력 밀기, 4틱 max-pool. */
-TEST(ModelTemporal, Desire)
-{
+// desire: rising-edge 펄스, 100틱 이력 밀기, 4틱 max-pool.
+TEST(ModelTemporal, Desire) {
     SupercomboTemporalState state;
     const auto &desire = state.desire_history();
     const size_t last = (SupercomboTemporalState::kDesireHistoryTicks - 1) * kDesireLen;
@@ -106,10 +103,9 @@ TEST(ModelTemporal, Desire)
     ASSERT_EQ(state.traffic_convention(), (std::vector<float>{1.0f, 0.0f}));
 }
 
-/* 특징: hidden_state 512개가 마지막 슬롯에 들어가고, 모델 입력은 0,4,...,92번
- * 슬롯이라 이번 출력은 3프레임을 더 밀어야 입력 마지막 행에 나타난다. */
-TEST(ModelTemporal, Features)
-{
+// 특징: hidden_state 512개가 마지막 슬롯에 들어가고, 모델 입력은 0,4,...,92번
+// 슬롯이라 이번 출력은 3프레임을 더 밀어야 입력 마지막 행에 나타난다.
+TEST(ModelTemporal, Features) {
     static_assert(SupercomboTemporalState::kHiddenOffset == 1064, "hidden state offset moved");
     SupercomboTemporalState state;
     std::vector<float> raw(kModelOutputFloats, 0.0f), zeros(kModelOutputFloats, 0.0f);
@@ -134,9 +130,8 @@ TEST(ModelTemporal, Features)
     ASSERT_FALSE(state.push_feature_history(raw.data(), 100)) << "짧은 raw 출력은 거부한다";
 }
 
-/* 이미지: 5프레임 링, 모델 입력은 t-4 다음 t. */
-TEST(ModelTemporal, ImageHistory)
-{
+// 이미지: 5프레임 링, 모델 입력은 t-4 다음 t.
+TEST(ModelTemporal, ImageHistory) {
     ModelImageHistory history;
     std::vector<uint8_t> input(2 * ModelImageHistory::kFrameBytes);
     for (int frame = 1; frame <= 7; ++frame) {
@@ -150,10 +145,9 @@ TEST(ModelTemporal, ImageHistory)
     ASSERT_EQ(input.back(), 7);
 }
 
-/* 헤드를 나눈 axmodel 출력(split_outputs.py)을 모으면 2576 레이아웃의 모든 칸이 정확히 한 번씩
- * 제자리에 온다. 각 출력에 "가야 할 칸 번호"를 채워 확인한다. */
-TEST(ModelOutputParser, SplitOutputsReassembleLayout)
-{
+// 헤드를 나눈 axmodel 출력(split_outputs.py)을 모으면 2576 레이아웃의 모든 칸이 정확히 한 번씩
+// 제자리에 온다. 각 출력에 "가야 할 칸 번호"를 채워 확인한다.
+TEST(ModelOutputParser, SplitOutputsReassembleLayout) {
     using namespace model_output_assembly;
     std::vector<float> raw(kModelOutputFloats, -1.0f);
     std::vector<int> hits(kModelOutputFloats, 0);
@@ -163,7 +157,8 @@ TEST(ModelOutputParser, SplitOutputsReassembleLayout)
         for (int i = 0; i < part.count; ++i) {
             int target = part.offset + i;
             if (part.piece == Piece::PlanMotion)
-                target = part.offset + (i / kPlanMotionWidth) * model_output_assembly::kPlanWidth + i % kPlanMotionWidth;
+                target =
+                    part.offset + (i / kPlanMotionWidth) * model_output_assembly::kPlanWidth + i % kPlanMotionWidth;
             else if (part.piece == Piece::PlanOrient)
                 target = part.offset + (i / kPlanOrientWidth) * model_output_assembly::kPlanWidth + kPlanMotionWidth +
                          i % kPlanOrientWidth;
@@ -184,17 +179,15 @@ TEST(ModelOutputParser, SplitOutputsReassembleLayout)
 }
 
 template <typename T>
-bool read_exact(std::ifstream &file, T *value)
-{
+bool read_exact(std::ifstream &file, T *value) {
     file.read(reinterpret_cast<char *>(value), sizeof(T));
     return file.gcount() == static_cast<std::streamsize>(sizeof(T));
 }
 
-} // namespace
+}  // namespace
 
 // 인자가 없으면 테스트, SCODMP1 덤프 경로를 주면 첫 프레임을 파싱해 출력한다.
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
     if (argc == 1) return RUN_ALL_TESTS();
     if (argc != 2) {
@@ -210,8 +203,7 @@ int main(int argc, char *argv[])
 
     char magic[8]{};
     file.read(magic, sizeof(magic));
-    if (file.gcount() != static_cast<std::streamsize>(sizeof(magic)) ||
-        std::memcmp(magic, "SCODMP1", 7) != 0) {
+    if (file.gcount() != static_cast<std::streamsize>(sizeof(magic)) || std::memcmp(magic, "SCODMP1", 7) != 0) {
         std::cerr << "bad raw dump magic\n";
         return 1;
     }
@@ -238,15 +230,10 @@ int main(int argc, char *argv[])
 
     ParsedLeadPoint lead;
     const bool have_lead = parsed.leads.primary(0, 0.0f, &lead);
-    std::cout << "raw_size=" << raw_size
-              << " frames=" << frame_count
-              << " plan_best=" << parsed.plan.best_index
-              << " plan_prob=" << parsed.plan.probability
-              << " lane0_prob=" << parsed.lanes[0].probability
-              << " pose_vx=" << parsed.pose.trans[0]
-              << " lead_valid=" << (have_lead ? 1 : 0);
-    if (have_lead)
-        std::cout << " lead_x=" << lead.x << " lead_y=" << lead.y;
+    std::cout << "raw_size=" << raw_size << " frames=" << frame_count << " plan_best=" << parsed.plan.best_index
+              << " plan_prob=" << parsed.plan.probability << " lane0_prob=" << parsed.lanes[0].probability
+              << " pose_vx=" << parsed.pose.trans[0] << " lead_valid=" << (have_lead ? 1 : 0);
+    if (have_lead) std::cout << " lead_x=" << lead.x << " lead_y=" << lead.y;
     std::cout << "\n";
     return 0;
 }

@@ -64,7 +64,7 @@ defined in one of those libraries means linking it.
 
 ## src/common
 
-Libraries `common` and `utils_json`.
+Libraries `common` and `utils_json`, and the object library `build_version`.
 
 - `app_config.*`
   - parses the small runtime option set once at startup, and holds the
@@ -102,6 +102,10 @@ Libraries `common` and `utils_json`.
   - the web device settings (`params/display.json`) the runtime reads: modeld
     (camera mount, calibration source) and overlayd (alert volume) poll it from
     their main loops.
+- `build_version.h`
+  - `edgepilot_version()`, the `git describe` that `cmake/build_version.cmake`
+    stamps into every board binary on each build, the marker the web console
+    finds it by, and `log_build_version`, the first log line of each process.
 - `utils_process.h`
   - what a process gets from the OS: environment variables (`env_flag` is the
     one boolean convention), the `params/` directory path, and the
@@ -525,7 +529,8 @@ only in the board build, against `deps/ax630` from
     `console_server.py` is the FastAPI app and its routes; each card or tab has
     its own module behind it: `param_store.py` and `param_metadata.py` (the
     parameter files, their labels, sections and ranges), `process_status.py`
-    (the manager's process table, and signalling a process to reload),
+    (the manager's process table with each binary's build version, and
+    signalling a process to reload),
     `learner_monitor.py` (learner and localization state), `calibration_control.py`
     (the camera calibration card: its state, reset and source switch),
     `panda_update.py` (the Panda firmware card), `bev_stream.py`,
@@ -547,6 +552,10 @@ only in the board build, against `deps/ax630` from
 
 ## Tools and tests
 
+- `.clang-format`, `cmake/build_version.*`
+  - the C++ format ([Code style](code-style.md); `firmware/.clang-format`
+    leaves the vendored Panda tree alone) and the build version stamp
+    ([Build and deploy](build-and-deploy.md#build-version)).
 - `scripts/fetch_maixcam2_sdk.sh`, `tools/docker_ax630/`,
   `scripts/upload_to_board.sh`, `scripts/run_host_tests.sh`
   - pinned SDK and board-library fetch, the arm64 build container, deploy, and

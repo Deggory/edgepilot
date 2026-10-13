@@ -1,9 +1,8 @@
-"""Numpy port of src/model/model_input_transform.cc.
+"""src/model/model_input_transform.cc의 Numpy 포팅.
 
-Reproduces the device's fixed-point bilinear warp (kWeightBits=12) so the
-student trains on the same pixel distribution the runtime produces. The
-output is the YUV6 tensor layout the supercombo models consume:
-channels [Y(2x,2y), Y(2x,2y+1), Y(2x+1,2y), Y(2x+1,2y+1), U, V] at 128x256.
+기기의 고정소수점 bilinear 워프(kWeightBits=12)를 그대로 재현해, student가 런타임이
+만드는 것과 같은 픽셀 분포로 학습하게 한다. 출력은 supercombo 모델이 받는 YUV6
+텐서 배치다: 128x256에서 채널 [Y(2x,2y), Y(2x,2y+1), Y(2x+1,2y), Y(2x+1,2y+1), U, V].
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ WEIGHT_SCALE = 1 << WEIGHT_BITS
 
 CAMERA_HEIGHT_M = 1.22
 
-# MaixCAM2 camera at 1920x1080: src/common/app_config.h kCamera* (check_recording_reader.py keeps them equal).
+# 1920x1080에서의 MaixCAM2 카메라: src/common/app_config.h kCamera*(check_recording_reader.py가 같은지 본다).
 MAIXCAM2_FX_1080 = 1131.24
 MAIXCAM2_FY_1080 = 1130.85
 MAIXCAM2_CX_1080 = 940.13
@@ -37,7 +36,7 @@ GROUND_FROM_SBIGMODEL = np.array([
 
 
 def maixcam2_intrinsics(width: int, height: int) -> tuple[float, float, float, float]:
-    """The MaixCAM2 runtime intrinsics scaled from 1920x1080 to width x height."""
+    """1920x1080에서 width x height로 스케일한 MaixCAM2 런타임 내부 파라미터."""
     return (MAIXCAM2_FX_1080 * width / 1920.0, MAIXCAM2_FY_1080 * height / 1080.0,
             MAIXCAM2_CX_1080 * width / 1920.0, MAIXCAM2_CY_1080 * height / 1080.0)
 
@@ -76,7 +75,7 @@ def _scale_transform(projection: np.ndarray, scale: float) -> np.ndarray:
 
 
 class _PlaneMap:
-    """Precomputed gather indices + fixed-point bilinear weights for one plane."""
+    """평면 하나의 미리 계산한 gather 인덱스 + 고정소수점 bilinear 가중치."""
 
     def __init__(self, projection: np.ndarray, src_w: int, src_h: int,
                  dst_scale: int, dst_x_offset: int, dst_y_offset: int):
@@ -121,7 +120,7 @@ class _PlaneMap:
 
 
 class ModelInputWarp:
-    """One model-frame warp (medmodel or sbigmodel) at fixed calibration."""
+    """보정을 고정한 모델 프레임 워프 하나(medmodel 또는 sbigmodel)."""
 
     def __init__(self, src_w: int, src_h: int, rpy: np.ndarray, sbig: bool,
                  intrinsics: tuple[float, float, float, float] | None = None):
@@ -136,7 +135,7 @@ class ModelInputWarp:
         self.uv_map = _PlaneMap(proj_uv, src_w // 2, src_h // 2, 1, 0, 0)
 
     def warp(self, y: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
-        """(720p planar YUV420) -> uint8 [6, 128, 256]."""
+        """(720p 평면 YUV420) -> uint8 [6, 128, 256]."""
         out = np.empty((6, HALF_H, HALF_W), dtype=np.uint8)
         y_flat = np.ascontiguousarray(y).reshape(-1)
         for ch, plane_map in enumerate(self.y_maps):
@@ -147,7 +146,7 @@ class ModelInputWarp:
 
 
 class WarpPair:
-    """med + sbig warps with calibration-change caching."""
+    """보정이 바뀔 때까지 캐시해 두는 med + sbig 워프."""
 
     def __init__(self, src_w: int, src_h: int,
                  intrinsics: tuple[float, float, float, float] | None = None):

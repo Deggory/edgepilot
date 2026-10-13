@@ -56,7 +56,7 @@ branch keeps the earlier Kendryte K230 port.
   and a web parameter editor pushes changes the controller picks up within
   100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite (196 tests) that needs neither the
+  macOS or Linux, with a googletest suite (260 tests) that needs neither the
   board nor its SDK.
 
 ## How it works
@@ -213,7 +213,8 @@ docs/           documentation; docs/images holds the README media
 - **Setup:** [Board setup](docs/board-setup.md) · [Build and deploy](docs/build-and-deploy.md) ·
   [Boot time](docs/boot-time.md) · [Panda firmware](firmware/panda/README.md)
 - **How it works:** [Split runtime](docs/runtime.md) · [Model pipeline](docs/model-pipeline.md) ·
-  [Model package](models/README.md) · [Source layout](docs/source-layout.md)
+  [Model package](models/README.md) · [Source layout](docs/source-layout.md) ·
+  [Code style](docs/code-style.md)
 - **Operating:** [Runtime options](docs/runtime-options.md) · [Parameters](params/README.md) ·
   [Diagnostics](docs/diagnostics.md) · [Verification](docs/verification.md)
 - **Design notes:** [K7 Panda port](docs/k7-panda-port.md) · [Departure alerts](docs/departure-alerts.md) ·

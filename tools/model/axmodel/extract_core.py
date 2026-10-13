@@ -1,18 +1,17 @@
-"""Cut the NPU core out of openpilot master driving_supercombo.onnx.
+"""openpilot master driving_supercombo.onnx에서 NPU 코어를 잘라 낸다.
 
-The released graph also carries the history queues (image/desire/feature
-shift registers, desire 20->5 Hz max-pool). Those are cheap tensor shuffles the
-runtime does on the CPU; the core keeps only the network:
+배포 그래프에는 이력 큐(이미지/desire/특징 시프트 레지스터, desire 20->5 Hz max-pool)도
+들어 있다. 이것들은 런타임이 CPU에서 하는 값싼 텐서 재배치라, 코어에는 네트워크만 남긴다:
 
-  input_imgs      [1,12,128,256]  2 frames x 6 YUV planes (road)
-  big_input_imgs  [1,12,128,256]  same for wide
-  desire          [1,25,8]        5 Hz max-pooled desire history
-  features_buffer [1,24,512]      5 Hz feature history
-  traffic_convention [1,2]   (action_t only feeds an unused Cast in the release graph; dropped,
-                             and the script stops if a newer graph starts to use it)
+  input_imgs      [1,12,128,256]  2 프레임 x 6 YUV 평면(road)
+  big_input_imgs  [1,12,128,256]  wide도 같다
+  desire          [1,25,8]        5 Hz로 max-pool한 desire 이력
+  features_buffer [1,24,512]      5 Hz 특징 이력
+  traffic_convention [1,2]   (action_t는 배포 그래프에서 쓰이지 않는 Cast 하나에만 들어가 뺐다.
+                             새 그래프가 이를 쓰기 시작하면 스크립트가 멈춘다)
   -> outputs [1,2576]
 
-fp16 weights/casts are promoted to fp32 (Pulsar2 quantizes from fp32).
+fp16 가중치/cast는 fp32로 올린다(Pulsar2는 fp32에서 양자화한다).
 """
 import sys
 import numpy as np
@@ -27,7 +26,7 @@ m = onnx.shape_inference.infer_shapes(onnx.load(src))
 
 
 def reaches_outputs(graph, name):
-    """Whether tensor `name` feeds any graph output."""
+    """텐서 `name`이 그래프 출력 중 하나로 이어지는지."""
     outputs, frontier, seen = {o.name for o in graph.output}, [name], set()
     while frontier:
         t = frontier.pop()
@@ -40,9 +39,9 @@ def reaches_outputs(graph, name):
     return False
 
 
-# The release graph feeds action_t (the lateral/longitudinal delay openpilot's modeld
-# passes in) into one Cast whose result nothing reads, so the core drops it. A model
-# that starts to use it needs a new core input and runtime support: stop here.
+# 배포 그래프는 action_t(openpilot modeld가 넘기는 횡/종방향 지연)를 결과를 아무도 읽지
+# 않는 Cast 하나에 넣으므로 코어는 이를 뺀다. 이를 쓰기 시작한 모델은 새 코어 입력과
+# 런타임 지원이 필요하다: 여기서 멈춘다.
 if any(i.name == "action_t" for i in m.graph.input) and reaches_outputs(m.graph, "action_t"):
     sys.exit("action_t now feeds the outputs: add it as a core input and feed it at runtime")
 onnx.save(m, tmp)
@@ -59,7 +58,7 @@ for n in g.node:
             a.i = TensorProto.FLOAT
         if a.type == onnx.AttributeProto.TENSOR and a.t.data_type == TensorProto.FLOAT16:
             a.t.CopyFrom(numpy_helper.from_array(numpy_helper.to_array(a.t).astype(np.float32)))
-# uint8 image inputs -> fp32 graph inputs, rename to runtime names
+# uint8 이미지 입력 -> fp32 그래프 입력, 런타임 이름으로 바꾼다
 for i in g.input:
     i.type.tensor_type.elem_type = TensorProto.FLOAT
 ren = {k: v for k, v in cut.items() if k != v}
@@ -68,15 +67,15 @@ for n in g.node:
         if x in ren: n.input[j] = ren[x]
 for i in g.input:
     if i.name in ren: i.name = ren[i.name]
-# every Cast is now fp32->fp32 (Pulsar2 rejects opset-20 Cast): bypass them,
-# and Identity with them
+# 이제 모든 Cast가 fp32->fp32다(Pulsar2는 opset-20 Cast를 받지 않는다): 이들을 우회하고,
+# Identity도 함께 우회한다
 alias = {}
 keep = []
 for n in g.node:
     if n.op_type == "Cast":
         assert next(a.i for a in n.attribute if a.name == "to") == TensorProto.FLOAT
         alias[n.output[0]] = alias.get(n.input[0], n.input[0])
-    elif n.op_type == "Identity":   # Pulsar2 7.0 rejects bare Identity links
+    elif n.op_type == "Identity":   # Pulsar2 7.0은 단독 Identity 연결을 받지 않는다
         alias[n.output[0]] = alias.get(n.input[0], n.input[0])
     else:
         keep.append(n)
@@ -84,7 +83,7 @@ for n in keep:
     for j, x in enumerate(n.input):
         n.input[j] = alias.get(x, x)
 outs = {o.name for o in g.output}
-for o in outs & set(alias):   # graph output produced by a Cast: rename producer's output
+for o in outs & set(alias):   # Cast가 만든 그래프 출력: 생산 노드의 출력 이름을 바꾼다
     src_name = alias[o]
     for n in keep:
         for j, x in enumerate(n.output):
@@ -94,8 +93,8 @@ for o in outs & set(alias):   # graph output produced by a Cast: rename producer
 del g.node[:]
 g.node.extend(keep)
 
-# Pulsar2 cannot run the policy's GatherND (constant indices = last 9 feature
-# tokens) nor Where(mask, -inf, x); rewrite both into equivalent simple ops.
+# Pulsar2는 policy의 GatherND(상수 인덱스 = 마지막 9개 특징 토큰)도
+# Where(mask, -inf, x)도 돌리지 못한다. 둘 다 같은 결과의 단순한 연산으로 바꾼다.
 consts = {i.name: numpy_helper.to_array(i) for i in g.initializer}
 consts.update({n.output[0]: numpy_helper.to_array(n.attribute[0].t) for n in g.node if n.op_type == "Constant"})
 byname = {n.name: n for n in g.node}
@@ -108,8 +107,8 @@ g.initializer.extend([numpy_helper.from_array(np.array([-9], np.int64), "last9_s
 sl = helper.make_node("Slice", [t_in.input[0], "last9_start", "last9_end", "last9_axis"], [t_out.output[0]], name="last9_slice")
 wh = byname["model/p_node_masked_fill"]
 mask = consts[wh.input[0]]
-# scores measured in [-6.3, 4.7] on recorded drives: -30 leaves masked weights < e^-19
-# and keeps the quantized range tight (an -inf/-1e4 fill would wreck it)
+# 녹화 주행에서 잰 score는 [-6.3, 4.7]이다: -30이면 가린 가중치가 e^-19 미만으로 남고
+# 양자화 범위도 좁게 유지된다(-inf/-1e4로 채우면 범위가 망가진다)
 g.initializer.append(numpy_helper.from_array(np.where(mask, -30.0, 0.0).astype(np.float32), "attn_mask_add"))
 add = helper.make_node("Add", [wh.input[2], "attn_mask_add"], [wh.output[0]], name="attn_mask_add")
 new = []
@@ -121,9 +120,9 @@ for n in g.node:
 del g.node[:]
 g.node.extend(new)
 
-# Pulsar2 fuses x / expand(clip(ReduceL2(x))) into LpNormalization, which the
-# AX620E backend only tiles for 3D/4D; run the two [1,512] L2-normalizations
-# on a [1,1,512] view.
+# Pulsar2는 x / expand(clip(ReduceL2(x)))를 LpNormalization으로 합치는데, AX620E
+# 백엔드는 이를 3D/4D에서만 타일링한다. 두 [1,512] L2 정규화를 [1,1,512] 뷰에서
+# 돌린다.
 prod = {o: n for n in g.node for o in n.output}
 g.initializer.extend([numpy_helper.from_array(np.array([1, 1, 512], np.int64), "l2n_3d"),
                       numpy_helper.from_array(np.array([1, 512], np.int64), "l2n_2d")])
@@ -141,7 +140,7 @@ for n in g.node:
         new.append(helper.make_node("Reshape", [y + "_3d", "l2n_2d"], [y], name=n.name + "_to2d"))
     else:
         new.append(n)
-# ReduceL2 axes must point at the last dim of the 3D view
+# ReduceL2 axes는 3D 뷰의 마지막 차원을 가리켜야 한다
 for n in new:
     if n.op_type == "ReduceL2":
         ax = n.input[1] if len(n.input) > 1 else None
@@ -150,7 +149,7 @@ for n in new:
             n.input[1] = n.name + "_ax"
 del g.node[:]
 g.node.extend(new)
-# topological order: the new Reshape must precede its ReduceL2
+# 위상 정렬: 새 Reshape가 자기 ReduceL2보다 앞서야 한다
 order, seen, avail = [], set(), {i.name for i in g.input} | {i.name for i in g.initializer} | {""}
 pending = list(g.node)
 while pending:

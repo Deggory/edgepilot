@@ -63,7 +63,9 @@ keeps the AX system open.
   enabled; `overlayd` and `recordd` start once `camerad` has run for 1.5 s
   (opening VI resets the AX pools); binaries that are not installed are
   skipped
-- restarts a process 1 s after it exits
+- restarts a process 1 s after it exits; each process's first log line names
+  its build (`modeld: edgepilot v0.0.4-6-g1a2b3c4`,
+  [Build version](build-and-deploy.md#build-version))
 - publishes `managerState` to `/dev/shm/edgepilot_manager_state` every second
 - nice levels: `camerad=0`, `overlayd=10`, `recordd=15`, `modeld=-15`,
   `imud=10`, `locationd=5`, `pandad=-10`, `controlsd=-8`, `web_console=10`

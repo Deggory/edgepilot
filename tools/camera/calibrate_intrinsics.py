@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Solve MaixCAM2 camera intrinsics from checkerboard photos taken with camcal.
+"""camcal로 찍은 체커보드 사진에서 MaixCAM2 카메라 내부 파라미터를 푼다.
 
-The runtime warps model input with a plain pinhole intrinsic (fx, fy, cx, cy) and
-applies no distortion correction, so the headline result is those four numbers at
-the capture resolution. The distortion coefficients are still solved and reported,
-because they say how much residual the pinhole-only warp is accepting.
+런타임은 모델 입력을 왜곡 보정 없이 단순 핀홀 내부 파라미터(fx, fy, cx, cy)로 워프하므로, 핵심 결과는 촬영
+해상도에서의 이 네 값이다. 왜곡 계수도 풀어서 보고한다. 핀홀만 쓰는 워프가 남기는 잔차가 얼마인지 알려 주기
+때문이다.
 """
 
 from __future__ import annotations
@@ -22,10 +21,10 @@ from model_warp import maixcam2_intrinsics  # noqa: E402
 
 
 def find_corners(gray: np.ndarray, pattern: tuple[int, int]) -> np.ndarray | None:
-    """Detect inner corners, preferring the sector-based detector.
+    """안쪽 코너를 찾는다. 섹터 기반 검출기를 먼저 쓴다.
 
-    findChessboardCornersSB is more accurate and needs no separate subpixel pass;
-    the classic detector is kept as a fallback for frames it refuses.
+    findChessboardCornersSB가 더 정확하고 따로 서브픽셀 단계가 필요 없다. 그것이 거부하는 프레임에는 예전
+    검출기를 대신 쓴다.
     """
     found, corners = cv2.findChessboardCornersSB(
         gray, pattern, flags=cv2.CALIB_CB_ACCURACY | cv2.CALIB_CB_EXHAUSTIVE)
@@ -145,7 +144,7 @@ def main() -> int:
     names = ["k1", "k2", "p1", "p2", "k3"]
     print("  " + "  ".join(f"{n} {v:+.6f}" for n, v in zip(names, coefficients)))
 
-    # Runtime constants (src/common/app_config.h kCamera*, at 1920x1080) scaled to this size.
+    # 런타임 상수(src/common/app_config.h kCamera*, 1920x1080 기준)를 이 크기로 환산한다.
     runtime = dict(zip(("fx", "fy", "cx", "cy"), maixcam2_intrinsics(size[0], size[1])))
     print("  vs runtime kCamera*: " + "  ".join(
         f"{k} {v - runtime[k]:+.2f} px ({(v - runtime[k]) / runtime[k] * 100:+.2f}%)"
@@ -161,7 +160,7 @@ def main() -> int:
         print(f"  {used[i].name}  {errors[i]:.4f} px")
     print(f"  median {np.median(errors):.4f} px, best {errors.min():.4f} px")
 
-    # How much the pinhole-only input warp gives up by ignoring distortion.
+    # 핀홀만 쓰는 입력 워프가 왜곡을 무시해서 잃는 정도.
     grid = np.array([[[x, y]] for y in np.linspace(0, size[1] - 1, 25)
                      for x in np.linspace(0, size[0] - 1, 25)], np.float32)
     undistorted = cv2.undistortPoints(grid, camera_matrix, dist, P=camera_matrix)

@@ -1,23 +1,20 @@
-// The bird's eye view of what the model sees, in 3D, for the web console's BEV tab: lane lines, road
-// edges, the planned path and the lead round the ego car, drawn with three.js in the browser. The
-// board only copies the published state to the page (bev_data.js), so the drawing costs it nothing.
+// 웹 콘솔 BEV 탭용, 모델이 보는 것의 3D 조감도: 자차 둘레의 차선선, 도로 경계, 계획 경로와 앞차를 브라우저에서
+// three.js로 그린다. 보드는 발행된 상태를 페이지로 복사만 하므로(bev_data.js) 그리기에 드는 비용이 없다.
 //
-// Ported from sv_recorder_bev (static/bev.js): its renderer, ground, footprints, corridor and car
-// (bev_car.js, now the lead's); the scene is ours, in vehicle coordinates: metres, x forward from the
-// front bumper, y left, z up. The ego car is the car's own model (bev_ego.js). It draws as the HUD
-// does (hud_scene.cc draw_scene): the same reach, lane alpha, road edge confidence, path colours, lead
-// threshold and risk colour; lines also in laneless mode.
-// Beyond the HUD: the path is tinted amber to red where the model plans to slow down, with the
-// slowest speed (or STOP) where it is; arcs of the curvature controlsd asks for and the one it gets;
-// the lead's brake lights; the lead where modeld's lead track puts it (the model distance and optical flow
-// fused, model/lead_tracker; the vision cruise takes it) with the model's own distance as a bar, and a card of the lead's
-// distance and speed over time; the ego lines as the planner's lane filter steadies them (lane_filter.js), the
-// model's own thin beneath; and, standing, what the departure alert decides from.
+// sv_recorder_bev(static/bev.js)에서 옮겨 왔다: 렌더러, 바닥, 풋프린트, 경로 띠와 차(bev_car.js, 지금은 앞차용).
+// 장면은 우리 것이고 차량 좌표계다: 미터 단위, x는 앞 범퍼에서 앞으로, y 왼쪽, z 위. 자차는 이 차 고유의
+// 모델이다(bev_ego.js). HUD처럼 그린다(hud_scene.cc draw_scene): 같은 도달 거리, 차선 알파, 도로 경계 신뢰도, 경로
+// 색, 앞차 임계값과 위험 색이고, laneless 모드에서도 선을 그린다.
+// HUD에 없는 것: 모델이 감속을 계획한 곳에서 경로를 호박색~빨간색으로 물들이고 가장 느린 속도(또는 STOP)를
+// 그 자리에 쓴다. controlsd가 요구하는 곡률과 실제로 얻는 곡률의 원호, 앞차 제동등, modeld의 앞차 트랙이 놓은
+// 자리의 앞차(모델 거리와 광류를 융합, model/lead_tracker. 비전 크루즈가 이것을 따른다)와 막대로 그린 모델 자체
+// 거리, 앞차 거리와 속도의 시간 변화 카드, 플래너의 차선 필터가 안정시킨 자차 차로 선(lane_filter.js)과 그 아래
+// 가는 모델 자체 선, 그리고 정차 중에는 출발 알림의 판단 근거.
 //
-// Drag to orbit, right-drag or two fingers to pan and zoom; view("behind") and view("top") set the
-// camera. The scene graph is made once: a frame writes itself into the same buffers and instanced
-// meshes (grown when a frame needs more), and nothing is made or freed per frame. Rendering happens
-// only when a frame arrives or the camera moves, at most once per display frame.
+// 드래그로 궤도 회전, 오른쪽 드래그나 두 손가락으로 이동과 확대/축소. view("behind")와 view("top")이 카메라를
+// 정한다. 장면 그래프는 한 번만 만든다: 프레임은 같은 버퍼와 인스턴스 메시(프레임이 더 필요하면 키운다)에 써 넣고,
+// 프레임마다 만들거나 해제하는 것은 없다. 렌더링은 프레임이 오거나 카메라가 움직일 때만, 화면 프레임당 많아야
+// 한 번 한다.
 
 import * as THREE from "three";
 import {OrbitControls} from "./three/OrbitControls.js";
@@ -26,61 +23,60 @@ import {carModel, fit, wheel} from "./bev_car.js";
 import {BevStream, LEAD_HISTORY_S} from "./bev_data.js";
 import {EGO_SIZE, makeEgo} from "./bev_ego.js";
 
-// The ground: 5 m and 20 m grid lines, GRID.ahead in front and GRID.side to each side.
+// 바닥: 5 m와 20 m 격자선, 앞으로 GRID.ahead, 양옆으로 GRID.side.
 const GRID = {ahead: 160, behind: 8, side: 25, major: 20};
 const EGO = [EGO_SIZE.length, EGO_SIZE.width, EGO_SIZE.height];
-const LEAD = [4.5, 1.8, 1.5];            // the model gives the lead no size: a typical car
-const LANE_WIDTH = 0.15;                 // a lane line as a band as wide as its paint
-const RAW_LANE = {width: 0.05, alpha: [0.15, 0.35]};  // the model's own ego line under the filtered one
+const LEAD = [4.5, 1.8, 1.5];            // 모델은 앞차 크기를 주지 않는다: 흔한 승용차
+const LANE_WIDTH = 0.15;                 // 차선선은 도색 폭만큼의 띠로
+const RAW_LANE = {width: 0.05, alpha: [0.15, 0.35]};  // 거른 선 아래의 모델 자체 자차 차로 선
 const CURB = {width: 0.2, height: 0.12};
-const PATH_WIDTH = 1.8;                  // hud_scene.cc kPathHalfWidth, both sides
-// hud_scene.cc: lines below this probability and edges below this confidence are not drawn
+const PATH_WIDTH = 1.8;                  // hud_scene.cc kPathHalfWidth의 양쪽 합
+// hud_scene.cc: 이 확률보다 낮은 선과 이 신뢰도보다 낮은 경계는 그리지 않는다
 const LANE_MIN_PROBABILITY = 0.05, EDGE_MIN_CONFIDENCE = 0.05;
-// lead_risk(): full at this gap or this closing speed
+// lead_risk(): 이 간격이나 이 접근 속도에서 최대
 const RISK = {distance: 40, closing: 10};
-// the lead's speed relative to ours as an arrow as long as 1 s of it, from 0.3 m/s
+// 앞차의 상대 속도를 그 1 s만큼 길이의 화살표로, 0.3 m/s부터
 const ARROW = {seconds: 1.0, slowest: 0.3};
-// The planned slowdown, (speed now - speed there) / speed now (at least floor m/s): the corridor
-// tints from tint, and the slowest point is labelled from label and labelKph slower; below stop m/s
-// the plan has stopped there.
+// 계획 감속, (지금 속도 - 그 지점 속도) / 지금 속도(적어도 floor m/s): 경로 띠는 tint부터 물들고, 가장 느린
+// 지점은 label 이상이면서 labelKph 이상 느리면 라벨을 단다. stop m/s 아래면 계획이 거기서 멈춘 것이다.
 const SLOW = {floor: 3, tint: 0.1, label: 0.15, labelKph: 5, stop: 0.5};
-// the lead's brake lights: on at accel m/s² or below, off again above off (the model's lead accel
-// is cautious: below -1 in 2% of the 2026-10-04 lead frames, never below -2)
+// 앞차 제동등: 가속도가 on m/s² 이하면 켜고, off보다 높아지면 다시 끈다(모델의 앞차 가속도는 조심스럽다:
+// 2026-10-04 앞차 프레임의 2%에서 -1 아래, -2 아래는 한 번도 없다)
 const BRAKE = {on: -1.0, off: -0.6};
-// the ego car's turn signals flash as the car's own lamps do (CGW1, 2026-10-04 drives: every 0.70 s)
+// 자차 방향지시등은 이 차의 실제 등처럼 깜빡인다(CGW1, 2026-10-04 주행: 0.70 s마다)
 const BLINK = {period: 0.7, duty: 0.5};
-// curvature arcs: as far as the car goes in 2.5 s, from 3 m/s
+// 곡률 원호: 차가 2.5 s 동안 가는 거리만큼, 3 m/s부터
 const ARC = {seconds: 2.5, min: 10, max: 70, width: 0.16, tick: 0.7, speed: 3};
-// departure_alert.cc: standing at 0.1 m/s or less until moving above 0.5, the 2 s gas press
-// probability that fires at 0.3, the plan at 10 s that arms within ±5 m and fires above 10 m
+// departure_alert.cc: 0.1 m/s 이하면 정차로 보고 0.5를 넘어야 움직인 것으로 본다. 2 s 가속 페달 확률은
+// 0.3에서 알림을 내고, 10 s 시점의 계획은 ±5 m 안에서 대기(arm)하고 10 m를 넘으면 알림을 낸다
 const DEPART = {stopped: 0.1, moving: 0.5, gas: 0.3, open: 10, arm: 5, planMax: 20, history: 10};
-// The lead card: the lead's distance and relative speed over the last LEAD_HISTORY_S (bev_data.js keeps
-// them), the speed chart at least ±minScale km/h and the distance chart at least minSpan m tall; the time to
-// contact shown below ttc s, amber below warn and red below alarm. The vision cruise takes the lead track
-// (controls_tick observe_cruise_lead); the departure alert keeps the model's lead.
+// 앞차 카드: 최근 LEAD_HISTORY_S 동안의 앞차 거리와 상대 속도(bev_data.js가 보관한다). 속도 차트는 적어도
+// ±minScale km/h, 거리 차트는 적어도 minSpan m 높이다. 충돌까지 시간은 ttc s 아래에서 보이고, warn 아래는
+// 호박색, alarm 아래는 빨간색이다. 비전 크루즈는 앞차 트랙을 쓰고(controls_tick observe_cruise_lead) 출발
+// 알림은 모델의 앞차를 그대로 쓴다.
 const LEAD_CARD = {minScale: 10, minSpan: 10, ttc: 10, warn: 6, alarm: 3};
-// each chart's lines: line name (its CSS class) -> lead card row field
+// 차트별 선: 선 이름(CSS 클래스) -> 앞차 카드 행 필드
 const LEAD_CHARTS = {distance: {model: "x", trend: "level", fused: "fx"}, speed: {model: "v", flow: "flow", trend: "trend", fused: "fv"}};
-// the lead card's folded state, remembered in this browser only
+// 앞차 카드의 접힘 상태, 이 브라우저에만 기억한다
 const LEAD_FOLD_KEY = "edgepilot.bev.leadCardFolded"
 const MAX_PIXEL_RATIO = 1.5;
 const THEME = {
   background: "#0a0d12", ground: "#0e1217", road: "#131820", gridLine: "#c8d2e0", axis: "#3f74e0",
   halo: "#8a949b", model: "#bfc5cd", lane: "#ffffff", egoLane: "#ffffff",
-  modelTint: 0.3,                 // how much of the lead's risk colour its paint takes
+  modelTint: 0.3,                 // 앞차 도색이 위험 색을 얼마나 띠는지
 };
-// hud_draw.h colours, so the BEV reads like the HUD
+// hud_draw.h 색, BEV가 HUD처럼 읽히도록
 const HUD = {white: "#ffffff", green: "#30d158", blue: "#409cff", gray: "#969ca5", amber: "#ffb020", red: "#ff453a",
              cyan: "#5ac8fa"};
 
-// The toolbar's layer buttons, and the groups each one shows or hides.
+// 도구 막대의 레이어 버튼과, 버튼마다 보이거나 숨기는 그룹.
 const LAYERS = {path: "경로", lanes: "차선", rawLanes: "원시 차선", edges: "도로 경계", lead: "앞차", curvature: "곡률",
                 labels: "라벨"};
 const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], rawLanes: ["rawLanes"], edges: ["edges"], lead: ["lead"],
                       curvature: ["curvature"], labels: ["lead_labels", "path_labels"]};
 const VIEWS = {behind: "뒤에서", top: "위에서"};
 
-// -- colours ---------------------------------------------------------------------------------------
+// -- 색 --------------------------------------------------------------------------------------------
 const BLACK = new THREE.Color(0, 0, 0);
 const inks = new Map();
 const ink = (hex) => inks.get(hex) || inks.set(hex, new THREE.Color(hex)).get(hex);
@@ -93,9 +89,9 @@ const el = (tag, className = "", text) => {
   return node;
 };
 
-// -- geometry rewritten every frame ---------------------------------------------------------------------
-// Triangles in buffers kept from frame to frame: position and one more attribute (a colour with
-// alpha, uv, ...) of size values. A frame begin()s, writes, and end()s, which sends the new part.
+// -- 매 프레임 다시 쓰는 지오메트리 ---------------------------------------------------------------------
+// 프레임 사이에 유지하는 버퍼 속 삼각형: position과 값 size개짜리 속성 하나 더(알파가 있는 색, uv, ...).
+// 프레임은 begin()하고, 쓰고, end()한다. end()가 새로 쓴 부분을 보낸다.
 class Batch {
   constructor(name, size, material, order) {
     this.name = name;
@@ -112,7 +108,7 @@ class Batch {
 
   begin() { this.v = this.n = 0; }
 
-  // Room for vertices and indices more; the first new vertex's index.
+  // 정점 vertices개와 인덱스 indices개를 더 넣을 자리. 첫 새 정점의 인덱스를 돌려준다.
   reserve(vertices, indices) {
     const grow = (array, need) => {
       const bigger = new array.constructor(Math.max(2 * array.length, need));
@@ -141,13 +137,13 @@ class Batch {
 
   end() {
     const geometry = this.geometry;
-    if (this.grown) {                       // new buffers: made again on the GPU at the next render
+    if (this.grown) {                       // 새 버퍼: 다음 렌더에서 GPU에 다시 만든다
       geometry.dispose();
       geometry.setAttribute("position", new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
       geometry.setAttribute(this.name, new THREE.BufferAttribute(this.values, this.size).setUsage(THREE.DynamicDrawUsage));
       geometry.setIndex(new THREE.BufferAttribute(this.indices, 1).setUsage(THREE.DynamicDrawUsage));
       this.grown = false;
-    } else if (this.n) {                    // the same buffers: only the part this frame wrote
+    } else if (this.n) {                    // 같은 버퍼: 이 프레임이 쓴 부분만
       for (const [attribute, count] of [[geometry.attributes.position, 3 * this.v], [geometry.attributes[this.name], this.size * this.v],
                                         [geometry.index, this.n]]) {
         attribute.clearUpdateRanges();
@@ -160,9 +156,9 @@ class Batch {
   }
 }
 
-// Instances of one geometry, as many as a frame has, in one draw: each placed at x, y, z, turned
-// by yaw and stretched by sx, sy, sz, with a colour (colors) and attributes of their own (extra,
-// name: size). The mesh is made again, bigger, when a frame has more than it holds.
+// 지오메트리 하나의 인스턴스를 프레임에 있는 만큼 한 번의 드로로 그린다: 각각 x, y, z에 놓고 yaw만큼 돌리고
+// sx, sy, sz만큼 늘이며, 제 색(colors)과 제 속성(extra, name: size)을 갖는다. 프레임에 메시가 담을 수 있는
+// 것보다 많으면 메시를 더 크게 다시 만든다.
 class Instances {
   constructor(geometry, material, {order = 0, colors = true, extra = {}} = {}) {
     this.geometry = Object.keys(extra).length ? geometry.clone() : geometry;
@@ -225,8 +221,8 @@ class Instances {
   }
 }
 
-// -- materials --------------------------------------------------------------------------------------
-// Shared uniforms, set once per render: fog (near, far, as view depth) and the pixel ratio.
+// -- 재질 -------------------------------------------------------------------------------------------
+// 공유 유니폼, 렌더마다 한 번 정한다: 안개(near, far, 뷰 깊이로)와 픽셀 비율.
 const SHARED = {uFog: {value: new THREE.Vector2(70, 200)}, uPixel: {value: 1}, uBackground: {value: new THREE.Color(THEME.background)}};
 const FOG_FADE = "float fogFade(float depth) { return 1.0 - smoothstep(uFog.x, uFog.y, depth); }";
 
@@ -238,7 +234,7 @@ function shader(vertex, fragment, uniforms = {}, options = {}) {
   });
 }
 
-// Lit models, flat-shaded: their own colours, the instance colour on what is paint.
+// 조명을 받는 모델, 플랫 셰이딩: 제 색이고, 도색 부분에는 인스턴스 색.
 function modelMaterial() {
   const material = new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true, roughness: 0.55, metalness: 0.05});
   material.onBeforeCompile = (program) => {
@@ -253,13 +249,12 @@ function modelMaterial() {
   return material;
 }
 
-// Unlit, vertex colours with alpha: lane lines, the ego lane, the gap and arrow.
+// 조명 없음, 알파가 있는 정점 색: 차선선, 자차 차로, 간격과 화살표.
 const overlayMaterial = () => new THREE.MeshBasicMaterial({vertexColors: true, transparent: true, depthWrite: false,
                                                            side: THREE.DoubleSide, toneMapped: false});
 
-// A footprint on the road, in metres round a length x width rectangle with rounded corners:
-// iStyle is its fill, outline, corner brackets only (1) and glow, iSize its length, width and
-// the margin the glow fades out in. With a black colour it is a soft contact shadow.
+// 도로 위 풋프린트, 모서리가 둥근 길이 x 폭 직사각형 둘레를 미터로: iStyle은 채움, 윤곽선,
+// 모서리 괄호만(1)과 글로, iSize는 길이, 폭과 글로가 사라지는 여백이다. 검은색이면 부드러운 접지 그림자다.
 const FOOTPRINT = [`
   attribute vec3 iSize; attribute vec4 iStyle;
   varying vec2 vQ; varying vec3 vSize; varying vec4 vStyle; varying vec3 vColor; varying float vDepth;
@@ -291,10 +286,9 @@ const FOOTPRINT = [`
     #include <colorspace_fragment>
   }`];
 
-// The planned path as a corridor as wide as the HUD's ribbon: bright edges in the HUD's path colour,
-// chevrons every 4 m, fading out ahead; uStrength dims it as the HUD does when not steering. Inside,
-// it turns amber, then red, where the model plans to slow down. corridor is across (0..1), along
-// (metres) and the planned slowdown there (0..1, SLOW).
+// 계획 경로를 HUD 리본만큼 넓은 띠로: HUD 경로 색의 밝은 가장자리, 4 m마다 셰브런, 앞으로 갈수록 흐려진다.
+// uStrength는 HUD가 조향하지 않을 때처럼 띠를 흐리게 한다. 안쪽은 모델이 감속을 계획한 곳에서 호박색, 이어
+// 빨간색이 된다. corridor는 폭 방향 위치(0..1), 진행 거리(미터)와 그곳의 계획 감속(0..1, SLOW)이다.
 const CORRIDOR = [`
   attribute vec3 corridor;
   varying vec3 vC; varying float vDepth;
@@ -323,8 +317,8 @@ const CORRIDOR = [`
     #include <colorspace_fragment>
   }`];
 
-// The ground: the BEV's range a shade lighter, 5 m and 20 m grid lines that fade before they crowd
-// into moire, the ego axes, all fading into the background far away.
+// 바닥: BEV 범위는 한 톤 밝게, 5 m와 20 m 격자선은 빽빽해져 모아레가 되기 전에 흐려지고, 자차 축, 모두
+// 멀리서 배경으로 사라진다.
 const GROUND = [`
   varying vec3 vWorld; varying float vDepth;
   void main() {
@@ -445,7 +439,7 @@ const STYLE_SHEET = `
 }`;
 
 export class BevView {
-  // container: the 3D panel; side: the column beside (or under) it for the cards, so they do not cover the view
+  // container: 3D 패널, side: 그 옆(또는 아래)의 카드용 열, 카드가 화면을 가리지 않도록
   constructor(container, side) {
     this.container = container;
     if (!document.getElementById("bev-style")) {
@@ -454,7 +448,7 @@ export class BevView {
     this.renderer = new THREE.WebGLRenderer({antialias: true});
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
     SHARED.uPixel.value = this.renderer.getPixelRatio();
-    // laid over the panel, so its size never feeds back into the panel's own
+    // 패널 위에 겹쳐 놓아, 캔버스 크기가 패널 크기에 되먹임되지 않게 한다
     Object.assign(this.renderer.domElement.style, {position: "absolute", top: "0", left: "0"});
     container.appendChild(this.renderer.domElement);
     this.labels = new CSS2DRenderer();
@@ -463,7 +457,7 @@ export class BevView {
     this.hud = container.appendChild(el("div", "bev-hud"));
     this.chips = {};
     for (const name of ["mode", "speed", "plan", "lane", "lat", "lead", "model"]) this.chips[name] = this.hud.appendChild(el("span"));
-    // the toolbar over the view; the cards in the side column
+    // 화면 위의 도구 막대, 옆 열의 카드
     this.tools(container.appendChild(el("div", "bev-tools")));
     this.sideEmpty = side.appendChild(el("div", "bev-side-empty",
       "앞차가 보이면 거리와 상대 속도를, 정차해 있으면 출발 알림의 판단 근거를 여기 보여 줍니다."));
@@ -482,7 +476,7 @@ export class BevView {
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.5, 1500);
     this.camera.up.set(0, 0, 1);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.maxPolarAngle = Math.PI * 0.47;           // not under the road
+    this.controls.maxPolarAngle = Math.PI * 0.47;           // 도로 아래로는 가지 않는다
     this.controls.addEventListener("change", () => this.requestRender());
 
     this.layers = {};
@@ -498,7 +492,7 @@ export class BevView {
     this.view("behind");
   }
 
-  // View buttons on the left, layer buttons on the right.
+  // 왼쪽에 시점 버튼, 오른쪽에 레이어 버튼.
   tools(bar) {
     const views = bar.appendChild(el("div")), layers = bar.appendChild(el("div"));
     for (const [name, title] of Object.entries(VIEWS)) {
@@ -519,7 +513,7 @@ export class BevView {
     }
   }
 
-  // -- the meshes every frame writes into -----------------------------------------------------------
+  // -- 프레임마다 써 넣는 메시 ----------------------------------------------------------------------
   makeParts() {
     const plane = new THREE.PlaneGeometry(1, 1), print = {iSize: 3, iStyle: 4};
     const put = (layer, part) => { this.layers[layer].add(part.object || part.mesh); return part; };
@@ -532,7 +526,7 @@ export class BevView {
                                                  uStrength: {value: 1}, uTint: {value: SLOW.tint}});
     this.path = put("path", new Batch("corridor", 3, this.corridorMaterial, 3));
     this.speedTag = this.tag("path_labels", "speed");
-    this.speedTag.center.set(0, 0);             // hung below and right of its point: clear of the lead's label
+    this.speedTag.center.set(0, 0);             // 점의 오른쪽 아래에 매단다: 앞차 라벨을 피한다
     this.arcs = put("curvature", new Batch("color", 4, overlayMaterial(), 6));
 
     this.modelMaterial = modelMaterial();
@@ -550,10 +544,10 @@ export class BevView {
       gap: this.tag("lead_labels", "gap"),
       ttc: this.tag("lead_labels", "ttc"),
     };
-    this.lead.ttc.center.set(1, 0.5);            // beside the car, to its left
+    this.lead.ttc.center.set(1, 0.5);            // 차 옆, 왼쪽에
   }
 
-  // A label in group, hidden until place()d: a pill with a dot and a kind (dotted), or plain text.
+  // group 안의 라벨, place()할 때까지 숨긴다: 점과 종류가 있는 알약 모양(dotted) 또는 일반 텍스트.
   tag(group, variant = "", dotted = false) {
     const element = el("div", `bev-tag ${variant}`.trim());
     if (dotted) element.append(el("i"), el("em"));
@@ -580,7 +574,7 @@ export class BevView {
     label.visible = true;
   }
 
-  // -- the parts that do not change: the ground, distances, ego car ------------------------------------
+  // -- 바뀌지 않는 부분: 바닥, 거리, 자차 --------------------------------------------------------------
   staticParts() {
     const group = new THREE.Group();
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), shader(...GROUND, {
@@ -596,8 +590,8 @@ export class BevView {
       group.add(label);
       this.distances.push(label);
     }
-    // the ego car, its front bumper at x = 0; its turn signals and brake lights, and their glow on the
-    // road, follow the car's own (drawEgo())
+    // 자차, 앞 범퍼가 x = 0. 방향지시등과 제동등, 그리고 그 도로 위 빛은 이 차의
+    // 실제 등을 따른다(drawEgo())
     const [l, w] = EGO, x = -l / 2;
     this.ego = makeEgo(this.renderer);
     this.ego.position.x = x;
@@ -606,18 +600,18 @@ export class BevView {
     shadow.begin(1);
     shadow.add(x, 0, 0.006, 0, l + 1.2, w + 1.2, 1, BLACK, [l * 0.92, w * 0.9, 0.6], [0.5, 0, 0, 0.5]);
     shadow.end();
-    // the halo takes the HUD's state colour (drawEgo())
+    // 후광은 HUD의 상태 색을 띤다(drawEgo())
     this.halo = new Instances(new THREE.PlaneGeometry(1, 1), shader(...FOOTPRINT), {order: 4, extra: {iSize: 3, iStyle: 4}});
     group.add(this.ego, shadow.object, this.halo.object, this.egoGlow.object);
     this.drawEgo(null);
     return group;
   }
 
-  // -- camera -------------------------------------------------------------------------------------------
+  // -- 카메라 -------------------------------------------------------------------------------------------
   view(name) {
     if (name === "top") {
       this.controls.target.set(45, 0, 0);
-      this.camera.position.set(44.99, 0, 120);     // a hair behind, so forward is up on the screen
+      this.camera.position.set(44.99, 0, 120);     // 살짝 뒤에서, 앞쪽이 화면 위로 오도록
     } else {
       this.controls.target.set(22, 0, 0);
       this.camera.position.set(-19, 0, 13.5);
@@ -636,7 +630,7 @@ export class BevView {
     this.requestRender();
   }
 
-  // The scene drawn at the next display frame; frames that come in between are skipped.
+  // 다음 화면 프레임에 그릴 장면. 그 사이에 오는 프레임은 건너뛴다.
   update(scene) {
     this.next = scene;
     this.requestRender();
@@ -651,19 +645,19 @@ export class BevView {
         this.draw(this.next);
         this.next = null;
       }
-      // fog starts beyond what the camera looks at, however far away it is
+      // 안개는 카메라가 보는 곳이 얼마나 멀든 그 너머에서 시작한다
       const distance = this.camera.position.distanceTo(this.controls.target);
       this.scene.fog.near = distance + 40;
       this.scene.fog.far = distance + 160;
       SHARED.uFog.value.set(this.scene.fog.near, this.scene.fog.far);
       this.fadeLabels(distance);
-      this.labels.domElement.classList.toggle("far", distance > 90);     // from far away, no kinds
+      this.labels.domElement.classList.toggle("far", distance > 90);     // 멀리서는 종류를 뺀다
       this.renderer.render(this.scene, this.camera);
       this.labels.render(this.scene, this.camera);
     });
   }
 
-  // Labels well beyond what the camera looks at fade, so the near ones read.
+  // 카메라가 보는 곳보다 한참 먼 라벨은 흐리게 해 가까운 라벨이 읽히게 한다.
   fadeLabels(distance) {
     for (const label of [...this.tags, ...this.distances]) {
       const beyond = this.camera.position.distanceTo(label.position) - distance;
@@ -672,7 +666,7 @@ export class BevView {
     }
   }
 
-  // -- one frame ------------------------------------------------------------------------------------
+  // -- 한 프레임 ------------------------------------------------------------------------------------
   draw(scene) {
     this.plan = planSummary(scene.path, scene.planNow);
     this.container.classList.toggle("stale", scene.stale);
@@ -688,10 +682,10 @@ export class BevView {
     this.sideEmpty.hidden = !(this.card.hidden && this.leadPanel.hidden);
   }
 
-  // Lane lines as bands, as sure as the HUD draws them; the ego lane faintly filled between its
-  // lines while both are sure. Unlike the HUD, in laneless mode too (with the edges): the model
-  // still sees them, and the 차선 button hides them. The ego lines are the planner's, through its lane
-  // filter; the model's own ones run thin and gray under them (원시 차선 hides those).
+  // 차선선은 띠로, HUD가 그리는 것과 같은 확신도로 그린다. 두 선이 모두 확실한 동안 자차 차로를 그 사이에
+  // 옅게 채운다. HUD와 달리 laneless 모드에서도(경계와 함께) 그린다: 모델은 여전히 선을 보고, 차선 버튼으로
+  // 숨긴다. 자차 차로 선은 플래너의 것으로 그 차선 필터를 거친 선이고, 모델 자체 선은 그 아래 가늘고
+  // 회색으로 그린다(원시 차선 버튼으로 숨긴다).
   drawLanes(lanes) {
     const b = this.lanes, raw = this.rawLanes, color = ink(THEME.lane), gray = ink(HUD.gray);
     b.begin();
@@ -706,7 +700,7 @@ export class BevView {
     b.end();
   }
 
-  // Road edges as low red curbs, as sure as the model is of them (1 - std).
+  // 도로 경계는 낮은 빨간 연석으로, 모델의 확신도(1 - std)만큼 그린다.
   drawEdges(edges) {
     const b = this.curbs, color = ink(HUD.red);
     b.begin();
@@ -717,7 +711,7 @@ export class BevView {
     b.end();
   }
 
-  // The plan as a corridor in the HUD's path colour, tinted where the model plans to slow down.
+  // 계획을 HUD 경로 색의 띠로, 모델이 감속을 계획한 곳은 물들여 그린다.
   drawPath(scene) {
     const path = scene.path;
     this.path.begin();
@@ -729,8 +723,8 @@ export class BevView {
       uniforms.uColor.value.copy(ink(hex));
       uniforms.uStrength.value = strength;
       uniforms.uLength.value = Math.max(corridor(this.path, path, PATH_WIDTH, 0.025, slow), 1);
-      // the plan's slowest point (or STOP, or where it speeds up to) beside the path, but not with a
-      // lead in view: in perspective it lands on the lead's label wherever it is, and the chip says it
+      // 계획의 가장 느린 지점(또는 STOP, 또는 가속해 도달하는 속도)을 경로 옆에 쓴다. 단 앞차가 보이면 쓰지
+      // 않는다: 원근 때문에 어디에 있든 앞차 라벨 위에 겹치고, 칩이 같은 내용을 보여 준다
       const plan = this.plan;
       if (plan && !(scene.lead && this.layers.lead.visible)) {
         const [nx, ny] = normalAt(path, plan.i), beside = PATH_WIDTH / 2 + 0.4;
@@ -740,10 +734,9 @@ export class BevView {
     this.path.end();
   }
 
-  // Arcs of the curvature controlsd asks for (white) and the one it measures (cyan), from the bumper
-  // as far as the car goes in ARC.seconds, each ended by a tick across it: how far apart the ticks
-  // are is where tracking that curvature would leave the car. Their curvature is + to the right; the
-  // BEV's y is to the left.
+  // controlsd가 요구하는 곡률(흰색)과 측정한 곡률(청록색)의 원호를 범퍼에서 차가 ARC.seconds 동안 가는
+  // 거리만큼 그리고, 각 끝에 가로 눈금을 둔다: 두 눈금이 떨어진 거리가 곧 각 곡률을 따라갔을 때 차가 놓일
+  // 자리의 차이다. 곡률은 오른쪽이 +이고, BEV의 y는 왼쪽이다.
   drawCurvature(scene) {
     const b = this.arcs, curvature = scene.curvature, speed = scene.speedKph / 3.6;
     b.begin();
@@ -759,13 +752,12 @@ export class BevView {
     b.end();
   }
 
-  // The lead as a car turned along the path, ringed in the HUD's risk colour, with the gap from our bumper
-  // to its rear and an arrow of its speed relative to ours: where the lead track puts it when it has one,
-  // with a gray bar across the lane at the model's own distance, else the model's lead. Beside it, the time
-  // to contact while closing in.
+  // 앞차를 경로 방향으로 돌린 차로, HUD 위험 색 테두리를 두르고, 우리 범퍼에서 앞차 뒤까지의 간격과 상대
+  // 속도 화살표를 붙여 그린다: 앞차 트랙이 있으면 트랙이 놓은 자리에 그리고 모델 자체 거리에는 차로를
+  // 가로지르는 회색 막대를 두며, 없으면 모델의 앞차를 그린다. 옆에는 다가가는 동안 충돌까지 시간을 쓴다.
   drawLead(scene) {
     const lead = scene.lead, parts = this.lead, model = carModel();
-    // brake lights with hysteresis, so they do not flicker round the threshold
+    // 제동등은 히스테리시스를 두어 임계값 부근에서 깜빡이지 않게 한다
     const braking = this.braking = !!lead && Number.isFinite(lead.accel) && lead.accel <= (this.braking ? BRAKE.off : BRAKE.on);
     for (const part of [parts.body, parts.lamps]) part.begin(lead ? 1 : 0);
     parts.brake.begin(braking ? 1 : 0);
@@ -779,7 +771,7 @@ export class BevView {
       const hex = riskColor(lead), color = ink(hex);
       parts.body.add(x, y, 0, yaw, ...scale, ink(THEME.model).clone().lerp(color, THEME.modelTint));
       parts.lamps.add(x, y, 0, yaw, ...scale, null);
-      if (braking) {                            // and their glow on the road behind it
+      if (braking) {                            // 그리고 차 뒤 도로 위의 그 빛
         parts.brake.add(x, y, 0, yaw, ...scale, null);
         parts.prints.add(lead.x - c * 0.9, lead.y - s * 0.9, 0.012, yaw, 3.4, w + 2.4, 1, ink(HUD.red), [0.4, w * 0.8, 1.1], [0, 0, 0, 0.55]);
       }
@@ -789,7 +781,7 @@ export class BevView {
       }
       parts.prints.add(x, y, 0.006, yaw, l + 1.2, w + 1.2, 1, BLACK, [l * 0.92, w * 0.9, 0.6], [0.5, 0, 0, 0.5]);
       parts.prints.add(x, y, 0.016, yaw, l + 1.6, w + 1.6, 1, color, [l + 0.3, w + 0.3, 0.5], [0.12, 0.85, 0, 0.25]);
-      if (lead.x > 1) {                         // a dimension line, ticked at both ends
+      if (lead.x > 1) {                         // 양 끝에 눈금이 있는 치수선
         band(parts.lines, [[0.3, 0], [lead.x - 0.3, lead.y]], 0.05, 0.02, color, 0.6);
         band(parts.lines, [[0.3, -0.45], [0.3, 0.45]], 0.06, 0.02, color, 0.8);
         band(parts.lines, [[lead.x - 0.3, lead.y - 0.45], [lead.x - 0.3, lead.y + 0.45]], 0.06, 0.02, color, 0.8);
@@ -798,7 +790,7 @@ export class BevView {
       if (lead.relative !== null && Math.abs(lead.relative) >= ARROW.slowest) {
         arrow(parts.lines, x, y, x + c * lead.relative * ARROW.seconds, y + s * lead.relative * ARROW.seconds, color);
       }
-      if (lead.tracked && Math.abs(lead.raw.x - lead.x) > 0.05) {     // the model's own distance
+      if (lead.tracked && Math.abs(lead.raw.x - lead.x) > 0.05) {     // 모델 자체 거리
         const ahead = lead.raw.x - lead.x, rx = lead.x + c * ahead, ry = lead.y + s * ahead, half = w / 2 + 0.2;
         band(parts.lines, [[rx + s * half, ry - c * half], [rx - s * half, ry + c * half]], 0.14, 0.035, ink(HUD.gray), 0.85);
       }
@@ -811,9 +803,9 @@ export class BevView {
     parts.lines.end();
   }
 
-  // The ego car's halo in the HUD's state colour: green or blue while steering, turning amber as the
-  // output nears its limit (the HUD's path does that; here amber in the path means slowing down),
-  // gray while engaged. Then its lamps: turn signals and hazards, and brake lights.
+  // 자차 후광은 HUD 상태 색: 조향 중에는 초록이나 파랑이고 출력이 한계에 가까워지면 호박색으로 바뀌며(HUD는
+  // 경로가 그렇게 한다. 여기서는 경로의 호박색이 감속을 뜻한다), engaged 상태에서는 회색. 그다음 등화:
+  // 방향지시등과 비상등, 제동등.
   drawEgo(scene) {
     const [l, w] = EGO, state = scene && scene.state, hex = state && stateColor(state);
     const strain = state && state.steering ? clamp((Math.abs(state.output) - 0.7) / 0.3, 0, 1) : 0;
@@ -821,13 +813,12 @@ export class BevView {
     this.halo.add(-l / 2, 0, 0.008, 0, l + 2.4, w + 2.4, 1, ink(hex || THEME.halo).clone().lerp(ink(HUD.amber), strain),
                   [l + 0.4, w + 0.4, 1.2], hex ? [0.06, 0.7, 0, 0.3] : [0.04, 0.5, 0, 0.18]);
     this.halo.end();
-    // turn signals and hazards (both), lit for the first half of each BLINK.period; brake lights
-    // (pedal pressed, or AUTO HOLD)
+    // 방향지시등과 비상등(양쪽)은 BLINK.period마다 앞 절반 동안 켠다. 제동등(페달을 밟았거나 AUTO HOLD)
     const blinkers = scene && scene.blinkers, lit = (performance.now() / 1000) % BLINK.period < BLINK.period * BLINK.duty;
     const sides = [!!(blinkers && blinkers.left && lit), !!(blinkers && blinkers.right && lit)];
     const braking = !!scene && !!scene.brakeLights;
     this.ego.setLamps({left: sides[0], right: sides[1], brake: braking});
-    // and their glow on the road: at the corners on the flashing side, behind the car when braking
+    // 그리고 도로 위의 그 빛: 깜빡이는 쪽 모서리에, 제동 중이면 차 뒤에
     this.egoGlow.begin(2 * sides.filter(Boolean).length + (braking ? 1 : 0));
     sides.forEach((on, i) => {
       if (!on) return;
@@ -839,10 +830,10 @@ export class BevView {
     this.egoGlow.end();
   }
 
-  // The chips along the bottom: mode, speed, lane width, the gap, and how old the model frame is.
+  // 아래쪽 칩: 모드, 속도, 차로 폭, 간격, 모델 프레임이 얼마나 오래됐는지.
   drawHud(scene) {
     const lead = scene.lead;
-    // the lead track's relative speed always, the model's own only while closing in
+    // 앞차 트랙의 상대 속도는 항상, 모델 자체 상대 속도는 다가가는 동안만
     const relative = lead && lead.relative !== null && (lead.tracked || lead.relative * 3.6 <= -3) ? ` ${kph(lead.relative)}` : "";
     this.chip("mode", `<i style="background:${stateColor(scene.state) || "#566170"}"></i>${modeText(scene.state)}`);
     this.chip("speed", Number.isFinite(scene.speedKph) ? `${Math.round(scene.speedKph)} km/h` : "");
@@ -857,10 +848,10 @@ export class BevView {
     this.chip("model", scene.stale ? `<b>MODEL</b>${Number.isFinite(scene.modelAge) ? scene.modelAge.toFixed(1) + " s" : "없음"}` : "", true);
   }
 
-  // -- standing: what the departure alert decides from ------------------------------------------------
-  // A card while the car stands in D, and while an alert shows: the 2 s gas press probability against the
-  // 0.3 that fires it, both inputs over the last DEPART.history s, and the plan's x at 10 s against
-  // the band that arms the green light alert (±5 m for 1.5 s) and the 10 m that fires it.
+  // -- 정차: 출발 알림의 판단 근거 --------------------------------------------------------------------
+  // D에서 정차해 있는 동안과 알림이 떠 있는 동안 보이는 카드: 2 s 가속 페달 확률과 알림을 내는 0.3, 최근
+  // DEPART.history s 동안의 두 입력, 그리고 10 s 시점 계획의 x와 녹색 신호 알림을 대기시키는 구간(1.5 s
+  // 동안 ±5 m), 알림을 내는 10 m.
   departureCard(parent) {
     const card = this.card = parent.appendChild(el("div", "bev-card"));
     card.hidden = true;
@@ -910,16 +901,15 @@ export class BevView {
     this.planLine.setAttribute("points", line(2, DEPART.planMax));
   }
 
-  // -- with a lead: its distance and relative speed over time ----------------------------------------------
-  // A card while a lead was in view within LEAD_HISTORY_S (and the 앞차 layer is on): the lead track (green:
-  // the model distance and optical flow fused), the model's own distance and relative speed (gray), the flow's
-  // relative speed (cyan) and the trend of the model's distance (amber, dashed: a straight line over ±2 s, so it
-  // ends 2 s back), as values and over time. The badge is the time to contact.
+  // -- 앞차가 있을 때: 거리와 상대 속도의 시간 변화 --------------------------------------------------------
+  // 최근 LEAD_HISTORY_S 안에 앞차가 보였던 동안(그리고 앞차 레이어가 켜져 있을 때) 보이는 카드: 앞차 트랙(초록:
+  // 모델 거리와 광류를 융합), 모델 자체 거리와 상대 속도(회색), 광류 상대 속도(청록)와 모델 거리의 추세(호박색
+  // 점선: ±2 s에 걸친 직선이라 2 s 전에서 끝난다)를 값과 시간 변화로 보인다. 배지는 충돌까지 시간이다.
   leadCard(parent) {
     const card = this.leadPanel = parent.appendChild(el("div", "bev-card"));
     card.hidden = true;
     const head = card.appendChild(el("div", "bev-card-head"));
-    // the head folds the charts away; the choice is remembered in this browser
+    // 머리를 누르면 차트를 접는다. 선택은 이 브라우저에 기억한다
     const fold = head.appendChild(el("button", "", "LEAD"));
     fold.type = "button";
     const setFolded = (folded) => {
@@ -941,7 +931,7 @@ export class BevView {
     };
     this.leadValues = {fused: value("추적", HUD.green), model: value("모델", HUD.gray), flow: value("광류", HUD.cyan),
                        trend: value("거리 추세 2 s 전", HUD.amber)};
-    // the values above name the colours, so the charts need no legend
+    // 위의 값들이 색의 이름을 알려 주므로 차트에는 범례가 필요 없다
     const chart = (title, lines, zero) => {
       const box = card.appendChild(el("div", "bev-chart"));
       box.appendChild(el("div", "bev-chart-title", title));
@@ -955,11 +945,11 @@ export class BevView {
   }
 
   drawLeadCard(scene) {
-    const card = this.leadPanel, rows = scene.leads, lead = scene.lead;   // rows: the last LEAD_HISTORY_S
+    const card = this.leadPanel, rows = scene.leads, lead = scene.lead;   // rows: 최근 LEAD_HISTORY_S
     card.hidden = !(this.layers.lead.visible && rows.some((row) => row.segment >= 0));
     if (card.hidden) return;
     const start = rows[rows.length - 1].t - LEAD_HISTORY_S;
-    // the newest fitted trend (NaN once that row has no lead)
+    // 가장 최근에 맞춘 추세(그 행에 앞차가 없으면 NaN)
     let fitted = rows.length - 1;
     while (fitted >= 0 && rows[fitted].trend === undefined) fitted--;
     const show = (em, v) => { const text = Number.isFinite(v) ? kph(v) : "–"; if (em.textContent !== text) em.textContent = text; };
@@ -971,7 +961,7 @@ export class BevView {
     const text = ttc < LEAD_CARD.ttc ? ttcText(ttc) : "TTC –";
     if (this.ttcBadge.textContent !== text) this.ttcBadge.textContent = text;
     if (this.ttcBadge.className !== `bev-badge ${tone}`.trim()) this.ttcBadge.className = `bev-badge ${tone}`.trim();
-    // each series as a path broken where it has no value, value mapped to the chart's height
+    // 계열마다 값이 없는 곳에서 끊긴 path로, 값은 차트 높이에 맞춘다
     const draw = (lines, fields, y) => {
       for (const [name, key] of Object.entries(fields)) {
         let d = "", gap = true;
@@ -984,7 +974,7 @@ export class BevView {
         lines[name].setAttribute("d", d);
       }
     };
-    // distance: from the lowest to the highest value in view (some row has a lead), at least LEAD_CARD.minSpan m
+    // 거리: 보이는 값(어떤 행에 앞차가 있음)의 최저에서 최고까지, 적어도 LEAD_CARD.minSpan m
     let lo = Infinity, hi = -Infinity;
     for (const row of rows) {
       for (const key of Object.values(LEAD_CHARTS.distance)) {
@@ -993,7 +983,7 @@ export class BevView {
     }
     const middle = (lo + hi) / 2, span = Math.max(LEAD_CARD.minSpan, hi - lo) * 1.1;
     draw(this.distanceLines, LEAD_CHARTS.distance, (v) => 30 - clamp((v - middle) / span, -0.5, 0.5) * 56);
-    // relative speed: symmetric, at least LEAD_CARD.minScale km/h, in steps of 10
+    // 상대 속도: 대칭, 적어도 LEAD_CARD.minScale km/h, 10 단위
     let peak = LEAD_CARD.minScale;
     for (const row of rows) {
       for (const key of Object.values(LEAD_CHARTS.speed)) if (Number.isFinite(row[key])) peak = Math.max(peak, Math.abs(row[key]) * 3.6);
@@ -1013,38 +1003,38 @@ export class BevView {
   }
 }
 
-// A flag remembered in this browser only (storage may be missing or refuse).
+// 이 브라우저에만 기억하는 플래그(저장소가 없거나 거부할 수 있다).
 function readFlag(key) {
   try { return window.localStorage.getItem(key) === "1"; } catch { return false; }
 }
 function writeFlag(key, on) {
-  try { window.localStorage.setItem(key, on ? "1" : "0"); } catch { /* not remembered */ }
+  try { window.localStorage.setItem(key, on ? "1" : "0"); } catch { /* 기억하지 않는다 */ }
 }
 
-// An SVG element with attributes.
+// 속성을 단 SVG 요소.
 function svg(tag, attributes) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
   return node;
 }
 
-// A relative speed (m/s) in signed km/h, as the LEAD chip and card show it.
+// 상대 속도(m/s)를 LEAD 칩과 카드가 보여 주는 대로 부호 있는 km/h로.
 function kph(v) {
   const k = Math.round(v * 3.6);
   return `${k > 0 ? "+" : k < 0 ? "−" : ""}${Math.abs(k)} km/h`;
 }
 
-// The time to contact's tier (the badge's class): "alarm" below LEAD_CARD.alarm s, "warn" below LEAD_CARD.warn s,
-// and its label's colour.
+// 충돌까지 시간의 단계(배지의 클래스): LEAD_CARD.alarm s 아래는 "alarm", LEAD_CARD.warn s 아래는 "warn", 그리고
+// 그 라벨의 색.
 function ttcTone(ttc) {
   return ttc < LEAD_CARD.alarm ? "alarm" : ttc < LEAD_CARD.warn ? "warn" : "";
 }
 const TTC_COLOR = {alarm: HUD.red, warn: HUD.amber, "": HUD.gray};
 const ttcText = (ttc) => `TTC ${ttc.toFixed(1)} s`;
 
-// -- the HUD's rules --------------------------------------------------------------------------------
-// Where the plan slows down most ahead (STOP where it stops), or, speeding up instead, what it
-// reaches at its end: {i (path index), text, color}, or null when it does neither by SLOW.labelKph.
+// -- HUD의 규칙 -------------------------------------------------------------------------------------
+// 앞쪽에서 계획이 가장 많이 감속하는 곳(멈추면 STOP), 또는 대신 가속하면 끝에서 도달하는 속도:
+// {i(경로 인덱스), text, color}. 어느 쪽도 SLOW.labelKph만큼이 안 되면 null.
 function planSummary(path, now) {
   if (path.length < 2 || !Number.isFinite(now)) return null;
   let k = -1;
@@ -1059,7 +1049,7 @@ function planSummary(path, now) {
   return null;
 }
 
-// hud_draw.h state_color(): the colour of steering, null when not engaged.
+// hud_draw.h state_color(): 조향 상태의 색, engaged가 아니면 null.
 function stateColor(state) {
   if (state.steering) return state.laneless ? HUD.blue : HUD.green;
   return state.engaged ? HUD.gray : null;
@@ -1070,16 +1060,16 @@ function modeText(state) {
   return state.engaged || state.enabled ? "READY" : "OFF";
 }
 
-// path_color(): [colour, strength]: white faint when not engaged, gray when not steering, green or
-// blue while steering. (Its amber near the output limit is on the ego halo here, drawEgo().)
+// path_color(): [색, 세기]: engaged가 아니면 옅은 흰색, 조향하지 않으면 회색, 조향 중이면 초록이나 파랑.
+// (출력 한계 부근의 호박색은 여기서는 자차 후광에 있다, drawEgo().)
 function pathStyle(state) {
   if (!state.engaged) return [HUD.white, 0.6];
   if (!state.steering) return [HUD.gray, 0.85];
   return [state.laneless ? HUD.blue : HUD.green, 1];
 }
 
-// lead_risk(): near or closing fast towards 1; white, amber, then red. (The HUD takes the SCC
-// radar's gap first; this car's never has a lead, so it is left out here.)
+// lead_risk(): 가깝거나 빠르게 다가갈수록 1에 가깝다. 흰색, 호박색, 그다음 빨간색. (HUD는 SCC 레이더의
+// 간격을 먼저 쓰지만 이 차의 레이더에는 앞차가 잡히지 않으므로 여기서는 뺐다.)
 function riskColor(lead) {
   const relative = lead.relative ?? 0;
   const risk = clamp(clamp(1 - lead.gap / RISK.distance, 0, 1) + clamp(-relative / RISK.closing, 0, 1), 0, 1);
@@ -1087,15 +1077,15 @@ function riskColor(lead) {
   return "#" + ink(HUD.white).clone().lerp(ink(HUD.amber), risk / 0.75).getHexString();
 }
 
-// A departure card meter row: value against full, filled green when it fires.
+// 출발 카드의 미터 행: full 대비 value, 알림을 낼 때 초록으로 채운다.
 function meter(row, value, full, go, text) {
   row.fill.style.width = `${(Number.isFinite(value) ? clamp(value / full, 0, 1) : 0) * 100}%`;
   row.fill.classList.toggle("go", go);
   if (row.value.textContent !== text) row.value.textContent = text;
 }
 
-// -- writing geometry -------------------------------------------------------------------------------------
-// A band of width along points [[x, y], ...] at height z.
+// -- 지오메트리 쓰기 --------------------------------------------------------------------------------------
+// points [[x, y], ...]를 따라 높이 z에 놓는 폭 width의 띠.
 function band(b, points, width, z, color, alpha) {
   const n = points.length, h = width / 2;
   if (n < 2) return;
@@ -1108,7 +1098,7 @@ function band(b, points, width, z, color, alpha) {
   }
 }
 
-// The lane between left and right faintly filled, fading ahead.
+// left와 right 사이 차로를 옅게 채우고, 앞으로 갈수록 흐려진다.
 function egoLane(b, left, right) {
   if (left.length < 2 || right.length < 2) return;
   const x0 = Math.max(left[0][0], right[0][0], 0), x1 = Math.min(left[left.length - 1][0], right[right.length - 1][0]);
@@ -1128,7 +1118,7 @@ function egoLane(b, left, right) {
   }
 }
 
-// An arrow from (x0, y0) to (x1, y1) on the road.
+// 도로 위 (x0, y0)에서 (x1, y1)까지의 화살표.
 function arrow(b, x0, y0, x1, y1, color) {
   const length = Math.hypot(x1 - x0, y1 - y0), ux = (x1 - x0) / length, uy = (y1 - y0) / length, head = Math.min(0.6, length * 0.4);
   band(b, [[x0, y0], [x1 - ux * head, y1 - uy * head]], 0.1, 0.07, color, 0.95);
@@ -1139,7 +1129,7 @@ function arrow(b, x0, y0, x1, y1, color) {
   b.tri(base, base + 1, base + 2);
 }
 
-// A band along points for the path: across, along and slow[i] (the planned slowdown); its length.
+// 경로용으로 points를 따르는 띠: 폭 방향 위치, 진행 거리와 slow[i](계획 감속). 그 길이를 돌려준다.
 function corridor(b, points, width, z, slow) {
   const n = points.length, h = width / 2, base = b.reserve(2 * n, 6 * (n - 1));
   let along = 0;
@@ -1153,7 +1143,7 @@ function corridor(b, points, width, z, slow) {
   return along;
 }
 
-// [[x, y], ...] of an arc from the origin heading along x, curving k (1/m, + to the left) for length m.
+// 원점에서 x 방향으로 출발해 곡률 k(1/m, 왼쪽이 +)로 length m만큼 가는 원호의 [[x, y], ...].
 function arc(k, length, n = 24) {
   return Array.from({length: n + 1}, (_, i) => {
     const s = length * i / n;
@@ -1161,7 +1151,7 @@ function arc(k, length, n = 24) {
   });
 }
 
-// A road edge as a low curb: its top and both faces, lit.
+// 도로 경계를 낮은 연석으로: 윗면과 양 옆면, 조명을 받는다.
 function curb(b, points, width, height, color, alpha) {
   const n = points.length, h = width / 2;
   if (n < 2) return;
@@ -1178,7 +1168,7 @@ function curb(b, points, width, height, color, alpha) {
   });
 }
 
-// The y of a polyline at x, null where it does not reach.
+// 폴리라인의 x에서 y, 닿지 않는 곳에서는 null.
 function lateralAt(points, x) {
   for (let i = 1; i < points.length; i++) {
     const [x0, y0] = points[i - 1], [x1, y1] = points[i];
@@ -1187,8 +1177,7 @@ function lateralAt(points, x) {
   return null;
 }
 
-// The heading of a polyline where it passes x (its last piece beyond its end), 0 for a path too
-// short to say (standing still).
+// 폴리라인이 x를 지나는 곳의 방향(끝 너머는 마지막 조각), 판단하기에 너무 짧은 경로(정차 중)는 0.
 function headingAt(points, x) {
   const n = points.length;
   if (n < 2 || points[n - 1][0] - points[0][0] < 5) return 0;
@@ -1197,15 +1186,15 @@ function headingAt(points, x) {
   return Math.atan2(points[i][1] - points[i - 1][1], points[i][0] - points[i - 1][0]);
 }
 
-// The unit normal, to the left, of a polyline at its point i.
+// 폴리라인의 점 i에서 왼쪽을 향하는 단위 법선.
 function normalAt(points, i) {
   const [ax, ay] = points[Math.max(0, i - 1)], [bx, by] = points[Math.min(points.length - 1, i + 1)];
   const length = Math.hypot(bx - ax, by - ay) || 1;
   return [-(by - ay) / length, (bx - ax) / length];
 }
 
-// The BEV tab: the view and its stream, made once; start() and stop() follow the tab and the
-// page's visibility. onStatus({live, text}) says how the stream is doing.
+// BEV 탭: 뷰와 그 스트림을 한 번 만든다. start()와 stop()은 탭과 페이지가 보이는지를 따른다.
+// onStatus({live, text})가 스트림 상태를 알린다.
 export function createBev(onStatus) {
   const element = el("div", "bev-layout");
   const view = new BevView(element.appendChild(el("div", "bev-panel")), element.appendChild(el("div", "bev-side")));

@@ -1,4 +1,4 @@
-/* model/lead_tracker: 모델 앞차 거리와 광류 확대율을 섞는 칼만 필터. 잡음을 정해 둔 합성 앞차로 본다. */
+// model/lead_tracker: 모델 앞차 거리와 광류 확대율을 섞는 칼만 필터. 잡음을 정해 둔 합성 앞차로 본다.
 #include "model/lead_tracker.h"
 
 #include <gtest/gtest.h>
@@ -13,23 +13,20 @@ constexpr double kDt = 0.05;  // 20 Hz
 // 고정 씨앗 정규 잡음
 class Gauss {
 public:
-    double operator()(double sd)
-    {
+    double operator()(double sd) {
         const double u1 = (next() + 0.5) / 4294967296.0, u2 = (next() + 0.5) / 4294967296.0;
         return sd * std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2);
     }
 
 private:
-    double next()
-    {
+    double next() {
         rng_ = rng_ * 6364136223846793005ULL + 1442695040888963407ULL;
         return static_cast<double>(rng_ >> 32);
     }
     uint64_t rng_ = 12345;
 };
 
-LeadTrackInput measured(double t, double d, double v, Gauss &noise, double d_sd, bool flow, uint64_t frame)
-{
+LeadTrackInput measured(double t, double d, double v, Gauss &noise, double d_sd, bool flow, uint64_t frame) {
     LeadTrackInput in;
     in.t_s = t;
     in.lead_valid = true;
@@ -41,8 +38,7 @@ LeadTrackInput measured(double t, double d, double v, Gauss &noise, double d_sd,
     return in;
 }
 
-double std_of_steps(const std::vector<double> &x)
-{
+double std_of_steps(const std::vector<double> &x) {
     double s = 0.0, s2 = 0.0;
     for (size_t i = 1; i < x.size(); ++i) {
         const double d = x[i] - x[i - 1];
@@ -53,8 +49,7 @@ double std_of_steps(const std::vector<double> &x)
     return std::sqrt(s2 / n - (s / n) * (s / n));
 }
 
-TEST(LeadTracker, ClosingLeadIsSmoothedAndItsSpeedFound)
-{
+TEST(LeadTracker, ClosingLeadIsSmoothedAndItsSpeedFound) {
     LeadTracker tracker;
     Gauss noise;
     std::vector<double> raw, fused;
@@ -79,8 +74,7 @@ TEST(LeadTracker, ClosingLeadIsSmoothedAndItsSpeedFound)
     EXPECT_NEAR(tracker.state().distance_m, 40.0 - 3.0 * 10.0, 1.0);
 }
 
-TEST(LeadTracker, DistanceOutliersAreDroppedButAnotherLeadStartsOver)
-{
+TEST(LeadTracker, DistanceOutliersAreDroppedButAnotherLeadStartsOver) {
     LeadTracker tracker;
     Gauss noise;
     int f = 0;
@@ -103,10 +97,9 @@ TEST(LeadTracker, DistanceOutliersAreDroppedButAnotherLeadStartsOver)
     EXPECT_NEAR(tracker.state().distance_m, 15.0, 0.01);
 }
 
-/* 앞차가 갑자기 3 m/s로 다가오기 시작한다. 확대율을 넣은 추적은 모델 거리만 거른 추적과 비슷하게 따라붙고
- * (지연은 거의 같다), 그 뒤로 상대 속도가 더 정확하고 덜 흔들린다. */
-TEST(LeadTracker, FlowMakesTheClosingSpeedSteadierThanDistanceAlone)
-{
+// 앞차가 갑자기 3 m/s로 다가오기 시작한다. 확대율을 넣은 추적은 모델 거리만 거른 추적과 비슷하게 따라붙고
+// (지연은 거의 같다), 그 뒤로 상대 속도가 더 정확하고 덜 흔들린다.
+TEST(LeadTracker, FlowMakesTheClosingSpeedSteadierThanDistanceAlone) {
     LeadTracker with_flow, distance_only;
     Gauss noise_a, noise_b;
     double first_a = -1.0, first_b = -1.0, err_a = 0.0, err_b = 0.0;
@@ -137,8 +130,7 @@ TEST(LeadTracker, FlowMakesTheClosingSpeedSteadierThanDistanceAlone)
     EXPECT_LT(std_of_steps(va_hist), 0.75 * std_of_steps(vb_hist)) << "덜 흔들린다";
 }
 
-TEST(LeadTracker, FlowSpikesAndRepeatsAreNotUsed)
-{
+TEST(LeadTracker, FlowSpikesAndRepeatsAreNotUsed) {
     LeadTracker tracker;
     Gauss noise;
     int f = 0;
@@ -160,8 +152,7 @@ TEST(LeadTracker, FlowSpikesAndRepeatsAreNotUsed)
     EXPECT_EQ(tracker.state().flags & (kLeadTrackFlowUsed | kLeadTrackFlowRejected), 0u);
 }
 
-TEST(LeadTracker, LostLeadOrAGapStartsOver)
-{
+TEST(LeadTracker, LostLeadOrAGapStartsOver) {
     LeadTracker tracker;
     Gauss noise;
     for (int f = 0; f < 20; ++f) tracker.update(measured(f * kDt, 25.0, -1.0, noise, 0.3, false, 0));

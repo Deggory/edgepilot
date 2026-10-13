@@ -15,29 +15,27 @@ constexpr uint8_t kRequestIn = LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR |
 constexpr int kReenumerateTimeoutMs = 15000;  // 재부팅 뒤 다시 열거될 때까지(파이썬 panda도 15초)
 constexpr int kPollMs = 200;
 constexpr unsigned kControlTimeoutMs = 1000;
-constexpr unsigned kEraseTimeoutMs = 5000;    // bootstub은 섹터를 다 지운 뒤에 응답한다
+constexpr unsigned kEraseTimeoutMs = 5000;  // bootstub은 섹터를 다 지운 뒤에 응답한다
 constexpr unsigned kWriteTimeoutMs = 2000;
-constexpr size_t kWriteChunk = 16;            // 파이썬 panda의 flash_static과 같은 단위
+constexpr size_t kWriteChunk = 16;  // 파이썬 panda의 flash_static과 같은 단위
 
-/* libusb 컨텍스트 하나와 열린 판다 하나. 열면 인터페이스 0을 쥔다. */
+// libusb 컨텍스트 하나와 열린 판다 하나. 열면 인터페이스 0을 쥔다.
 class PandaUsb {
 public:
     PandaUsb() { ok_ = libusb_init(&ctx_) == 0; }
-    ~PandaUsb()
-    {
+    ~PandaUsb() {
         close();
         if (ok_) libusb_exit(ctx_);
     }
     bool ok() const { return ok_; }
 
     // 붙어 있는 판다의 product id(없으면 0)
-    uint16_t present() const
-    {
+    uint16_t present() const {
         libusb_device **list = nullptr;
         const ssize_t count = libusb_get_device_list(ctx_, &list);
         uint16_t found = 0;
         for (ssize_t i = 0; i < count && !found; ++i) {
-            libusb_device_descriptor desc {};
+            libusb_device_descriptor desc{};
             if (libusb_get_device_descriptor(list[i], &desc) != 0 || desc.idVendor != kPandaVendorId) continue;
             if (desc.idProduct == kPandaAppProductId || desc.idProduct == kPandaBootstubProductId)
                 found = desc.idProduct;
@@ -46,8 +44,7 @@ public:
         return found;
     }
 
-    bool wait_for(uint16_t product_id) const
-    {
+    bool wait_for(uint16_t product_id) const {
         for (int waited = 0; waited < kReenumerateTimeoutMs; waited += kPollMs) {
             if (present() == product_id) return true;
             usleep(kPollMs * 1000);
@@ -56,8 +53,7 @@ public:
     }
 
     // 0이면 열려 있다. 아니면 libusb 오류 코드(LIBUSB_ERROR_BUSY: 다른 프로세스가 쥐고 있다)
-    int open(uint16_t product_id)
-    {
+    int open(uint16_t product_id) {
         close();
         handle_ = libusb_open_device_with_vid_pid(ctx_, kPandaVendorId, product_id);
         if (!handle_) return LIBUSB_ERROR_NO_DEVICE;
@@ -71,26 +67,22 @@ public:
         return err;
     }
 
-    void close()
-    {
+    void close() {
         if (!handle_) return;
         libusb_release_interface(handle_, 0);
         libusb_close(handle_);
         handle_ = nullptr;
     }
 
-    int write(uint8_t request, uint16_t value, unsigned timeout_ms = kControlTimeoutMs)
-    {
+    int write(uint8_t request, uint16_t value, unsigned timeout_ms = kControlTimeoutMs) {
         return libusb_control_transfer(handle_, kRequestOut, request, value, 0, nullptr, 0, timeout_ms);
     }
 
-    int read(uint8_t request, uint8_t *data, uint16_t length)
-    {
+    int read(uint8_t request, uint8_t *data, uint16_t length) {
         return libusb_control_transfer(handle_, kRequestIn, request, 0, 0, data, length, kControlTimeoutMs);
     }
 
-    int bulk_write(const uint8_t *data, int length)
-    {
+    int bulk_write(const uint8_t *data, int length) {
         int transferred = 0;
         const int err = libusb_bulk_transfer(handle_, kPandaFlashEndpoint, const_cast<uint8_t *>(data), length,
                                              &transferred, kWriteTimeoutMs);
@@ -103,14 +95,10 @@ private:
     libusb_device_handle *handle_ = nullptr;
 };
 
-std::string usb_error(const char *what, int err)
-{
-    return std::string(what) + ": " + libusb_error_name(err);
-}
+std::string usb_error(const char *what, int err) { return std::string(what) + ": " + libusb_error_name(err); }
 
-/* bootstub의 flasher 응답(12바이트): [4:8] 매직, [8:12] 다음에 쓸 주소. 아니면 false. */
-bool read_flasher_echo(PandaUsb &usb, uint32_t *prog_ptr)
-{
+// bootstub의 flasher 응답(12바이트): [4:8] 매직, [8:12] 다음에 쓸 주소. 아니면 false.
+bool read_flasher_echo(PandaUsb &usb, uint32_t *prog_ptr) {
     uint8_t echo[12] = {};
     if (usb.read(kPandaRequestFlasherEcho, echo, sizeof(echo)) != static_cast<int>(sizeof(echo))) return false;
     if (std::memcmp(echo + 4, kPandaFlasherMagic, sizeof(kPandaFlasherMagic)) != 0) return false;
@@ -118,28 +106,28 @@ bool read_flasher_echo(PandaUsb &usb, uint32_t *prog_ptr)
     return true;
 }
 
-std::string read_version(PandaUsb &usb)
-{
+std::string read_version(PandaUsb &usb) {
     char version[kPandaVersionMaxBytes] = {};
     const int got = usb.read(kPandaRequestVersion, reinterpret_cast<uint8_t *>(version), sizeof(version));
     return got > 0 ? std::string(version, strnlen(version, static_cast<size_t>(got))) : std::string();
 }
 
-} // namespace
+}  // namespace
 
-PandaUsbMode panda_usb_mode()
-{
+PandaUsbMode panda_usb_mode() {
     PandaUsb usb;
     if (!usb.ok()) return PandaUsbMode::None;
     switch (usb.present()) {
-    case kPandaAppProductId: return PandaUsbMode::App;
-    case kPandaBootstubProductId: return PandaUsbMode::Bootstub;
-    default: return PandaUsbMode::None;
+        case kPandaAppProductId:
+            return PandaUsbMode::App;
+        case kPandaBootstubProductId:
+            return PandaUsbMode::Bootstub;
+        default:
+            return PandaUsbMode::None;
     }
 }
 
-PandaFlashResult flash_panda(const PandaImage &image, const PandaFlashProgress &progress)
-{
+PandaFlashResult flash_panda(const PandaImage &image, const PandaFlashProgress &progress) {
     PandaFlashResult result;
     auto fail = [&](const char *error, const std::string &detail) {
         result.error = error;
@@ -167,7 +155,8 @@ PandaFlashResult flash_panda(const PandaImage &image, const PandaFlashProgress &
                                               std::to_string(hw_type) + ") is not an STM32F413 board");
         usb.write(kPandaRequestEnterBootloader, 1);
         usb.close();
-        if (!usb.wait_for(kPandaBootstubProductId)) return fail("bootstub_timeout", "panda did not come back as bootstub");
+        if (!usb.wait_for(kPandaBootstubProductId))
+            return fail("bootstub_timeout", "panda did not come back as bootstub");
     }
 
     const int err = usb.open(kPandaBootstubProductId);
@@ -179,7 +168,8 @@ PandaFlashResult flash_panda(const PandaImage &image, const PandaFlashProgress &
     if (usb.write(kPandaRequestFlashUnlock, 0) < 0) return fail("erase_failed", "flash unlock failed");
     for (uint16_t sector = kPandaAppFirstSector; sector <= kPandaAppLastSector; ++sector) {
         const int erased = usb.write(kPandaRequestFlashErase, sector, kEraseTimeoutMs);
-        if (erased < 0) return fail("erase_failed", usb_error(("erase sector " + std::to_string(sector)).c_str(), erased));
+        if (erased < 0)
+            return fail("erase_failed", usb_error(("erase sector " + std::to_string(sector)).c_str(), erased));
         report("erase", 100 * (sector - kPandaAppFirstSector + 1) / (kPandaAppLastSector - kPandaAppFirstSector + 1));
     }
 
@@ -189,8 +179,8 @@ PandaFlashResult flash_panda(const PandaImage &image, const PandaFlashProgress &
         const int length = static_cast<int>(std::min(kWriteChunk, size - offset));
         const int written = usb.bulk_write(image.bytes.data() + offset, length);
         if (written != length)
-            return fail("write_failed", written < 0 ? usb_error("write", written)
-                                                    : "short write at offset " + std::to_string(offset));
+            return fail("write_failed",
+                        written < 0 ? usb_error("write", written) : "short write at offset " + std::to_string(offset));
         const int percent = static_cast<int>(100 * (offset + static_cast<size_t>(length)) / size);
         if (percent / 5 != last_percent / 5) {
             report("write", percent);

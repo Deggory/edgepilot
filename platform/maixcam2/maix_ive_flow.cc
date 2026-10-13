@@ -20,8 +20,7 @@ struct Buf {
 };
 
 // 캐시 CMM: CPU가 점을 쓰고 결과·응답을 읽는다(쓰기 뒤 flush, 하드웨어가 쓴 뒤 invalidate)
-Buf alloc_buf(size_t size)
-{
+Buf alloc_buf(size_t size) {
     Buf b;
     void *v = nullptr;
     if (AX_SYS_MemAllocCached(&b.phys, &v, static_cast<AX_U32>(size), 128,
@@ -33,16 +32,14 @@ Buf alloc_buf(size_t size)
     AX_SYS_MflushCache(b.phys, b.virt, static_cast<AX_U32>(size));
     return b;
 }
-void free_buf(Buf &b)
-{
+void free_buf(Buf &b) {
     if (b.virt) AX_SYS_MemFree(b.phys, b.virt);
     b = Buf{};
 }
 void flush(const Buf &b) { AX_SYS_MflushCache(b.phys, b.virt, static_cast<AX_U32>(b.size)); }
 void invalidate(const Buf &b) { AX_SYS_MinvalidateCache(b.phys, b.virt, static_cast<AX_U32>(b.size)); }
 
-AX_IVE_IMAGE_T image(AX_U64 phys, uint8_t *virt, int w, int h, int stride, AX_IVE_IMAGE_TYPE_E type)
-{
+AX_IVE_IMAGE_T image(AX_U64 phys, uint8_t *virt, int w, int h, int stride, AX_IVE_IMAGE_TYPE_E type) {
     AX_IVE_IMAGE_T im = {};
     im.au64PhyAddr[0] = phys;
     im.au64VirAddr[0] = reinterpret_cast<uintptr_t>(virt);
@@ -52,16 +49,14 @@ AX_IVE_IMAGE_T image(AX_U64 phys, uint8_t *virt, int w, int h, int stride, AX_IV
     im.enType = type;
     return im;
 }
-AX_IVE_MEM_INFO_T mem(const Buf &b)
-{
+AX_IVE_MEM_INFO_T mem(const Buf &b) {
     AX_IVE_MEM_INFO_T m = {};
     m.u64PhyAddr = b.phys;
     m.u64VirAddr = reinterpret_cast<uintptr_t>(b.virt);
     m.u32Size = static_cast<AX_U32>(b.size);
     return m;
 }
-AX_IVE_DATA_T data(AX_U64 phys, uint8_t *virt, int w, int h, int stride)
-{
+AX_IVE_DATA_T data(AX_U64 phys, uint8_t *virt, int w, int h, int stride) {
     AX_IVE_DATA_T d = {};
     d.u64PhyAddr = phys;
     d.u64VirAddr = reinterpret_cast<uintptr_t>(virt);
@@ -71,10 +66,10 @@ AX_IVE_DATA_T data(AX_U64 phys, uint8_t *virt, int w, int h, int stride)
     return d;
 }
 
-/* 작업 하나를 넣고 끝날 때까지 기다린다. 블록 질의는 작업이 길면 몇 ms 뒤 시간 초과를 내므로 다시 묻는다
- * (AX_ERR_IVE_QUERY_TIMEOUT은 열거값 0x54가 아니라 AX_DEF_ERR로 다시 정의된 전체 코드다). */
-template <class Submit> bool run(Submit submit)
-{
+// 작업 하나를 넣고 끝날 때까지 기다린다. 블록 질의는 작업이 길면 몇 ms 뒤 시간 초과를 내므로 다시 묻는다
+// (AX_ERR_IVE_QUERY_TIMEOUT은 열거값 0x54가 아니라 AX_DEF_ERR로 다시 정의된 전체 코드다).
+template <class Submit>
+bool run(Submit submit) {
     AX_IVE_HANDLE handle = 0;
     if (submit(&handle) != 0) return false;
     AX_BOOL finished = AX_FALSE;
@@ -89,13 +84,13 @@ struct PointQ {  // AX_IVE_POINT_U11Q20_T: y가 먼저
 
 constexpr float kQ20 = 1048576.0f;
 
-} // namespace
+}  // namespace
 
 struct IveFlow::Impl {
     struct Frame {
-        AX_U64 l0_phys = 0;     // 원본 단: 호출자의 Y 평면(링 슬롯)을 복사하지 않고 그대로 읽는다
+        AX_U64 l0_phys = 0;  // 원본 단: 호출자의 Y 평면(링 슬롯)을 복사하지 않고 그대로 읽는다
         int l0_stride = 0;
-        Buf level[kLevels];     // 1단부터. NV12 크기로 잡는다(VPP가 YUV400을 못 내면 UV까지 쓴다)
+        Buf level[kLevels];  // 1단부터. NV12 크기로 잡는다(VPP가 YUV400을 못 내면 UV까지 쓴다)
     };
     enum class Engine { VppY400, VppNv12, Ive };
     int w = 0, h = 0;
@@ -109,18 +104,16 @@ struct IveFlow::Impl {
     AX_IVE_LK_OPTICAL_FLOW_PYR_CTRL_T lk{};
     bool ive = false;
 
-    ~Impl()
-    {
+    ~Impl() {
         for (Frame &f : frames)
             for (Buf &b : f.level) free_buf(b);
         for (Buf *b : {&blur, &gx, &gy, &resp, &corners, &pts, &nxt, &status}) free_buf(*b);
         if (ive) AX_IVE_Exit();
     }
 
-    /* 축소 단을 VPP 한 번으로(원본에서 1/2, 1/4를 함께) 만든다. modeld는 GDC 워프 때문에 AX_IVPS_Init으로
-     * TDP·VPP 작업 큐 한 쌍(보드 전체에 넷)을 이미 쥐고 있지만 쓰지는 않았다. y400이면 출력에 Y만 쓴다. */
-    AX_S32 pyramid_vpp(Frame &f, AX_U64 uv_phys, bool y400)
-    {
+    // 축소 단을 VPP 한 번으로(원본에서 1/2, 1/4를 함께) 만든다. modeld는 GDC 워프 때문에 AX_IVPS_Init으로
+    // TDP·VPP 작업 큐 한 쌍(보드 전체에 넷)을 이미 쥐고 있지만 쓰지는 않았다. y400이면 출력에 Y만 쓴다.
+    AX_S32 pyramid_vpp(Frame &f, AX_U64 uv_phys, bool y400) {
         AX_VIDEO_FRAME_T src = {};
         src.u32Width = static_cast<AX_U32>(w);
         src.u32Height = static_cast<AX_U32>(h);
@@ -154,8 +147,7 @@ struct IveFlow::Impl {
     }
 
     // VPP를 못 쓸 때: IVE 5x5 가우시안 + 두 화소·두 행마다 하나(원본 단은 호출자 버퍼에서 바로 읽는다)
-    bool pyramid_ive(Frame &f)
-    {
+    bool pyramid_ive(Frame &f) {
         for (int l = 1; l < kLevels; ++l) {
             const int sw = w >> (l - 1), sh = h >> (l - 1);
             const AX_U64 src_phys = l == 1 ? f.l0_phys : f.level[l - 1].phys;
@@ -175,8 +167,7 @@ struct IveFlow::Impl {
         return true;
     }
 
-    bool pyramid(Frame &f, AX_U64 uv_phys)
-    {
+    bool pyramid(Frame &f, AX_U64 uv_phys) {
         while (engine != Engine::Ive) {
             const AX_S32 r = pyramid_vpp(f, uv_phys, engine == Engine::VppY400);
             if (r == 0) return true;
@@ -191,8 +182,7 @@ struct IveFlow::Impl {
     }
 };
 
-IveFlow::IveFlow(int width, int height) : impl_(new Impl), width_(width), height_(height)
-{
+IveFlow::IveFlow(int width, int height) : impl_(new Impl), width_(width), height_(height) {
     Impl &m = *impl_;
     m.w = width;
     m.h = height;
@@ -243,8 +233,7 @@ IveFlow::IveFlow(int width, int height) : impl_(new Impl), width_(width), height
 
 IveFlow::~IveFlow() = default;
 
-bool IveFlow::push(unsigned long long y_phys, int stride, unsigned long long uv_phys)
-{
+bool IveFlow::push(unsigned long long y_phys, int stride, unsigned long long uv_phys) {
     Impl &m = *impl_;
     if (stride % 16 != 0 || stride < m.w) return false;
     const int next = m.cur < 0 ? 0 : 1 - m.cur;
@@ -257,21 +246,19 @@ bool IveFlow::push(unsigned long long y_phys, int stride, unsigned long long uv_
     return true;
 }
 
-const char *IveFlow::pyramid_engine() const
-{
+const char *IveFlow::pyramid_engine() const {
     switch (impl_->engine) {
-    case Impl::Engine::VppY400:
-        return "vpp";
-    case Impl::Engine::VppNv12:
-        return "vpp-nv12";
-    case Impl::Engine::Ive:
-        return "ive";
+        case Impl::Engine::VppY400:
+            return "vpp";
+        case Impl::Engine::VppNv12:
+            return "vpp-nv12";
+        case Impl::Engine::Ive:
+            return "ive";
     }
     return "?";
 }
 
-const int16_t *IveFlow::corner_response()
-{
+const int16_t *IveFlow::corner_response() {
     Impl &m = *impl_;
     if (m.cur < 0) return nullptr;
     const int cw = m.w / 2;
@@ -295,8 +282,7 @@ const int16_t *IveFlow::corner_response()
     return reinterpret_cast<const int16_t *>(m.resp.virt);
 }
 
-bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool backward)
-{
+bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool backward) {
     Impl &m = *impl_;
     if (n <= 0) return true;
     std::fill(ok, ok + n, 0);

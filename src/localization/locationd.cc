@@ -1,19 +1,20 @@
-/* locationd: 보드 IMU·모델 pose·제어 상태로 자세 칼만 필터(상류 locationd)와 조향 지연
- * 추정(상류 lagd)을 돌려 /edgepilot_localization에 발행한다. 본체는 LocalizationPipeline이고
- * 이 파일은 공유 메모리 입출력과 lagd 저장만 맡는다.
- *
- * controlsd는 이 출력을 paramsd·torqued 입력(use_locationd_learner_inputs)과 경로 지연
- * (use_live_delay)에 쓴다. 입력이 없으면(IMU 없음 등) 발행하지 않고 기다리고, 그동안 controlsd는
- * ESP12 값으로 돌아간다. lagd 추정은 params/live_delay.json에 60초마다와 종료 때 저장하고,
- * 시작 때 초기값(steering.json steer_actuator_delay)이 같으면 이어서 쓴다. */
+// locationd: 보드 IMU·모델 pose·제어 상태로 자세 칼만 필터(상류 locationd)와 조향 지연
+// 추정(상류 lagd)을 돌려 /edgepilot_localization에 발행한다. 본체는 LocalizationPipeline이고
+// 이 파일은 공유 메모리 입출력과 lagd 저장만 맡는다.
+//
+// controlsd는 이 출력을 paramsd·torqued 입력(use_locationd_learner_inputs)과 경로 지연
+// (use_live_delay)에 쓴다. 입력이 없으면(IMU 없음 등) 발행하지 않고 기다리고, 그동안 controlsd는
+// ESP12 값으로 돌아간다. lagd 추정은 params/live_delay.json에 60초마다와 종료 때 저장하고,
+// 시작 때 초기값(steering.json steer_actuator_delay)이 같으면 이어서 쓴다.
 #include "common/background_writer.h"
+#include "common/build_version.h"
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
-#include "localization/localization_pipeline.h"
 #include "common/utils_file.h"
 #include "common/utils_json.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
+#include "localization/localization_pipeline.h"
 
 #include <signal.h>
 #include <unistd.h>
@@ -30,9 +31,9 @@ constexpr uint64_t kLogIntervalNs = 10'000'000'000ULL;
 
 }  // namespace
 
-int main()
-{
+int main() {
     install_stop_signal_handlers(&g_stop);
+    log_build_version("locationd");
 
     LateralLagConfig lag_config;
     float actuator_delay = 0.0f;
@@ -72,8 +73,8 @@ int main()
         return static_cast<unsigned long long>(now_count - before);
     };
 
-    /* 조향 지연 캐시는 바뀌었을 때만 writer 스레드에 넘긴다(SD가 바빠도 IMU 루프가 막히지 않는다).
-     * 쓰기가 실패했으면 다음 번에 같은 내용이라도 다시 넘긴다. */
+    // 조향 지연 캐시는 바뀌었을 때만 writer 스레드에 넘긴다(SD가 바빠도 IMU 루프가 막히지 않는다).
+    // 쓰기가 실패했으면 다음 번에 같은 내용이라도 다시 넘긴다.
     auto persist = [&]() {
         if (writer.failures() != write_failures) {
             write_failures = writer.failures();
@@ -126,12 +127,12 @@ int main()
                          "sanity=%llu cross=%llu filter=%llu | camera ok=%llu ts=%llu sanity=%llu filter=%llu "
                          "speed_guard=%llu\n",
                          d(c.accel_ok, p.accel_ok), d(c.accel_timestamp, p.accel_timestamp),
-                         d(c.accel_sanity, p.accel_sanity), d(c.accel_filter, p.accel_filter),
-                         d(c.gyro_ok, p.gyro_ok), d(c.gyro_timestamp, p.gyro_timestamp),
-                         d(c.gyro_sanity, p.gyro_sanity), d(c.gyro_cross_check, p.gyro_cross_check),
-                         d(c.gyro_filter, p.gyro_filter), d(c.camera_ok, p.camera_ok),
-                         d(c.camera_timestamp, p.camera_timestamp), d(c.camera_sanity, p.camera_sanity),
-                         d(c.camera_filter, p.camera_filter), d(c.camera_speed_guard, p.camera_speed_guard));
+                         d(c.accel_sanity, p.accel_sanity), d(c.accel_filter, p.accel_filter), d(c.gyro_ok, p.gyro_ok),
+                         d(c.gyro_timestamp, p.gyro_timestamp), d(c.gyro_sanity, p.gyro_sanity),
+                         d(c.gyro_cross_check, p.gyro_cross_check), d(c.gyro_filter, p.gyro_filter),
+                         d(c.camera_ok, p.camera_ok), d(c.camera_timestamp, p.camera_timestamp),
+                         d(c.camera_sanity, p.camera_sanity), d(c.camera_filter, p.camera_filter),
+                         d(c.camera_speed_guard, p.camera_speed_guard));
             last_counters = c;
         }
     }

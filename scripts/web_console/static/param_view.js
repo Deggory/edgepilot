@@ -8,7 +8,7 @@ import {el, section} from "./ui.js";
 const OTHER_SECTION = "기타";
 const tabLabel = tab => (tab === "vehicle" ? params().vehicle_tab.label : tab);
 
-/* extras: 파라미터 섹션 뒤에 붙일 것들({element, start, stop}, 예: 기기 설정의 Panda 펌웨어 카드). */
+// extras: 파라미터 섹션 뒤에 붙일 것들({element, start, stop}, 예: 기기 설정의 Panda 펌웨어 카드).
 export function createParamView(group, {extras = []} = {}) {
   const spec = params().groups[group];
   const bySection = new Map(spec.sections.map(name => [name, []]));

@@ -9,7 +9,7 @@
 ./scripts/run_host_tests.sh
 ```
 
-`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 258개와
+`build-host`를 구성하고 `host_tests` 타깃을 빌드한 뒤 `ctest`로 전부 돌린다(C++ 260개와
 Python 2개). googletest v1.18.0은 첫 구성 때 받아 온다(SHA256 고정).
 
 하나만 돌릴 때:
@@ -29,6 +29,7 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 | `gtest_adaptive_cruise` | 18 | 비전 크루즈 버튼 간격과 한계. 차량 모형과 폐루프로 돌려 설정 속도 동기화, 재설정, 반응 없는 차, 오르내림 반복을 본다. 실측 같은 느린 차량 모형(초당 0.5 km/h)으로 가속 페달 사용을 버튼 유실로 읽지 않는지, 약한 감속에 맞춘 접근 속도 한계, 차가 줄이는 동안 설정 속도를 실제 속도 근처에 두는지, 앞차 측정 잡음에 SET-/RES+가 번갈아 나가지 않는지 |
 | `gtest_alert_tones` | 1 | 알림음 합성: 모든 소리가 무음에서 시작해 무음으로 끝나고, 봉우리가 같고, 0.3~2.5초이며, 서로 다르다 |
 | `gtest_background_writer` | 1 | 루프 밖 파일 쓰기 스레드: 같은 경로는 최신 내용, 지우기, 실패 수, flush는 넘긴 쓰기가 끝날 때까지 기다림, 없앨 때 남은 쓰기 마치기 |
+| `gtest_build_version` | 2 | 빌드 버전(`cmake/build_version.cmake`): 실행 파일 안의 표식 바로 뒤가 `edgepilot_version()`이고, 웹 콘솔이 그대로 보여 줄 수 있는 64자 이하의 글자만 쓰는지 |
 | `gtest_calibration` | 17 | 온라인 보정 상태 기계(calibrationd.py 참조, 카메라 높이·높이 표준편차 조건 포함), 장착 변경·초기화 재보정, 범위 밖 저장값 복원, 저장·복원·수동 보정, 환경 변수, 투영 행렬과 YUV6 워프(openpilot OpenCL 참조), NV21 색차 순서, 카메라 장착 위치. 보정 서비스의 광류 출처(가짜 `FlowSource`로): 저장된 광류 블록과 설정으로 첫 프레임부터 광류, 광류가 워프를 맡는 동안 포즈 보정기가 멈췄다가 포즈로 돌아오면 다시 도는지, 초기화가 두 보정을 다 지우고 측정원에 알리며 그 전 상태를 버리는지, 결합 중 초기화는 해제까지 대기, 측정원의 블록 저장 |
 | `gtest_calibration_source` | 12 | 워프 보정 출처 고르기: 설정이 포즈면 포즈 값 그대로, 광류면 쓸 만할 때(3블록, 범위·표준편차) 광류 pitch·yaw와 포즈 roll, 결합 중 설정 변경과 주행 중 생긴 추정은 해제까지 대기, 포즈로 물러나기는 결합 중에도, 적용 중인 추정 변화는 결합 중에도 따라감, 표준편차 이력(0.5°/0.8°), 램프(차이의 1/5 초당, 최소 0.05°/s), 포즈로 돌아온 뒤 그대로 따라감, 초기화 때 바로 맞추기 |
 | `gtest_car` | 15 | 휠 속도 vEgo 칼만 필터(상류 opendbc 값과 대조, 낡은 뒤 다시 시작), K7 CAN 신호 해석(LCA11, WHL_SPD11과 바퀴 정지, TPMS11, TCS13/15, SCC11, CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터와 일시 고장(ToiUnavail·ToiFlt))과 MDPS용 CLU11 속도 바꿔치기, CGW1 B-CAN 타임아웃을 안전한 값으로 읽기(깜빡이·비상등 꺼짐, 문 열림, 안전벨트 미착용), AHB1 페달 스트로크(3 mm 초과)와 TCS13 BrakeLight(AUTO HOLD)로 켜는 브레이크등, AHB1 페달이 끄는 고정형 크루즈 추정(TCS13 0이 덮어쓰지 않음, 밟은 채 RES 무시) |
@@ -62,7 +63,8 @@ build-host/bin/gtest_lateral_learners --gtest_filter='LateralLearners.Torque*'
 `ctest`에 등록돼 함께 돈다. 앞의 것은 fastapi 없이 stdlib만으로 웹 콘솔을 본다: 파라미터 저장소와
 기본값 동기화, `params/*.json`의 UI 메타데이터(섹션, 범위), UI min/max와 C++ `Json*Field` 클램프 표의
 일치, 공유 메모리 상태(학습, locationd, 매니저 프로세스 표, 카메라 보정, BEV)의 배치와 `ipc_messages.h`의
-일치, 카메라 보정 카드가 해제 상태에서만 초기화와 보정 출처 바꾸기를 받고 카드 전용 항목은 파라미터 API가
+일치, 프로세스 표의 빌드 버전(실행 중인 실행 파일과 설치된 실행 파일의 표식, 리허설의 `replayd` 칸, 표식이
+`build_version.h`와 같은지), 카메라 보정 카드가 해제 상태에서만 초기화와 보정 출처 바꾸기를 받고 카드 전용 항목은 파라미터 API가
 받지 않는지, 판다 펌웨어 카드가 설치된 이미지를 `panda_firmware.cc`와 같은 규칙으로 보고 주차 중일 때만
 플래싱 요청 파일을 쓰는지, 페이지 모듈의 import와 페이지가 부르는 API가 서버에 다 있는지, 화면 문구에 차종
 이름이 없는지, BEV의 차선 필터 사본(`lane_filter.js`)이 플래너와 같은 상수와 기준 출력을 갖는지(jsc나 node가 있으면 `check_bev_lane_filter.mjs`를

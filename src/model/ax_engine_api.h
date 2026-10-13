@@ -1,10 +1,10 @@
 #ifndef AX_ENGINE_API_H
 #define AX_ENGINE_API_H
 
-/* AX620E(AX630C) NPU 런타임 libax_engine 선언과 NPU 세션이 쓰는 libax_sys 함수. 엔진
- * 헤더는 MSP SDK에 없어서, 같은 라이브러리를 여는 pyaxengine(_axe_capi.py)의 cffi 정의를
- * aarch64 64비트 배치 그대로 옮겼다. 쓰는 함수만 둔다. (GDC는 SDK 헤더를 쓰고, 이
- * 파일은 SDK 헤더와 같은 번역 단위에 넣지 않는다.) */
+// AX620E(AX630C) NPU 런타임 libax_engine 선언과 NPU 세션이 쓰는 libax_sys 함수. 엔진
+// 헤더는 MSP SDK에 없어서, 같은 라이브러리를 여는 pyaxengine(_axe_capi.py)의 cffi 정의를
+// aarch64 64비트 배치 그대로 옮겼다. 쓰는 함수만 둔다. (GDC는 SDK 헤더를 쓰고, 이
+// 파일은 SDK 헤더와 같은 번역 단위에 넣지 않는다.)
 
 #include <cstdint>
 
@@ -114,8 +114,7 @@ typedef struct {
 } AX_ENGINE_IO_T;
 
 AX_S32 AX_SYS_Init(AX_VOID);
-AX_S32 AX_SYS_MemAllocCached(AX_U64 *phyaddr, AX_VOID **pviraddr, AX_U32 size, AX_U32 align,
-                             const AX_S8 *token);
+AX_S32 AX_SYS_MemAllocCached(AX_U64 *phyaddr, AX_VOID **pviraddr, AX_U32 size, AX_U32 align, const AX_S8 *token);
 AX_S32 AX_SYS_MemFree(AX_U64 phyaddr, AX_VOID *pviraddr);
 AX_S32 AX_SYS_MflushCache(AX_U64 phyaddr, AX_VOID *pviraddr, AX_U32 size);
 AX_S32 AX_SYS_MinvalidateCache(AX_U64 phyaddr, AX_VOID *pviraddr, AX_U32 size);

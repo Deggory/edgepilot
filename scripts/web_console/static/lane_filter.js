@@ -1,17 +1,16 @@
-// The lane-line filter controlsd's planner runs on the two ego lines (src/planning/lane_line_filter.cc), so
-// the BEV draws the lines steering follows. Line for line the same: the last filtered line moved by the
-// car's own motion (an arc of the measured curvature over v·dt), read at the model's point distances with a
-// three-point quadratic interpolation and blended with the new frame. check_web_console.py holds the
-// constants to the C++ ones and runs tests/check_bev_lane_filter.mjs, which checks this file against the
-// C++ output. docs/lane-line-filter.md
+// controlsd의 플래너가 자차 차로의 두 선에 거는 차선선 필터(src/planning/lane_line_filter.cc)다. 그래서
+// BEV가 조향이 따르는 선을 그린다. C++와 한 줄 한 줄 같다: 직전에 거른 선을 자차 움직임(실측 곡률로
+// v·dt만큼 간 원호)만큼 옮기고, 모델의 점 거리에서 세 점 2차 보간으로 읽어 새 프레임과 섞는다.
+// check_web_console.py가 상수를 C++ 상수와 맞춰 보고 tests/check_bev_lane_filter.mjs를 돌리며, 이
+// 스크립트가 이 파일을 C++ 출력과 비교한다. docs/lane-line-filter.md
 
 export const LANE_FILTER_WEIGHT = 0.5;  // lane_line_filter.h kLaneLineFilterWeight
-const MAX_GAP_S = 0.2;                  // lane_line_filter.cc kMaxGapS: a longer gap starts again
-const RESTART_REACH_M = 20.0;           // kRestartReachM: the near points that judge a restart
-const RESTART_M = 0.5;                  // kRestartM: their mean distance from the prediction that restarts
+const MAX_GAP_S = 0.2;                  // lane_line_filter.cc kMaxGapS: 이보다 긴 끊김은 다시 시작한다
+const RESTART_REACH_M = 20.0;           // kRestartReachM: 다시 시작을 판단하는 가까운 점의 범위
+const RESTART_M = 0.5;                  // kRestartM: 그 점들이 예측에서 평균 이만큼 벗어나면 다시 시작한다
 
-// The line through (px, py) at x, with px[j] <= x <= px[j + 1]: a quadratic through j, j + 1 and the
-// neighbour nearer x, or a straight line where points coincide.
+// px[j] <= x <= px[j + 1]인 x에서 (px, py)를 지나는 선의 값: j, j + 1과 x에 더 가까운 쪽 이웃을 지나는
+// 2차식이고, 점이 겹치는 곳에서는 직선이다.
 function interpolate(px, py, j, x) {
   const n = px.length, span = px[j + 1] - px[j];
   if (!(span > 1e-6)) return py[j + 1];
@@ -39,8 +38,8 @@ export class LaneLineFilter {
     this.have = false;
   }
 
-  // x and y are one line's points (m from the camera, y to the right), t the capture time (s), v our
-  // speed (m/s), curvature the measured one (1/m, + to the right). Returns the filtered y.
+  // x와 y는 선 하나의 점(카메라에서 m, y는 오른쪽), t는 캡처 시각(s), v는 자차 속도(m/s), curvature는 실측
+  // 곡률(1/m, 오른쪽이 +)이다. 거른 y를 돌려준다.
   update(t, x, y, v, curvature) {
     const n = x.length;
     if (![...x, ...y].every(Number.isFinite)) {

@@ -15,16 +15,14 @@ namespace {
 constexpr uint64_t kControlMaxAgeNs = 1000000000ULL;
 constexpr float kParkedMaxSpeedKph = 1.0f;
 
-uint32_t read_le32(const uint8_t *p)
-{
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+uint32_t read_le32(const uint8_t *p) {
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
 }
 
-/* 버전 문자열 <대문자 3~8>-<영숫자 8>-<DEBUG|RELEASE>를 찾는다(펌웨어의 gitversion). 앞뒤가
- * 같은 꼴의 글자와 붙어 있으면 아니다. */
-std::string find_version(const std::vector<uint8_t> &bytes)
-{
+// 버전 문자열 <대문자 3~8>-<영숫자 8>-<DEBUG|RELEASE>를 찾는다(펌웨어의 gitversion). 앞뒤가
+// 같은 꼴의 글자와 붙어 있으면 아니다.
+std::string find_version(const std::vector<uint8_t> &bytes) {
     for (const char *suffix : {"-DEBUG", "-RELEASE"}) {
         const size_t suffix_len = std::strlen(suffix);
         auto it = bytes.begin();
@@ -39,7 +37,8 @@ std::string find_version(const std::vector<uint8_t> &bytes)
                              [](uint8_t c) { return std::isalnum(c) != 0; }))
                 continue;
             size_t name_start = hash_start - 1;
-            while (name_start > 0 && std::isupper(bytes[name_start - 1]) && hash_start - 1 - name_start < 8) --name_start;
+            while (name_start > 0 && std::isupper(bytes[name_start - 1]) && hash_start - 1 - name_start < 8)
+                --name_start;
             const size_t name_len = hash_start - 1 - name_start;
             if (name_len < 3 || (name_start > 0 && std::isalnum(bytes[name_start - 1]))) continue;
             return std::string(bytes.begin() + static_cast<long>(name_start), bytes.begin() + static_cast<long>(end));
@@ -48,8 +47,7 @@ std::string find_version(const std::vector<uint8_t> &bytes)
     return std::string();
 }
 
-void append_json_string(std::string *out, const std::string &value)
-{
+void append_json_string(std::string *out, const std::string &value) {
     out->push_back('"');
     for (const unsigned char c : value) {
         if (c == '"' || c == '\\') {
@@ -66,21 +64,23 @@ void append_json_string(std::string *out, const std::string &value)
     out->push_back('"');
 }
 
-const char *flash_state_name(PandaFlashState state)
-{
+const char *flash_state_name(PandaFlashState state) {
     switch (state) {
-    case PandaFlashState::Flashing: return "flashing";
-    case PandaFlashState::Done: return "done";
-    case PandaFlashState::Failed: return "failed";
-    case PandaFlashState::Idle: break;
+        case PandaFlashState::Flashing:
+            return "flashing";
+        case PandaFlashState::Done:
+            return "done";
+        case PandaFlashState::Failed:
+            return "failed";
+        case PandaFlashState::Idle:
+            break;
     }
     return "idle";
 }
 
-} // namespace
+}  // namespace
 
-bool parse_panda_image(std::vector<uint8_t> bytes, PandaImage *image, std::string *error)
-{
+bool parse_panda_image(std::vector<uint8_t> bytes, PandaImage *image, std::string *error) {
     auto fail = [&](const std::string &message) {
         if (error) *error = message;
         return false;
@@ -105,8 +105,7 @@ bool parse_panda_image(std::vector<uint8_t> bytes, PandaImage *image, std::strin
     return true;
 }
 
-bool load_panda_image(const std::string &path, PandaImage *image, std::string *error)
-{
+bool load_panda_image(const std::string &path, PandaImage *image, std::string *error) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
         if (error) *error = "cannot open " + path;
@@ -116,27 +115,32 @@ bool load_panda_image(const std::string &path, PandaImage *image, std::string *e
     return parse_panda_image(std::move(bytes), image, error);
 }
 
-bool panda_hw_type_flashable(uint8_t hw_type)
-{
+bool panda_hw_type_flashable(uint8_t hw_type) {
     return hw_type == kPandaHwBlack || hw_type == kPandaHwUno || hw_type == kPandaHwDos;
 }
 
-const char *panda_hw_type_name(uint8_t hw_type)
-{
+const char *panda_hw_type_name(uint8_t hw_type) {
     switch (hw_type) {
-    case 1: return "white panda";
-    case 2: return "grey panda";
-    case kPandaHwBlack: return "black panda";
-    case 4: return "pedal";
-    case kPandaHwUno: return "uno";
-    case kPandaHwDos: return "dos";
-    case kPandaHwRed: return "red panda";
-    default: return "unknown";
+        case 1:
+            return "white panda";
+        case 2:
+            return "grey panda";
+        case kPandaHwBlack:
+            return "black panda";
+        case 4:
+            return "pedal";
+        case kPandaHwUno:
+            return "uno";
+        case kPandaHwDos:
+            return "dos";
+        case kPandaHwRed:
+            return "red panda";
+        default:
+            return "unknown";
     }
 }
 
-bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, std::string *reason)
-{
+bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, std::string *reason) {
     const char *code = nullptr;
     const uint64_t age = now_ns >= control.timestamp_ns ? now_ns - control.timestamp_ns : 0;
     if (control.timestamp_ns == 0 || age > kControlMaxAgeNs) {
@@ -154,8 +158,7 @@ bool panda_flash_allowed(const ControlState &control, uint64_t now_ns, std::stri
     return code == nullptr;
 }
 
-std::string panda_status_json(const PandaLinkStatus &link, const PandaFlashStatus &flash, uint64_t now_ns)
-{
+std::string panda_status_json(const PandaLinkStatus &link, const PandaFlashStatus &flash, uint64_t now_ns) {
     std::string out = "{\"stamp_ns\":" + std::to_string(now_ns) + ",\"mode\":";
     append_json_string(&out, link.mode);
     out += ",\"serial\":";

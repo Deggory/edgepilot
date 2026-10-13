@@ -18,13 +18,13 @@ from .state_layout import (CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, MODEL_CALIBR
 
 # modeld(calibration_service.cc)와 같은 변수로 바꿀 수 있다
 CALIBRATION_RESET_PATH = os.environ.get("EDGEPILOT_CALIBRATION_RESET_PATH", "/dev/shm/edgepilot_calibration_reset")
-CALIBRATION_STATE = struct.Struct("<Ii3f3f")  # CalibrationState: status, valid_blocks, rpy, spread
+CALIBRATION_STATE = struct.Struct("<Ii3f3f")  # CalibrationState 필드: status, valid_blocks, rpy, spread
 CALIBRATION_STATUS = ("uncalibrated", "calibrated", "invalid", "recalibrating")
-# FlowCalibrationState: window_frame_id, status, windows, blocks, pitch, yaw, sd_pitch, sd_yaw, window_pitch, window_yaw,
-# window_rotation, window_tracks, window_inliers, mount_changes, window_parallax, estimate_blocks, rejected_windows
+# FlowCalibrationState 필드: window_frame_id, status, windows, blocks, pitch, yaw, sd_pitch, sd_yaw, window_pitch,
+# window_yaw, window_rotation, window_tracks, window_inliers, mount_changes, window_parallax, estimate_blocks, rejected_windows
 FLOW_CALIBRATION_STATE = struct.Struct("<Q3I4f3f2IIf2I")
 FLOW_STATUS = ("off", "collecting", "estimate")
-# CalibrationSourceState: source, requested, flags, pose_status, pose_valid_blocks, pose rpy
+# CalibrationSourceState 필드: source, requested, flags, pose_status, pose_valid_blocks, 포즈 rpy
 CALIBRATION_SOURCE_STATE = struct.Struct("<4Ii3f")
 SOURCE_FLAG_FLOW_USABLE, SOURCE_FLAG_PENDING, SOURCE_FLAG_RAMPING = 1, 2, 4  # ipc_messages.h kCalibrationSource*
 SOURCE_GROUP, SOURCE_KEY = "display", "calibration_use_flow"  # 보정 출처 설정(modeld ModeldSettings가 읽는다)

@@ -1,8 +1,8 @@
 #ifndef SYSTEM_MONITOR_H
 #define SYSTEM_MONITOR_H
 
-/* /proc CPU/메모리/저장소, thermal zone 온도, 네트워크 상태를 읽어
- * HudState에 채운다. overlayd가 1 Hz로 호출한다. */
+// /proc CPU/메모리/저장소, thermal zone 온도, 네트워크 상태를 읽어
+// HudState에 채운다. overlayd가 1 Hz로 호출한다.
 
 #include "hud/hud_state.h"
 

@@ -1,8 +1,8 @@
 #ifndef PANDA_PROTOCOL_H
 #define PANDA_PROTOCOL_H
 
-/* firmware/panda가 USB로 말하는 것: 장치 ID, 요청 코드, 패킷 버전, health 패킷, 앱 플래시 배치.
- * pandad·플래셔가 쓰고, gtest_panda_firmware가 펌웨어 헤더(board/health.h 등)와 대조한다. */
+// firmware/panda가 USB로 말하는 것: 장치 ID, 요청 코드, 패킷 버전, health 패킷, 앱 플래시 배치.
+// pandad·플래셔가 쓰고, gtest_panda_firmware가 펌웨어 헤더(board/health.h 등)와 대조한다.
 
 #include <cstddef>
 #include <cstdint>
@@ -12,19 +12,19 @@ constexpr uint16_t kPandaAppProductId = 0xddcc;       // 앱(펌웨어)이 돌 �
 constexpr uint16_t kPandaBootstubProductId = 0xddee;  // bootstub(플래셔)에 머물 때
 
 // 벤더 요청 코드(board/usb_comms.h, board/flasher.h)
-constexpr uint8_t kPandaRequestFlasherEcho = 0xb0;   // bootstub: 응답 [4:8]이 DE AD D0 0D, [8:12]가 기록 위치
-constexpr uint8_t kPandaRequestFlashUnlock = 0xb1;   // bootstub: 플래시 잠금 해제, 기록 위치를 앱 시작으로
-constexpr uint8_t kPandaRequestFlashErase = 0xb2;    // bootstub: wValue 섹터 지우기(0은 거부)
+constexpr uint8_t kPandaRequestFlasherEcho = 0xb0;  // bootstub: 응답 [4:8]이 DE AD D0 0D, [8:12]가 기록 위치
+constexpr uint8_t kPandaRequestFlashUnlock = 0xb1;  // bootstub: 플래시 잠금 해제, 기록 위치를 앱 시작으로
+constexpr uint8_t kPandaRequestFlashErase = 0xb2;   // bootstub: wValue 섹터 지우기(0은 거부)
 constexpr uint8_t kPandaRequestHwType = 0xc1;
-constexpr uint8_t kPandaRequestEnterBootloader = 0xd1;  // wValue 1: bootstub, 0: STM32 DFU
+constexpr uint8_t kPandaRequestEnterBootloader = 0xd1;  // wValue 1이면 bootstub, 0이면 STM32 DFU
 constexpr uint8_t kPandaRequestHealth = 0xd2;
-constexpr uint8_t kPandaRequestVersion = 0xd6;       // 버전 문자열(최대 64바이트)
+constexpr uint8_t kPandaRequestVersion = 0xd6;  // 버전 문자열(최대 64바이트)
 constexpr uint8_t kPandaRequestReset = 0xd8;
 constexpr uint8_t kPandaRequestSafetyModel = 0xdc;
 constexpr uint8_t kPandaRequestPacketVersions = 0xdd;
 constexpr uint8_t kPandaRequestHeartbeat = 0xf3;
 
-constexpr uint8_t kPandaFlashEndpoint = 0x02;        // bootstub: 앱 이미지를 4바이트 단위로 받는 bulk OUT
+constexpr uint8_t kPandaFlashEndpoint = 0x02;  // bootstub: 앱 이미지를 4바이트 단위로 받는 bulk OUT
 constexpr uint8_t kPandaFlasherMagic[4] = {0xde, 0xad, 0xd0, 0x0d};
 constexpr size_t kPandaVersionMaxBytes = 64;
 

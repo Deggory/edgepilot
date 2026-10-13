@@ -13,8 +13,7 @@ constexpr int kModelW = 512;
 constexpr int kModelH = 256;
 constexpr size_t kDstBytes = static_cast<size_t>(kModelW) * kModelH * 3 / 2;
 
-AX_VIDEO_FRAME_T nv12_frame(uint64_t phys, uint8_t *virt, int w, int h)
-{
+AX_VIDEO_FRAME_T nv12_frame(uint64_t phys, uint8_t *virt, int w, int h) {
     AX_VIDEO_FRAME_T f = {};
     f.u32Width = w;
     f.u32Height = h;
@@ -28,12 +27,10 @@ AX_VIDEO_FRAME_T nv12_frame(uint64_t phys, uint8_t *virt, int w, int h)
     return f;
 }
 
-} // namespace
+}  // namespace
 
 GdcWarp::GdcWarp(int src_width, int src_height)
-    : src_w_(src_width), src_h_(src_height),
-      src_bytes_(static_cast<size_t>(src_width) * src_height * 3 / 2)
-{
+    : src_w_(src_width), src_h_(src_height), src_bytes_(static_cast<size_t>(src_width) * src_height * 3 / 2) {
     if (AX_IVPS_Init() != 0) throw std::runtime_error("AX_IVPS_Init failed");
     // 생성자가 던지면 소멸자가 불리지 않으므로 여기서 잡은 것을 풀고 다시 던진다.
     try {
@@ -54,13 +51,9 @@ GdcWarp::GdcWarp(int src_width, int src_height)
     }
 }
 
-GdcWarp::~GdcWarp()
-{
-    release();
-}
+GdcWarp::~GdcWarp() { release(); }
 
-void GdcWarp::release()
-{
+void GdcWarp::release() {
     for (int i = 0; i < 2; ++i)
         if (dst_virt_[i]) AX_SYS_MemFree(dst_phys_[i], dst_virt_[i]);
     if (src_virt_) AX_SYS_MemFree(src_phys_, src_virt_);
@@ -68,8 +61,7 @@ void GdcWarp::release()
     AX_IVPS_Deinit();
 }
 
-bool GdcWarp::warp_one(unsigned long long src_phys, const float projection[9], int dst, uint8_t *yuv6)
-{
+bool GdcWarp::warp_one(unsigned long long src_phys, const float projection[9], int dst, uint8_t *yuv6) {
     AX_IVPS_DEWARP_ATTR_T attr = {};
     attr.eDewarpType = AX_IVPS_DEWARP_PERSPECTIVE;
     const double scale = projection[8] != 0.0f ? 1.0 / projection[8] : 1.0;
@@ -102,15 +94,13 @@ bool GdcWarp::warp_one(unsigned long long src_phys, const float projection[9], i
     return true;
 }
 
-bool GdcWarp::warp(const float med_projection[9], const float sbig_projection[9],
-                   uint8_t *med_yuv6, uint8_t *sbig_yuv6)
-{
+bool GdcWarp::warp(const float med_projection[9], const float sbig_projection[9], uint8_t *med_yuv6,
+                   uint8_t *sbig_yuv6) {
     AX_SYS_MflushCache(src_phys_, src_virt_, static_cast<AX_U32>(src_bytes_));
     return warp_one(src_phys_, med_projection, 0, med_yuv6) && warp_one(src_phys_, sbig_projection, 1, sbig_yuv6);
 }
 
-bool GdcWarp::warp_phys(unsigned long long src_phys, const float med_projection[9],
-                        const float sbig_projection[9], uint8_t *med_yuv6, uint8_t *sbig_yuv6)
-{
+bool GdcWarp::warp_phys(unsigned long long src_phys, const float med_projection[9], const float sbig_projection[9],
+                        uint8_t *med_yuv6, uint8_t *sbig_yuv6) {
     return warp_one(src_phys, med_projection, 0, med_yuv6) && warp_one(src_phys, sbig_projection, 1, sbig_yuv6);
 }

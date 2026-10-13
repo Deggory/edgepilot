@@ -5,15 +5,13 @@
 #include <algorithm>
 #include <cmath>
 
-/* openpilot의 plan→lane_t: 차선 점 x(X_IDXS)마다 plan이 그 거리에 닿는 시각. plan 끝을 넘는 차선 점은
- * NaN이다(플래너가 보간에서 뺀다). */
-void compute_lane_t(const ParsedPlan &plan, float lane_t[kTrajectorySize])
-{
+// openpilot의 plan→lane_t: 차선 점 x(X_IDXS)마다 plan이 그 거리에 닿는 시각. plan 끝을 넘는 차선 점은
+// NaN이다(플래너가 보간에서 뺀다).
+void compute_lane_t(const ParsedPlan &plan, float lane_t[kTrajectorySize]) {
     std::fill_n(lane_t, kTrajectorySize, NAN);
     lane_t[0] = 0.0f;
     for (int xidx = 1, tidx = 0; xidx < kTrajectorySize; ++xidx) {
-        for (int next_tid = tidx + 1;
-             next_tid < kTrajectorySize && plan.points[next_tid].x < model_x_idx_double(xidx);
+        for (int next_tid = tidx + 1; next_tid < kTrajectorySize && plan.points[next_tid].x < model_x_idx_double(xidx);
              ++next_tid) {
             ++tidx;
         }
@@ -28,20 +26,14 @@ void compute_lane_t(const ParsedPlan &plan, float lane_t[kTrajectorySize])
         // 발산하거나 NaN이 되어 lane_t가 비단조가 된다. p를 [0,1]로 묶으면
         // lane_t는 항상 두 knot 시각 사이에 들어가 단조성이 보장된다.
         const double span = next_x - current_x;
-        const double p = span > 0.0
-            ? std::clamp((model_x_idx_double(xidx) - current_x) / span, 0.0, 1.0)
-            : 1.0;
-        lane_t[xidx] = static_cast<float>(
-            p * model_t_idx_double(tidx + 1) + (1.0 - p) * model_t_idx_double(tidx));
+        const double p = span > 0.0 ? std::clamp((model_x_idx_double(xidx) - current_x) / span, 0.0, 1.0) : 1.0;
+        lane_t[xidx] = static_cast<float>(p * model_t_idx_double(tidx + 1) + (1.0 - p) * model_t_idx_double(tidx));
     }
 }
 
-void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
-                           const ProjectionState &projection,
-                           const OnlineCalibrator::Snapshot &calibration,
-                           uint64_t frame_id, uint64_t capture_timestamp_ns,
-                           float model_execution_ms)
-{
+void fill_model_state(ModelState &state, const ParsedModelOutput &parsed, const ProjectionState &projection,
+                      const OnlineCalibrator::Snapshot &calibration, uint64_t frame_id, uint64_t capture_timestamp_ns,
+                      float model_execution_ms) {
     state = ModelState{};
     state.frame_id = frame_id;
     state.capture_timestamp_ns = capture_timestamp_ns;
@@ -76,10 +68,8 @@ void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
         state.lane_probabilities[lane] = parsed.lanes[lane].probability;
         state.lane_stds[lane] = parsed.lanes[lane].std;
     }
-    for (int edge = 0; edge < 2; ++edge)
-        state.road_edge_stds[edge] = parsed.road_edges[edge].std;
-    for (int i = 0; i < kDesireLen; ++i)
-        state.desire_state[i] = parsed.meta.desire_state[i];
+    for (int edge = 0; edge < 2; ++edge) state.road_edge_stds[edge] = parsed.road_edges[edge].std;
+    for (int i = 0; i < kDesireLen; ++i) state.desire_state[i] = parsed.meta.desire_state[i];
     for (int i = 0; i < kMetaPressHorizons; ++i) {
         state.gas_press_probs[i] = parsed.meta.gas_press[i];
         state.brake_press_probs[i] = parsed.meta.brake_press[i];
@@ -111,6 +101,5 @@ void fill_model_state(ModelState &state, const ParsedModelOutput &parsed,
     state.calibration.roll = projection.roll;
     state.calibration.pitch = projection.pitch;
     state.calibration.yaw = projection.yaw;
-    for (int i = 0; i < 3; ++i)
-        state.calibration.spread[i] = calibration.spread[i];
+    for (int i = 0; i < 3; ++i) state.calibration.spread[i] = calibration.spread[i];
 }
