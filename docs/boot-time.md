@@ -11,6 +11,14 @@ original SD card, and the tuned boot on its replacement
 ([Measured](#measured)):
 
 ```mermaid
+---
+config:
+  gantt:
+    useWidth: 820
+    fontSize: 13
+    sectionFontSize: 13
+    barHeight: 24
+---
 gantt
     dateFormat x
     axisFormat %-S s
@@ -112,14 +120,19 @@ driver load and the services that no longer start.
 
 ## After a reflash
 
-A freshly flashed v4.12.5 image needs three things before the runtime runs:
+Before its first boot, a freshly flashed card can take the Wi-Fi files and
+`maix_npu_ai_isp=1` on its FAT partition
+([Board setup](board-setup.md#2-set-the-wi-fi-before-the-first-boot)). Once
+it runs, a freshly flashed v4.12.5 image needs three things before the runtime
+runs:
 
 1. `scripts/upload_to_board.sh` installs `libmaixcam_lib` 1.2.5. The image's
    library of the same size is a different build, and `camerad` crashes with
    it.
 2. `scripts/install_autostart.sh` adds the missing final newline to
    `/boot/configs` before appending `maix_npu_ai_isp=1`. The setting takes
-   effect at the next boot, and `camerad` refuses to start until then.
+   effect at the next boot, and `camerad` refuses to start until then, unless
+   it was set on the card before the first boot.
 3. `scripts/install_boot_tuning.sh` installs the boot tuning above.
 
 ## Related

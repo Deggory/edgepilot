@@ -63,7 +63,40 @@ branch keeps the earlier Kendryte K230 port.
 
 ### The pipeline
 
-<p align="center"><img src="docs/images/pipeline.svg" width="760" alt="Processes and data paths: camera to camerad to the CMM frame ring; modeld reads the ring through the GDC and runs supercombo on the NPU, overlayd and recordd read it through IVPS; modeld, controlsd, locationd, imud, pandad, overlayd and recordd exchange states through /dev/shm; pandad talks to the Panda over USB and the Panda to the car over CAN"></p>
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 400
+---
+flowchart TB
+    cam(["camera<br>OS04D10"]) --> camerad["camerad<br>ISP, 20 Hz"]
+    camerad --> ring[("frame ring<br>8 CMM slots")]
+    ring -- GDC --> modeld["modeld<br>supercombo on the NPU"]
+    ring -- IVPS --> overlayd["overlayd<br>LCD video and HUD"]
+    ring -- "IVPS, VENC" --> recordd["recordd<br>H.264, event log"]
+    modeld --> controlsd["controlsd, 100 Hz<br>planner, MPC, torque"]
+    modeld -- "frame it used" --> recordd
+    imu(["board IMU"]) --> imud["imud"]
+    imud --> locationd["locationd<br>pose, steering lag"]
+    locationd --> controlsd
+    controlsd <-- "CAN, sendcan" --> pandad["pandad"]
+    pandad <-- USB --> panda(["Panda"])
+    panda <-- CAN --> car(["K7 HEV"])
+    classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    class cam,camerad,ring,overlayd pixel
+    class modeld,controlsd,locationd compute
+    class recordd,imud,pandad,imu proc
+    class panda,car external
+    linkStyle 0,1,2,3,4 stroke:#1f9e9a,stroke-width:2px
+    linkStyle 11,12 stroke:#f0883e,stroke-width:2px
+```
+
+Teal lines carry camera pixels through hardware buffers, black lines carry
+states through `/dev/shm`, and orange lines are the USB and CAN links.
 
 Each process does one job and talks to the others through `/dev/shm`, keeping
 openpilot's process boundaries without Cap'n Proto/cereal. Camera pixels never
@@ -77,20 +110,106 @@ boot in place of the stock launcher.
 
 ### One frame, end to end
 
-<p align="center"><img src="docs/images/latency.svg" width="760" alt="Timeline of one camera frame: 43.1 ms capture and ISP into the frame ring, 1 ms GDC warp, 15.5 ms NPU, 3 ms inputs, parse and publish, then up to 10 ms until the next controlsd tick; model output after about 63 ms, steering command within 73 ms"></p>
+Measured on the board. Frames arrive every 50 ms (20 Hz); `controlsd` runs
+every 10 ms and uses the newest model output:
+
+```mermaid
+---
+config:
+  gantt:
+    useWidth: 820
+    fontSize: 13
+    sectionFontSize: 13
+    barHeight: 24
+---
+gantt
+    dateFormat x
+    axisFormat %-L ms
+    tickInterval 10millisecond
+    todayMarker off
+    section One frame
+    capture + ISP into the frame ring, 43.1 ms :0, 43ms
+    GDC warp, 1 ms :43, 1ms
+    NPU (supercombo), 15.5 ms :44, 16ms
+    inputs + parse + publish, 3 ms :60, 3ms
+    model output, about 63 ms :milestone, 63, 0ms
+    wait for the next controlsd tick, up to 10 ms :63, 10ms
+    steering command, within 73 ms :milestone, 73, 0ms
+```
 
 ### Lateral control
 
-<p align="center"><img src="docs/images/lateral-control.svg" width="760" alt="Lateral control: supercombo, then lane mode (lane-centre path and MPC) or laneless mode (curvature from the plan), desired curvature, torque controller with the learners, Hyundai limits, LKAS11, MDPS12 and CLU11 through the Panda safety firmware to the MDPS"></p>
+`controlsd` runs at 100 Hz; the learners refine the car model while driving:
 
-On a recorded minute of engaged lane keeping, the car's measured curvature (from
-the steering angle and yaw rate) follows what the controller asks for closely:
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 400
+---
+flowchart TB
+    model["supercombo<br>plan, lanes, lead"] --> lane["lane mode<br>lane-centre path + MPC"]
+    model --> laneless["laneless mode<br>curvature from the plan"]
+    lane --> desired["desired curvature<br>jerk-limited, lag-compensated"]
+    laneless --> desired
+    desired --> torque["torque controller<br>openpilot torque model"]
+    learners["learners<br>paramsd, torqued, lagd"] -.-> torque
+    torque --> limits["Hyundai limits<br>rate, override, fault angle"]
+    limits -- "LKAS11, MDPS12, CLU11" --> safety["Panda safety<br>hyundaiCommunity"]
+    safety --> mdps(["MDPS"])
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    classDef safety fill:#eaf7ee,stroke:#2da44e,color:#1f2328
+    class model,lane,laneless,desired,torque compute
+    class learners proc
+    class limits,safety safety
+    class mdps external
+```
 
-<p align="center"><img src="docs/images/curvature-tracking.svg" width="760" alt="Desired and actual curvature over 60 s of engaged lane keeping at 41 to 66 km/h; the two lines overlap with a correlation of 0.98"></p>
+On a recorded minute of engaged lane keeping at 41-66 km/h (2026-10-05), the
+car's measured curvature (orange, from the steering angle and yaw rate) follows
+what the controller asks for (blue) with a correlation of 0.98; the driver
+steered for 1.5% of the time:
+
+```mermaid
+---
+config:
+  xyChart:
+    height: 300
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#2f81f7, #f0883e"
+---
+xychart-beta
+    x-axis "time (s)" 0 --> 60
+    y-axis "curvature (1/km)" -5 --> 25
+    line [-0.4, -0.3, -0.6, -0.8, -0.8, -1.2, -1.5, -1.5, -1.3, -1.6, -1.9, -2.4, -2.3, -2.2, -2.2, -2.5, -2.6, -2.9, -2.8, -2.7, -2.6, -2.5, -2.2, -2.0, -2.7, -2.6, -2.9, -2.9, -3.1, -3.2, -2.9, -2.5, -1.7, -1.8, -1.9, -2.2, -3.0, -3.0, -3.1, -2.3, -2.0, -2.2, -2.6, -2.8, -2.8, -2.8, -3.0, -2.8, -2.4, -2.2, -2.0, -2.4, -2.2, -2.2, -2.6, -2.7, -2.5, -2.3, -2.6, -2.0, -2.4, -2.4, -2.4, -1.4, -0.7, -0.2, -0.0, -0.6, -0.4, -0.6, -1.1, -1.6, -1.5, -2.0, -2.2, -1.9, -1.8, -1.3, -0.7, -0.1, 0.4, 1.0, 2.5, 4.5, 7.6, 11.5, 13.1, 16.1, 15.3, 15.5, 15.8, 15.4, 15.7, 16.1, 15.2, 12.0, 13.8, 17.9, 18.3, 20.4, 18.0, 13.2, 8.1, 5.5, 4.2, 3.1, 2.0, 0.9, 0.1, 0.3, 0.3, 0.4, 0.2, 0.3, 0.1, -0.4, -0.8, -1.6, -2.3, -2.7, -2.2]
+    line [-0.3, -0.5, -0.6, -0.6, -0.7, -0.9, -1.3, -1.5, -1.4, -1.5, -1.6, -2.1, -2.3, -2.3, -2.1, -2.3, -2.5, -2.5, -2.6, -2.7, -2.7, -2.7, -2.4, -2.2, -2.2, -2.2, -2.4, -2.7, -2.7, -3.0, -3.3, -2.6, -2.4, -1.6, -2.0, -2.0, -2.4, -2.9, -3.0, -2.9, -2.4, -2.0, -2.3, -2.6, -2.7, -2.6, -2.6, -2.9, -2.6, -2.2, -1.9, -2.1, -2.4, -2.4, -2.3, -2.5, -2.6, -2.5, -2.2, -2.2, -2.0, -2.3, -2.2, -1.9, -1.2, -0.2, 0.2, -0.3, -0.3, -0.3, -0.7, -1.1, -1.2, -1.4, -1.9, -2.0, -1.9, -1.7, -1.2, -0.7, 0.2, 0.6, 1.1, 3.4, 4.5, 8.9, 10.7, 13.7, 14.7, 15.1, 15.1, 15.0, 15.1, 15.1, 15.0, 13.8, 12.4, 12.4, 20.3, 22.3, 19.9, 19.4, 13.4, 5.8, 5.4, 4.3, 3.1, 2.0, 0.6, 0.2, 0.2, 0.4, 0.3, 0.2, 0.5, 0.2, -0.4, -0.9, -1.6, -2.3, -2.4]
+```
 
 ### What it costs the board
 
-<p align="center"><img src="docs/images/cpu-load.svg" width="760" alt="CPU per process: overlayd 14.9%, camerad 11%, modeld 8.2%, locationd 2%, controlsd 1.6%, imud 1.3%, web_console 0.7%, recordd 0.5%, pandad 0.5%, manager 0.3% of one core; 41% of one core in total"></p>
+CPU per process with the full pipeline at 20 Hz on the board, over 60 s
+windows (2026-10-07): 41% of one core together, about a fifth of the two-core
+AX630C. `overlayd` draws the HUD, `camerad` is mostly the ISP's 3A thread, and
+the NPU runs the model for `modeld`:
+
+```mermaid
+---
+config:
+  xyChart:
+    height: 340
+    chartOrientation: horizontal
+  themeVariables:
+    xyChart:
+      plotColorPalette: "#1f9e9a"
+---
+xychart-beta
+    x-axis ["overlayd", "camerad", "modeld", "locationd", "controlsd", "imud", "web_console", "recordd", "pandad", "manager.py"]
+    y-axis "CPU, % of one core" 0 --> 16
+    bar [14.9, 11, 8.2, 2, 1.6, 1.3, 0.7, 0.5, 0.5, 0.3]
+```
 
 ## The HUD
 
@@ -118,7 +237,22 @@ card, and tapping the left column toggles a diagnostic card.
 
 Every layer must agree before steering torque reaches the car:
 
-<p align="center"><img src="docs/images/safety-layers.svg" width="760" alt="Four layers in a row: controlsd gates, controller limits, the EDGEPILOT_PANDA_TX switch and the Panda safety firmware, before the MDPS"></p>
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 400
+---
+flowchart TB
+    gates["1 · controlsd gates<br>model, MPC, CAN, gear,<br>seatbelt, driver SET"] --> limits["2 · controller limits<br>curvature, jerk, torque rate,<br>fault-angle ramp"]
+    limits --> tx["3 · EDGEPILOT_PANDA_TX<br>final transmit switch,<br>0 = shadow mode"]
+    tx --> panda["4 · Panda safety<br>hyundaiCommunity,<br>never bypassed"]
+    panda --> mdps(["MDPS"])
+    classDef safety fill:#eaf7ee,stroke:#2da44e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    class gates,limits,tx,panda safety
+    class mdps external
+```
 
 1. **`controlsd` gates** require a fresh model, a valid MPC solution, fresh
    vehicle state, the right gear, a fastened seatbelt, and an explicit driver
@@ -133,7 +267,33 @@ Every layer must agree before steering torque reaches the car:
 
 ## Hardware
 
-<p align="center"><img src="docs/images/hardware.svg" width="760" alt="Hardware: the Sipeed MaixCAM2 (AX630C, camera, LCD and speaker) connects over USB-C in host mode to a comma Panda, which sits on three K7 CAN buses: bus 0 powertrain (TX LKAS11), bus 1 MDPS (TX LKAS11 and CLU11) and bus 2 the stock LKAS camera (TX MDPS12)"></p>
+The Panda joins the board to three of the car's CAN buses; TX lists the frames
+edgepilot sends on each:
+
+```mermaid
+---
+config:
+  flowchart:
+    wrappingWidth: 400
+---
+flowchart TB
+    subgraph board["Sipeed MaixCAM2"]
+        soc["AX630C<br>2x A53, NPU, 1 GB"]
+        io["camera, 640x480 LCD,<br>speaker"]
+    end
+    board -- "USB-C, host mode" --> panda(["comma Panda"])
+    panda -- "bus 0<br>TX LKAS11" --> pt["powertrain<br>cluster, brake, gear"]
+    panda -- "bus 1<br>TX LKAS11, CLU11" --> mdps["MDPS<br>and SAS"]
+    panda -- "bus 2<br>TX MDPS12" --> cam["stock LKAS<br>camera"]
+    classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
+    classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
+    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
+    classDef group fill:#ffffff,stroke:#d1d9e0,color:#59636e
+    class board group
+    class soc compute
+    class io proc
+    class panda,pt,mdps,cam external
+```
 
 - Sipeed MaixCAM2 (AX630C: 2x Cortex-A53 + NPU, 1 GB), with its stock
   `ov_os04d10` camera and 640x480 LCD, on the stock image (Ubuntu 22.04 arm64,
@@ -146,14 +306,17 @@ source.
 
 ## Getting started
 
-1. **Prepare the board.** See [Board setup](docs/board-setup.md) for SSH, the
-   web console packages, and the rootfs caveats.
+1. **Prepare the board.** Flash the stock image to the microSD card, put the
+   Wi-Fi settings on its boot partition before the first boot, and install
+   your SSH key: see [Board setup](docs/board-setup.md).
 2. **Build.** Fetch the SDK and the board libraries once, then build in an
    arm64 Ubuntu 22.04 container
-   ([details](docs/build-and-deploy.md)):
+   ([details](docs/build-and-deploy.md)). The scripts that reach the board take
+   its address from `EDGEPILOT_BOARD` (or their first argument):
 
    ```sh
-   scripts/fetch_maixcam2_sdk.sh root@192.168.219.117
+   export EDGEPILOT_BOARD=root@<board-ip>
+   scripts/fetch_maixcam2_sdk.sh
    tools/docker_ax630/build.sh          # -> build-ax630/bin
    ```
 
@@ -162,8 +325,8 @@ source.
    is sent only when it changed:
 
    ```sh
-   scripts/upload_to_board.sh root@192.168.219.117
-   scripts/install_autostart.sh root@192.168.219.117   # also sets maix_npu_ai_isp=1
+   scripts/upload_to_board.sh
+   scripts/install_autostart.sh   # also sets maix_npu_ai_isp=1
    ```
 
 4. **Run.** On the board:
@@ -208,7 +371,7 @@ tests/          host unit tests and the Python layout checks
 diagnostics/    replay, dataset, and HUD tools
 scripts/        SDK fetch, deploy, host tests, board-side Python
 tools/          axmodel pipeline, camera calibration, build container, route readers
-docs/           documentation (index in docs/README.md); docs/images holds the README media
+docs/           documentation (index in docs/README.md); docs/images holds the drive and HUD pictures
 ```
 
 ## Documentation

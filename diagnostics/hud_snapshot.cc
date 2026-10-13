@@ -163,7 +163,8 @@ int main(int argc, char **argv) {
     idle.wifi_signal_dbm = -61;
     std::snprintf(idle.active_block, sizeof(idle.active_block), "control_stale");
     std::snprintf(idle.network_interface, sizeof(idle.network_interface), "wlan0");
-    std::snprintf(idle.network_ipv4, sizeof(idle.network_ipv4), "192.168.219.111");
+    // 표본 주소는 문서용 대역(RFC 5737)이다.
+    std::snprintf(idle.network_ipv4, sizeof(idle.network_ipv4), "192.0.2.11");
     std::snprintf(idle.network_ssid, sizeof(idle.network_ssid), "edgepilot-car");
 
     HudState drive = idle;
@@ -179,7 +180,7 @@ int main(int argc, char **argv) {
     drive.recording = true;
     drive.lane_center_offset_m = lane_center_offset_m(output);
     std::snprintf(drive.wired_interface, sizeof(drive.wired_interface), "usb0");
-    std::snprintf(drive.wired_ipv4, sizeof(drive.wired_ipv4), "192.168.123.100");
+    std::snprintf(drive.wired_ipv4, sizeof(drive.wired_ipv4), "198.51.100.1");
     // 학습 카드: paramsd는 쓰는 중, torqued·lagd는 아직 학습 중
     drive.learner_fresh = true;
     drive.params_valid = true;

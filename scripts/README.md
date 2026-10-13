@@ -53,11 +53,15 @@ flowchart TB
 
 The build itself is done by `tools/docker_ax630/build.sh` in an arm64 Ubuntu
 22.04 container (the output goes to `build-ax630/bin`, the Panda firmware to
-`build-ax630/panda/obj`). The default board address is `root@192.168.219.117`,
-with SSH key authentication.
+`build-ax630/panda/obj`). The scripts that reach the board take its address as
+their first argument (`root@<board-ip>`), or from `EDGEPILOT_BOARD`, and log in
+with SSH key authentication; with neither they stop and print their usage.
 
 Environment variables that change the defaults:
 
+- `fetch_maixcam2_sdk.sh`, `upload_to_board.sh`, `install_autostart.sh`,
+  `install_boot_tuning.sh`: `EDGEPILOT_BOARD`, the board when no argument is
+  given.
 - `upload_to_board.sh`: `EDGEPILOT_BIN_DIR` (default `build-ax630/bin`),
   `EDGEPILOT_BOARD_DIR` (default `/root/edgepilot`), `EDGEPILOT_PANDA_IMAGE`
   (default `build-ax630/panda/obj/panda.bin.signed`).

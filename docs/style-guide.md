@@ -117,9 +117,10 @@ and anchors, the wrapping and the language of every document.
 
 ## Diagrams
 
-Diagrams in `docs/` and in the folder READMEs are Mermaid blocks inside the
-Markdown, so they change with the text and GitHub draws them. The root README
-keeps its drawn figures in `docs/images/`.
+Every diagram, in the root README, `docs/` and the folder READMEs, is a Mermaid
+block inside the Markdown, so it changes with the text and GitHub draws it.
+`docs/images/` holds only photos and screenshots: the drive clips and the HUD
+renders.
 
 - **Type.** `flowchart` for data paths and steps, `sequenceDiagram` for
   messages between processes, `stateDiagram-v2` for state machines, `gantt` for
@@ -131,7 +132,9 @@ keeps its drawn figures in `docs/images/`.
   nodes, labels of a few words with detail on a second line after `<br>`, and
   run long chains top to bottom (`flowchart TB`). Mermaid wraps a label line
   longer than about 200 px; the local renderer's font wraps at about 130 px,
-  so a label that fits there fits on GitHub. A `sequenceDiagram` that is too
+  so a label that fits there fits on GitHub. Where the wrapping breaks a label
+  badly, front matter `config: flowchart: wrappingWidth: 400` keeps the lines
+  as written (the root README's flowcharts do). A `sequenceDiagram` that is too
   wide can narrow its actors in front matter
   (`config: sequence: actorMargin: 30, width: 130`).
 - **Layout.** An edge back to an earlier node (a loop) scrambles the layout;
@@ -152,7 +155,19 @@ keeps its drawn figures in `docs/images/`.
   ```
 
   A `gantt` timeline in seconds uses `dateFormat x`, `axisFormat %-S s` and
-  `todayMarker off`.
+  `todayMarker off`, and front matter that fixes its width: GitHub otherwise
+  draws a gantt wider than the column and shrinks its text.
+
+  ```text
+  ---
+  config:
+    gantt:
+      useWidth: 820
+      fontSize: 13
+      sectionFontSize: 13
+      barHeight: 24
+  ---
+  ```
 - **Colours.** Nodes are coloured by role with the same classes everywhere.
   Copy the classes a diagram uses from this block:
 

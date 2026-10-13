@@ -3,7 +3,7 @@
 본문 칸(약 830 px)보다 넓어 글자가 작아지는 그림을 알려 준다. 그린 PNG는 --out 아래에 남는다(눈으로 볼 때).
 
 사용: tools/docs/render_mermaid.py [--out build-docs] [문서.md ...]
-  문서를 주지 않으면 docs/*.md와 폴더 README를 모두 본다(최상위 README는 그림 파일을 쓰므로 뺀다).
+  문서를 주지 않으면 최상위 README, docs/*.md와 폴더 README를 모두 본다.
 """
 import argparse
 import re
@@ -18,7 +18,7 @@ BLOCK = re.compile(r"^```mermaid\n(.*?)^```", re.M | re.S)
 
 
 def documents():
-    files = sorted((ROOT / "docs").glob("*.md"))
+    files = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     listed = subprocess.run(["git", "ls-files", "*/README.md"], cwd=ROOT, capture_output=True, text=True).stdout
     # firmware/panda는 들여온 코드지만 README는 우리 문서다
     files += [ROOT / f for f in listed.split() if not f.startswith("firmware/panda/") or f == "firmware/panda/README.md"]

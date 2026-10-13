@@ -2,7 +2,7 @@
 """문서 형식 검사(docs/style-guide.md의 Documents·Diagrams 규칙). docs/*.md와 폴더 README를 본다:
 제목이 파일 이름과 맞는지, 제목 아래 색인 링크, 마지막 절 Related, 상대 링크와 #앵커가 있는지, 산문 80칸 줄바꿈,
 한글이 없는지(용어집이 있는 style-guide.md는 뺀다), Mermaid 색 정의가 공통 팔레트와 같은지, 그림 파일이 있는지.
-최상위 README는 링크와 그림만 본다.
+최상위 README는 링크, 그림, Mermaid 색만 본다.
 
 사용: tests/check_docs.py [문서.md ...]   (주지 않으면 모두)
 """
@@ -108,7 +108,7 @@ def check_file(path: Path, root_readme: bool = False):
             if not re.match(r"^[a-z]+:", src) and not (path.parent / src).exists():
                 problem(i, f"missing image: {src}")
     if root_readme:
-        return problems
+        return problems + check_mermaid(rel, lines)
 
     # 제목과 색인 링크
     title = lines[0][2:].strip() if lines and lines[0].startswith("# ") else ""
@@ -163,7 +163,12 @@ def check_file(path: Path, root_readme: bool = False):
                 problem(i, "documents are English (quote on-screen Korean text as `code`)")
                 break
 
-    # Mermaid 색
+    return problems + check_mermaid(rel, lines)
+
+
+def check_mermaid(rel, lines):
+    """Mermaid 색: classDef는 공통 팔레트의 것만 쓴다."""
+    problems = []
     in_mermaid = False
     for i, line in enumerate(lines, 1):
         if line.strip() == "```mermaid":
@@ -173,7 +178,8 @@ def check_file(path: Path, root_readme: bool = False):
         elif in_mermaid:
             m = re.match(r"^\s*classDef\s+(\w+)\s+(\S+)", line)
             if m and PALETTE.get(m.group(1)) != m.group(2):
-                problem(i, f"classDef {m.group(1)} is not one of the shared classes (docs/style-guide.md#diagrams)")
+                problems.append(f"{rel}:{i}: classDef {m.group(1)} is not one of the shared classes "
+                                "(docs/style-guide.md#diagrams)")
     return problems
 
 

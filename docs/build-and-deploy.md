@@ -43,7 +43,7 @@ libusb dependency; the manager skips a binary that is not installed.
 ## 1. Fetch the SDK and board libraries
 
 ```sh
-scripts/fetch_maixcam2_sdk.sh [root@192.168.219.117]
+scripts/fetch_maixcam2_sdk.sh root@<board-ip>
 ```
 
 This fills `deps/ax630/` (not tracked):
@@ -118,7 +118,7 @@ The value shows in three places:
 ## 3. Upload to the board
 
 ```sh
-scripts/upload_to_board.sh [root@192.168.219.117]
+scripts/upload_to_board.sh root@<board-ip>
 ```
 
 The script copies the binaries from `build-ax630/bin`, the board-side Python,
@@ -144,7 +144,8 @@ Panda itself is flashed from the web console or with `panda_flash`.
 - It does not upload `replayd`. Copy it into the install directory by hand
   ([Rehearsal](rehearsal.md#1-copy-replayd-to-the-board)).
 - `EDGEPILOT_BOARD_DIR` changes the install directory and `EDGEPILOT_BIN_DIR`
-  the binary directory.
+  the binary directory. `EDGEPILOT_BOARD` stands in for the board argument, as
+  in every script that reaches the board.
 
 ## Host tests
 

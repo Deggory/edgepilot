@@ -251,7 +251,7 @@ segments.
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
 python3 tools/model/make_replay.py --route recordings/<route> --out /tmp/replay_nv12 --frames 120
-scp /tmp/replay_nv12/replay.scnv12 root@192.168.219.117:/root/edgepilot/
+scp /tmp/replay_nv12/replay.scnv12 root@<board-ip>:/root/edgepilot/
 
 # board (stop the manager first, or at least modeld)
 cd /root/edgepilot

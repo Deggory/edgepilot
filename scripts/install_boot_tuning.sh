@@ -4,13 +4,18 @@
 #   2) 쓰지 않는 서비스(tailscale·nginx·bluetooth·ttyd·maixvision·rsyslog)가 같은 시각에 떠서
 #      느린 SD와 CPU 두 개를 나눠 쓴다.
 #   3) 영구 journal이 700MB 가까이 쌓였고, 선 없는 eth0의 dhclient와 avahi-monitor가 몇 초마다 로그를 쓴다.
-# 모두 되돌릴 수 있다: scripts/install_boot_tuning.sh --remove [root@보드]
-# 사용: scripts/install_boot_tuning.sh [--remove] [root@보드]   (적용은 다음 부팅부터)
+# 모두 되돌릴 수 있다: scripts/install_boot_tuning.sh --remove root@<보드 IP>
+# 사용: scripts/install_boot_tuning.sh [--remove] root@<보드 IP>   (또는 EDGEPILOT_BOARD=root@<보드 IP>,
+#   적용은 다음 부팅부터)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REMOVE=0
 if [ "${1:-}" = "--remove" ]; then REMOVE=1; shift; fi
-BOARD="${1:-root@192.168.219.117}"
+BOARD="${1:-${EDGEPILOT_BOARD:-}}"
+if [ -z "$BOARD" ]; then
+  echo "usage: $0 [--remove] root@<board-ip>   (or set EDGEPILOT_BOARD=root@<board-ip>)" >&2
+  exit 2
+fi
 SSH=(ssh -o StrictHostKeyChecking=no "$BOARD")
 
 # 순정 이미지에서 켜져 있지만 edgepilot에 필요 없는 서비스. bluetooth와 rsyslog는 D-Bus·소켓으로

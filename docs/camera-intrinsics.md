@@ -57,7 +57,7 @@ boot. Start it as a service. This stops the driving runtime, which has to give
 up the camera:
 
 ```sh
-ssh root@192.168.219.117 systemctl start camcal
+ssh root@<board-ip> systemctl start camcal
 ```
 
 To run it in the foreground over SSH instead, run
@@ -127,7 +127,7 @@ Copy the shots to the host and solve. The solver needs `opencv-python` and
 `numpy`.
 
 ```sh
-scp -r root@192.168.219.117:/root/camcal/snapshots ./camcal_snapshots
+scp -r root@<board-ip>:/root/camcal/snapshots ./camcal_snapshots
 python3 tools/camera/calibrate_intrinsics.py camcal_snapshots \
     --corners 17x8 --square-mm 67.45 --max-view-error 0.5 --json intrinsics.json
 ```
