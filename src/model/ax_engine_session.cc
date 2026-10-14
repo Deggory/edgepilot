@@ -1,14 +1,18 @@
 #include "model/ax_engine_session.h"
 #include "model/ax_engine_api.h"
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <functional>
-#include <iterator>
 #include <mutex>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -56,21 +60,34 @@ size_t AxEngineSession::Tensor::count() const {
 }
 
 AxEngineSession::AxEngineSession(const std::string &model_path) {
-    std::ifstream file(model_path, std::ios::binary);
-    if (!file) throw std::runtime_error("cannot open axmodel: " + model_path);
-    model_data_.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-    if (model_data_.empty()) throw std::runtime_error("empty axmodel: " + model_path);
+    // 모델 파일(34 MB)은 힙에 읽어 두지 않고 읽기 전용으로 매핑한다. 엔진은 핸들을 만들며 가중치를 CMM에 옮기므로,
+    // 그 뒤에는 페이지를 놓아 준다(MADV_DONTNEED). 엔진이 포인터를 다시 읽어도 파일에서 다시 올라온다.
+    const int fd = ::open(model_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) throw std::runtime_error("cannot open axmodel: " + model_path);
+    struct stat st = {};
+    if (::fstat(fd, &st) != 0 || st.st_size <= 0) {
+        ::close(fd);
+        throw std::runtime_error("empty axmodel: " + model_path);
+    }
+    model_size_ = static_cast<size_t>(st.st_size);
+    void *map = ::mmap(nullptr, model_size_, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);
+    if (map == MAP_FAILED) throw std::runtime_error("cannot map axmodel: " + model_path);
+    model_map_ = map;
 
     init_runtime_once();
 
     AX_ENGINE_HANDLE_EXTRA_T extra;
     std::memset(&extra, 0, sizeof(extra));
-    if (AX_ENGINE_CreateHandleV2(&handle_, model_data_.data(), static_cast<AX_U32>(model_data_.size()), &extra) != 0)
+    if (AX_ENGINE_CreateHandleV2(&handle_, model_map_, static_cast<AX_U32>(model_size_), &extra) != 0) {
+        release();
         throw std::runtime_error("AX_ENGINE_CreateHandleV2 failed: " + model_path);
+    }
     if (AX_ENGINE_CreateContextV2(handle_, &context_) != 0) {
         release();
         throw std::runtime_error("AX_ENGINE_CreateContextV2 failed");
     }
+    ::madvise(model_map_, model_size_, MADV_DONTNEED);
     if (const char *v = AX_ENGINE_GetModelToolsVersion(handle_)) tools_version_ = v;
 
     AX_ENGINE_IO_INFO_T *info = nullptr;
@@ -79,8 +96,8 @@ AxEngineSession::AxEngineSession(const std::string &model_path) {
         throw std::runtime_error("AX_ENGINE_GetIOInfo failed");
     }
     try {
-        allocate(inputs_, info->pInputs, info->nInputSize);
-        allocate(outputs_, info->pOutputs, info->nOutputSize);
+        allocate(input_block_, inputs_, info->pInputs, info->nInputSize);
+        allocate(output_block_, outputs_, info->pOutputs, info->nOutputSize);
     } catch (...) {
         release();
         throw;
@@ -109,8 +126,25 @@ AxEngineSession::AxEngineSession(const std::string &model_path) {
 
 AxEngineSession::~AxEngineSession() { release(); }
 
-void AxEngineSession::allocate(std::vector<Tensor> &tensors, const void *metas_ptr, unsigned count) {
+void AxEngineSession::allocate(Block &block, std::vector<Tensor> &tensors, const void *metas_ptr, unsigned count) {
     const auto *metas = static_cast<const AX_ENGINE_IO_META_T *>(metas_ptr);
+    std::vector<size_t> offsets(count);
+    size_t total = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        offsets[i] = total;
+        total += (metas[i].nSize + kTensorAlign - 1) / kTensorAlign * kTensorAlign;
+    }
+    if (total == 0) return;
+    void *virt = nullptr;
+    AX_U64 phys = 0;
+    if (AX_SYS_MemAllocCached(&phys, &virt, static_cast<AX_U32>(total), 128,
+                              reinterpret_cast<const AX_S8 *>("supercombo")) != 0)
+        throw std::runtime_error("AX_SYS_MemAllocCached failed for " + std::to_string(count) + " tensors");
+    block.phys = phys;
+    block.virt = virt;
+    block.bytes = total;
+    std::memset(virt, 0, total);
+    AX_SYS_MflushCache(phys, virt, static_cast<AX_U32>(total));
     for (unsigned i = 0; i < count; ++i) {
         const AX_ENGINE_IO_META_T &m = metas[i];
         Tensor t;
@@ -118,27 +152,25 @@ void AxEngineSession::allocate(std::vector<Tensor> &tensors, const void *metas_p
         t.shape.assign(m.pShape, m.pShape + m.nShapeSize);
         t.dtype = to_dtype(m.eDataType);
         t.bytes = m.nSize;
-        void *virt = nullptr;
-        AX_U64 phys = 0;
-        if (AX_SYS_MemAllocCached(&phys, &virt, m.nSize, 128, reinterpret_cast<const AX_S8 *>("supercombo")) != 0)
-            throw std::runtime_error("AX_SYS_MemAllocCached failed for " + t.name);
-        std::memset(virt, 0, m.nSize);
-        AX_SYS_MflushCache(phys, virt, m.nSize);
-        t.phys = phys;
-        t.virt = virt;
+        t.phys = phys + offsets[i];
+        t.virt = static_cast<uint8_t *>(virt) + offsets[i];
         tensors.push_back(std::move(t));
     }
 }
 
 void AxEngineSession::release() {
-    for (auto *list : {&inputs_, &outputs_}) {
-        for (auto &t : *list)
-            if (t.virt) AX_SYS_MemFree(t.phys, t.virt);
-        list->clear();
+    for (Block *block : {&input_block_, &output_block_}) {
+        if (block->virt) AX_SYS_MemFree(block->phys, block->virt);
+        *block = Block();
     }
+    inputs_.clear();
+    outputs_.clear();
     if (handle_) AX_ENGINE_DestroyHandle(handle_);
     handle_ = nullptr;
     context_ = nullptr;
+    if (model_map_) ::munmap(model_map_, model_size_);
+    model_map_ = nullptr;
+    model_size_ = 0;
 }
 
 int AxEngineSession::input_index(const std::string &name) const {
@@ -148,9 +180,13 @@ int AxEngineSession::input_index(const std::string &name) const {
 }
 
 bool AxEngineSession::run() {
-    for (auto &t : inputs_) AX_SYS_MflushCache(t.phys, t.virt, static_cast<AX_U32>(t.bytes));
+    // 블록마다 한 번씩. 텐서마다 부르면 출력 15개 invalidate만 프레임당 약 0.6 ms였다(범위가 바뀌는 호출은 한 번에
+    // 약 40 µs, 같은 범위를 한 번에는 약 15 µs; 2026-10-13 보드 측정).
+    if (input_block_.virt)
+        AX_SYS_MflushCache(input_block_.phys, input_block_.virt, static_cast<AX_U32>(input_block_.bytes));
     auto *io = reinterpret_cast<AX_ENGINE_IO_T *>(io_storage_.data());
     if (AX_ENGINE_RunSyncV2(handle_, context_, io) != 0) return false;
-    for (auto &t : outputs_) AX_SYS_MinvalidateCache(t.phys, t.virt, static_cast<AX_U32>(t.bytes));
+    if (output_block_.virt)
+        AX_SYS_MinvalidateCache(output_block_.phys, output_block_.virt, static_cast<AX_U32>(output_block_.bytes));
     return true;
 }

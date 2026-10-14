@@ -14,6 +14,7 @@
 #include "maixcam2/maix_vdec.h"
 #include "model/flow_worker.h"
 #include "recording/recording_format.h"
+#include "recording/replay_route.h"
 
 #include <chrono>
 #include <cstdio>
@@ -26,18 +27,6 @@
 namespace {
 
 constexpr double kDeg = 57.29577951308232;
-
-std::vector<uint8_t> read_file(const std::string &path) {
-    std::vector<uint8_t> d;
-    if (FILE *f = std::fopen(path.c_str(), "rb")) {
-        std::fseek(f, 0, SEEK_END);
-        d.resize(static_cast<size_t>(std::ftell(f)));
-        std::fseek(f, 0, SEEK_SET);
-        if (std::fread(d.data(), 1, d.size(), f) != d.size()) d.clear();
-        std::fclose(f);
-    }
-    return d;
-}
 
 }  // namespace
 
@@ -74,27 +63,19 @@ int main(int argc, char **argv) {
             }
         }
     }
-    const std::vector<uint8_t> index = read_file(seg + "/frames.bin");
-    FrameIndexHeader header;
-    if (index.size() < sizeof(header)) {
-        std::fprintf(stderr, "no frames.bin in %s\n", seg.c_str());
+    FrameIndex index;
+    if (!read_frame_index(seg, &index)) {
+        std::fprintf(stderr, "no usable frames.bin in %s\n", seg.c_str());
         return 1;
     }
-    std::memcpy(&header, index.data(), sizeof(header));
-    if (!is_frame_index_magic(header.magic) || header.record_size != sizeof(FrameIndexRecord) ||
-        header.header_size > index.size()) {
-        std::fprintf(stderr, "bad frames.bin\n");
-        return 1;
-    }
-    const size_t count = (index.size() - header.header_size) / sizeof(FrameIndexRecord);
-    std::vector<FrameIndexRecord> recs(count);
-    std::memcpy(recs.data(), index.data() + header.header_size, count * sizeof(FrameIndexRecord));
+    const std::vector<FrameIndexRecord> &recs = index.records;
+    const size_t count = recs.size();
     FILE *video = std::fopen((seg + "/road.h264").c_str(), "rb");
-    if (!video || count == 0) {
+    if (!video) {
         std::fprintf(stderr, "no road.h264\n");
         return 1;
     }
-    const int w = static_cast<int>(header.width), h = static_cast<int>(header.height);
+    const int w = static_cast<int>(index.width), h = static_cast<int>(index.height);
     const uint64_t prefix_bytes = recs[0].file_offset;  // 첫 프레임 앞의 파라미터 세트
 
     VideoDecoder decoder(w, h);  // AX_SYS_Init

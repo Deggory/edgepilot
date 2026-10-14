@@ -43,14 +43,20 @@ replay tools, `lane_bias.py`). `gtest_recording` covers
 - H.264 because the board's decoder only decodes H.264, so a route can be
   replayed as recorded ([Rehearsal](rehearsal.md)).
 - The video is 1280x720 at 20 fps. `bitrate_bps` in `params/recording.json`
-  sets the bitrate (1-20 Mbit/s, 8 Mbit/s when it is missing); it is read
-  once, when `recordd` starts.
+  sets the bitrate (1-10 Mbit/s, 8 Mbit/s when it is missing); it is read
+  once, when `recordd` starts. The top is what the tmpfs staging cap holds:
+  a closed segment still being moved plus the one being written.
 
 ## Starting and stopping a route
 
 `params/recording.json` `enabled` starts and stops a route. `recordd` looks at
 the file every 250 ms and acts when it changes. A route needs a storage
-reserve: at least 5 GiB and 10% of the SD card free.
+reserve: at least 5 GiB and 10% of the SD card free, and at most 160 MiB
+waiting in the tmpfs staging area. More than that means the card is not
+keeping up (at 8 Mbit/s the staging peaks near 106 MiB while a closed segment
+moves), and the board's `/tmp` (224 MB, no swap) would run out of memory.
+After a staging stop, recording starts again only once the staging is below
+80 MiB, as the SD reserve needs 1 GiB more than the stop level.
 
 ```mermaid
 stateDiagram-v2
@@ -59,7 +65,7 @@ stateDiagram-v2
     Idle --> Refused: enabled, reserve low
     Writing --> Idle: enabled false
     Writing --> Refused: reserve low<br>(checked every 5 s)
-    Refused --> Writing: reserve + 1 GiB free<br>(checked every 5 s)
+    Refused --> Writing: reserve + 1 GiB free,<br>staging below 80 MiB<br>(checked every 5 s)
     Refused --> Idle: enabled false
 ```
 
@@ -70,9 +76,10 @@ in a loop, because the stopped route's files still move from tmpfs to the SD
 card. Turning `enabled` off clears the storage warning.
 
 `recordd` publishes `recordState` twice a second: whether a route is being
-written, and whether the storage reserve is exhausted. `overlayd` shows a red
-`REC` or a `STORAGE FULL` chip from it ([HUD](hud.md)). A route stopped for
-space is closed as complete.
+written, and what stopped it, if anything. `overlayd` shows a red `REC`, a
+`STORAGE FULL` chip when the SD reserve is exhausted, or an `SD CARD SLOW` chip
+when the staging cap stopped it while the card still has room
+([HUD](hud.md)). A route stopped for space is closed as complete.
 
 ## Route layout
 

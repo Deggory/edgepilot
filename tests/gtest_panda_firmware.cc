@@ -1,11 +1,15 @@
 // panda_firmware(이미지 검사, 플래싱 조건, 상태 JSON)와, pandad가 기대하는 프로토콜이 firmware/panda의
 // 소스와 맞는지. 펌웨어의 health 패킷은 board/health.h를 그대로 가져와 대조한다.
 #include "car/can_frame.h"
+#include "car/hyundai_can.h"
+#include "controls/control_params.h"
 #include "panda/panda_firmware.h"
 #include "panda/panda_protocol.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -54,6 +58,14 @@ long define_value(const std::string &path, const std::string &name) {
     const std::string text = source(path);
     if (!std::regex_search(text, match, std::regex("#define " + name + " (0x[0-9A-Fa-f]+|[0-9]+)U?\\b"))) return -1;
     return std::stol(match[1].str(), nullptr, 0);
+}
+
+// safety 소스의 `const int NAME = 값;`
+long const_int(const std::string &path, const std::string &name) {
+    std::smatch match;
+    const std::string text = source(path);
+    if (!std::regex_search(text, match, std::regex("const int " + name + " = (-?[0-9]+);"))) return -1;
+    return std::stol(match[1].str());
 }
 
 }  // namespace
@@ -196,6 +208,46 @@ TEST(PandaProtocol, HealthPacketIsTheFirmwares) {
     EXPECT_SAME_OFFSET(alternative_experience_pkt);
     EXPECT_SAME_OFFSET(blocked_msg_cnt_pkt);
     EXPECT_SAME_OFFSET(interrupt_load);
+}
+
+// 우리가 내는 토크 한계와 보내는 프레임은 Panda safety(hyundaiCommunity)가 강제하는 것과 같아야 한다. 다르면
+// Panda가 프레임을 막아 조향이 끊기거나(한계를 넘거나 목록에 없는 프레임), 순정보다 약해진다.
+TEST(PandaSafety, SteeringLimitsAndFramesMatchTheFirmware) {
+    const SteeringParams params;
+    const std::string hyundai = "board/safety/safety_hyundai.h";
+    EXPECT_EQ(params.steer_max, const_int(hyundai, "HYUNDAI_MAX_STEER"));
+    EXPECT_EQ(params.steer_delta_up, const_int(hyundai, "HYUNDAI_MAX_RATE_UP"));
+    EXPECT_EQ(params.steer_delta_down, const_int(hyundai, "HYUNDAI_MAX_RATE_DOWN"));
+    EXPECT_EQ(params.steer_driver_allowance, const_int(hyundai, "HYUNDAI_DRIVER_TORQUE_ALLOWANCE"));
+    EXPECT_EQ(params.steer_driver_multiplier, const_int(hyundai, "HYUNDAI_DRIVER_TORQUE_FACTOR"));
+    const std::string community = source("board/safety/safety_hyundai_community.h");
+    EXPECT_NE(community.find("max_limit_check(desired_torque, HYUNDAI_MAX_STEER, -HYUNDAI_MAX_STEER)"),
+              std::string::npos)
+        << "커뮤니티 safety가 같은 한계를 쓴다";
+
+    // 송신 허용 목록 {주소, 버스, 길이}
+    const size_t begin = community.find("HYUNDAI_COMMUNITY_TX_MSGS[] = {");
+    ASSERT_NE(begin, std::string::npos);
+    const std::string table = community.substr(begin, community.find("};", begin) - begin);
+    std::vector<std::array<long, 3>> allowed;
+    const std::regex row("\\{(\\d+), (\\d+), (\\d+)\\}");
+    for (auto it = std::sregex_iterator(table.begin(), table.end(), row); it != std::sregex_iterator(); ++it)
+        allowed.push_back({std::stol((*it)[1].str()), std::stol((*it)[2].str()), std::stol((*it)[3].str())});
+    ASSERT_GE(allowed.size(), 5u);
+    std::vector<CanFrame> frames;
+    for (int frame = 0; frame < 2; ++frame) {
+        const std::vector<CanFrame> lateral = build_lateral_can_frames(HyundaiLkas11Values{}, HyundaiClu11Values{}, {},
+                                                                       HyundaiLkasCommand{}, 60.0f, true, false, frame);
+        frames.insert(frames.end(), lateral.begin(), lateral.end());
+    }
+    frames.push_back(create_cruise_button_frame(HyundaiClu11Values{}, 1, 0));
+    for (const CanFrame &f : frames) {
+        const std::array<long, 3> key = {static_cast<long>(f.address), static_cast<long>(f.bus),
+                                         static_cast<long>(f.length)};
+        EXPECT_NE(std::find(allowed.begin(), allowed.end(), key), allowed.end())
+            << "0x" << std::hex << f.address << std::dec << " bus " << static_cast<int>(f.bus) << " len "
+            << static_cast<int>(f.length);
+    }
 }
 
 TEST(PandaProtocol, ConstantsMatchTheFirmwareSources) {

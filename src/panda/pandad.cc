@@ -8,24 +8,32 @@
 #include "panda/panda_firmware.h"
 #include "panda/panda_flasher.h"
 
+#include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
-constexpr uint64_t kCanPublishIntervalNs = 10000000ULL;
+// 수신 루프 주기. 상류 pandad처럼 10 ms마다 Panda에 쌓인 CAN을 한 번에 읽어 한 묶음으로 올린다.
+constexpr auto kRxCycle = std::chrono::milliseconds(10);
 constexpr uint64_t kMaxSendCanAgeNs = 100000000ULL;
+// 송신 스레드가 sendcan을 기다리는 최대 시간(멈춤 확인 간격). 상류 can_send_thread의 100 ms와 같다.
+constexpr uint64_t kTxWaitNs = 100000000ULL;
 constexpr uint64_t kFirmwareIntervalNs = 1000000000ULL;
 // 웹 콘솔(web_console)과 주고받는 파일. 요청 파일에는 쓸 이미지의 버전 문자열이 들어 있다.
 constexpr char kFirmwareStatusPath[] = "/dev/shm/edgepilot_panda_status.json";
@@ -86,7 +94,8 @@ void publish_disconnected(LatestChannel &state_pub, bool tx_enabled) {
     state_pub.publish(&state, sizeof(state));
 }
 
-void publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enabled) {
+// 상태를 조회해 PandaState로 올린다. 조회한 값은 health_out에 남겨 1초 통계 줄이 다시 묻지 않게 한다.
+bool publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enabled, PandaHealth *health_out) {
     PandaHealth health;
     PandaState state;
     state.timestamp_ns = monotonic_now_ns();
@@ -94,7 +103,8 @@ void publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enable
     state.comms_healthy = panda.comms_healthy() ? 1 : 0;
     state.tx_enabled = tx_enabled ? 1 : 0;
     state.panda_type = panda.hw_type();
-    if (panda.get_health(&health)) {
+    const bool got = panda.get_health(&health);
+    if (got) {
         state.controls_allowed = health.controls_allowed;
         state.ignition_line = health.ignition_line;
         state.ignition_can = health.ignition_can;
@@ -114,41 +124,68 @@ void publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enable
         state.current = health.current;
     }
     state_pub.publish(&state, sizeof(state));
+    if (got && health_out) *health_out = health;
+    return got;
 }
+
+// 송신 스레드의 1초 창 통계. 메인 스레드가 로그를 찍으며 비운다.
+struct TxStats {
+    std::atomic<unsigned> frames{0};
+    std::atomic<unsigned> batches{0};
+    std::atomic<unsigned> stale{0};
+    std::atomic<unsigned> blocked{0};  // EDGEPILOT_PANDA_TX가 꺼져 보내지 않은 프레임
+    std::atomic<unsigned> unsent{0};   // 접속·safety 설정 전, 재접속·펌웨어 쓰기 중이라 버린 묶음
+    std::atomic<unsigned> log_full{0};
+    std::atomic<unsigned> errors{0};
+    std::atomic<uint64_t> lag_sum_us{0};  // controlsd가 묶음을 만든 뒤 USB로 보내기 시작할 때까지
+    std::atomic<unsigned> lag_n{0};
+    std::atomic<unsigned> lag_max_us{0};
+
+    void add_lag(uint64_t lag_ns) {
+        const unsigned us = static_cast<unsigned>(std::min<uint64_t>(lag_ns / 1000, UINT32_MAX));
+        lag_sum_us += us;
+        ++lag_n;
+        unsigned seen = lag_max_us.load();
+        while (us > seen && !lag_max_us.compare_exchange_weak(seen, us)) {
+        }
+    }
+};
 
 // 1초 창의 브리지 통계. 창이 끝나면 panda 헬스와 함께 한 줄로 찍고 비운다.
 struct BridgeStats {
     unsigned rx_frames = 0;
-    unsigned tx_frames = 0;
-    unsigned tx_batches = 0;
     unsigned rx_queue_full = 0;
     unsigned rx_log_queue_full = 0;
-    unsigned tx_log_queue_full = 0;
-    unsigned tx_stale = 0;
-    unsigned tx_blocked = 0;
     unsigned rx_rejected = 0;
+    unsigned rx_late = 0;  // 10 ms 주기를 넘긴 수신 주기
     unsigned errors = 0;
     std::map<std::pair<uint32_t, uint8_t>, unsigned> rejected_frames;
 
-    void log(PandaClient &panda, unsigned long long tx_depth, unsigned long long rx_depth) {
-        PandaHealth health;
-        const bool got_health = panda.get_health(&health);
+    // last_health는 직전 publish_health가 조회한 값(없으면 nullptr). 여기서 다시 묻지 않는다.
+    void log(PandaClient &panda, TxStats &tx, const PandaHealth *last_health, unsigned long long tx_depth,
+             unsigned long long rx_depth) {
+        const PandaHealth health = last_health ? *last_health : PandaHealth{};
+        const bool got_health = last_health != nullptr;
+        const unsigned lag_n = tx.lag_n.exchange(0);
+        const uint64_t lag_sum = tx.lag_sum_us.exchange(0);
         std::fprintf(stderr,
-                     "pandad: rx=%u tx=%u batches=%u stale=%u "
+                     "pandad: rx=%u tx=%u batches=%u stale=%u unsent=%u txLag=%llu/%uus rxLate=%u "
                      "queue=%llu/%llu rxFull=%u logFull=%u/%u "
-                     "blocked=%u rejected=%u errors=%u "
+                     "blocked=%u rejected=%u errors=%u/%u "
                      "canerr=%u/%u/%u pandaBlocked=%u "
                      "heartbeatLost=%u controls=%u usb=%u/%u malformed=%u "
                      "safety=%u:%u ign=%u/%u voltage=%umV current=%umA faults=0x%x\n",
-                     rx_frames, tx_frames, tx_batches, tx_stale, tx_depth, rx_depth, rx_queue_full, rx_log_queue_full,
-                     tx_log_queue_full, tx_blocked, rx_rejected, errors, got_health ? health.can_rx_errs : 0,
-                     got_health ? health.can_send_errs : 0, got_health ? health.can_fwd_errs : 0,
-                     got_health ? health.blocked_msg_cnt : 0, got_health ? health.heartbeat_lost : 0,
-                     got_health ? health.controls_allowed : 0, panda.usb_tx_timeouts(), panda.usb_tx_retries(),
-                     panda.malformed_rx_batches(), got_health ? health.safety_mode : 0,
-                     got_health ? health.safety_param : 0, got_health ? health.ignition_line : 0,
-                     got_health ? health.ignition_can : 0, got_health ? health.voltage : 0,
-                     got_health ? health.current : 0, got_health ? health.faults : 0);
+                     rx_frames, tx.frames.exchange(0), tx.batches.exchange(0), tx.stale.exchange(0),
+                     tx.unsent.exchange(0), static_cast<unsigned long long>(lag_n ? lag_sum / lag_n : 0),
+                     tx.lag_max_us.exchange(0), rx_late, tx_depth, rx_depth, rx_queue_full, rx_log_queue_full,
+                     tx.log_full.exchange(0), tx.blocked.exchange(0), rx_rejected, errors, tx.errors.exchange(0),
+                     got_health ? health.can_rx_errs : 0, got_health ? health.can_send_errs : 0,
+                     got_health ? health.can_fwd_errs : 0, got_health ? health.blocked_msg_cnt : 0,
+                     got_health ? health.heartbeat_lost : 0, got_health ? health.controls_allowed : 0,
+                     panda.usb_tx_timeouts(), panda.usb_tx_retries(), panda.malformed_rx_batches(),
+                     got_health ? health.safety_mode : 0, got_health ? health.safety_param : 0,
+                     got_health ? health.ignition_line : 0, got_health ? health.ignition_can : 0,
+                     got_health ? health.voltage : 0, got_health ? health.current : 0, got_health ? health.faults : 0);
         for (const auto &[key, count] : rejected_frames) {
             std::fprintf(stderr, "pandad: rejected addr=0x%x bus=%u count=%u\n", key.first, key.second, count);
         }
@@ -156,51 +193,26 @@ struct BridgeStats {
     }
 };
 
-// 수신 프레임을 10 ms 또는 256개 단위로 모아 CAN 토픽과 로그 토픽에 올린다.
-class RxBatcher {
-public:
-    RxBatcher() { pending_.reserve(kCanBatchMaxFrames); }
-
-    void clear() {
-        pending_.clear();
-        dropped_ = 0;
-    }
-
-    void reset(uint64_t now_ns) {
-        clear();
-        last_publish_ns_ = now_ns;
-    }
-
-    void add(const std::vector<PandaCanFrame> &frames) {
-        pending_.insert(pending_.end(), frames.begin(), frames.end());
-    }
-
-    bool due(uint64_t now_ns) const {
-        return !pending_.empty() &&
-               (now_ns - last_publish_ns_ >= kCanPublishIntervalNs || pending_.size() >= kCanBatchMaxFrames);
-    }
-
-    void publish(uint64_t now_ns, CanQueue &can_pub, CanQueue &can_log_pub, BridgeStats *stats) {
-        if (pending_.size() > kCanBatchMaxFrames) {
-            const size_t overflow = pending_.size() - kCanBatchMaxFrames;
-            pending_.erase(pending_.begin(), pending_.begin() + overflow);
-            dropped_ += static_cast<unsigned>(overflow);
-        }
-        CanBatch batch = rx_can_batch(pending_);
-        batch.dropped += dropped_;
+// 이번 주기에 받은 프레임을 CAN 토픽과 로그 토픽에 올린다. 256개를 넘으면(밀린 뒤 한꺼번에 왔을 때) 나눠 올린다.
+void publish_rx(const std::vector<PandaCanFrame> &frames, CanQueue &can_pub, CanQueue &can_log_pub,
+                BridgeStats *stats) {
+    auto push = [&](const CanBatch &batch) {
         if (!can_pub.push(batch)) {
             ++stats->rx_queue_full;
             ++stats->errors;
         }
         if (!can_log_pub.push(batch)) ++stats->rx_log_queue_full;
-        reset(now_ns);
+    };
+    if (frames.size() <= kCanBatchMaxFrames) {
+        if (!frames.empty()) push(rx_can_batch(frames));
+        return;
     }
-
-private:
-    std::vector<PandaCanFrame> pending_;
-    unsigned dropped_ = 0;
-    uint64_t last_publish_ns_ = 0;
-};
+    for (size_t start = 0; start < frames.size(); start += kCanBatchMaxFrames) {
+        const size_t end = std::min<size_t>(frames.size(), start + kCanBatchMaxFrames);
+        push(rx_can_batch(std::vector<PandaCanFrame>(frames.begin() + static_cast<std::ptrdiff_t>(start),
+                                                     frames.begin() + static_cast<std::ptrdiff_t>(end))));
+    }
+}
 
 // USB 연결과 safety 모델 설정. 실패하면 false를 돌려주고 호출자가 다음 루프에서
 // 다시 시도한다. 연결 자체가 안 되면 1초 쉰다.
@@ -221,6 +233,7 @@ bool connect_and_configure(PandaClient &panda, uint16_t safety_model, uint16_t s
         panda.close();
         return false;
     }
+    panda.set_configured();  // 이제부터 송신 스레드가 보낸다
     return true;
 }
 
@@ -307,62 +320,89 @@ private:
     Subscription<ControlState> control_;
 };
 
-enum class RxResult { Idle, Frames, Error };
-
-// USB 수신 한 번. Error면 호출자가 연결을 끊고 다시 잇는다.
-RxResult service_rx(PandaClient &panda, bool log_can, RxBatcher *rx, BridgeStats *stats) {
-    std::vector<PandaCanFrame> frames;
-    if (!panda.receive(&frames, 10)) {
+// USB 수신 한 번. 실패하면 false이고 호출자가 연결을 끊고 다시 잇는다. Panda는 쌓인 것이 없으면 빈 응답을
+// 바로 돌려준다(펌웨어 EP1 IN).
+bool service_rx(PandaClient &panda, bool log_can, std::vector<PandaCanFrame> *frames, BridgeStats *stats) {
+    if (!panda.receive(frames, 10)) {
         ++stats->errors;
-        return RxResult::Error;
+        return false;
     }
-    if (frames.empty()) return RxResult::Idle;
-    for (const PandaCanFrame &frame : frames) {
+    for (const PandaCanFrame &frame : *frames) {
         if (frame.rejected) {
             ++stats->rx_rejected;
             ++stats->rejected_frames[{frame.address, frame.bus}];
         }
     }
-    rx->add(frames);
-    stats->rx_frames += static_cast<unsigned>(frames.size());
+    stats->rx_frames += static_cast<unsigned>(frames->size());
     if (log_can) {
-        for (const PandaCanFrame &frame : frames) {
+        for (const PandaCanFrame &frame : *frames) {
             std::fprintf(stderr, "can rx bus=%u addr=0x%x len=%u returned=%u rejected=%u\n", frame.bus, frame.address,
                          frame.data_len, frame.returned ? 1 : 0, frame.rejected ? 1 : 0);
         }
     }
-    return RxResult::Frames;
+    return true;
 }
 
-// sendcan 큐를 비워 panda로 보낸다. 배치가 하나라도 있었으면 true.
-bool service_tx(CanQueue &sendcan_sub, CanQueue &sendcan_log_pub, PandaClient &panda, bool tx_enabled,
-                BridgeStats *stats) {
-    bool had_sendcan = false;
-    CanBatch send_batch;
-    while (sendcan_sub.pop(&send_batch)) {
-        had_sendcan = true;
-        ++stats->tx_batches;
-        // 생산자는 루프가 시계를 읽은 뒤에 발행할 수 있다. 여기서 시각을 새로 읽어, 새 묶음을
-        // 미래나 낡은 묶음으로 잘못 보고 토크 순서에서 건너뛰는 일이 없게 한다.
-        const uint64_t tx_now = monotonic_now_ns();
-        if (!can_batch_is_fresh(send_batch, tx_now, kMaxSendCanAgeNs)) {
-            ++stats->tx_stale;
+// 송신 스레드. 상류 can_send_thread처럼 sendcan이 오면 바로 Panda로 보낸다. 예전에는 수신 루프가 빈 수신 뒤
+// 5 ms씩 자는 동안 sendcan도 기다려, 보내기까지 평균 약 2 ms, 길게는 5 ms가 걸렸다(10-12 주행 기록).
+// 보낼 수 있는지(접속 + safety 설정 확인)와 100 ms 신선도는 PandaClient::send가 USB 잠금을 얻은 뒤 다시 본다:
+// 메인 스레드의 USB 작업(수신, 하트비트, 상태 조회, 재접속)을 기다린 묶음이 낡았거나 재접속 직후 설정 전이면 보내지 않는다.
+void run_tx(CanQueue &sendcan_sub, CanQueue &sendcan_log_pub, PandaClient &panda, bool tx_enabled,
+            const std::atomic<bool> &stop, TxStats *stats) {
+    pthread_setname_np(pthread_self(), "pandad_tx");
+    // 묶음 하나가 21.5 KB라 한 번만 잡는다. pop은 count까지 채우고 그 뒤는 읽지 않는다.
+    const std::unique_ptr<CanBatch> batch(new CanBatch);
+    while (!stop.load()) {
+        if (!sendcan_sub.pop_wait(batch.get(), kTxWaitNs)) continue;
+        ++stats->batches;
+        // 생산자는 이 스레드가 시계를 읽은 뒤에 발행할 수 있다. 꺼낸 뒤 시각을 새로 읽어, 새 묶음을 미래나 낡은
+        // 묶음으로 잘못 보고 건너뛰는 일이 없게 한다.
+        if (!can_batch_is_fresh(*batch, monotonic_now_ns(), kMaxSendCanAgeNs)) {
+            ++stats->stale;
             continue;
         }
-        const std::vector<PandaCanFrame> tx = frames_from_batch(send_batch);
-        if (!sendcan_log_pub.push(send_batch)) ++stats->tx_log_queue_full;
-        if (tx_enabled) {
-            if (panda.send(tx)) {
-                stats->tx_frames += static_cast<unsigned>(tx.size());
-            } else {
-                ++stats->errors;
+        const std::vector<PandaCanFrame> tx = frames_from_batch(*batch);
+        if (!tx_enabled) {
+            if (!panda.ready()) {
+                ++stats->unsent;
+                continue;
             }
-        } else {
-            stats->tx_blocked += static_cast<unsigned>(tx.size());
+            if (!sendcan_log_pub.push(*batch)) ++stats->log_full;
+            stats->blocked += static_cast<unsigned>(tx.size());
+            continue;
         }
+        uint64_t started_ns = 0;
+        switch (panda.send(tx, batch->timestamp_ns + kMaxSendCanAgeNs, &started_ns)) {
+            case PandaSendResult::NotReady:
+                ++stats->unsent;
+                continue;
+            case PandaSendResult::Expired:
+                ++stats->stale;
+                continue;
+            case PandaSendResult::Sent:
+                stats->frames += static_cast<unsigned>(tx.size());
+                stats->add_lag(started_ns - batch->timestamp_ns);
+                break;
+            case PandaSendResult::Failed:
+                ++stats->errors;
+                break;
+        }
+        // 기록(recordd의 CanTx)에는 보낸(보내려 한) 묶음만 남긴다.
+        if (!sendcan_log_pub.push(*batch)) ++stats->log_full;
     }
-    return had_sendcan;
 }
+
+// 송신 스레드와 멈춤 신호. 예외로 main을 빠져나가도 세우고 기다린다(joinable한 std::thread를 그대로 지우면
+// terminate). 스레드가 쓰는 큐와 PandaClient보다 뒤에 만들어 먼저 지워지게 한다.
+struct TxThread {
+    std::atomic<bool> stop{false};
+    std::thread thread;
+
+    ~TxThread() {
+        stop = true;
+        if (thread.joinable()) thread.join();
+    }
+};
 
 }  // namespace
 
@@ -390,7 +430,6 @@ int main() {
         const bool tx_enabled = env_flag("EDGEPILOT_PANDA_TX", false);
         const bool heartbeat_engaged = env_flag("EDGEPILOT_PANDA_ENGAGED", false);
         const bool log_can = env_flag("EDGEPILOT_PANDA_LOG_CAN", false);
-        const uint16_t idle_us = static_cast<uint16_t>(env_unsigned("EDGEPILOT_PANDA_IDLE_US", 5000));
         uint16_t default_safety_param = 0;
         const uint16_t safety_model = parse_safety_model("EDGEPILOT_PANDA_SAFETY", &default_safety_param);
         const uint16_t safety_param =
@@ -404,16 +443,27 @@ int main() {
         }
 
         PandaClient panda;
-        RxBatcher rx;
         BridgeStats stats;
+        TxStats tx_stats;
         FirmwareService firmware(env_string("EDGEPILOT_PANDA_FIRMWARE", kDefaultFirmwarePath));
         uint64_t last_health_ns = 0;
         uint64_t last_heartbeat_ns = 0;
         uint64_t last_log_ns = 0;
         uint64_t last_firmware_ns = 0;
+        std::vector<PandaCanFrame> frames;
+        frames.reserve(kCanBatchMaxFrames);
+        PandaHealth last_health;
+        bool have_health = false;
 
+        TxThread tx;
+        tx.thread = std::thread(run_tx, std::ref(sendcan_sub), std::ref(sendcan_log_pub), std::ref(panda), tx_enabled,
+                                std::cref(tx.stop), &tx_stats);
+
+        using Clock = std::chrono::steady_clock;
+        auto next_cycle = Clock::now();
         while (!g_stop) {
             if (!panda.connected()) {
+                have_health = false;
                 publish_disconnected(panda_state_pub, tx_enabled);
                 // 판다가 없거나 bootstub에 머물러도 웹 콘솔에서 펌웨어를 다시 쓸 수 있게 여기서도 본다
                 if (monotonic_now_ns() - last_firmware_ns >= kFirmwareIntervalNs) {
@@ -424,43 +474,49 @@ int main() {
                 if (!connect_and_configure(panda, safety_model, safety_param, &stats)) continue;
                 last_health_ns = 0;
                 last_heartbeat_ns = 0;
-                rx.reset(monotonic_now_ns());
+                next_cycle = Clock::now();
             }
 
-            const RxResult received = service_rx(panda, log_can, &rx, &stats);
-            if (received == RxResult::Error) {
-                rx.clear();
+            if (!service_rx(panda, log_can, &frames, &stats)) {
                 panda.close();
                 continue;
             }
+            publish_rx(frames, can_pub, can_log_pub, &stats);
 
             const uint64_t now = monotonic_now_ns();
-            if (rx.due(now)) rx.publish(now, can_pub, can_log_pub, &stats);
-            const bool had_sendcan = service_tx(sendcan_sub, sendcan_log_pub, panda, tx_enabled, &stats);
-
+            // 하트비트와 상태 조회(USB 제어 전송, 각각 최대 100 ms)를 한 주기에 몰지 않는다. 송신 스레드가 USB 잠금을
+            // 두 번 연달아 기다리지 않게 한다.
+            bool control_transfer = false;
             if (now - last_heartbeat_ns >= 500000000ULL) {
                 panda.send_heartbeat(heartbeat_engaged && tx_enabled);
                 last_heartbeat_ns = now;
+                control_transfer = true;
             }
-            if (now - last_health_ns >= 500000000ULL) {
-                publish_health(panda_state_pub, panda, tx_enabled);
+            if (!control_transfer && now - last_health_ns >= 500000000ULL) {
+                have_health = publish_health(panda_state_pub, panda, tx_enabled, &last_health);
                 last_health_ns = now;
             }
             if (now - last_log_ns >= 1000000000ULL) {
-                stats.log(panda, static_cast<unsigned long long>(sendcan_sub.depth()),
+                stats.log(panda, tx_stats, have_health ? &last_health : nullptr,
+                          static_cast<unsigned long long>(sendcan_sub.depth()),
                           static_cast<unsigned long long>(can_pub.depth()));
                 last_log_ns = now;
             }
             if (now - last_firmware_ns >= kFirmwareIntervalNs) {
                 last_firmware_ns = now;
-                if (firmware.service_request(panda)) {
-                    rx.clear();
-                    continue;  // 펌웨어를 썼다: 다음 루프가 다시 잇는다
-                }
+                // 펌웨어를 쓰면 판다 연결이 닫혀 송신 스레드의 send는 NotReady가 되고, 다음 루프가 다시 잇는다
+                if (firmware.service_request(panda)) continue;
                 firmware.write_status(panda);
             }
-            if (received == RxResult::Idle && !had_sendcan && idle_us > 0) {
-                usleep(idle_us);
+
+            // 다음 주기까지 잔다. 넘겼으면 밀린 만큼 몰아서 읽지 않고 지금부터 다시 센다.
+            next_cycle += kRxCycle;
+            const auto cycle_end = Clock::now();
+            if (next_cycle > cycle_end) {
+                std::this_thread::sleep_until(next_cycle);
+            } else {
+                ++stats.rx_late;
+                next_cycle = cycle_end;
             }
         }
 

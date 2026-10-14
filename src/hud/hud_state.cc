@@ -120,7 +120,8 @@ void hud_apply_model_state(const ModelState &model, bool fresh, HudState *hud) {
 
 void hud_apply_record_state(const RecordState &record, bool fresh, HudState *hud) {
     hud->recording = fresh && record.active != 0;
-    hud->storage_full = fresh && record.storage_blocked != 0;
+    hud->storage_full = fresh && record.storage_blocked == kStorageBlockedSdReserve;
+    hud->storage_slow = fresh && record.storage_blocked == kStorageBlockedStaging;
 }
 
 void hud_apply_learner_state(const LearnerState &learner, bool fresh, HudState *hud) {

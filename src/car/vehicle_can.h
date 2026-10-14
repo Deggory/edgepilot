@@ -238,6 +238,12 @@ Lca11Values decode_lca11(const std::array<uint8_t, 8> &data);
 
 Tpms11Values decode_tpms11(const std::array<uint8_t, 8> &data);
 
+// 차 상태에 넣을 수신 프레임인가: Panda가 돌려준 우리 송신 에코(flags)·거부 프레임이나 CAN FD 길이, 차 버스가
+// 아닌 src는 뺀다. controlsd와 녹화 재생 도구가 같은 규칙을 쓴다.
+inline bool is_vehicle_rx_frame(uint32_t flags, uint32_t data_len, uint32_t src) {
+    return flags == 0 && data_len <= 8 && src <= 7;
+}
+
 // raw CAN frame을 K7 vehicle state에 반영한다.
 void update_vehicle_can_state(VehicleCanState *state, uint32_t address, const std::array<uint8_t, 8> &data,
                               uint8_t length, uint8_t bus, double now_s);

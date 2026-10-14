@@ -117,8 +117,7 @@ int main(int argc, char **argv) {
         std::vector<char> buf;
         while (reader.next(&rh, &buf)) {
             if (use_vehicle && rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
-                apply_recorded_can(buf.data(), rh.payload_size, static_cast<double>(rh.timestamp_ns) * 1e-9, &vehicle,
-                                   true);
+                apply_recorded_can(buf.data(), rh.payload_size, static_cast<double>(rh.timestamp_ns) * 1e-9, &vehicle);
             } else if (rh.type == static_cast<uint16_t>(RecordType::ControlState) &&
                        rh.payload_size >= sizeof(ControlState)) {
                 ControlState cs{};

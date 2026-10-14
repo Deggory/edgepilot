@@ -2,9 +2,8 @@
 // 바이트), 20 Hz 직선 도로 모델, Panda 상태를 넣고 ControlState와 보낼 CAN을 본다: SET으로 결합해
 // LKAS11을 보내고 문이 열리면 해제한다, Panda가 허가하지 않으면 1초 유예 뒤 거부한다, 브레이크
 // 페달(AHB1)이 고정형 크루즈 추정을 끈다, 휠 속도가 끊기면 크루즈·발행 속도는 0.5초 뒤 비운다,
-// locationd를 못 읽은 틱은 마지막 lagd 지연을 쓴다, 확률 문턱 밑의 모델 앞차는 쓰지 않는다. 플래너는 그
-// 자리에서 계산한다(SyncPlanner).
-// 보드의 작업 스레드 플래너(LateralPlannerWorker)는 SyncPlanner와 같은 결과를 내는지 따로 본다.
+// locationd를 못 읽은 틱은 마지막 lagd 지연을 쓴다, 확률 문턱 밑의 모델 앞차는 쓰지 않는다, 새 모델의
+// 플랜은 그 모델을 받은 틱에 쓴다.
 #include "car/can_frame.h"
 #include "common/ipc_messages.h"
 #include "common/model_output.h"
@@ -15,10 +14,8 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstring>
-#include <thread>
 
 namespace {
 
@@ -108,7 +105,7 @@ PandaState panda_state(uint64_t now_ns, bool controls_allowed) {
 class Drive {
 public:
     explicit Drive(const ControlParams &params = laneless_params())
-        : planner_(params.steering), tick_(params, false, planner_, std::string(), std::string(), 1) {
+        : tick_(params, false, std::string(), std::string(), 1) {
         tick_.controller().set_clock([this] { return now_ns_; });
     }
 
@@ -147,7 +144,6 @@ public:
 private:
     uint64_t now_ns_ = 1'000'000'000ULL;
     unsigned ticks_ = 0;
-    SyncPlanner planner_;
     ControlsTick tick_;
 };
 
@@ -156,6 +152,55 @@ bool sends(const ControlsTick &tick, uint32_t address, uint8_t bus) {
     if (!result.should_send) return false;
     return std::any_of(result.frames.begin(), result.frames.end(),
                        [&](const CanFrame &frame) { return frame.address == address && frame.bus == bus; });
+}
+
+// 학습 파일은 내용이 바뀔 때만 쓴다: CAN이 없어 배울 것이 없으면 처음 한 번 뒤로는 다시 쓰지 않는다.
+TEST(ControlsTick, LearnerFilesAreWrittenOnlyWhenTheyChange) {
+    const ControlParams params;
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    int vehicle_writes = 0, torque_writes = 0;
+    for (int i = 0; i < 13000; ++i) {  // 100 Hz로 130 s: paramsd 저장 주기 2번, torqued 10번
+        const LearnerOutputs out = tick.update_learners(1.0 + i * 0.01);
+        vehicle_writes += out.vehicle_json ? 1 : 0;
+        torque_writes += out.torque_cache ? 1 : 0;
+    }
+    EXPECT_EQ(vehicle_writes, 1);
+    EXPECT_EQ(torque_writes, 1);
+
+    // 시작 때 읽은 내용과 같으면 첫 저장도 하지 않는다
+    ControlsTick restarted(params, false, tick.learners().vehicle_persist_json(), tick.learners().torque_cache(), 1);
+    torque_writes = 0;
+    for (int i = 0; i < 3000; ++i) torque_writes += restarted.update_learners(1.0 + i * 0.01).torque_cache ? 1 : 0;
+    EXPECT_EQ(torque_writes, 0);
+}
+
+// 학습 파일 쓰기가 실패하면(BackgroundWriter::failures가 늘면) 내용이 같아도 두 파일을 다시 내놓는다: 다음 저장 주기나
+// 늦어도 12 s 뒤. 주차 중처럼 내용이 바뀌지 않으면 그렇지 않고는 다시 쓸 일이 없다.
+TEST(ControlsTick, FailedLearnerWritesAreRetried) {
+    const ControlParams params;
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    double now_s = 1.0;
+    for (int i = 0; i < 3000; ++i, now_s += 0.01) tick.update_learners(now_s);  // 첫 저장
+    int vehicle_writes = 0, torque_writes = 0;
+    for (int i = 0; i < 3000; ++i, now_s += 0.01) {
+        const LearnerOutputs out = tick.update_learners(now_s);
+        vehicle_writes += out.vehicle_json ? 1 : 0;
+        torque_writes += out.torque_cache ? 1 : 0;
+    }
+    ASSERT_EQ(vehicle_writes + torque_writes, 0) << "nothing changed, nothing written";
+
+    const double failed_at = now_s;
+    tick.learner_write_failed(failed_at);
+    double torque_retried_at = 0.0;
+    for (int i = 0; i < 3000; ++i, now_s += 0.01) {
+        const LearnerOutputs out = tick.update_learners(now_s);
+        if (out.torque_cache && torque_retried_at == 0.0) torque_retried_at = now_s;
+        vehicle_writes += out.vehicle_json ? 1 : 0;
+        torque_writes += out.torque_cache ? 1 : 0;
+    }
+    EXPECT_EQ(vehicle_writes, 1);
+    EXPECT_EQ(torque_writes, 1);
+    EXPECT_LE(torque_retried_at, failed_at + 12.0 + 0.02) << "retried within 12 s";
 }
 
 TEST(ControlsTick, EngagesOnSetAndDisengagesWhenADoorOpens) {
@@ -224,8 +269,7 @@ TEST(ControlsTick, CruiseSpeedGoesStaleAfterHalfASecond) {
 TEST(ControlsTick, TornLocalizationReadKeepsTheLastLagEstimate) {
     ControlParams params;
     params.steering.use_live_delay = true;
-    SyncPlanner planner(params.steering);
-    ControlsTick tick(params, false, planner, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
     LocalizationRead good;
     good.open = good.read = true;
     good.read_ns = 10'000'000'000ULL;
@@ -252,8 +296,7 @@ TEST(ControlsTick, TornLocalizationReadKeepsTheLastLagEstimate) {
 // 판정(observe_vision_lead)을 받는다.
 TEST(ControlsTick, VisionLeadNeedsTheFixedProbability) {
     ControlParams params;
-    SyncPlanner planner(params.steering);
-    ControlsTick tick(params, false, planner, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
     const uint64_t now_ns = 2'000'000'000ULL;
     ModelState model = straight_model(now_ns);
     model.lead.valid = 1;
@@ -273,8 +316,7 @@ TEST(ControlsTick, VisionLeadNeedsTheFixedProbability) {
 // 알림은 모델 앞차를 그대로 받는다(늦으면 안 된다). 추적이 없으면 크루즈도 모델 앞차다.
 TEST(ControlsTick, CruiseTakesTheLeadTrackAndTheAlertTheModelLead) {
     ControlParams params;
-    SyncPlanner planner(params.steering);
-    ControlsTick tick(params, false, planner, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
     const uint64_t now_ns = 2'000'000'000ULL;
     ModelState model = straight_model(now_ns);
     model.lead.valid = 1;
@@ -304,8 +346,8 @@ TEST(ControlsTick, CruiseTakesTheLeadTrackAndTheAlertTheModelLead) {
     EXPECT_FALSE(tick.cruise_input().vision_lead_valid);
 }
 
-// Lane 모드 모델: 차선 둘과 직진 plan. 차선 중심이 차에서 offset_m만큼 떨어져 있다.
-ModelState lane_model(uint64_t now_ns, float offset_m) {
+// Lane 모드 모델: 차 양옆 1.75 m의 차선 둘과 직진 plan.
+ModelState lane_model(uint64_t now_ns) {
     const float v = 20.0f;
     ModelState model;
     model.valid = 1;
@@ -316,8 +358,8 @@ ModelState lane_model(uint64_t now_ns, float offset_m) {
         const float t = model_t_idx(i);
         model.model_t[i] = model.lane_t[i] = t;
         model.plan[i] = {v * t, 0.0f, 0.0f};
-        model.lanes[1][i] = {v * t, offset_m - 1.75f, 0.0f};
-        model.lanes[2][i] = {v * t, offset_m + 1.75f, 0.0f};
+        model.lanes[1][i] = {v * t, -1.75f, 0.0f};
+        model.lanes[2][i] = {v * t, 1.75f, 0.0f};
     }
     model.lane_probabilities[1] = model.lane_probabilities[2] = 0.99f;
     model.lane_stds[1] = model.lane_stds[2] = 0.05f;
@@ -325,66 +367,35 @@ ModelState lane_model(uint64_t now_ns, float offset_m) {
     return model;
 }
 
-// 작업 스레드가 이 캡처 시각의 결과를 낼 때까지 기다린다(최대 5초).
-LateralTarget wait_for(const LateralPlannerWorker &worker, uint64_t capture_ns) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    LateralTarget target = worker.latest();
-    while (target.capture_timestamp_ns != capture_ns && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
-        target = worker.latest();
-    }
-    return target;
-}
-
-void expect_same_target(const LateralTarget &a, const LateralTarget &b, int frame) {
-    EXPECT_EQ(a.valid, b.valid) << frame;
-    EXPECT_EQ(a.mpc_solution_valid, b.mpc_solution_valid) << frame;
-    EXPECT_EQ(a.laneless_mode, b.laneless_mode) << frame;
-    EXPECT_EQ(a.target_y_m, b.target_y_m) << frame;
-    EXPECT_EQ(a.heading_rad, b.heading_rad) << frame;
-    EXPECT_EQ(a.curvature, b.curvature) << frame;
-    for (int i = 0; i < kLateralControlN; ++i) {
-        EXPECT_EQ(a.psis[i], b.psis[i]) << frame << " psi " << i;
-        EXPECT_EQ(a.curvatures[i], b.curvatures[i]) << frame << " curvature " << i;
-    }
-}
-
-// 보드의 작업 스레드 플래너는 같은 입력 순서면 그 자리에서 계산한 것(SyncPlanner)과 비트까지 같다.
-// MPC와 차선 플래너가 프레임 사이에 상태를 이어 가므로 차선 중심을 프레임마다 옮긴다.
-TEST(PlannerWorker, MatchesTheSyncPlanner) {
-    SteeringParams steering;
-    LateralPlannerWorker worker(steering);
-    SyncPlanner sync(steering);
-    VehicleCanState vehicle{};
-    for (int frame = 0; frame < 30; ++frame) {
-        const uint64_t now_ns = 1'000'000'000ULL + static_cast<uint64_t>(frame) * 50'000'000ULL;
-        const ModelState model = lane_model(now_ns, 0.3f * std::sin(0.2f * static_cast<float>(frame)));
-        worker.submit(model, vehicle, 20.0f, 0.0f, true);
-        sync.submit(model, vehicle, 20.0f, 0.0f, true);
-        const LateralTarget target = wait_for(worker, now_ns);
-        ASSERT_EQ(target.capture_timestamp_ns, now_ns) << "작업 스레드가 프레임 " << frame << "을 끝내지 못했다";
-        expect_same_target(target, sync.latest(), frame);
-    }
-}
-
-// 바꾼 파라미터는 바로 다음 프레임부터 쓴다(작업 스레드가 요청보다 먼저 적용한다).
-TEST(PlannerWorker, ParamsApplyFromTheNextFrame) {
-    SteeringParams steering;
-    LateralPlannerWorker worker(steering);
-    VehicleCanState vehicle{};
+// 웹 콘솔·SIGHUP으로 다시 읽은 파라미터는 다음 모델 프레임부터 플래너에 들어간다(apply_params → 플래너).
+TEST(ControlsTick, ReloadedParamsReachThePlanner) {
+    ControlParams params;
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
     uint64_t now_ns = 1'000'000'000ULL;
-    LateralTarget target;
     for (int frame = 0; frame < 40; ++frame, now_ns += 50'000'000ULL) {
-        worker.submit(lane_model(now_ns, 0.0f), vehicle, 20.0f, 0.0f, true);
-        target = wait_for(worker, now_ns);
+        tick.on_model(lane_model(now_ns));
+        tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
     }
-    ASSERT_FALSE(target.laneless_mode) << "차선이 자리 잡으면 Lane 모드 경로";
-    steering.laneless_mode = true;
-    worker.update_params(steering);
-    worker.submit(lane_model(now_ns, 0.0f), vehicle, 20.0f, 0.0f, true);
-    target = wait_for(worker, now_ns);
-    ASSERT_EQ(target.capture_timestamp_ns, now_ns);
-    ASSERT_TRUE(target.laneless_mode) << "Laneless 모드로 바꾼 뒤의 첫 프레임";
+    ASSERT_FALSE(tick.target().laneless_mode) << "settled lanes give a lane-mode plan";
+    params.steering.laneless_mode = true;
+    tick.apply_params(params);
+    tick.on_model(lane_model(now_ns));
+    tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
+    EXPECT_TRUE(tick.target().laneless_mode) << "the first frame after the reload plans laneless";
+}
+
+// 새 모델의 플랜은 그 모델을 받은 틱의 step이 바로 쓴다(예전 작업 스레드는 한 틱 늦어, 이 틱에는 직전
+// 프레임의 플랜이 나왔다).
+TEST(ControlsTick, UsesTheNewPlanInTheSameTick) {
+    const ControlParams params;
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    uint64_t now_ns = 1'000'000'000ULL;
+    for (int frame = 0; frame < 20; ++frame, now_ns += 50'000'000ULL) {
+        tick.on_model(lane_model(now_ns));
+        tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
+        ASSERT_TRUE(tick.target().valid) << frame;
+        ASSERT_EQ(tick.target().capture_timestamp_ns, now_ns) << "프레임 " << frame << "의 플랜을 같은 틱에 써야 한다";
+    }
 }
 
 }  // namespace

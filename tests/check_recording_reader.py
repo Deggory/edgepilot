@@ -42,6 +42,23 @@ def size_of(struct: str, text: str = IPC) -> int:
     return pinned(r"sizeof\(" + struct + r"\) == (\d+)", text)
 
 
+def struct_fields(name: str, text: str) -> list[tuple[str, str, int]]:
+    """C++ 구조체의 (형식, 이름, 배열 길이) 목록. uint32_t·int32_t·float·uint8_t 필드만 있는 구조체용."""
+    body = re.search(r"struct " + name + r" \{(.*?)\n\};", text, re.S).group(1)
+    return [(kind, field, int(count or 1))
+            for kind, field, count in re.findall(r"(uint32_t|int32_t|float|uint8_t) (\w+)(?:\[(\d+)\])?", body)]
+
+
+def dtype_fields(dtype) -> list[tuple[str, str, int]]:
+    kinds = {"<u4": "uint32_t", "<i4": "int32_t", "<f4": "float", "|u1": "uint8_t"}
+    out = []
+    for name in dtype.names:
+        field = dtype.fields[name][0]
+        base = field.base if field.shape else field
+        out.append((kinds[base.str], name, int(np.prod(field.shape)) if field.shape else 1))
+    return out
+
+
 def offset_in(dtype, name: str) -> int:
     return dtype.fields[name][1]
 
@@ -83,6 +100,7 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(layout["lead_flow"], pinned(r"offsetof\(ModelState, lead_flow\) == (\d+)"))
         self.assertEqual(layout["lead_track"], pinned(r"offsetof\(ModelState, lead_track\) == (\d+)"))
         self.assertEqual(rr.CALIBRATION_STATE.itemsize, size_of("CalibrationState"))
+        self.assertEqual(dtype_fields(rr.POSE_STATE), struct_fields("PoseState", IPC))
         self.assertEqual(rr.FLOW_CALIBRATION_STATE.itemsize, size_of("FlowCalibrationState"))
         self.assertEqual(rr.CALIBRATION_SOURCE_STATE.itemsize, size_of("CalibrationSourceState"))
         self.assertEqual(rr.LEAD_FLOW_STATE.itemsize, size_of("LeadFlowState"))
@@ -161,6 +179,9 @@ class RecordingReaderLayout(unittest.TestCase):
 
     def test_recording_format(self):
         self.assertEqual(rr.EVENT_RECORD_HEADER.size, size_of("EventRecordHeader", FORMAT))
+        self.assertEqual(rr.RECORDED_CAN_FRAME.itemsize, size_of("RecordedCanFrame", FORMAT))
+        self.assertEqual(dtype_fields(rr.RECORDED_CAN_FRAME), struct_fields("RecordedCanFrame", FORMAT))
+        self.assertEqual(len(struct_fields("RecordedCanBatchHeader", FORMAT)) * 4, rr.RECORDED_CAN_BATCH_HEAD.size)
         self.assertEqual(rr.FRAME_INDEX_RECORD.itemsize, size_of("FrameIndexRecord", FORMAT))
         body = re.search(r"enum class RecordType : uint16_t \{(.*?)\};", FORMAT, re.S).group(1)
         types = {name: int(value) for name, value in re.findall(r"(\w+) = (\d+),", body)}
@@ -168,6 +189,21 @@ class RecordingReaderLayout(unittest.TestCase):
         for name, value in types.items():
             constant = "RECORD_" + re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
             self.assertEqual(getattr(rr, constant), value, constant)
+
+
+class CanRecords(unittest.TestCase):
+    def test_can_frames_reads_the_batch(self):
+        """CanRx 레코드: 머리의 count만큼, 잘린 레코드면 들어 있는 만큼 읽는다."""
+        frames = np.zeros(2, rr.RECORDED_CAN_FRAME)
+        frames["address"] = [0x251, 0x4f1]
+        frames["src"] = [0, 2]
+        frames["data_len"] = [8, 4]
+        frames["data"][0, :8] = range(1, 9)
+        payload = rr.RECORDED_CAN_BATCH_HEAD.pack(2, 0) + frames.tobytes()
+        read = rr.can_frames(payload)
+        self.assertEqual(read["address"].tolist(), [0x251, 0x4f1])
+        self.assertEqual(read["data"][0, :8].tolist(), list(range(1, 9)))
+        self.assertEqual(len(rr.can_frames(payload[:-10])), 1)
 
 
 class CameraIntrinsics(unittest.TestCase):

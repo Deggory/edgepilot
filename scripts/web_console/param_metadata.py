@@ -104,7 +104,7 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "recording": {
         "enabled": toggle("recording"),
-        "bitrate_bps": number("recording", "bps", 500000, 1000000, 20000000),
+        "bitrate_bps": number("recording", "bps", 500000, 1000000, 10000000),
     },
     "display": {
         "enabled": toggle("backlight"),

@@ -324,9 +324,9 @@ Libraries `control_core` and `controls`, process `controlsd`.
   - CAN, model, Panda and locationd inputs go in; the lateral controller,
     departure alerts, vision cruise and learners run in between; the frames to
     send, `ControlState` and `LearnerState` come out.
-  - The 20 Hz planner sits behind `PlannerPort`: a worker thread on the board
-    (`LateralPlannerWorker`), computed in place in tools and tests
-    (`SyncPlanner`).
+  - The 20 Hz planner runs in place in the tick that receives the model
+    (about 0.1 ms on the board), so a new plan is used in that same tick, on
+    the board and in the tools and tests alike.
   - It also holds the parameter-file watcher.
 - `lateral_controller.*`, `lateral_torque.*`, `control_params.*`: apply the
   planner's lag-adjusted curvature through the validated K7 torque/CAN path
@@ -446,8 +446,9 @@ Libraries `model` and (board) `replay`, process `modeld`.
   inputs, and runs one frame. `run_frame_phys` reads a ring slot by physical
   address and drops the frame if it was overwritten during the warp.
 - `ax_engine_session.*`, `ax_engine_api.h`: a minimal `libax_engine` session
-  with a cached CMM buffer per tensor. The board image ships no engine
-  headers, so `ax_engine_api.h` declares the API. These are the only files
+  with one cached CMM block for the inputs and one for the outputs, so a run
+  flushes and invalidates once. The board image ships no engine headers, so
+  `ax_engine_api.h` declares the API. These are the only files
   under `src/` that touch the NPU.
 - `model_output_assembly.h`: reassembles the split-head axmodel outputs into
   the openpilot 2576-float layout (`model_output.h`); each head is quantised
@@ -761,7 +762,9 @@ only in the board build, against `deps/ax630` from
   chessboard image.
 - `tools/control/`: `fit_lateral_params.py` (torque regression and
   actuator-lag estimate from drives, both on the wheel speed as openpilot's
-  torqued and lagd use `vEgo`) and `export_can_fixture.py` (recorded CAN →
+  torqued and lagd use `vEgo`; its `fit` reads the 1 Hz log line and only
+  approximates torqued, so with a recording use `replay_lateral_learners`,
+  which runs the real learner) and `export_can_fixture.py` (recorded CAN →
   `gtest_lateral_controller` fixture).
 - `tools/rehearsal/compare_rehearsal.py`: compares a board rehearsal's
   recording with the route it replayed ([Rehearsal](rehearsal.md)).

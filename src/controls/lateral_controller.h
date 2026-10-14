@@ -13,6 +13,8 @@
 #include "controls/lateral_path.h"
 #include "controls/lateral_target.h"
 #include "controls/lateral_torque.h"
+#include "controls/road_bank.h"
+#include "controls/steering_pressed.h"
 
 // lag 보상 곡률의 고정 한계. 런타임 튜닝 항목이 아니다. 진단용 참조 구현이
 // 같은 값을 쓰도록 헤더에 둔다(값이 갈리면 리플레이 검증이 조용히 썩는다).
@@ -118,7 +120,7 @@ struct LateralControlResult {
 
 class LateralController {
 public:
-    float road_bank_lat_accel() const { return road_bank_lat_accel_; }
+    float road_bank_lat_accel() const { return road_bank_.lat_accel(); }
     explicit LateralController(LateralControllerConfig config = LateralControllerConfig{});
 
     // 제어 상태를 유지한 채 런타임 파라미터를 즉시 교체한다.
@@ -157,7 +159,6 @@ private:
     void disengage(double now_s);
     void resolve_engagement(BlockKind kind, bool logical_engaged, bool engage_requested, double now_s,
                             LateralControlResult *result);
-    void update_road_bank(const VehicleCanState &vehicle_state, float speed_mps, bool yaw_rate_valid);
     // 클립 전 목표 곡률. plan_curvature에는 묶기 전의 plan 곡률(상류 modelV2.action.desiredCurvature,
     // 포화 경고가 쓴다)을 적는다.
     float requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
@@ -185,9 +186,6 @@ private:
 
     // 큰 조향각 고장 회피: 85도 위 체류를 세고 요청을 끌지 정한다.
     bool update_large_angle_hold(bool steer_requested, float steering_angle_deg, bool steering_pressed);
-
-    // 노이즈가 있는 운전자 조향 토크를 openpilot 방식으로 필터링한다.
-    bool update_steering_pressed(int driver_torque);
 
     // 제어 내부 상태를 초기값으로 되돌린다.
     void reset_control_state();
@@ -248,11 +246,8 @@ private:
     bool steer_req_sent_ = false;
     // 상류 CarController.angle_limit_counter(avoid_lkas_fault를 끈 경우만)
     int angle_limit_counter_ = 0;
-    int steering_pressed_counter_ = 0;
-    // 라이브 편경사 추정: bank = lat실측 + yaw_rate*v, 2초 저역통과, 직선에서만 갱신
-    float road_bank_lat_accel_ = 0.0f;
-    bool road_bank_init_ = false;
-    int road_bank_stale_frames_ = 0;
+    SteeringPressedFilter steering_pressed_;  // 운전자 조향 판정(openpilot 방식 카운터 필터)
+    RoadBankEstimator road_bank_;             // 라이브 편경사 추정(직선에서만 갱신, 2초 저역통과)
     bool lkas11_counter_valid_ = false;
     int lkas11_counter_ = 0;
     // Panda health는 100 Hz 컨트롤러보다 낮은 주기로 발행된다.

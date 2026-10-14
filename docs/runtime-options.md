@@ -41,7 +41,7 @@ processes it starts, so a variable set for the manager reaches every process.
 | --- | --- | --- |
 | `EDGEPILOT_MODEL=/path/to/supercombo.axmodel` | `models/supercombo.axmodel` in the install directory | Overrides the model selected by `manager.py`. A command-line argument wins over it. |
 | `EDGEPILOT_STOP_LAUNCHER=0` | on | Leaves the stock `launcher.service` and `/maixapp/apps/` running. The default stops them, since they hold the camera and NPU. |
-| `EDGEPILOT_LOG_DIR=dir` | unset: output goes to the terminal | Writes each process's output to `<name>.log` in that directory and empties a log above 1 MiB. `edgepilot.service` sets `/run/edgepilot`, on tmpfs, so logs never reach the SD card. |
+| `EDGEPILOT_LOG_DIR=dir` | unset: output goes to the terminal | Writes each process's output to `<name>.log` in that directory; a log above 1 MiB is copied to `<name>.log.1` and emptied. `edgepilot.service` sets `/run/edgepilot`, on tmpfs, so logs never reach the SD card. |
 | `EDGEPILOT_REPLAY_ROUTE=route` | unset | Rehearsal: `replayd` plays the recorded route in place of `camerad`, from `EDGEPILOT_REPLAY_START` for `EDGEPILOT_REPLAY_DURATION` seconds; `imud`, `locationd` and `pandad` are not started ([Rehearsal](rehearsal.md)). |
 
 The variables that choose which processes start (`EDGEPILOT_ENABLE_CONTROL`,
@@ -108,7 +108,6 @@ and the one the manager sets before it starts `pandad`.
 | `EDGEPILOT_PANDA_ENGAGED=1` | disengaged | engaged | Sends the Panda heartbeat as engaged; only meaningful with `EDGEPILOT_PANDA_TX=1`. |
 | `EDGEPILOT_PANDA_LOG_CAN=1` | off | off | Prints every received CAN frame from `pandad`. This is a bus-bringup aid only; at full bus load it is far too noisy to leave on. |
 | `EDGEPILOT_PANDA_FIRMWARE=path` | `firmware/panda.bin.signed` | same | The Panda application image the web console flashes, relative to the install directory (built by `make -C firmware/panda`). `pandad` and the web console read the same variable. |
-| `EDGEPILOT_PANDA_IDLE_US=N` | `5000` | same | Sleep time used by `pandad` when the Panda returns no CAN frames and no `sendcan` batch is pending. This keeps USB-only or parked shadow runs from stealing scheduler time from `modeld`. |
 
 Collected KIA K7 YG HEV logs from the current openpilot fork report
 `safety=hyundaiCommunity:0`, `sccBus=-1`, `mdpsBus=1`, and `sasBus=1`. A
@@ -163,7 +162,7 @@ atomically: to a temporary file, synced, then renamed over the old one.
 
 | File | Written by | Read by | A change applies |
 | --- | --- | --- | --- |
-| `steering.json` | web console: Steering and Vehicle tabs | `controlsd`; `locationd` reads `steer_actuator_delay` once at start | on the next control cycle: the web console signals `controlsd`, which also checks the file every 100 ms |
+| `steering.json` | web console: Steering and Vehicle tabs | `controlsd`; `locationd` reads `steer_actuator_delay` once at start | on the next control cycle: the web console signals `controlsd`, which also checks the file every second |
 | `adaptive_cruise.json` | web console: Vision cruise tab | `controlsd` | as `steering.json` |
 | `recording.json` | web console: Recording tab | `recordd` | `enabled` within 250 ms; `bitrate_bps` when `recordd` next starts |
 | `display.json` | web console: Device settings tab; `calibration_use_flow` from the Vehicle tab's calibration card | web console (backlight), `modeld` (camera mount, calibration source), `overlayd` (alert volume) | the backlight at once; `modeld` and `overlayd` within 1 s |
@@ -195,7 +194,7 @@ sequenceDiagram
 
 The signal makes `controlsd` read the files on its next 10 ms tick and apply
 them on the same tick, keeping the control and PID state. Without the signal,
-its check every 100 ms finds the change.
+its check every second finds the change.
 
 `params/calibration.json` is also tracked as the initial calibration seed. The
 runtime replaces it atomically when a stable calibration is learned, and
@@ -218,8 +217,8 @@ at the next start:
 | --- | --- | --- | --- |
 | `calibration.json` | `modeld` | when a stable calibration is learned | at `modeld` start |
 | `flow_calibration.json` | `modeld` | the first estimate and a mount change at once, otherwise every minute and on exit | at `modeld` start |
-| `live_parameters.json` | `controlsd` (paramsd) | every minute | at `controlsd` start |
-| `live_torque_parameters.bin` | `controlsd` (torqued) | every 12 s | at `controlsd` start |
+| `live_parameters.json` | `controlsd` (paramsd) | every minute, if it changed | at `controlsd` start |
+| `live_torque_parameters.bin` | `controlsd` (torqued) | every 12 s, if it gathered new points | at `controlsd` start |
 | `live_delay.json` | `locationd` (lagd) | every 60 s and on exit | at `locationd` start, unless the saved estimate is invalid; a changed `steer_actuator_delay` does not discard it |
 
 A saved learner state that fails to restore is deleted (for torqued, only a

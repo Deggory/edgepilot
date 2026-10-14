@@ -122,6 +122,7 @@ void TorqueEstimator::reset() {
 }
 
 void TorqueEstimator::add_point(double x, double y) {
+    ++new_points_;
     for (int i = 0; i < kBuckets; ++i) {
         if (x >= kSteerBucketBounds[i][0] && x < kSteerBucketBounds[i][1]) {
             Bucket &b = buckets_[i];
@@ -285,9 +286,13 @@ bool TorqueEstimator::update(const TorqueEstimatorInput &in) {
     }
     const bool publish = frame_ % 5 == 0;
     if (publish) last_ = get_msg(in.inputs_fresh);
-    if (frame_ % 240 == 0) {
+    // 상류처럼 12초마다 저장하되, 그동안 새 점이 없으면 건너뛴다(처음 한 번은 저장한다). 점이 그대로면 필터값만
+    // 같은 점의 적합으로 수렴하는 중이라 다시 시작해도 같은 데서 이어진다. 상류 torqued는 주행 중에만 돌지만
+    // 여기서는 주차 중에도 돌아, 88 KB를 12초마다 SD에 다시 쓰고 있었다.
+    if (frame_ % 240 == 0 && (new_points_ > 0 || cache_.empty())) {
         cache_ = serialize(get_msg(in.inputs_fresh));
         persist_due_ = true;
+        new_points_ = 0;
     }
     return publish;
 }

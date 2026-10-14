@@ -21,6 +21,7 @@
 #include "common/utils_file.h"
 #include "controls/control_params.h"
 #include "controls/lateral_torque.h"
+#include "controls/steering_pressed.h"
 #include "learners/lateral_learners.h"
 #include "learners/localizer_inputs.h"
 #include "recorded_vehicle_can.h"
@@ -46,8 +47,6 @@ struct TorqueInputRow {
     double t, steer, speed, yaw, roll;
     int32_t fresh, lat_active, steer_override, pose_valid;
 };
-
-constexpr int kSteeringPressedMinCount = 5;  // lateral_controller.cc와 같다
 
 }  // namespace
 
@@ -135,7 +134,7 @@ int main(int argc, char **argv) {
                     : learners.torque_restore_status() == TorqueRestore::KeyMismatch ? "키 불일치"
                                                                                      : "손상");
     learners.torque_estimator().set_fit_all_points(fit_all);
-    int pressed_counter = 0;
+    SteeringPressedFilter steering_pressed;  // 컨트롤러와 같은 판정
     SpeedFilter speed_filter;
 
     std::FILE *in_file = inputs_path.empty() ? nullptr : std::fopen(inputs_path.c_str(), "wb");
@@ -188,8 +187,7 @@ int main(int argc, char **argv) {
             if (rh.type != static_cast<uint16_t>(RecordType::ControlState)) continue;
             ControlState cs{};
             std::memcpy(&cs, buf.data(), std::min(sizeof(cs), buf.size()));
-            const bool pressed = std::abs(cs.driver_torque) > sp.steering_pressed_threshold;
-            pressed_counter = std::clamp(pressed_counter + (pressed ? 1 : -1), 0, kSteeringPressedMinCount * 2 + 1);
+            const bool pressed = steering_pressed.update(cs.driver_torque, sp.steering_pressed_threshold);
             // controlsd처럼 매 틱 최신 locationd 상태로 판단한다(기록 시각 = 학습기 시계)
             if (have_loc) {
                 const double sample_t_s = static_cast<double>(loc.timestamp_ns) * 1e-9;
@@ -199,8 +197,7 @@ int main(int argc, char **argv) {
             }
             // controlsd처럼 컨트롤러가 거른 vEgo를 준다(상류 carState.vEgo)
             const double v_ego = speed_filter.update(vehicle_speed_kph(vehicle, now_s, timeout_s) / 3.6);
-            learners.update(vehicle, now_s, timeout_s, v_ego, cs.active != 0, cs.apply_torque,
-                            pressed_counter > kSteeringPressedMinCount);
+            learners.update(vehicle, now_s, timeout_s, v_ego, cs.active != 0, cs.apply_torque, pressed);
 
             const VehicleParamsInput &in = learners.last_vehicle_input();
             const LiveLateralParams live = learners.live();

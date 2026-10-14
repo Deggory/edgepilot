@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """MaixCAM2(AX630C) 보드 런타임 감시자. 프로세스를 시작 순서대로 띄우고(camerad가 VI와
-AX 공용 풀을 연 뒤 overlayd) 죽으면 1초 뒤 다시 띄우며, 1초마다 managerState를 /dev/shm에
+AX 공용 풀을 연 뒤 overlayd) 죽으면 다시 띄우며(10초 안에 거듭 죽으면 최대 16초까지 늦춘다), 1초마다
+managerState를 /dev/shm에
 낸다. 어떤 프로세스를 띄울지는 EDGEPILOT_ENABLE_CONTROL·EDGEPILOT_ENABLE_PANDA·
 EDGEPILOT_ENABLE_WEB_CONSOLE이 정한다. EDGEPILOT_REPLAY_ROUTE(+ _START, _DURATION 초)를 주면 카메라와
 판다 대신 그 녹화 route를 재생하는 리허설 모드로 돈다(replayd가 camerad 자리를 맡는다).
@@ -8,14 +9,15 @@ EDGEPILOT_ENABLE_WEB_CONSOLE이 정한다. EDGEPILOT_REPLAY_ROUTE(+ _START, _DUR
 시작 전에 보드 UI 런처와 그 앱을 멈춘다(CPU 약 30%를 쓰고 카메라·화면과 겹친다,
 EDGEPILOT_STOP_LAUNCHER=0이면 그대로 둔다). USB-C 역할은 EDGEPILOT_USB_ROLE(host|device)이 있으면
 그대로 고정하고, 없으면 pandad를 띄울 때만 호스트로 바꿨다가 끝낼 때 되돌린다. EDGEPILOT_LOG_DIR를 주면(부팅 서비스 edgepilot.service) 자식의 출력을
-그 디렉터리의 <이름>.log에 남기고 LOG_MAX_BYTES를 넘으면 비운다(tmpfs에 두어 SD에
-쓰지 않는다). 주지 않으면 터미널로 그대로 나온다.
+그 디렉터리의 <이름>.log에 남기고 LOG_MAX_BYTES를 넘으면 <이름>.log.1로 하나 남긴 뒤 비운다(tmpfs에 두어
+SD에 쓰지 않는다). 주지 않으면 터미널로 그대로 나온다.
 
 사용: python3 manager.py [supercombo.axmodel]   (모델 기본값은 설치 디렉터리의
 models/supercombo.axmodel, EDGEPILOT_MODEL로도 바꿀 수 있다)
 """
 import mmap
 import os
+import shutil
 import signal
 import struct
 import subprocess
@@ -48,6 +50,12 @@ CAMERA_SETTLE_S = 1.5
 # 실패할 때는 전부 내렸다가 다시 띄운다.
 CAMERA_QUICK_FAIL_S = 5.0
 CAMERA_QUICK_FAILS_FOR_FULL_RESTART = 2
+# 다른 프로세스가 이보다 빨리 죽기를 거듭하면 다시 띄우는 간격을 늘린다(1초마다 다시 띄우면 웹 콘솔은 FastAPI를
+# 매번 다시 읽고, journal에 두 줄씩 쌓인다). 세 번까지는 1초, 그 뒤 2·4·8·16초. 오래 돌면 처음으로 돌아간다.
+QUICK_EXIT_S = 10.0
+RESTART_DELAYS_S = (1.0, 1.0, 1.0, 1.0, 2.0, 4.0, 8.0, 16.0)  # 연달아 빨리 죽은 횟수별
+# 감시 루프의 최대 대기. 프로세스가 죽은 것을 이 안에 알아챈다.
+SUPERVISE_INTERVAL_S = 0.25
 
 
 def now_ns() -> int:
@@ -206,15 +214,34 @@ def restore_usb_role(previous: Optional[str]):
         print(f"manager: cannot restore USB role: {exc}", flush=True)
 
 
+def restart_delay(name: str, quick_exits: int) -> float:
+    """죽은 프로세스를 다시 띄우기까지의 초. camerad는 자기 규칙(전체 재시작)이 따로 있어 늘 1초다."""
+    if name == CAMERA:
+        return 1.0
+    return RESTART_DELAYS_S[min(quick_exits, len(RESTART_DELAYS_S) - 1)]
+
+
 @dataclass
 class ProcState:
     spec: ProcSpec
     proc: Optional[subprocess.Popen] = None
     next_restart_monotonic: float = 0.0
     started_monotonic: float = 0.0
+    quick_exits: int = 0  # 연달아 QUICK_EXIT_S 안에 죽은 횟수
+    stop_requested: bool = False  # 매니저가 멈추라고 보냈다(그 종료는 빠른 종료로 세지 않는다)
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
+
+
+def note_exit(state: ProcState, now: float) -> float:
+    """종료를 세고 다음 시작까지의 지연을 돌려준다. 매니저가 멈춘 것(camerad를 따라 내린 overlayd·recordd 등)은
+    죽은 것이 아니므로 빠른 종료로 세지 않는다."""
+    if not state.stop_requested:
+        quick = now - state.started_monotonic < QUICK_EXIT_S
+        state.quick_exits = state.quick_exits + 1 if quick else 0
+    state.stop_requested = False
+    return restart_delay(state.spec.name, state.quick_exits)
 
 
 def child_setup(nice_adjust: int):
@@ -255,12 +282,25 @@ class Manager:
         return os.path.join(self.log_dir, name + ".log")
 
     def trim_logs(self):
-        """자식은 O_APPEND로 쓰므로 파일을 0으로 자르면 새 끝에서 이어 쓴다."""
+        """자식은 O_APPEND로 쓰므로 파일을 0으로 자르면 새 끝에서 이어 쓴다. 자르기 전 내용은 <이름>.log.1로 하나
+        남겨, 주행 중 문제의 로그가 자르는 순간 사라지지 않게 한다(로그는 tmpfs에 있다)."""
         for name in self.procs:
             path = self.log_path(name)
             try:
-                if os.path.getsize(path) > LOG_MAX_BYTES:
-                    os.truncate(path, 0)
+                if os.path.getsize(path) <= LOG_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            try:
+                shutil.copyfile(path, path + ".1")
+            except OSError:
+                # 공간이 모자라 남기지 못해도 자르기는 한다(tmpfs가 차면 더 나쁘다). 반쯤 쓴 사본은 지운다.
+                try:
+                    os.remove(path + ".1")
+                except OSError:
+                    pass
+            try:
+                os.truncate(path, 0)
             except OSError:
                 pass
 
@@ -279,6 +319,7 @@ class Manager:
             if log:
                 log.close()
         state.started_monotonic = time.monotonic()
+        state.stop_requested = False
         print(f"manager: started {state.spec.name} pid={state.proc.pid} nice={state.spec.nice} "
               f"cmd={' '.join(state.spec.cmd)}",
               flush=True)
@@ -313,6 +354,7 @@ class Manager:
     def terminate_proc(self, state: ProcState, sig=signal.SIGTERM):
         if not state.running():
             return
+        state.stop_requested = True
         try:
             os.killpg(os.getpgid(state.proc.pid), sig)
         except ProcessLookupError:
@@ -338,11 +380,18 @@ class Manager:
             signal.signal(sig, self.handle_signal)
 
         self.previous_usb_role = prepare_board("pandad" in self.procs)
+        waiting = []  # camerad가 자리 잡기를 기다리는 화면·기록
         for state in self.procs.values():
             if state.spec.name in CAMERA_DEPENDENTS and not self.camera_settled():
-                continue  # 감시 루프가 camerad가 자리 잡은 뒤에 띄운다
+                waiting.append(state)
+                continue
             self.start_proc(state)
             time.sleep(0.3)
+            # camerad가 자리 잡았으면 다음 차례보다 먼저 띄운다: 시작 순서가 끝날 때까지 기다리면 LCD가 0.6초 늦게 켜진다
+            while waiting and self.camera_settled():
+                self.start_proc(waiting.pop(0))
+                time.sleep(0.3)
+        # 남은 것은 감시 루프가 camerad가 자리 잡은 뒤에 띄운다
 
         last_publish = 0.0
         exit_code = 0
@@ -363,7 +412,10 @@ class Manager:
                 print(f"\nmanager: {state.spec.name} exited code={ret}", flush=True)
                 state.proc = None
                 exit_code = ret if ret != 0 else exit_code
-                state.next_restart_monotonic = now + 1.0
+                delay = note_exit(state, now)
+                if delay > 1.0:
+                    print(f"manager: {state.spec.name} keeps exiting, next start in {delay:.0f} s", flush=True)
+                state.next_restart_monotonic = now + delay
                 if state.spec.name == CAMERA:
                     quick = now - state.started_monotonic < CAMERA_QUICK_FAIL_S
                     self.camera_quick_fails = self.camera_quick_fails + 1 if quick else 0
@@ -386,7 +438,7 @@ class Manager:
                 if now >= state.next_restart_monotonic:
                     self.start_proc(state)
 
-            time.sleep(0.1)
+            time.sleep(SUPERVISE_INTERVAL_S)
 
         self.stop_all()
         self.publish_state()

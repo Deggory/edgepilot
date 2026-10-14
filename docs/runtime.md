@@ -67,7 +67,8 @@ Stop it with Ctrl-C or `SIGTERM`: children get `SIGTERM`, then `SIGKILL` after
 - has `Conflicts=launcher.service camcal.service` and `Restart=always`
 - reads `/etc/environment` for `LD_LIBRARY_PATH`
 - sets `EDGEPILOT_LOG_DIR=/run/edgepilot`, so each child's output goes to
-  `/run/edgepilot/<name>.log` (tmpfs, emptied past 1 MiB)
+  `/run/edgepilot/<name>.log` (tmpfs, emptied past 1 MiB after keeping the
+  old content as `<name>.log.1`)
 - sets `EDGEPILOT_USB_ROLE=host` and `EDGEPILOT_ENABLE_PANDA=1`, so the Panda
   on the USB-C port is used and `pandad` runs
 
@@ -118,12 +119,16 @@ skipped.
 
 ### Restarts
 
-The manager restarts a dead child after 1 s. `camerad` has two extra rules:
+The manager notices a dead child within 0.25 s and restarts it after 1 s. A
+child other than `camerad` that keeps dying within 10 s of starting waits
+longer from the 4th time in a row: 2, 4, 8, then 16 s, so a crash loop does not
+reload its libraries every second; a run of 10 s resets it. `camerad` has two
+extra rules:
 
 ```mermaid
 flowchart TB
     exit["a child exits"] --> which{"camerad?"}
-    which -- no --> one["restart it<br>after 1 s"]
+    which -- no --> one["restart it after 1 s<br>(up to 16 s if it<br>keeps dying fast)"]
     which -- yes --> bad{"signal, or 2nd<br>quick exit?"}
     bad -- no --> cam["restart camerad<br>after 1 s"]
     cam --> deps["restart overlayd<br>and recordd once<br>camerad has run 1.5 s"]
@@ -231,9 +236,10 @@ The processes are described in the order data passes through them.
 ### `controlsd` (K7 controller)
 
 - enabled by default (`EDGEPILOT_ENABLE_CONTROL=1`)
-- runs the openpilot-compatible lane planner and lateral MPC in a worker,
-  with the KIA K7 YG HEV torque controller and `LKAS11`/`CLU11`/`MDPS12` packer
-  at 100 Hz; the planner smooths the ego lane lines over time first
+- runs the openpilot-compatible lane planner and lateral MPC in the tick that
+  receives the model, with the KIA K7 YG HEV torque controller and
+  `LKAS11`/`CLU11`/`MDPS12` packer at 100 Hz; the planner smooths the ego lane
+  lines over time first
   ([Lane-line filter](lane-line-filter.md))
 - consumes model path, lane, road-edge, and vehicle-state IPC
 - filters the wheel-speed average into `vEgo` as openpilot does
@@ -263,6 +269,12 @@ The processes are described in the order data passes through them.
   `-DEDGEPILOT_BUILD_PANDA=ON` (the default)
 - connects to the Panda over `libusb`, publishes compact Panda health and
   ordered CAN receive batches, and can relay ordered `sendcan` batches
+- runs like upstream `pandad`: the main loop reads every CAN frame the Panda
+  has queued once each 10 ms and publishes them as one batch, and a send
+  thread wakes on each `sendcan` batch (a futex on the queue) and passes it to
+  the Panda at once. One lock serialises the USB transfers of the two
+  threads; holding it, the send thread checks that the safety mode is
+  confirmed and that the batch is under 100 ms old before it writes.
 - standalone default is shadow mode (`EDGEPILOT_PANDA_TX=0`); the manager's
   default enables TX
 - copies received and sent CAN batches into the log queues that `recordd`
@@ -290,8 +302,8 @@ The processes are described in the order data passes through them.
   CAN batches and state topics beside it, as a route staged in tmpfs and moved
   to `recordings/` on the SD card; `params/recording.json` `enabled` starts
   and stops it
-- publishes `recordState` twice a second for the HUD's `REC` and
-  `STORAGE FULL`
+- publishes `recordState` twice a second for the HUD's `REC`, `STORAGE FULL`
+  and `SD CARD SLOW`
 - see [Recording](recording.md)
 
 ### `replayd` (rehearsal)

@@ -1,7 +1,9 @@
 // 녹화를 controlsd 한 틱의 로직(ControlsTick)에 다시 흘린다. 10 ms 틱마다 그 시각까지 기록된 CAN·
 // 모델·Panda·locationd 상태를 넣고 step/update_learners를 돌려, 보낼 CAN과 ControlState를 쓴다.
-// 플래너는 그 자리에서 계산하고(SyncPlanner) 시계는 틱 시각이라, 같은 입력이면 출력이 비트 단위로
-// 같다. controlsd 리팩토링 전후 비교와, 녹화된 실제 출력과의 대조에 쓴다.
+// 한 틱 안에서는 controlsd main처럼 CAN을 먼저, 그다음 모델·Panda·locationd를 넣고, 플래너는 controlsd처럼 그
+// 자리에서 계산하며 시계는 틱 시각이라, 같은 입력이면 출력이 비트 단위로 같다. controlsd 리팩토링 전후 비교와, 녹화된
+// 실제 출력과의 대조에 쓴다. 보드와 틱 경계(10 ms 격자의 위상)가 다르므로 녹화 출력과 틱마다 같지는 않다. 2026-10-13
+// 전 녹화에서는 보드가 새 플랜을 한 틱 늦게 썼으므로(플래너 작업 스레드) 모델 프레임의 첫 틱이 그만큼 더 다르다.
 // 사용: replay_controls [--steering s.json] [--cruise c.json] [--vehicle-json j]
 //                       [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt]
 //                       <events.bin...>
@@ -136,9 +138,8 @@ int main(int argc, char **argv) {
     std::stable_sort(records.begin(), records.end(),
                      [](const Record &a, const Record &b) { return a.timestamp_ns < b.timestamp_ns; });
 
-    SyncPlanner planner(params.steering);
-    if (lane_filter > 0.0) planner.set_lane_filter_weight(lane_filter);
-    ControlsTick tick(params, force_engaged, planner, vehicle_json, std::string(), 1);
+    ControlsTick tick(params, force_engaged, vehicle_json, std::string(), 1);
+    if (lane_filter > 0.0) tick.planner().set_lane_filter_weight(lane_filter);
     uint64_t tick_ns = first_record_ns;
     tick.controller().set_clock([&tick_ns] { return tick_ns; });
     const uint64_t start_ns = tick_ns;
@@ -146,6 +147,7 @@ int main(int argc, char **argv) {
     std::FILE *dump = dump_path.empty() ? nullptr : std::fopen(dump_path.c_str(), "w");
     Digest digest;
     LocalizationRead localization;
+    std::vector<Record> tick_records;
     unsigned long ticks = 0, sent = 0, compared = 0, same_active = 0, same_engaged = 0, same_desire = 0;
     double torque_error = 0.0;
     ControlState last_control{};
@@ -154,8 +156,16 @@ int main(int argc, char **argv) {
     while (!records.empty()) {
         tick_ns += 10'000'000ULL;
         const double now_s = static_cast<double>(tick_ns - start_ns) * 1e-9;
+        // controlsd main처럼 이번 틱까지 쌓인 CAN을 먼저 모두 넣고 그 뒤에 모델·Panda·locationd를 넣는다. 시각 순으로만
+        // 넣으면 같은 틱에서 CAN보다 먼저 찍힌 모델이 그 CAN이 반영되기 전 차량 상태로 플래너를 돌린다.
+        tick_records.clear();
         while (!records.empty() && records.front().timestamp_ns <= tick_ns) {
-            const Record &r = records.front();
+            tick_records.push_back(std::move(records.front()));
+            records.pop_front();
+        }
+        std::stable_partition(tick_records.begin(), tick_records.end(),
+                              [](const Record &r) { return r.type == RecordType::CanRx; });
+        for (const Record &r : tick_records) {
             switch (r.type) {
                 case RecordType::CanRx:
                     tick.on_can_batch(decode_recorded_can(r.payload.data(), r.payload.size(), tick_ns), tick_ns, now_s);
@@ -193,7 +203,6 @@ int main(int argc, char **argv) {
                 default:
                     break;
             }
-            records.pop_front();
         }
         localization.read_ns = tick_ns;
         tick.on_localization(localization, tick_ns, now_s);

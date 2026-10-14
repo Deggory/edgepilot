@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -21,7 +22,7 @@ constexpr uint32_t kIpcVersion = 1;
 constexpr uint32_t kFrameRingMagic = 0x4b465249;
 constexpr uint32_t kFrameRingVersion = 5;
 constexpr uint32_t kCanQueueMagic = 0x4b435151;
-constexpr uint32_t kCanQueueVersion = 1;
+constexpr uint32_t kCanQueueVersion = 2;  // 2: 머리에 futex 깨움(wake·waiters)
 
 // ---- 채널 이름 ----
 constexpr char kRoadAiFrameRing[] = "/edgepilot_road_ai";
@@ -53,14 +54,19 @@ struct IpcHeader {
     uint32_t magic = kIpcMagic;
     uint32_t version = kIpcVersion;
     uint32_t payload_capacity = 0;
-    uint32_t reserved0 = 0;
+    // futex 단어: C++ 발행마다 하나 늘리고 늘 깨운다(LatestChannel::read_new가 기다린다). waiters는 기다리는 쪽이 세며
+    // waiters를 보고서야 깨우던 예전 빌드 생산자와 맞추려고 남겨 둔다. Python 매니저의 ManagerState 발행은 둘 다 0으로 쓰고
+    // 깨우지 않으므로, 그 채널을 기다리는 쪽은 WakeWaiter가 알아채고 폴링한다.
+    std::atomic<uint32_t> wake{0};
     std::atomic<uint64_t> seq{0};
     std::atomic<uint64_t> timestamp_ns{0};
     std::atomic<uint32_t> payload_size{0};
-    uint32_t reserved1 = 0;
+    std::atomic<uint32_t> waiters{0};
 };
 
 static_assert(sizeof(IpcHeader) == 40, "IpcHeader layout is part of the Python manager ABI");
+static_assert(sizeof(std::atomic<uint32_t>) == 4 && std::atomic<uint32_t>::is_always_lock_free,
+              "IpcHeader::wake is a futex word");
 
 struct FrameRingHeader {
     uint32_t magic = kFrameRingMagic;
@@ -104,6 +110,13 @@ struct LeadState {
     float velocity = 0.0f;
     float acceleration = 0.0f;
 };
+
+// 모델 앞차를 앞차로 쓸 수 있는가: 있고, 거리와 속도가 유한하고, 존재 확률이 kLeadProbabilityThreshold 이상이다.
+// 비전 크루즈(controlsd)와 앞차 트랙(modeld)이 같은 규칙을 쓴다.
+inline bool lead_usable(const LeadState &lead) {
+    return lead.valid != 0 && lead.probability >= kLeadProbabilityThreshold && std::isfinite(lead.x) &&
+           std::isfinite(lead.velocity);
+}
 
 struct PoseState {
     uint32_t valid = 0;
@@ -335,16 +348,21 @@ CanBatch make_can_batch(const std::vector<Frame> &frames, Fill fill) {
     return batch;
 }
 
+// wake·waiters는 pop_wait의 futex 깨움이다(IpcHeader와 같은 방식: push가 늘 깨우고, waiters는 예전 빌드 호환용).
 struct CanQueueHeader {
     uint32_t magic = kCanQueueMagic;
     uint32_t version = kCanQueueVersion;
     uint32_t slot_count = kCanQueueSlots;
-    uint32_t reserved0 = 0;
+    std::atomic<uint32_t> wake{0};
     std::atomic<uint64_t> write_seq{0};
     std::atomic<uint64_t> read_seq{0};
-    uint64_t reserved1 = 0;
+    std::atomic<uint32_t> waiters{0};
+    uint32_t reserved1 = 0;
     uint64_t reserved2 = 0;
 };
+static_assert(sizeof(CanQueueHeader) == 48 && offsetof(CanQueueHeader, wake) == 12 &&
+                  offsetof(CanQueueHeader, write_seq) == 16 && offsetof(CanQueueHeader, waiters) == 32,
+              "CanQueueHeader layout");
 
 struct PandaState {
     uint64_t timestamp_ns = 0;
@@ -559,11 +577,15 @@ struct LocalizationState {
 };
 static_assert(sizeof(LocalizationState) == 128, "LocalizationState layout is shared with the recording reader");
 
+// RecordState::storage_blocked: 녹화를 거부했거나 멈춘 까닭(0이면 막히지 않음)
+constexpr uint32_t kStorageBlockedSdReserve = 1;  // SD 여유가 예비분(5 GiB와 10%) 밑
+constexpr uint32_t kStorageBlockedStaging = 2;    // SD가 기록을 따라오지 못해 tmpfs 스테이징이 참
+
 // recordd가 0.5초마다 발행하고 overlayd가 녹화 표시(REC)에 쓴다.
 struct RecordState {
     uint64_t timestamp_ns = 0;
     uint32_t active = 0;           // route를 쓰는 중
-    uint32_t storage_blocked = 0;  // 저장 공간 여유가 모자라 녹화를 거부했거나 멈춤
+    uint32_t storage_blocked = 0;  // kStorageBlocked*: 저장 공간 때문에 녹화를 거부했거나 멈춤
 };
 
 // controlsd가 발행하고 overlayd/recordd가 읽는 공유 레이아웃이다. 기록 v5는 이

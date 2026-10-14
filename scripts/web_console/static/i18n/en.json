@@ -157,11 +157,11 @@
   "vehicle.inputs_lost": "Inputs lost",
   "vehicle.sensor_mismatch": "Sensors disagree",
   "vehicle.input_source": "Inputs {source}",
-  "vehicle.paramsd_summary": "ESP12 yaw-rate bias {bias}°/s · saved every minute · {restored}",
+  "vehicle.paramsd_summary": "ESP12 yaw-rate bias {bias}°/s · saved every minute when changed · {restored}",
   "vehicle.learning": "Learning {percent}%",
   "vehicle.torqued_summary": {
-    "one": "points {points} · decay {decay} · {count} reset · saved every 12 s · {restored}",
-    "other": "points {points} · decay {decay} · {count} resets · saved every 12 s · {restored}"
+    "one": "points {points} · decay {decay} · {count} reset · saved every 12 s with new points · {restored}",
+    "other": "points {points} · decay {decay} · {count} resets · saved every 12 s with new points · {restored}"
   },
   "vehicle.no_locationd": "No locationd",
   "vehicle.blocks": "Blocks {blocks}/5",
@@ -329,7 +329,7 @@
   "param.steering.steering_pressed_threshold.increase": "The driver must steer harder to count as steering, and push harder to start a lane change.",
   "param.steering.steering_pressed_threshold.decrease": "Lighter steering counts as the driver steering sooner.",
   "param.steering.torque_lat_accel_factor.label": "Torque factor (latAccelFactor)",
-  "param.steering.torque_lat_accel_factor.description": "The lateral acceleration a normalised torque of 1.0 gives (openpilot latAccelFactor). The feed-forward, proportional and integral torques are all divided by it. Enter torqued's learned value or a fit_lateral_params.py fit.",
+  "param.steering.torque_lat_accel_factor.description": "The lateral acceleration a normalised torque of 1.0 gives (openpilot latAccelFactor). The feed-forward, proportional and integral torques are all divided by it. Enter torqued's learned value (with a recording, the one replay_lateral_learners finds).",
   "param.steering.torque_lat_accel_factor.increase": "The same target asks for less torque: weaker tracking and more understeer.",
   "param.steering.torque_lat_accel_factor.decrease": "The same target asks for more torque: stronger tracking and less headroom before saturation.",
   "param.steering.torque_lat_accel_factor.learned_role": "it is only the learner's prior and the centre of its allowed band (±30%).",
@@ -391,7 +391,7 @@
   "param.steering.use_locationd_learner_inputs.increase": "The angle zero and roll reconverge on locationd within minutes; torqued from its next start.",
   "param.steering.use_locationd_learner_inputs.decrease": "Learning uses ESP12 (torqued from its next start).",
   "param.steering.torque_lat_accel_offset.label": "Lateral acceleration offset",
-  "param.steering.torque_lat_accel_offset.description": "Removes a constant lateral-acceleration bias, such as one from a mount roll error, from the feed-forward. Enter latAccelOffset from a fit_lateral_params.py fit as it is.",
+  "param.steering.torque_lat_accel_offset.description": "Removes a constant lateral-acceleration bias, such as one from a mount roll error, from the feed-forward. Enter the offset torqued learned (with a recording, the one replay_lateral_learners finds) as it is.",
   "param.steering.torque_lat_accel_offset.increase": "Raise it when the car drifts right.",
   "param.steering.torque_lat_accel_offset.decrease": "Lower it when the car drifts left.",
   "param.steering.torque_lat_accel_offset.learned_role": "it is not used; the learned offset is, which is the saved value (or 0) until torqued is valid.",

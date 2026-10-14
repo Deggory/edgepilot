@@ -1,9 +1,9 @@
 #ifndef AX_ENGINE_SESSION_H
 #define AX_ENGINE_SESSION_H
 
-// axmodel 하나를 AX620E NPU에서 돌리는 최소 세션. 입출력마다 캐시 가능한 CMM
-// 버퍼를 한 번 잡아 두고, 호출자는 input(i)/output(i)에 직접 읽고 쓴다. run()이
-// 입력 캐시를 밀어내고 실행한 뒤 출력 캐시를 무효화한다. ax_engine 심볼은
+// axmodel 하나를 AX620E NPU에서 돌리는 최소 세션. 입력 전부와 출력 전부를 각각 캐시 가능한 CMM
+// 블록 하나에 페이지 경계로 나눠 잡아 두고(따로 할당할 때와 같은 시작·여유), 호출자는 input(i)/output(i)에
+// 직접 읽고 쓴다. run()이 입력 블록 캐시를 밀어내고 실행한 뒤 출력 블록 캐시를 무효화한다. ax_engine 심볼은
 // 이 클래스 안에만 둔다.
 
 #include <cstddef>
@@ -49,12 +49,23 @@ public:
     const std::string &tools_version() const { return tools_version_; }
 
 private:
-    void allocate(std::vector<Tensor> &tensors, const void *metas, unsigned count);
+    struct Block {
+        uint64_t phys = 0;
+        void *virt = nullptr;
+        size_t bytes = 0;
+    };
+    // CMM은 페이지 단위로 할당하므로 텐서마다 따로 잡을 때도 페이지 경계에서 시작했다. 같게 둔다.
+    static constexpr size_t kTensorAlign = 4096;
+
+    void allocate(Block &block, std::vector<Tensor> &tensors, const void *metas, unsigned count);
     void release();
 
-    std::vector<uint8_t> model_data_;
+    void *model_map_ = nullptr;  // 모델 파일의 읽기 전용 매핑(세션 동안 둔다)
+    size_t model_size_ = 0;
     uint64_t *handle_ = nullptr;
     uint64_t *context_ = nullptr;
+    Block input_block_;
+    Block output_block_;
     std::vector<Tensor> inputs_;
     std::vector<Tensor> outputs_;
     std::vector<uint8_t> io_storage_;  // AX_ENGINE_IO_T와 버퍼 배열

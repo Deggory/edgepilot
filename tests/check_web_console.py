@@ -43,11 +43,14 @@ from scripts.web_console.learner_monitor import (
     LocalizationReader,
 )
 from scripts.web_console.panda_update import (
+    CONTROL_MAX_AGE_S,
     IMAGE_ERRORS,
     PANDA_APP_MAX_BYTES,
+    PANDA_FLASHABLE_HW,
     PANDA_FLASH_REQUEST_PATH,
     PANDA_SIGNATURE_BYTES,
     PANDA_STATUS_PATH,
+    PARKED_MAX_SPEED_KPH,
     REASONS,
     STEPS,
     PandaUpdate,
@@ -365,6 +368,7 @@ class ParamMetadataTest(unittest.TestCase):
         tables = {
             "steering": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
             "adaptive_cruise": ("src/controls/adaptive_cruise.cc", ("kAdaptiveFloats",)),
+            "recording": ("src/recording/recordd.cc", ("kRecordingInts",)),
             # display는 백라이트(backlight.py) 항목도 있어 런타임이 읽는 키만 대조한다
             "display": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
         }
@@ -736,6 +740,21 @@ class PandaUpdateTest(unittest.TestCase):
         self.assertIn(f'kFirmwareStatusPath[] = "{PANDA_STATUS_PATH}";', pandad)
         self.assertIn(f'kFlashRequestPath[] = "{PANDA_FLASH_REQUEST_PATH}";', pandad)
         self.assertIn('kDefaultFirmwarePath[] = "firmware/panda.bin.signed";', pandad)
+        # 플래싱 조건(panda_flash_allowed)과 지원 보드(panda_hw_type_flashable)도 같아야 한다
+        firmware = cpp(ROOT / "src" / "panda" / "panda_firmware.cc")
+        max_age_ns = int(re.search(r"kControlMaxAgeNs = (\d+)ULL;", firmware).group(1))
+        self.assertEqual(max_age_ns, round(CONTROL_MAX_AGE_S * 1e9))
+        self.assertEqual(float(re.search(r"kParkedMaxSpeedKph = ([\d.]+)f;", firmware).group(1)), PARKED_MAX_SPEED_KPH)
+        flashable = re.search(r"return (hw_type == kPandaHw\w+(?: \|\| hw_type == kPandaHw\w+)*);", firmware).group(1)
+        hw = {name: int(value) for name, value in re.findall(r"kPandaHw(\w+) = (\d+);", protocol)}
+        self.assertEqual(sorted(hw[name] for name in re.findall(r"kPandaHw(\w+)", flashable)), sorted(PANDA_FLASHABLE_HW))
+
+    def test_image_version_prefers_debug_like_cpp(self):
+        """panda_firmware.cc find_version처럼 -DEBUG를 먼저 찾는다(앞쪽에 -RELEASE 꼴이 있어도)."""
+        image = bytearray(panda_image(version="EDGE-f9907afb-DEBUG"))
+        image[20:20 + 23] = b"\0REL-12345678-RELEASE\0"  # 버전(64바이트째)보다 앞
+        self.image.write_bytes(bytes(image))
+        self.assertEqual(panda_image_info(str(self.image))["version"], "EDGE-f9907afb-DEBUG")
 
     def test_image_info_follows_panda_firmware_rules(self):
         self.assertFalse(panda_image_info(str(self.image))["present"])
@@ -906,6 +925,41 @@ class ProcessStatusTest(unittest.TestCase):
                 self.assertEqual(read_binary_version(path), expected, content[:40])
             self.assertIsNone(read_binary_version(Path(directory) / "missing"))
 
+    def test_manager_backs_off_a_crash_loop(self):
+        """빨리 죽기를 거듭하는 프로세스는 세 번까지 1초, 그 뒤 2·4·8·16초에 다시 띄운다. camerad는 늘 1초."""
+        from scripts import manager
+        self.assertEqual([manager.restart_delay("web_console", n) for n in range(10)],
+                         [1.0, 1.0, 1.0, 1.0, 2.0, 4.0, 8.0, 16.0, 16.0, 16.0])
+        self.assertEqual({manager.restart_delay("camerad", n) for n in range(10)}, {1.0})
+
+    def test_manager_does_not_count_its_own_stops(self):
+        """매니저가 멈춘 프로세스(camerad를 따라 내린 overlayd 등)의 종료는 빠른 종료로 세지 않는다."""
+        from scripts import manager
+        spec = manager.ProcSpec("overlayd", ["/bin/true"])
+        state = manager.ProcState(spec, started_monotonic=100.0, quick_exits=3)
+        state.stop_requested = True
+        self.assertEqual(manager.note_exit(state, 102.0), 1.0)
+        self.assertEqual(state.quick_exits, 3)
+        self.assertFalse(state.stop_requested)
+        self.assertEqual(manager.note_exit(state, 102.0), 2.0)  # 스스로 죽으면 센다
+        self.assertEqual(state.quick_exits, 4)
+        state.started_monotonic = 0.0
+        self.assertEqual(manager.note_exit(state, 102.0), 1.0)  # 10초 넘게 살았으면 처음부터
+        self.assertEqual(state.quick_exits, 0)
+
+    def test_manager_trims_a_log_even_when_the_copy_fails(self):
+        """.log.1로 남기지 못해도(공간 부족 등) 로그는 비운다. tmpfs가 차는 것이 더 나쁘다."""
+        from scripts import manager
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "camerad.log"
+            log.write_bytes(b"x" * (manager.LOG_MAX_BYTES + 10))
+            (Path(directory) / "camerad.log.1").mkdir()  # 사본 자리에 디렉터리가 있어 복사가 실패한다
+            m = object.__new__(manager.Manager)
+            m.procs = {"camerad": None}
+            m.log_dir = directory
+            m.trim_logs()
+            self.assertEqual(log.stat().st_size, 0)
+
     def test_manager_starts_the_package(self):
         from scripts import manager
 
@@ -943,6 +997,59 @@ class BevTest(unittest.TestCase):
             value = float(re.search(rf"constexpr float {cpp_name} = ([\d.]+)f;", source).group(1))
             page = float(re.search(rf"const {page_name} = ([\d.]+);", text).group(1))
             self.assertEqual(page, value, page_name)
+
+    def test_bev_constants_match_cpp(self):
+        """BEV가 HUD·출발 알림처럼 그리고 판단하도록 옮겨 온 값들(hud_scene.cc, departure_alert.cc, can_frame.h)이
+        C++과 같아야 한다."""
+        bev = (STATIC_DIR / "bev.js").read_text(encoding="utf-8")
+        data = (STATIC_DIR / "bev_data.js").read_text(encoding="utf-8")
+        scene = cpp(ROOT / "src" / "hud" / "hud_scene.cc")
+        alert = cpp(ROOT / "src" / "controls" / "departure_alert.cc")
+
+        def cpp_value(text, name):
+            return float(re.search(rf"constexpr (?:float|double|int) {name} = (-?[\d.]+)f?;", text).group(1))
+
+        def js_object(text, name):
+            body = re.search(rf"const {name} = \{{([^}}]*)\}};", text).group(1)
+            return {key: float(value) for key, value in re.findall(r"(\w+): (-?[\d.]+)", body)}
+
+        def js_value(text, name):
+            return float(re.search(rf"\b{name} = (-?[\d.]+)", text).group(1))
+
+        self.assertEqual(js_value(bev, "PATH_WIDTH"), 2 * cpp_value(scene, "kPathHalfWidth"))
+        self.assertEqual(js_value(bev, "LANE_MIN_PROBABILITY"), cpp_value(scene, "kLaneMinProbability"))
+        self.assertEqual(js_value(bev, "EDGE_MIN_CONFIDENCE"), cpp_value(scene, "kEdgeMinConfidence"))
+        risk = js_object(bev, "RISK")
+        self.assertEqual((risk["distance"], risk["closing"]),
+                         (cpp_value(scene, "kLeadRiskDistanceM"), cpp_value(scene, "kLeadRiskClosingMps")))
+        depart = js_object(bev, "DEPART")
+        self.assertEqual(depart["stopped"], cpp_value(alert, "kStoppedSpeedMps"))
+        self.assertEqual(depart["moving"], cpp_value(alert, "kMovingResetSpeedMps"))
+        self.assertEqual(depart["gas"], cpp_value(alert, "kGasPressGoProbability"))
+        self.assertEqual(depart["open"], cpp_value(alert, "kOpenPlanDistanceM"))
+        self.assertEqual(depart["arm"], cpp_value(alert, "kStoppedPlanDistanceM"))
+        self.assertEqual(js_value(data, "LANE_WIDTH_INDEX"), cpp_value(scene, "kLaneRulerIndex"))
+        draw = js_object(data, "DRAW")
+        self.assertEqual((draw["min"], draw["max"]),
+                         (cpp_value(scene, "kMinDrawDistance"), cpp_value(scene, "kMaxDrawDistance")))
+        self.assertEqual(js_value(data, "DRIVE_GEAR"), cpp_value(cpp(ROOT / "src" / "car" / "can_frame.h"), "kGearDrive"))
+
+    def test_vehicle_tab_bands_and_bev_frame_match(self):
+        """차량 특성 탭이 보이는 허용 폭(torqued 배율 ±30%, 마찰 ±50%, paramsd 조향비 0.5~2배)과 BEV 프레임 매직이
+        학습기·서버와 같아야 한다."""
+        page = (STATIC_DIR / "vehicle_view.js").read_text(encoding="utf-8")
+        torque = cpp(ROOT / "src" / "learners" / "torque_estimator.cc")
+        learner = cpp(ROOT / "src" / "learners" / "vehicle_params_learner.cc")
+        factor = float(re.search(r"kFactorSanity = ([\d.]+);", torque).group(1))
+        friction = float(re.search(r"kFrictionSanity = ([\d.]+);", torque).group(1))
+        self.assertIn(f"s.lat_accel_factor_raw, s.prior_lat_accel_factor, {factor}, 2)", page)
+        self.assertIn(f"s.friction_raw, s.prior_friction, {friction}, 3)", page)
+        low = float(re.search(r"min_sr_\(([\d.]+) \* c\.steer_ratio\)", learner).group(1))
+        high = float(re.search(r"max_sr_\(([\d.]+) \* c\.steer_ratio\)", learner).group(1))
+        self.assertIn(f"s.prior_steer_ratio * {low:g}, 1)", page)
+        self.assertIn(f"s.prior_steer_ratio * {high:g}, 1)", page)
+        magic = int(re.search(r"const MAGIC = (0x[0-9a-fA-F]+);", (STATIC_DIR / "bev_data.js").read_text()).group(1), 16)
+        self.assertEqual(magic, BEV_FRAME_MAGIC)
 
     def test_lane_filter_constants_match_cpp(self):
         """BEV의 차선 필터 사본(lane_filter.js)의 가중·끊김·다시 시작 기준은 플래너의 lane_line_filter와 같아야 한다."""
@@ -1043,6 +1150,18 @@ class BevTest(unittest.TestCase):
 
 # ------------------------------------------------------------ 페이지 파일
 class StaticPageTest(unittest.TestCase):
+    def test_asset_cache_is_keyed_by_the_resolved_file(self):
+        """같은 파일을 다른 글자로 요청해도 캐시는 하나다(요청마다 사본이 쌓이지 않는다)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "static"
+            (root / "three").mkdir(parents=True)
+            (root / "three" / "a.js").write_text("export const a = 1;\n", encoding="utf-8")
+            assets = StaticAssets(root)
+            for name in ("three/a.js", "./three/a.js", "three//a.js", "three/./a.js"):
+                self.assertIsNotNone(assets.get(name), name)
+            self.assertIsNone(assets.get("three/../three/a.js"))  # ..은 숨김 경로처럼 거부한다
+            self.assertEqual(list(assets.cache), ["three/a.js"])
+
     def test_assets_are_gzipped_once_and_stay_in_static(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "static"

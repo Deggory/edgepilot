@@ -1,5 +1,6 @@
 #include "panda/panda_client.h"
 
+#include "common/utils_time.h"
 #include "panda/panda_can_codec.h"
 #include "panda/panda_protocol.h"
 
@@ -24,6 +25,7 @@ constexpr uint32_t kMaxConsecutiveMalformedRx = 3;
 PandaClient::~PandaClient() { close(); }
 
 bool PandaClient::connect(const std::string &serial) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     close();
     int err = libusb_init(&ctx_);
     if (err != 0) {
@@ -107,11 +109,13 @@ bool PandaClient::connect(const std::string &serial) {
 }
 
 void PandaClient::close() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (dev_handle_) {
         libusb_release_interface(dev_handle_, 0);
         libusb_close(dev_handle_);
         dev_handle_ = nullptr;
     }
+    configured_ = false;
     if (ctx_) {
         libusb_exit(ctx_);
         ctx_ = nullptr;
@@ -208,17 +212,22 @@ void PandaClient::mark_usb_error(int err, const char *where) {
 }
 
 bool PandaClient::set_safety_model(uint16_t safety_model, uint16_t safety_param) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return control_write(kPandaRequestSafetyModel, safety_model, safety_param);
 }
 
 bool PandaClient::send_heartbeat(bool engaged) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return control_write(kPandaRequestHeartbeat, engaged ? 1 : 0, 0, 100);
 }
 
 bool PandaClient::get_health(PandaHealth *health) {
     if (!health) return false;
     PandaHealthPacket packet{};
-    if (!control_read(kPandaRequestHealth, 0, 0, &packet, sizeof(packet), 100)) return false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (!control_read(kPandaRequestHealth, 0, 0, &packet, sizeof(packet), 100)) return false;
+    }
     health->uptime = packet.uptime_pkt;
     health->voltage = packet.voltage_pkt;
     health->current = packet.current_pkt;
@@ -248,23 +257,29 @@ bool PandaClient::receive(std::vector<PandaCanFrame> *frames, int timeout_ms) {
     if (!frames) return false;
     frames->clear();
     uint8_t data[kRecvSize] = {};
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const int recv = bulk_read(kCanRxEndpoint, data, sizeof(data), static_cast<unsigned>(timeout_ms));
     if (recv <= 0) return comms_healthy_;
     if (recv == kRecvSize) std::fprintf(stderr, "panda: receive buffer full\n");
     return unpack_can_buffer(data, recv, frames);
 }
 
-bool PandaClient::send(const std::vector<PandaCanFrame> &frames) {
-    if (frames.empty()) return true;
+PandaSendResult PandaClient::send(const std::vector<PandaCanFrame> &frames, uint64_t not_after_ns,
+                                  uint64_t *started_ns) {
     std::vector<uint8_t> packed;
-    if (!pack_can_buffer(frames, &packed)) return false;
+    if (!frames.empty() && !pack_can_buffer(frames, &packed)) return PandaSendResult::Failed;
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!configured_ || !dev_handle_) return PandaSendResult::NotReady;
+    const uint64_t now = monotonic_now_ns();
+    if (now > not_after_ns) return PandaSendResult::Expired;
+    if (started_ns) *started_ns = now;
     for (size_t pos = 0; pos < packed.size();) {
         const size_t chunk = std::min<size_t>(kUsbTxSoftLimit, packed.size() - pos);
         const int sent = bulk_write(kCanTxEndpoint, packed.data() + pos, static_cast<int>(chunk), 5);
-        if (sent <= 0) return false;
+        if (sent <= 0) return PandaSendResult::Failed;
         pos += static_cast<size_t>(sent);
     }
-    return true;
+    return PandaSendResult::Sent;
 }
 
 bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, std::vector<PandaCanFrame> *frames) {

@@ -6,12 +6,13 @@
 
 #include "car/can_frame.h"
 
+// 토크 한계. 값은 SteeringParams(control_params.h)에서 오고, Panda safety와 같은지는 gtest_panda_firmware가 본다.
 struct HyundaiSteeringLimits {
-    int steer_max = 384;
-    int steer_delta_up = 3;
-    int steer_delta_down = 7;
-    int steer_driver_allowance = 50;
-    int steer_driver_multiplier = 2;
+    int steer_max = 0;
+    int steer_delta_up = 0;
+    int steer_delta_down = 0;
+    int steer_driver_allowance = 0;
+    int steer_driver_multiplier = 0;
     int steer_driver_factor = 1;
 };
 

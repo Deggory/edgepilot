@@ -6,6 +6,7 @@
 
 #include "common/ipc_messages.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -33,6 +34,22 @@ private:
     size_t size_ = 0;
 };
 
+// 생산자의 futex 깨움을 기다리는 쪽의 상태(LatestChannel·CanQueue 공용). 생산자가 깨우지 않는 빌드(이 방식 전의
+// 바이너리, Python 매니저)면 시간 초과 한 번으로 알아채고 1 ms 폴링으로 내려가며, 깨움 단어가 다시 움직이면 futex로
+// 돌아온다. 그래서 일부 바이너리만 바꾸거나 되돌려도 지연이 한 번의 대기 상한(100 ms)을 넘지 않는다.
+class WakeWaiter {
+public:
+    // still_waiting()이 참인 동안 word가 바뀌거나 timeout_ns(상한 100 ms)가 지날 때까지 잔다. 가짜로 깰 수 있으므로
+    // 호출자가 다시 본다.
+    template <class StillWaiting>
+    void wait(std::atomic<uint32_t> *word, std::atomic<uint32_t> *waiters, uint64_t timeout_ns,
+              StillWaiting still_waiting, const std::string &name);
+
+private:
+    bool polling_ = false;
+    uint32_t polled_word_ = 0;
+};
+
 class LatestChannel {
 public:
     LatestChannel() = default;
@@ -42,14 +59,20 @@ public:
     void close();
     bool publish(const void *payload, size_t payload_size);
     bool read(void *payload, size_t payload_capacity, uint64_t *seq = nullptr) const;
+    // last_seq와 다른 새 스냅샷이면 읽고 true. 없으면 timeout_ms까지 다음 발행을 기다린다(리눅스는 futex, 그
+    // 밖이나 깨우지 않는 생산자에는 1 ms 간격 폴링). 0이면 기다리지 않고, 음수면 끝없이 기다린다.
     bool read_new(uint64_t *last_seq, void *payload, size_t payload_capacity, int timeout_ms) const;
     bool valid() const { return header_ != nullptr; }
 
 private:
+    // seen_seq 다음 발행까지(또는 timeout_ns) 잔다.
+    void wait_publish(uint64_t seen_seq, uint64_t timeout_ns) const;
+
     std::string name_;
     ShmRegion region_;
     IpcHeader *header_ = nullptr;
     uint8_t *payload_ = nullptr;
+    mutable WakeWaiter waiter_;
 };
 
 // LatestChannel 하나의 타입 있는 구독: 마지막으로 받은 스냅샷과 그 seq. poll()은 새 스냅샷을 끝까지
@@ -61,7 +84,7 @@ public:
     // 아직 열리지 않았으면 생산자가 만든 채널에 붙어 본다(생산자가 늦게 뜨거나 없어도 되는 구독).
     // 열려 있으면 true.
     bool attach(const char *topic) { return channel_.valid() || channel_.open(topic, sizeof(T), false); }
-    // 새 스냅샷이면 latest()에 두고 true. timeout_ms까지 1 ms 간격으로 기다릴 수 있다.
+    // 새 스냅샷이면 latest()에 두고 true. timeout_ms까지 다음 발행을 기다릴 수 있다(read_new와 같다).
     bool poll(int timeout_ms = 0) {
         T candidate;
         uint64_t seq = seq_;
@@ -87,7 +110,10 @@ public:
     void close();
     void reset();
     bool push(const CanBatch &batch);
+    // 생길 수 없는 인덱스(쓰기 < 읽기, 칸 수를 넘는 차이)를 보면 읽기 위치를 쓰기 위치에 맞춰 큐를 비운다.
     bool pop(CanBatch *batch);
+    // 비어 있으면 push가 깨울 때까지(최대 timeout_ns) 기다리며 꺼낸다. 소비자는 하나여야 한다.
+    bool pop_wait(CanBatch *batch, uint64_t timeout_ns);
     uint64_t depth() const;
     bool valid() const { return header_ != nullptr; }
 
@@ -96,6 +122,7 @@ private:
     ShmRegion region_;
     CanQueueHeader *header_ = nullptr;
     CanBatch *slots_ = nullptr;
+    WakeWaiter waiter_;
 };
 
 // 카메라 프레임 링. shm에는 헤더만 있고, 슬롯 픽셀은 생산자(camerad)가 잡은 CMM

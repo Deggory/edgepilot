@@ -40,25 +40,34 @@ std::vector<uint8_t> read_file(const std::string &path) {
 
 }  // namespace
 
+bool read_frame_index(const std::string &seg_dir, FrameIndex *out) {
+    const std::vector<uint8_t> index = read_file(seg_dir + "/frames.bin");
+    if (!out || index.size() < sizeof(FrameIndexHeader)) return false;
+    FrameIndexHeader header;
+    std::memcpy(&header, index.data(), sizeof(header));
+    // header_size가 파일보다 크면(깨진 머리) 아래 레코드 수 계산이 size_t로 넘친다
+    if (!is_frame_index_magic(header.magic) || header.record_size != sizeof(FrameIndexRecord) ||
+        header.header_size < sizeof(FrameIndexHeader) || header.header_size > index.size())
+        return false;
+    const size_t count = (index.size() - header.header_size) / sizeof(FrameIndexRecord);
+    if (count == 0) return false;
+    out->width = header.width;
+    out->height = header.height;
+    out->records.resize(count);
+    std::memcpy(out->records.data(), index.data() + header.header_size, count * sizeof(FrameIndexRecord));
+    return true;
+}
+
 ReplayRoute::ReplayRoute(const std::string &dir) {
     for (const std::string &seg_dir : numbered_entries(dir + "/segments", nullptr)) {
-        const std::vector<uint8_t> index = read_file(seg_dir + "/frames.bin");
-        if (index.size() < sizeof(FrameIndexHeader)) continue;
-        FrameIndexHeader header;
-        std::memcpy(&header, index.data(), sizeof(header));
-        // header_size가 파일보다 크면(깨진 머리) 아래 레코드 수 계산이 size_t로 넘친다
-        if (!is_frame_index_magic(header.magic) || header.record_size != sizeof(FrameIndexRecord) ||
-            header.header_size < sizeof(FrameIndexHeader) || header.header_size > index.size())
-            continue;
-        width = header.width;
-        height = header.height;
-        const size_t count = (index.size() - header.header_size) / header.record_size;
-        if (count == 0) continue;
+        FrameIndex index;
+        if (!read_frame_index(seg_dir, &index)) continue;
+        width = index.width;
+        height = index.height;
         Segment segment;
         segment.video_path = seg_dir + "/road.h264";
-        for (size_t i = 0; i < count; ++i) {
-            FrameIndexRecord r;
-            std::memcpy(&r, index.data() + header.header_size + i * sizeof(r), sizeof(r));
+        for (size_t i = 0; i < index.records.size(); ++i) {
+            const FrameIndexRecord &r = index.records[i];
             if (i == 0) segment.header_bytes = r.file_offset;
             frames.push_back(
                 {segments.size(), r.file_offset, r.packet_size, r.capture_timestamp_ns, (r.flags & 1U) != 0, i == 0});

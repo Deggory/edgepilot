@@ -938,6 +938,24 @@ TEST(LateralController, SteeringJsonMatchesDefaults) {
     ASSERT_NE(error.find("torque_kf_raw"), std::string::npos);
 }
 
+// 편경사 추정은 직선에서만 갱신하고 커브에서는 유지하며, 30초 넘게 갱신이 없으면 0으로 줄인다. 호출 간격(dt)이
+// 달라도(데이터셋 도구는 ControlState 간격) 같은 시정수와 시간 규칙을 따른다.
+TEST(RoadBankEstimator, HoldsInCurvesAndFadesWhenStale) {
+    for (const float dt : {0.01f, 0.05f}) {
+        RoadBankEstimator bank;
+        const int per_second = static_cast<int>(std::lround(1.0f / dt));
+        for (int i = 0; i < 20 * per_second; ++i) bank.update(dt, 20.0f, 0.2f, true, 0.0f, true);
+        EXPECT_NEAR(bank.lat_accel(), 0.2f, 1e-3f) << dt;
+        for (int i = 0; i < 10 * per_second; ++i) bank.update(dt, 20.0f, 1.5f, true, 0.05f, true);  // |yaw·v| = 1
+        EXPECT_NEAR(bank.lat_accel(), 0.2f, 1e-3f) << "커브에서는 유지 " << dt;
+        // 커브에서 갱신하지 않은 10초도 낡은 시간에 든다
+        for (int i = 0; i < 19 * per_second; ++i) bank.update(dt, 20.0f, 0.0f, false, 0.0f, true);
+        EXPECT_NEAR(bank.lat_accel(), 0.2f, 1e-3f) << "30초 전에는 유지 " << dt;
+        for (int i = 0; i < 12 * per_second; ++i) bank.update(dt, 20.0f, 0.0f, false, 0.0f, true);
+        EXPECT_LT(bank.lat_accel(), 0.02f) << "30초 넘게 낡으면 0으로 " << dt;
+    }
+}
+
 // 스스로 가는 최대 조향각은 고장 각도 아래에서 멈춰야 뜻이 있다: 파일이 더 큰 값을 줘도 그 아래로 자른다.
 TEST(LateralController, HoldAngleStaysBelowTheFaultAngle) {
     const std::string path = "/tmp/gtest_lateral_controller_hold_angle.json";

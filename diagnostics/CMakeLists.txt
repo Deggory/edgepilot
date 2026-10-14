@@ -30,5 +30,5 @@ target_link_libraries(replay_controls PRIVATE controls)
 if(EDGEPILOT_BUILD_RUNTIME)
   add_executable(flow_calibration_replay flow_calibration_replay.cc
                  ${PROJECT_SOURCE_DIR}/src/model/flow_worker.cc)
-  configure_board_target(flow_calibration_replay model maixcam2_ive maixcam2_vdec maixcam2_gdc)
+  configure_board_target(flow_calibration_replay model recording maixcam2_ive maixcam2_vdec maixcam2_gdc)
 endif()

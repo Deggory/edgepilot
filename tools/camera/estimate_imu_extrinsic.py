@@ -44,10 +44,11 @@ def load(route: Path):
             elif rec.type == rr.RECORD_MODEL_STATE:
                 layout = rec.model_layout()
                 cap, = struct.unpack_from("<Q", rec.payload, layout["capture_timestamp_ns"])
-                p = struct.unpack_from("<I12f", rec.payload, layout["pose"])
-                cal = struct.unpack_from("<Ii3f", rec.payload, layout["calibration"])
-                if p[0] and cal[0] == 1:
-                    pose.append((cap * 1e-9 - CAMODO_DELAY_S, *(euler_rotate(*cal[2:5]) @ np.array(p[4:7]))))
+                p = np.frombuffer(rec.payload, rr.POSE_STATE, 1, layout["pose"])[0]
+                cal = np.frombuffer(rec.payload, rr.CALIBRATION_STATE, 1, layout["calibration"])[0]
+                if p["valid"] and cal["status"] == 1:
+                    rotation = euler_rotate(float(cal["roll"]), float(cal["pitch"]), float(cal["yaw"]))
+                    pose.append((cap * 1e-9 - CAMODO_DELAY_S, *(rotation @ p["rot"].astype(float))))
             elif rec.type == rr.RECORD_IMU:
                 _, count, _ = rr.IMU_BATCH_HEAD.unpack_from(rec.payload, 0)
                 imu.append(np.frombuffer(rec.payload, rr.IMU_SAMPLE, count, rr.IMU_BATCH_HEAD.size).copy())

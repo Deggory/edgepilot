@@ -57,11 +57,11 @@ public:
     ~RecordingWriter();
 
     void set_enabled(bool enabled, uint64_t now_ns);
-    // 녹화를 켜 두었는데 저장 공간 부족으로 거절되거나 멈춘 동안, 여유 공간이 예비분보다 1 GiB 넘게 늘면
-    // route를 다시 시작한다. 메인 루프가 자주 불러도 공간은 5초마다만 본다.
+    // 녹화를 켜 두었는데 저장 공간 때문에 거절되거나 멈춘 동안, SD 여유가 예비분보다 1 GiB 넘게 늘고 스테이징이
+    // 상한의 절반 밑이면 route를 다시 시작한다. 메인 루프가 자주 불러도 공간은 5초마다만 본다.
     void poll_storage(uint64_t now_ns);
-    // 여유 공간 확인을 바꾼다(테스트가 공간 부족을 흉내 낸다). extra_bytes는 예비분 위에 더 있어야 할 크기다.
-    // 녹화를 켜기 전에 부른다. 기본은 statvfs로 root의 여유 공간을 본다.
+    // SD 여유 공간 확인을 바꾼다(테스트가 공간 부족을 흉내 낸다). extra_bytes는 예비분 위에 더 있어야 할 크기다.
+    // 녹화를 켜기 전에 부른다. 기본은 statvfs로 root의 여유 공간을 본다. 스테이징 크기는 언제나 실제로 잰다.
     void set_storage_check(std::function<bool(uint64_t extra_bytes)> check) { storage_check_ = std::move(check); }
     void set_codec_config(const uint8_t *data, size_t size);
     void write_encoded_frame(const RoadAiFrame &frame, const uint8_t *data, size_t size, bool keyframe);
@@ -71,7 +71,8 @@ public:
 
     bool requested_enabled() const { return requested_enabled_.load(); }
     bool active() const { return active_.load(); }
-    bool blocked_for_space() const { return blocked_for_space_.load(); }
+    bool blocked_for_space() const { return storage_blocked_.load() != 0; }
+    uint32_t storage_blocked() const { return storage_blocked_.load(); }  // kStorageBlocked*, 막히지 않았으면 0
     uint64_t video_frames() const { return total_video_frames_.load(); }
     uint64_t queue_drops() const { return queue_drops_.load(); }
     uint64_t pending_moves() const { return mover_.pending(); }
@@ -112,7 +113,10 @@ private:
     void close_route(bool complete);
     void write_manifest(bool complete) const;
     void snapshot_params() const;
-    bool has_storage_reserve(uint64_t extra_bytes = 0) const;
+    // 녹화를 막는 저장 문제(kStorageBlocked*, 없으면 0): 스테이징(tmpfs)이 kMaxStagingBytes를 넘었거나 SD 여유가
+    // 예비분(5 GiB와 10%) 밑이다. 멈춘 뒤 다시 시작할지 볼 때(resuming)는 스테이징이 kStagingResumeBytes 밑이고 SD에
+    // kRetryMarginBytes가 더 남아야 한다.
+    uint32_t storage_problem(bool resuming) const;
     bool write_event_header(RecordType type, uint64_t timestamp_ns, uint32_t payload_size);
     static FILE *open_buffered(const std::string &path);
 
@@ -128,7 +132,7 @@ private:
     unsigned bitrate_ = 0;
     std::atomic<bool> requested_enabled_{false};
     std::atomic<bool> active_{false};
-    std::atomic<bool> blocked_for_space_{false};
+    std::atomic<uint32_t> storage_blocked_{0};
     bool config_enabled_ = false;         // 설정(recording.json)이 바라는 상태. 메인 스레드만 쓴다
     uint64_t next_storage_retry_ns_ = 0;  // poll_storage가 다음에 공간을 볼 시각
     std::function<bool(uint64_t)> storage_check_;

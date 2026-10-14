@@ -57,10 +57,10 @@ struct SteeringParams {
     int avoid_lkas_fault_cut_frames = 2;
     float angle_offset_deg = -1.57f;  // paramsd 학습 평균(2026-09-27)
     // openpilot latAccelOffset(m/s^2). 상수 횡가속 편향을 FF에서 뺀다.
-    // +y=오른쪽 관례라 양수 = 우측 쏠림 보정. fit 도구 출력을 그대로 넣는다.
+    // +y=오른쪽 관례라 양수 = 우측 쏠림 보정. torqued 학습값(녹화가 있으면 replay_lateral_learners 값)을 넣는다.
     float torque_lat_accel_offset = -0.06f;  // torqued 학습값(2026-09-27)
     // ESP12 실측으로 직선에서 추정한 도로 편경사(뱅크)를 FF에서 보정한다. 커브에서는 직전 값을
-    // 유지하고 30초 넘게 갱신이 없으면 0으로 줄인다(LateralController::update_road_bank).
+    // 유지하고 30초 넘게 갱신이 없으면 0으로 줄인다(controls/road_bank.h의 RoadBankEstimator).
     bool live_bank_compensation = true;
     // paramsd·torqued 학습값 사용. 끄면 학습기는 계산·기록만 한다. 차량 값을 켜면
     // 롤 보정이 live_bank_compensation을 대신한다.

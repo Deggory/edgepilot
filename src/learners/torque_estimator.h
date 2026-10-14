@@ -136,6 +136,7 @@ private:
     bool has_motion_t_ = false;
     double last_motion_t_ = 0.0;
     bool persist_due_ = false;
+    long new_points_ = 0;  // 마지막 저장 뒤 더한 점
     TorqueRestore restore_ = TorqueRestore::None;
     std::string cache_;
     TorqueParams last_{};

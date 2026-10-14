@@ -7,6 +7,9 @@ openpilot v0.11의 torqued(라이브 토크 회귀)와 lagd(라이브 지연 추
 
   fit  controlsd 텍스트 로그(1 Hz hz= 라인)에서 토크-횡가속 관계를 회귀한다.
        -> torque_lat_accel_factor, torque_friction, torque_lat_accel_offset
+       근사다: 1 Hz 표본이고 torqued의 버킷·적합을 따로 옮긴 것이며, 로그 줄 형식(torque=, curveYaw,
+       lat=)을 정규식으로 읽어 그 줄이 바뀌면 조용히 깨진다. 녹화가 있으면 실제 torqued를 돌리는
+       diagnostics/replay_lateral_learners를 쓴다.
 
   lag  v3 녹화의 ControlState 스트림에서 요청 곡률과 실측 곡률을
        상호상관해 steer_actuator_delay를 추정한다. 텍스트 로그는 1 Hz라
@@ -312,7 +315,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    f = sub.add_parser("fit", help="토크-횡가속 회귀 (controlsd 텍스트 로그)")
+    f = sub.add_parser("fit", help="토크-횡가속 회귀 (controlsd 텍스트 로그, 근사; 녹화는 replay_lateral_learners)")
     f.add_argument("logs", nargs="+")
     f.add_argument("--min-speed", type=float, default=MIN_SPEED_KPH,
                    help="km/h, 기본 54 (openpilot MIN_VEL)")

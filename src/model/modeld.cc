@@ -99,14 +99,26 @@ struct RateWindow {
 };
 
 // controlsd 스냅샷에서 모델 입력용 자차 속도와 desire, 광류 보정기의 직진 조건(곡률·깜빡이), 결합 상태(보정
-// 출처 설정을 해제까지 미룬다)를 읽는다. controlsd가 아직 없으면 열릴 때까지 마지막 값을 유지한다.
+// 출처 설정을 해제까지 미룬다)를 읽는다. controlsd가 아직 없으면 열릴 때까지 마지막 값을 유지한다. 스냅샷이
+// kStaleNs보다 오래되면(controlsd가 죽거나 멈춤) 차 상태를 낡은 것으로 보고 결합도 풀린 것으로 본다: 마지막
+// 속도로 광류 보정의 직진 조건이 계속 열려 있지 않게 한다.
 class EgoStateReader {
 public:
+    static constexpr uint64_t kStaleNs = 1'000'000'000ULL;
+
     void poll() {
         if (!open_) open_ = sub_.open(kControlStateTopic, sizeof(ControlState), false);
         if (!open_) return;
         ControlState control_state;
-        if (!sub_.read(&control_state, sizeof(control_state))) return;
+        const bool read = sub_.read(&control_state, sizeof(control_state));
+        if (read) last_stamp_ns_ = control_state.timestamp_ns;
+        const uint64_t now = monotonic_now_ns();
+        if (last_stamp_ns_ == 0 || (now > last_stamp_ns_ && now - last_stamp_ns_ > kStaleNs)) {
+            gate_.vehicle_fresh = false;
+            engaged_ = false;
+            return;
+        }
+        if (!read) return;
         const float ego_speed_kph =
             control_state.ego_speed_kph > 0.0f ? control_state.ego_speed_kph : control_state.cluster_speed_kph;
         v_ego_ = std::max(0.0f, ego_speed_kph / 3.6f);
@@ -127,6 +139,7 @@ public:
 private:
     LatestChannel sub_;
     bool open_ = false;
+    uint64_t last_stamp_ns_ = 0;
     float v_ego_ = 0.0f;
     int desire_ = 0;
     bool engaged_ = false;
@@ -232,8 +245,7 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
     if (lead.tracker) {  // 모델 앞차 거리와 확대율을 섞는다(비전 크루즈가 쓴다)
         LeadTrackInput in;
         in.t_s = static_cast<double>(capture_timestamp_ns) * 1e-9;
-        in.lead_valid = state.lead.valid != 0 && state.lead.probability >= kLeadProbabilityThreshold &&
-                        std::isfinite(state.lead.x) && std::isfinite(state.lead.velocity);
+        in.lead_valid = lead_usable(state.lead);
         in.distance_m = state.lead.x;
         in.relative_speed_mps = state.lead.velocity - lead.ego_mps;
         in.flow_valid = state.lead_flow.valid != 0;

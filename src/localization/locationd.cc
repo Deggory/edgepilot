@@ -19,8 +19,10 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -86,18 +88,27 @@ int main() {
         last_saved = json;
     };
 
+    auto next_wake = std::chrono::steady_clock::now();
     while (!g_stop) {
         const bool imu_open = imu_sub.attach(kImuTopic);
         model_sub.attach(kModelStateTopic);
         control_sub.attach(kControlStateTopic);
         if (!imu_open) {
             usleep(200000);
+            next_wake = std::chrono::steady_clock::now();
             continue;
         }
-        // 제어 상태는 100 Hz라 5 ms마다 본다(몇 개 놓쳐도 lagd는 0.1초 안의 값과 짝짓는다).
+        // 5 ms 격자로 깨어나 세 입력을 한 번씩 본다. 제어 상태는 100 Hz라 대개 하나씩 받는다(몇 개 놓쳐도 lagd는
+        // 0.1초 안의 값과 짝짓는다). 예전처럼 IMU를 1 ms 간격으로 기다리면 할 일 없이 초당 900번 깨어난다.
+        next_wake += std::chrono::milliseconds(5);
+        const auto now_wake = std::chrono::steady_clock::now();
+        if (next_wake > now_wake)
+            std::this_thread::sleep_until(next_wake);
+        else
+            next_wake = now_wake;  // 밀렸으면 따라잡지 않고 다시 맞춘다
         if (control_sub.poll()) pipeline.on_control(control_sub.latest());
         if (model_sub.poll()) pipeline.on_model(model_sub.latest());
-        if (!imu_sub.poll(5)) continue;
+        if (!imu_sub.poll()) continue;
         ++batches;
         LocalizationState out{};
         if (pipeline.on_imu(imu_sub.latest(), static_cast<double>(monotonic_now_ns()) * 1e-9, &out)) {

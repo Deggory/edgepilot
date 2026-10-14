@@ -182,5 +182,7 @@ def main() -> None:
     args = parser.parse_args()
     server: uvicorn.Server | None = None
     application = create_app(stopping=lambda: server is not None and server.should_exit)
-    server = uvicorn.Server(uvicorn.Config(application, host=args.host, port=args.port, log_level="info"))
+    # 접근 로그는 끈다: 열린 페이지마다 1~2초 폴링 한 번에 한 줄씩 로그(SD의 journal)에 쌓인다.
+    server = uvicorn.Server(uvicorn.Config(application, host=args.host, port=args.port, log_level="info",
+                                           access_log=False))
     server.run()

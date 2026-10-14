@@ -180,8 +180,8 @@ questions ([Closed-loop replay](closed-loop-replay.md)).
   clip's frames. On the 2026-10-10 19:32 route, `events/138.bin` ended before
   `segments/138` began (109 s apart). A clip with the same-numbered chunks then
   ran out of wheel speed after 11 s, and the ego speed went missing.
-- **`recordd: recording refused: storage reserve is below 5 GiB/10%`.** The
-  record root has too little free space, as tmpfs does. Record to the SD card.
+- **`recordd: recording refused: SD reserve below 5 GiB/10%`.** The record
+  root has too little free space, as tmpfs does. Record to the SD card.
 
 ## Related
 

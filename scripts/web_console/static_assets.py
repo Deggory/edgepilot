@@ -36,14 +36,16 @@ class StaticAssets:
         media_type = MEDIA_TYPES.get(path.suffix)
         if media_type is None or self.root not in path.parents or any(part.startswith(".") for part in Path(name).parts):
             return None
+        # 캐시는 실제 파일로 묶는다. 요청 글자로 묶으면 ./x.js, a//x.js 같은 표기마다 사본이 쌓인다(인증 없는 포트).
+        key = path.relative_to(self.root).as_posix()
         try:
             info = path.stat()
             etag = f'"{info.st_mtime_ns:x}-{info.st_size:x}"'
             with self.lock:
-                cached = self.cache.get(name)
+                cached = self.cache.get(key)
                 if cached is None or cached.etag != etag:
                     cached = StaticFile(etag, gzip.compress(path.read_bytes(), compresslevel=6, mtime=0), media_type)
-                    self.cache[name] = cached
+                    self.cache[key] = cached
             return cached
         except OSError:
             return None

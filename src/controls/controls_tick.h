@@ -6,7 +6,9 @@
 // 한 틱의 순서(main이 지킨다):
 //   apply_params(바뀌었으면) → on_can_batch(...) → on_model(새 모델이면) → on_panda → on_localization →
 //   step → [main: ControlState 발행, CAN 송신] → update_learners → [main: 학습 저장, LearnerState 발행]
-// - 플래너는 on_model에서 이번 틱 CAN이 반영된 차량 상태와 직전 틱의 실제 곡률·active를 받는다.
+// - 플래너는 on_model에서 이번 틱 CAN이 반영된 차량 상태와 직전 틱의 실제 곡률·active를 받아 그 자리에서
+//   계산하고, 같은 틱의 step이 그 결과를 쓴다(평균 약 0.1 ms, MPC는 반복 없는 고정 연산; 2026-10-13 보드).
+//   예전에는 작업 스레드가 계산해 새 플랜이 한 틱(10 ms) 늦게 쓰였고, 재생 도구·검사와도 그만큼 달랐다.
 // - step의 now_ns는 공유 상태를 다 읽은 직후의 시각이다(그 사이 발행된 모델도 신선하게 본다).
 // - 학습기 갱신은 송신 뒤라 적합·직렬화 틱이 CAN 송신을 늦추지 않고, 결과는 다음 틱의 컨트롤러가
 //   쓴다.
@@ -23,12 +25,9 @@
 #include "planning/lateral_planner.h"
 
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 
 // controlsd의 런타임 파라미터 두 파일(steering/adaptive_cruise.json)과 코드 고정값(timing). 파일은 한꺼번에
 // 읽고 한꺼번에 바꾼다.
@@ -69,69 +68,6 @@ private:
     unsigned generation_ = 1;
 };
 
-// 횡방향 플래너를 부르는 길. 보드는 별도 스레드(LateralPlannerWorker)가 다음 결과를 만들고, 검사와
-// 재생 도구는 그 자리에서 계산한다(SyncPlanner).
-class PlannerPort {
-public:
-    virtual ~PlannerPort() = default;
-    virtual void submit(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
-                        bool active) = 0;
-    virtual void update_params(const SteeringParams &params) = 0;
-    virtual LateralTarget latest() const = 0;
-};
-
-// 20 Hz 플래너를 100 Hz 제어 루프와 떼어 놓는 작업 스레드. latest()는 마지막으로 끝난 결과다.
-class LateralPlannerWorker : public PlannerPort {
-public:
-    explicit LateralPlannerWorker(const SteeringParams &params);
-    ~LateralPlannerWorker() override;
-
-    void submit(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
-                bool active) override;
-    void update_params(const SteeringParams &params) override;
-    LateralTarget latest() const override;
-
-private:
-    struct Request {
-        ModelState model;
-        VehicleCanState vehicle;
-        float v_ego = 0.0f;
-        float measured_curvature = 0.0f;
-        bool active = false;
-    };
-
-    void run();
-
-    LateralPlanner planner_;
-    mutable std::mutex mutex_;
-    std::condition_variable condition_;
-    Request request_;
-    SteeringParams pending_steering_;
-    LateralTarget latest_;
-    bool pending_ = false;
-    bool params_pending_ = false;
-    bool stop_ = false;
-    std::thread thread_;
-};
-
-// 넘겨받은 자리에서 바로 계산하는 플래너(검사·재생 도구).
-class SyncPlanner : public PlannerPort {
-public:
-    explicit SyncPlanner(const SteeringParams &params) : planner_(params) {}
-    void submit(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
-                bool active) override {
-        latest_ = planner_.update(model, vehicle, v_ego, measured_curvature, active);
-    }
-    void update_params(const SteeringParams &params) override { planner_.update_params(params); }
-    LateralTarget latest() const override { return latest_; }
-    // 재생 도구의 --lane-filter(LateralPlanner::set_lane_filter_weight)
-    void set_lane_filter_weight(double weight) { planner_.set_lane_filter_weight(weight); }
-
-private:
-    LateralPlanner planner_;
-    LateralTarget latest_;
-};
-
 // engage/disengage/거부 이벤트 id와 전이 로그. id는 0을 건너뛰어 HUD가 새 이벤트를 구분한다.
 struct EngageEvents {
     uint32_t engage_id = 0;
@@ -164,16 +100,15 @@ struct LearnerOutputs {
 class ControlsTick {
 public:
     // force_engaged는 EDGEPILOT_FORCE_ENGAGED(버튼 없이 결합), vehicle_learn_json·torque_learn_cache는
-    // 학습 저장 파일 내용(없으면 빈 문자열), seed는 학습기 난수 시드. 플래너는 호출자가 가진다(보드는
-    // 작업 스레드).
-    ControlsTick(const ControlParams &params, bool force_engaged, PlannerPort &planner,
-                 const std::string &vehicle_learn_json, const std::string &torque_learn_cache, uint64_t seed);
+    // 학습 저장 파일 내용(없으면 빈 문자열), seed는 학습기 난수 시드.
+    ControlsTick(const ControlParams &params, bool force_engaged, const std::string &vehicle_learn_json,
+                 const std::string &torque_learn_cache, uint64_t seed);
 
     // 다시 읽은 파라미터를 컨트롤러·플래너·크루즈에 넘긴다.
     void apply_params(const ControlParams &params);
     // 수신 CAN 묶음. 100 ms보다 오래된 묶음은 버리고 false다.
     bool on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s);
-    // 새 모델 상태. 플래너에 이번 틱 차량 상태와 직전 틱 결과(vEgo·실제 곡률·active)를 함께 넘긴다.
+    // 새 모델 상태. 이번 틱 차량 상태와 직전 틱 결과(vEgo·실제 곡률·active)로 플래너를 돌린다.
     void on_model(const ModelState &model);
     void on_panda(const PandaState &panda_state) { panda_state_ = panda_state; }
     // lagd 지연과 paramsd·torqued의 locationd 입력.
@@ -183,7 +118,11 @@ public:
     // result().frames, 보낼지는 result().should_send다.
     ControlState step(double now_s, uint64_t now_ns);
     // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영.
+    // 저장 주기가 됐고 내용이 마지막 저장과 다르면 저장할 내용을, 새 LearnerState가 나왔으면 그것도 담아 돌려준다.
     LearnerOutputs update_learners(double now_s);
+    // 학습 파일 쓰기가 실패했다(BackgroundWriter::failures가 늘었다). kLearnerRetryS 뒤 두 파일을 내용이 같아도 다시
+    // 내놓는다. 그대로 두면 주차 중처럼 내용이 바뀌지 않는 동안 실패한 파일을 다시 쓰지 않는다.
+    void learner_write_failed(double now_s);
 
     const LateralControlResult &result() const { return last_result_; }
     const PandaGateOutput &panda() const { return panda_; }
@@ -195,11 +134,13 @@ public:
     const LateralLearners &learners() const { return learners_; }
     LateralController &controller() { return controller_; }
     const LateralController &controller() const { return controller_; }
+    // 재생 도구의 --lane-filter(LateralPlanner::set_lane_filter_weight)
+    LateralPlanner &planner() { return planner_; }
 
 private:
     LateralControllerConfig config_;  // 조향 파라미터와 제어 타이밍은 여기에 있다
     AdaptiveCruiseConfig cruise_;
-    PlannerPort &planner_;
+    LateralPlanner planner_;
     LateralController controller_;
     LateralLearners learners_;
     AdaptiveCruiseController adaptive_cruise_controller_;
@@ -222,4 +163,10 @@ private:
     bool model_updated_ = false;
     int control_frame_ = 0;
     uint32_t last_logged_alert_event_id_ = 0;
+    // 마지막으로 저장하라고 넘긴(처음에는 시작 때 읽은) 학습 파일 내용. 같은 내용은 다시 쓰지 않는다: 주차 중에도
+    // torqued가 88 KB를 12초마다 SD에 다시 쓰고 있었다(상류는 주행 중에만 돈다). 쓰기가 실패하면
+    // learner_write_failed가 비우고 다시 내놓게 한다(locationd의 lagd 저장과 같다).
+    std::string saved_vehicle_json_;
+    std::string saved_torque_cache_;
+    double learner_retry_at_s_ = 0.0;  // 0이 아니면 이 시각에 두 학습 파일을 다시 내놓는다
 };

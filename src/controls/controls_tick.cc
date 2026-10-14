@@ -17,14 +17,18 @@ namespace {
 
 constexpr uint64_t kAlertModelTimeoutNs = 500000000ULL;
 constexpr uint64_t kMaxCanRxAgeNs = 100000000ULL;
-constexpr int kParamPollIntervalMs = 100;
+// 파라미터 파일을 stat하는 간격. 웹 콘솔은 바꾸면 SIGHUP으로 곧바로 알리므로, 이 확인은 손으로 고친 파일을 위한
+// 것이다. 제어 스레드에서 SD를 자주 보지 않게 1초로 둔다.
+constexpr int kParamPollIntervalMs = 1000;
+// 학습 파일 쓰기가 실패한 뒤 다시 내놓기까지(paramsd·torqued 저장 주기 12 s와 같다)
+constexpr double kLearnerRetryS = 12.0;
 
 void apply_can_batch(const CanBatch &batch, double now_s, VehicleCanState *vehicle) {
     if (!batch.valid) return;
     const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
     for (uint32_t i = 0; i < count; ++i) {
         const IpcCanFrame &frame = batch.frames[i];
-        if (frame.flags != 0 || frame.data_len > 8 || frame.src > 7) continue;
+        if (!is_vehicle_rx_frame(frame.flags, frame.data_len, frame.src)) continue;
         std::array<uint8_t, 8> data = {};
         std::copy_n(frame.data, frame.data_len, data.begin());
         update_vehicle_can_state(vehicle, frame.address, data, static_cast<uint8_t>(frame.data_len),
@@ -47,7 +51,7 @@ VisionLead observe_vision_lead(const ModelState &model, uint64_t now_ns, float e
     lead.model_fresh = model.valid != 0 && timestamp_fresh_ns(model.model_timestamp_ns, now_ns, kAlertModelTimeoutNs);
     lead.signal_valid =
         lead.model_fresh && model.lead.valid != 0 && std::isfinite(model.lead.x) && std::isfinite(model.lead.velocity);
-    lead.valid = lead.signal_valid && model.lead.probability >= kLeadProbabilityThreshold;
+    lead.valid = lead.model_fresh && lead_usable(model.lead);
     lead.distance_m = lead.signal_valid ? model.lead.x - kRadarToCameraDistanceM : 0.0f;
     lead.relative_speed_mps = lead.signal_valid ? model.lead.velocity - ego_speed_mps : 0.0f;
     return lead;
@@ -235,78 +239,6 @@ void ControlParamsWatcher::stamp() {
     cruise_stamp_ = file_stamp(paths_.cruise);
 }
 
-LateralPlannerWorker::LateralPlannerWorker(const SteeringParams &params)
-    : planner_(params), pending_steering_(params), thread_(&LateralPlannerWorker::run, this) {}
-
-LateralPlannerWorker::~LateralPlannerWorker() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_ = true;
-    }
-    condition_.notify_one();
-    thread_.join();
-}
-
-void LateralPlannerWorker::submit(const ModelState &model, const VehicleCanState &vehicle, float v_ego,
-                                  float measured_curvature, bool active) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        request_.model = model;
-        request_.vehicle = vehicle;
-        request_.v_ego = v_ego;
-        request_.measured_curvature = measured_curvature;
-        request_.active = active;
-        pending_ = true;
-    }
-    condition_.notify_one();
-}
-
-void LateralPlannerWorker::update_params(const SteeringParams &params) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending_steering_ = params;
-        params_pending_ = true;
-    }
-    condition_.notify_one();
-}
-
-LateralTarget LateralPlannerWorker::latest() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return latest_;
-}
-
-void LateralPlannerWorker::run() {
-    while (true) {
-        Request request;
-        SteeringParams steering;
-        bool has_request = false;
-        bool apply_params = false;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            condition_.wait(lock, [this] { return stop_ || pending_ || params_pending_; });
-            if (stop_) return;
-            if (params_pending_) {
-                steering = pending_steering_;
-                params_pending_ = false;
-                apply_params = true;
-            }
-            if (pending_) {
-                request = request_;
-                pending_ = false;
-                has_request = true;
-            }
-        }
-        if (apply_params) planner_.update_params(steering);
-        if (!has_request) continue;
-        const LateralTarget result =
-            planner_.update(request.model, request.vehicle, request.v_ego, request.measured_curvature, request.active);
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            latest_ = result;
-        }
-    }
-}
-
 void EngageEvents::update(const LateralControlResult &result, const VehicleCanState &vehicle,
                           const PandaGateOutput &panda, const PandaState &panda_state, const PathHoldOutput &held,
                           const ModelState &model, uint64_t now_ns) {
@@ -413,14 +345,16 @@ LateralControllerConfig controller_config(const ControlParams &params, bool forc
 
 }  // namespace
 
-ControlsTick::ControlsTick(const ControlParams &params, bool force_engaged, PlannerPort &planner,
-                           const std::string &vehicle_learn_json, const std::string &torque_learn_cache, uint64_t seed)
+ControlsTick::ControlsTick(const ControlParams &params, bool force_engaged, const std::string &vehicle_learn_json,
+                           const std::string &torque_learn_cache, uint64_t seed)
     : config_(controller_config(params, force_engaged)),
       cruise_(params.cruise),
-      planner_(planner),
+      planner_(params.steering),
       controller_(config_),
       learners_(params.steering, vehicle_learn_json, torque_learn_cache, seed),
-      adaptive_cruise_controller_(params.cruise) {}
+      adaptive_cruise_controller_(params.cruise),
+      saved_vehicle_json_(vehicle_learn_json),
+      saved_torque_cache_(torque_learn_cache) {}
 
 void ControlsTick::apply_params(const ControlParams &params) {
     cruise_ = params.cruise;
@@ -439,9 +373,9 @@ bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t can_now_ns, doub
 void ControlsTick::on_model(const ModelState &model) {
     model_ = model;
     model_updated_ = true;
-    // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다.
-    planner_.submit(model_, vehicle_, std::max(0.0f, last_result_.control_speed_kph / 3.6f),
-                    last_result_.actual_curvature, last_result_.active);
+    // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다. 결과는 이번 틱 step이 쓴다.
+    lateral_target_ = planner_.update(model_, vehicle_, std::max(0.0f, last_result_.control_speed_kph / 3.6f),
+                                      last_result_.actual_curvature, last_result_.active);
 }
 
 void ControlsTick::on_localization(const LocalizationRead &localization, uint64_t can_now_ns, double now_s) {
@@ -474,7 +408,6 @@ void ControlsTick::on_localization(const LocalizationRead &localization, uint64_
 }
 
 ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
-    lateral_target_ = planner_.latest();
     panda_ = panda_gate_.update(panda_state_, now_ns, config_.force_engaged);
     const uint64_t model_timeout_ns = static_cast<unsigned long long>(config_.timing.model_timeout_ms) * 1000000ULL;
     const PathHoldOutput held = path_gate_.update(model_, now_ns, model_timeout_ns);
@@ -528,8 +461,17 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
     controller_.set_live_params(learners_.live(), learners_.vehicle_valid(), model_.calibration.status == 1U);
     controller_.set_calibration_status(model_.calibration.status);
     LearnerOutputs out;
+    // 실패한 쓰기를 다시 시도할 때다: 저장 주기와 관계없이 두 파일을 다시 내놓는다(주차 중이면 주기가 오지 않는다).
+    const bool retry = learner_retry_at_s_ > 0.0 && now_s >= learner_retry_at_s_;
+    if (retry) learner_retry_at_s_ = 0.0;
+    if (retry || learners_.vehicle_persist_due()) {
+        std::string json = learners_.vehicle_persist_json();
+        if (json != saved_vehicle_json_) {
+            saved_vehicle_json_ = json;
+            out.vehicle_json = std::move(json);
+        }
+    }
     if (learners_.vehicle_persist_due()) {
-        out.vehicle_json = learners_.vehicle_persist_json();
         const VehicleParams &v = learners_.vehicle_params();
         const TorqueParams &t = learners_.torque_params();
         std::fprintf(stderr,
@@ -541,10 +483,20 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
                      t.lat_accel_factor_raw, t.lat_accel_factor, t.lat_accel_offset, t.friction_raw, t.friction,
                      t.valid ? 1 : 0);
     }
-    if (learners_.torque_persist_due()) out.torque_cache = learners_.torque_cache();
+    if ((retry || learners_.torque_persist_due()) && !learners_.torque_cache().empty() &&
+        learners_.torque_cache() != saved_torque_cache_) {
+        saved_torque_cache_ = learners_.torque_cache();
+        out.torque_cache = saved_torque_cache_;
+    }
     if (learners_.vehicle_published()) {
         out.learner_state = make_learner_state(learners_, config_.steering_params, controller_.road_bank_lat_accel(),
                                                controller_.live_delay_in_use(), controller_.plan_delay_s());
     }
     return out;
+}
+
+void ControlsTick::learner_write_failed(double now_s) {
+    saved_vehicle_json_.clear();
+    saved_torque_cache_.clear();
+    learner_retry_at_s_ = now_s + kLearnerRetryS;
 }

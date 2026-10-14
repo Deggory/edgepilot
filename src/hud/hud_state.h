@@ -92,7 +92,8 @@ struct HudState {
     char wired_ipv4[16] = {};
     bool network_card = false;  // 상태 알약을 눌러 연 네트워크 카드
     bool recording = false;     // recordd가 route를 쓰는 중
-    bool storage_full = false;  // 저장 공간이 모자라 녹화를 거부했거나 멈춤
+    bool storage_full = false;  // SD 여유가 예비분 밑이라 녹화를 거부했거나 멈춤
+    bool storage_slow = false;  // SD가 기록을 따라오지 못해(tmpfs 스테이징이 참) 녹화를 멈춤
     bool debug_card = false;    // HUD 진단 수치 카드. 화면 왼쪽 열을 눌러 켜고 끈다(시작은 꺼짐)
     // 학습값(진단 카드). learner_fresh가 아니면 "--".
     bool learner_fresh = false;

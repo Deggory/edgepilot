@@ -39,6 +39,7 @@ constexpr unsigned kRecordingBitrate = 8000000;
 constexpr uint64_t kConfigPollIntervalNs = 250000000ULL;
 constexpr uint64_t kMaximumFrameAgeNs = 100000000ULL;
 constexpr uint64_t kStatePublishIntervalNs = 500000000ULL;
+constexpr unsigned kIdleSleepUs = 100000;  // 기록이 꺼진 동안의 대기(CAN 로그 큐 64칸 = 640 ms보다 짧게)
 
 bool read_recording_enabled(const std::string &path, bool fallback) {
     std::ifstream file(path);
@@ -51,15 +52,27 @@ bool read_recording_enabled(const std::string &path, bool fallback) {
     return enabled;
 }
 
+struct RecordingSettings {
+    int bitrate_bps = 0;
+};
+
+// 허용 범위(벗어나면 클램프). 웹 콘솔의 min/max와 같아야 한다(check_web_console.py가 대조). 상한 10 Mbit/s는
+// 스테이징 상한(recording_writer.cc의 160 MiB) 안에 옮기는 중인 세그먼트와 쓰는 중인 세그먼트가 함께 들어가는 값이다
+// (SD로 3 MiB/s 옮길 때 최대 약 134 MiB). 그 위로는 세그먼트마다 기록이 멈췄다.
+constexpr JsonIntField<RecordingSettings> kRecordingInts[] = {
+    {"bitrate_bps", 1000000, 10000000, &RecordingSettings::bitrate_bps},
+};
+
 // 인코더는 시작할 때 한 번만 열리므로 비트레이트는 기동 시점 값이다.
 // 웹에서 바꾸면 recordd 재시작부터 적용된다.
 unsigned read_recording_bitrate(const std::string &path, unsigned fallback) {
     std::ifstream file(path);
     if (!file) return fallback;
     const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    int bitrate = static_cast<int>(fallback);
-    parse_json_optional_int(text, "bitrate_bps", 1000000, 20000000, &bitrate);
-    return static_cast<unsigned>(bitrate);
+    RecordingSettings settings;
+    settings.bitrate_bps = static_cast<int>(fallback);
+    parse_json_fields(text, kRecordingInts, &settings);
+    return static_cast<unsigned>(settings.bitrate_bps);
 }
 
 }  // namespace
@@ -125,6 +138,7 @@ int main() {
         uint64_t stale_frames = 0;
         uint64_t frame_sync_failures = 0;
         bool warmed = false;
+        CanBatch can_batch;  // 루프마다 21.5 KB를 0으로 채우지 않게 밖에 둔다(pop은 count까지 채운다)
 
         while (!g_stop) {
             const uint64_t now_ns = monotonic_now_ns();
@@ -149,7 +163,7 @@ int main() {
                 RecordState state;
                 state.timestamp_ns = now_ns;
                 state.active = writer.active() ? 1U : 0U;
-                state.storage_blocked = writer.blocked_for_space() ? 1U : 0U;
+                state.storage_blocked = writer.storage_blocked();
                 record_state_pub.publish(&state, sizeof(state));
             }
 
@@ -188,13 +202,14 @@ int main() {
                     }
                 }
             } else if (!need_video_frame) {
-                usleep(10000);
+                // 기록이 꺼진 동안은 설정(250 ms마다)과 CAN 로그 큐(64칸, 10 ms마다 한 묶음)만 비우면 되므로 길게
+                // 잔다. 10 ms로 자면 할 일 없이 초당 100번 깨어난다.
+                usleep(kIdleSleepUs);
             }
             if (encoder.submitted() != encoder.encoded()) encoder.drain(on_config, on_packet);
 
-            CanBatch batch;
-            while (can_log_sub.pop(&batch)) writer.write_can(RecordType::CanRx, batch);
-            while (sendcan_log_sub.pop(&batch)) writer.write_can(RecordType::CanTx, batch);
+            while (can_log_sub.pop(&can_batch)) writer.write_can(RecordType::CanRx, can_batch);
+            while (sendcan_log_sub.pop(&can_batch)) writer.write_can(RecordType::CanTx, can_batch);
 
             if (writer.requested_enabled()) states.record(writer);
 
@@ -215,7 +230,9 @@ int main() {
                     static_cast<unsigned long long>(writer.video_frames()),
                     static_cast<unsigned long long>(writer.queue_drops()),
                     static_cast<unsigned long long>(writer.pending_moves()),
-                    writer.blocked_for_space() ? " storage-blocked" : "");
+                    writer.storage_blocked() == kStorageBlockedStaging ? " staging-full"
+                    : writer.blocked_for_space()                       ? " storage-blocked"
+                                                                       : "");
             }
         }
 

@@ -281,6 +281,7 @@ void draw_status(HudCanvas &canvas, const HudState &hud, const LeadInfo &lead) {
     };
     if (!hud.panda_connected || !hud.panda_healthy) warn("PANDA", kAmber);
     if (hud.storage_full) warn("STORAGE FULL", kAmber);
+    if (hud.storage_slow) warn("SD CARD SLOW", kAmber);
     if (lead.radar && !lead.vision) warn(format_text("LEAD %s", lead_text(lead).c_str()), kText);
     if (hud.green_light_alert_armed) draw_traffic_light(canvas, right, y, kChipH);
 }

@@ -228,16 +228,23 @@ TEST(HudState, RecordStateMapping) {
     ASSERT_TRUE(hud.recording);
     ASSERT_FALSE(hud.storage_full);
     r.active = 0;
-    r.storage_blocked = 1;
+    r.storage_blocked = kStorageBlockedSdReserve;
     hud_apply_record_state(r, true, &hud);
     // 저장 공간 때문에 멈추면 REC 대신 저장 공간 경고
     ASSERT_FALSE(hud.recording);
     ASSERT_TRUE(hud.storage_full);
+    ASSERT_FALSE(hud.storage_slow);
+    r.storage_blocked = kStorageBlockedStaging;
+    hud_apply_record_state(r, true, &hud);
+    // 스테이징이 차서(SD가 느려서) 멈추면 STORAGE FULL이 아니라 SD CARD SLOW
+    ASSERT_FALSE(hud.storage_full);
+    ASSERT_TRUE(hud.storage_slow);
     r.active = 1;
     hud_apply_record_state(r, false, &hud);
-    // recordd가 멈춰 스냅샷이 낡으면 둘 다 끈다
+    // recordd가 멈춰 스냅샷이 낡으면 다 끈다
     ASSERT_FALSE(hud.recording);
     ASSERT_FALSE(hud.storage_full);
+    ASSERT_FALSE(hud.storage_slow);
 }
 
 }  // namespace

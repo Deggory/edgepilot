@@ -52,7 +52,8 @@ def recorded(route_dir: Path):
             elif rec.type == rr.RECORD_MODEL_STATE:
                 lay = rec.model_layout()
                 m_t.append(np.frombuffer(rec.payload, "<u8", 1, lay["capture_timestamp_ns"])[0] * 1e-9)
-                rpy.append(np.frombuffer(rec.payload, "<f4", 3, lay["calibration"] + 8).copy())
+                cal = np.frombuffer(rec.payload, rr.CALIBRATION_STATE, 1, lay["calibration"])[0]
+                rpy.append(np.array([cal["roll"], cal["pitch"], cal["yaw"]], np.float32))
                 if "camera_offset_m" in lay:
                     mount.append((np.frombuffer(rec.payload, "<f4", 1, lay["camera_offset_m"])[0],
                                   np.frombuffer(rec.payload, "<f4", 1, lay["camera_height_m"])[0]))

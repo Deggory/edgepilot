@@ -200,9 +200,13 @@ whose image inputs are uint8. How it is built is in
 [axmodel pipeline](../tools/model/axmodel/README.md); the result is committed
 as `models/supercombo.axmodel` and deployed by `scripts/upload_to_board.sh`.
 
-`src/model/ax_engine_session.*` wraps `libax_engine` with a cached CMM buffer
-per tensor: a run flushes the input caches, runs the model, and invalidates the
-output caches. Neither the board image nor the MSP SDK ships engine headers, so
+`src/model/ax_engine_session.*` wraps `libax_engine`. The axmodel file stays
+mapped read-only for the session, and its pages are dropped once the engine
+handle exists (they reload from the file if read again). All inputs share one
+cached CMM block and all outputs another, each tensor at a 4096-byte aligned
+offset, so a run is one cache flush of the inputs, the model, and one
+invalidate of the outputs (an invalidate costs about 40 µs whenever its range
+changes). Neither the board image nor the MSP SDK ships engine headers, so
 `src/model/ax_engine_api.h` declares the API, copied from pyaxengine's cffi
 definitions.
 

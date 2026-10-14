@@ -7,6 +7,7 @@
 #include "common/utils_time.h"
 #include "controls/control_params.h"
 #include "controls/lateral_torque.h"
+#include "controls/road_bank.h"
 #include "recorded_vehicle_can.h"
 #include "recording/event_log_reader.h"
 #include "recording/recorded_model_state.h"
@@ -19,16 +20,13 @@
 
 namespace {
 
-constexpr float kGravity = 9.8f;
+constexpr float kGravity = 9.81f;         // 컨트롤러·학습기와 같다
 constexpr double kVehicleTimeoutS = 0.5;  // ControlTiming 기본값
 // openpilot NNFF future_times. 플랜에서 이 시점의 값을 뽑는다.
 constexpr float kFutureTimes[] = {0.3f, 0.6f, 1.0f, 1.5f};
 constexpr int kFutureCount = 4;
 // 요각 미분 폭(초). 플랜 격자가 근거리에서 촘촘해 이 정도면 안정적이다.
 constexpr float kYawDiffHalfWindowS = 0.15f;
-// 편경사 필터 시정수. lateral_controller.cc와 같다.
-constexpr float kBankRcS = 2.0f;
-constexpr float kBankMinSpeedMps = 8.0f;
 
 // 플랜 격자(model_t)에서 t 시점 값을 선형 보간한다.
 float interp_plan(float t, const float *grid, const float *values) {
@@ -70,8 +68,7 @@ int main(int argc, char **argv) {
     ModelState model{};
     bool have_model = false;
     double model_time_s = -1.0;
-    float bank = 0.0f;
-    bool bank_init = false;
+    RoadBankEstimator road_bank;  // 컨트롤러와 같은 편경사 추정(직선에서만 갱신, 30초 낡으면 0으로)
     double last_row_s = -1.0;
     double route_start_s = -1.0;
     uint64_t rows = 0;
@@ -111,21 +108,14 @@ int main(int argc, char **argv) {
             const bool yaw_fresh =
                 signal_time_fresh(vehicle.esp12_time_s, now_s, kVehicleTimeoutS) && vehicle.yaw_rate_valid;
 
-            // 편경사: lateral_controller와 같은 식/게이트. 다만 이 도구는 100 Hz가
-            // 아니라 ControlState 주기로 돌아 alpha를 dt로 계산한다.
+            // 편경사: 컨트롤러와 같은 추정기를 100 Hz 대신 ControlState 간격(dt)으로 돌린다.
             const double dt = last_row_s < 0.0 ? 0.0 : now_s - last_row_s;
             last_row_s = now_s;
-            if (yaw_fresh && vehicle.lat_accel_valid && std::isfinite(vehicle.lat_accel_mps2) && v > kBankMinSpeedMps &&
-                dt > 0.0 && dt < 0.5) {
-                const float sample = clamp_float(vehicle.lat_accel_mps2 + vehicle.yaw_rate_rad_s * v, -2.0f, 2.0f);
-                if (!bank_init) {
-                    bank = sample;
-                    bank_init = true;
-                } else {
-                    const float alpha = static_cast<float>(dt / (kBankRcS + dt));
-                    bank += alpha * (sample - bank);
-                }
+            if (dt > 0.0 && dt < 0.5) {
+                road_bank.update(static_cast<float>(dt), v, vehicle.lat_accel_mps2, vehicle.lat_accel_valid,
+                                 vehicle.yaw_rate_rad_s, yaw_fresh);
             }
+            const float bank = road_bank.lat_accel();
             const float roll = bank / kGravity;
 
             float future_la[kFutureCount] = {};

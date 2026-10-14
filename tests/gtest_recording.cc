@@ -12,6 +12,7 @@
 #include "recording/state_recorder.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -266,6 +267,7 @@ TEST(RecordingWriter, StorageReserveRefusesClearsAndRetries) {
     writer.set_enabled(true, now);
     ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); }))
         << "4 GiB: 거절하고 STORAGE FULL";
+    EXPECT_EQ(writer.storage_blocked(), kStorageBlockedSdReserve);
     EXPECT_FALSE(writer.active());
     writer.set_enabled(false, now);
     EXPECT_FALSE(writer.blocked_for_space()) << "끄면 이미 거절된 뒤라도 경고가 지워진다";
@@ -308,6 +310,68 @@ TEST(RecordingWriter, StorageReserveRefusesClearsAndRetries) {
     writer.set_enabled(false, now);
     writer.close();
     EXPECT_EQ(list_dir(root + "/recordings").size(), 2u) << "멈춘 route와 다시 시작한 route";
+}
+
+// tmpfs 스테이징 상한(160 MiB): 넘으면 거절하고 SD가 느리다고 알린다(kStorageBlockedStaging, HUD SD CARD SLOW). 상한
+// 밑으로 내려와도 절반(80 MiB) 밑이 될 때까지는 다시 시작하지 않고, 녹화 중 넘으면 멈춘다. SD 여유는 넉넉하게 두고,
+// 스테이징에 쌓인 크기는 sparse 파일로 흉내 낸다(크기는 st_size로 잰다).
+TEST(RecordingWriter, StagingCapStopsAndResumesBelowHalf) {
+    char root_template[] = "/tmp/gtest_recording_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    const std::string staging = root + "/staging";
+    setenv("EDGEPILOT_RECORD_STAGING", staging.c_str(), 1);
+    constexpr uint64_t kMiB = 1024ULL * 1024;
+    constexpr uint64_t kSecond = 1'000'000'000ULL;
+    const auto settle = [](const auto &done) {
+        for (int i = 0; i < 2000 && !done(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return done();
+    };
+    ASSERT_EQ(mkdir(staging.c_str(), 0755), 0);
+    const std::string backlog = staging + "/backlog.bin";
+    const auto stage = [&](uint64_t bytes) {
+        const int fd = ::open(backlog.c_str(), O_CREAT | O_WRONLY, 0644);
+        const bool ok = fd >= 0 && ftruncate(fd, static_cast<off_t>(bytes)) == 0;
+        if (fd >= 0) ::close(fd);
+        return ok;
+    };
+
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
+    writer.set_storage_check([](uint64_t) { return true; });
+    uint64_t now = 10 * kSecond;
+    ASSERT_TRUE(stage(170 * kMiB));
+    writer.set_enabled(true, now);
+    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); })) << "170 MiB: 거절";
+    EXPECT_EQ(writer.storage_blocked(), kStorageBlockedStaging);
+
+    ASSERT_TRUE(stage(100 * kMiB));
+    writer.poll_storage(now += 10 * kSecond);
+    EXPECT_FALSE(writer.requested_enabled()) << "상한 밑이지만 절반을 넘는다";
+    EXPECT_EQ(writer.storage_blocked(), kStorageBlockedStaging);
+    ASSERT_TRUE(stage(70 * kMiB));
+    writer.poll_storage(now += 10 * kSecond);
+    EXPECT_TRUE(writer.requested_enabled()) << "절반 밑이면 다시 녹화한다";
+    EXPECT_EQ(writer.storage_blocked(), 0u);
+    ASSERT_TRUE(settle([&] { return writer.active(); }));
+
+    // 녹화 중 상한을 넘으면 다음 확인(5초 뒤 프레임)에서 멈춘다.
+    const uint8_t codec_config[] = {'C', 'F', 'G', 0x01};
+    writer.set_codec_config(codec_config, sizeof(codec_config));
+    std::vector<uint8_t> packet(64, 0xA0);
+    RoadAiFrame frame;
+    frame.frame_id = 1;
+    frame.timestamp_ns = now;
+    writer.write_encoded_frame(frame, packet.data(), packet.size(), true);
+    ASSERT_TRUE(stage(170 * kMiB));
+    frame.frame_id = 2;
+    frame.timestamp_ns = now + 6 * kSecond;
+    writer.write_encoded_frame(frame, packet.data(), packet.size(), false);
+    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.active(); })) << "녹화 중 스테이징 상한";
+    EXPECT_EQ(writer.storage_blocked(), kStorageBlockedStaging);
+    EXPECT_FALSE(writer.requested_enabled());
+    writer.set_enabled(false, now);
+    EXPECT_EQ(writer.storage_blocked(), 0u) << "끄면 경고를 지운다";
+    writer.close();
+    std::system(("rm -rf '" + root + "'").c_str());
 }
 
 TEST(StateRecorder, WritesEachNewSnapshotOnce) {

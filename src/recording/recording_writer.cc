@@ -34,6 +34,29 @@ constexpr unsigned kMinimumFreePercent = 10;
 // SD로 옮겨지며 공간을 더 쓰므로, 기준에서 바로 다시 시작하면 시작과 정지를 되풀이한다.
 constexpr uint64_t kRetryMarginBytes = 1ULL * 1024 * 1024 * 1024;
 constexpr size_t kFileBufferBytes = 1024 * 1024;
+// 스테이징(tmpfs, 곧 RAM)이 이보다 커지면 SD가 기록을 따라오지 못하는 것이다. 기록을 멈춰 RAM을 지킨다: 보드의
+// /tmp는 224 MB이고 스왑이 없다. 8 Mbit/s에서는 닫힌 세그먼트를 옮기는 동안 최대 약 106 MiB다(옮긴 파일은 다 복사한
+// 뒤에야 지운다). 그래서 recordd의 비트레이트 상한은 10 Mbit/s다.
+constexpr uint64_t kMaxStagingBytes = 160ULL << 20;
+// 스테이징 때문에 멈춘 뒤에는 상한의 절반 밑으로 내려와야 다시 시작한다(SD 쪽 kRetryMarginBytes와 같은 이유: 상한
+// 바로 밑에서 다시 시작하면 몇 초 만에 다시 멈추며 짧은 route를 되풀이해 만든다).
+constexpr uint64_t kStagingResumeBytes = kMaxStagingBytes / 2;
+
+// 디렉토리 아래 파일들의 크기 합(스테이징은 route/segments/NNN/와 events/의 파일 수십 개).
+uint64_t tree_bytes(const std::string &path) {
+    struct stat st{};
+    if (lstat(path.c_str(), &st) != 0) return 0;
+    if (!S_ISDIR(st.st_mode)) return S_ISREG(st.st_mode) ? static_cast<uint64_t>(st.st_size) : 0;
+    uint64_t total = 0;
+    if (DIR *dir = opendir(path.c_str())) {
+        while (const dirent *entry = readdir(dir)) {
+            if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) continue;
+            total += tree_bytes(path + "/" + entry->d_name);
+        }
+        closedir(dir);
+    }
+    return total;
+}
 
 bool make_directories(const std::string &path) {
     if (path.empty()) return false;
@@ -269,7 +292,7 @@ void RecordingWriter::process(PendingWrite &&write) {
         case PendingWrite::Kind::Disable:
             close_route(true);
             // 바로 앞의 Enable이 공간 부족으로 거절됐어도 끈 뒤에는 경고를 남기지 않는다.
-            blocked_for_space_.store(false);
+            storage_blocked_.store(0);
             break;
         case PendingWrite::Kind::CodecConfig:
             codec_config_ = std::move(write.data);
@@ -293,21 +316,31 @@ FILE *RecordingWriter::open_buffered(const std::string &path) {
     return file;
 }
 
-bool RecordingWriter::has_storage_reserve(uint64_t extra_bytes) const {
-    if (storage_check_) return storage_check_(extra_bytes);
+uint32_t RecordingWriter::storage_problem(bool resuming) const {
+    const uint64_t staged = tree_bytes(staging_root_);
+    if (staged > (resuming ? kStagingResumeBytes : kMaxStagingBytes)) {
+        if (!resuming)
+            std::fprintf(stderr, "recordd: staging holds %llu MiB, the SD card is not keeping up\n",
+                         static_cast<unsigned long long>(staged >> 20));
+        return kStorageBlockedStaging;
+    }
+    const uint64_t extra_bytes = resuming ? kRetryMarginBytes : 0;
+    if (storage_check_) return storage_check_(extra_bytes) ? 0 : kStorageBlockedSdReserve;
     struct statvfs space{};
-    if (statvfs(root_.c_str(), &space) != 0 || space.f_blocks == 0) return false;
+    if (statvfs(root_.c_str(), &space) != 0 || space.f_blocks == 0) return kStorageBlockedSdReserve;
     const uint64_t block_size = space.f_frsize ? space.f_frsize : space.f_bsize;
     const uint64_t free_bytes = block_size * space.f_bavail;
     const uint64_t total_bytes = block_size * space.f_blocks;
-    return free_bytes >= kMinimumFreeBytes + extra_bytes && free_bytes * 100ULL >= total_bytes * kMinimumFreePercent;
+    const bool reserve =
+        free_bytes >= kMinimumFreeBytes + extra_bytes && free_bytes * 100ULL >= total_bytes * kMinimumFreePercent;
+    return reserve ? 0 : kStorageBlockedSdReserve;
 }
 
 void RecordingWriter::set_enabled(bool enabled, uint64_t now_ns) {
     config_enabled_ = enabled;
     if (!enabled) {
         // 공간 부족으로 거절된 뒤라 이미 꺼져 있어도 경고는 지운다.
-        blocked_for_space_.store(false);
+        storage_blocked_.store(0);
         if (!requested_enabled_.exchange(false)) return;
         PendingWrite write;
         write.kind = PendingWrite::Kind::Disable;
@@ -315,7 +348,7 @@ void RecordingWriter::set_enabled(bool enabled, uint64_t now_ns) {
         return;
     }
     if (requested_enabled_.exchange(true)) return;
-    blocked_for_space_.store(false);
+    storage_blocked_.store(0);
     PendingWrite write;
     write.kind = PendingWrite::Kind::Enable;
     write.timestamp_ns = now_ns;
@@ -323,13 +356,16 @@ void RecordingWriter::set_enabled(bool enabled, uint64_t now_ns) {
 }
 
 void RecordingWriter::poll_storage(uint64_t now_ns) {
-    if (!config_enabled_ || requested_enabled_.load() || !blocked_for_space_.load()) return;
+    if (!config_enabled_ || requested_enabled_.load() || storage_blocked_.load() == 0) return;
     if (now_ns < next_storage_retry_ns_) return;
     next_storage_retry_ns_ = now_ns + kStorageCheckIntervalNs;
-    if (!has_storage_reserve(kRetryMarginBytes)) return;
+    if (const uint32_t problem = storage_problem(true)) {
+        storage_blocked_.store(problem);  // 막는 까닭이 바뀌었을 수 있다(스테이징이 빠진 뒤 SD 여유)
+        return;
+    }
     std::fprintf(stderr, "recordd: storage reserve is back, recording again\n");
     requested_enabled_.store(true);
-    blocked_for_space_.store(false);
+    storage_blocked_.store(0);
     PendingWrite write;
     write.kind = PendingWrite::Kind::Enable;
     write.timestamp_ns = now_ns;
@@ -337,9 +373,11 @@ void RecordingWriter::poll_storage(uint64_t now_ns) {
 }
 
 bool RecordingWriter::start_route(uint64_t now_ns) {
-    if (!make_directories(root_) || !has_storage_reserve()) {
-        std::fprintf(stderr, "recordd: recording refused: storage reserve is below 5 GiB/10%%\n");
-        blocked_for_space_.store(true);
+    const uint32_t problem = make_directories(root_) ? storage_problem(false) : kStorageBlockedSdReserve;
+    if (problem != 0) {
+        std::fprintf(stderr, "recordd: recording refused: %s\n",
+                     problem == kStorageBlockedStaging ? "tmpfs staging full" : "SD reserve below 5 GiB/10%");
+        storage_blocked_.store(problem);
         active_.store(false);
         return false;
     }
@@ -428,11 +466,12 @@ void RecordingWriter::write_encoded_frame_impl(const RoadAiFrame &frame, const u
     if (!event_file_) return;
     if (frame.timestamp_ns >= next_storage_check_ns_) {
         next_storage_check_ns_ = frame.timestamp_ns + kStorageCheckIntervalNs;
-        if (!has_storage_reserve()) {
-            blocked_for_space_.store(true);
+        if (const uint32_t problem = storage_problem(false)) {
+            storage_blocked_.store(problem);
             requested_enabled_.store(false);
             close_route(true);
-            std::fprintf(stderr, "recordd: recording stopped to preserve storage reserve\n");
+            std::fprintf(stderr, "recordd: recording stopped: %s\n",
+                         problem == kStorageBlockedStaging ? "tmpfs staging full" : "SD reserve below 5 GiB/10%");
             return;
         }
     }

@@ -11,10 +11,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
-from recording_reader import RECORD_CAN_RX, iter_event_records  # noqa: E402
+from recording_reader import RECORD_CAN_RX, can_frames, iter_event_records  # noqa: E402
 
-BATCH_HEADER = struct.Struct("<II")        # RecordedCanBatchHeader
-RECORDED_FRAME = struct.Struct("<IIIII64s")  # RecordedCanFrame
 FIXTURE_MAGIC = b"EDGECAN1"
 FIXTURE_RECORD = struct.Struct("<QIBB8s2x")  # 열: timestamp_us, address, bus, len, data, pad
 
@@ -24,15 +22,10 @@ def export(src: Path, dst: Path) -> tuple[int, float]:
     for rec in iter_event_records(src):
         if rec.type != RECORD_CAN_RX:
             continue
-        count, _dropped = BATCH_HEADER.unpack_from(rec.payload, 0)
-        pos = BATCH_HEADER.size
-        for _ in range(count):
-            if pos + RECORDED_FRAME.size > len(rec.payload):
-                break
-            address, bus, _bus_time, length, _flags, raw = RECORDED_FRAME.unpack_from(rec.payload, pos)
-            pos += RECORDED_FRAME.size
-            if length <= 8:
-                frames.append((rec.timestamp_ns, address, bus, length, raw[:8]))
+        for frame in can_frames(rec.payload):
+            if frame["data_len"] <= 8:
+                frames.append((rec.timestamp_ns, int(frame["address"]), int(frame["src"]), int(frame["data_len"]),
+                               frame["data"][:8].tobytes()))
     if not frames:
         raise ValueError(f"{src}: no CAN frames")
     start_ns = frames[0][0]

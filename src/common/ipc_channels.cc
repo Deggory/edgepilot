@@ -5,11 +5,81 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#endif
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+
+namespace {
+
+// futex 대기 한 번의 상한. 깨우지 않는 생산자라도 이 안에 데이터를 보고, 이 시간 초과로 그런 생산자를 알아챈다.
+constexpr uint64_t kMaxFutexWaitNs = 100000000ULL;
+
+// 기다리는 쪽을 깨운다. waiters 셈은 보지 않고 늘 FUTEX_WAKE를 부른다: 다른 빌드가 머리를 다시 초기화(memset)하면
+// 기다리는 중의 셈이 어긋나(0 밑으로 감겨) 깨움을 영영 빠뜨릴 수 있다. 기다리는 이가 없으면 syscall 하나(약 1 µs)다.
+void wake_all(std::atomic<uint32_t> *word) {
+    word->fetch_add(1);
+#if defined(__linux__)
+    syscall(SYS_futex, reinterpret_cast<uint32_t *>(word), FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0);
+#endif
+}
+
+}  // namespace
+
+template <class StillWaiting>
+void WakeWaiter::wait(std::atomic<uint32_t> *word, std::atomic<uint32_t> *waiters, uint64_t timeout_ns,
+                      StillWaiting still_waiting, const std::string &name) {
+#if defined(__linux__)
+    if (polling_) {
+        if (word->load() == polled_word_) {
+            usleep(1000);
+            return;
+        }
+        polling_ = false;  // 생산자가 다시 깨운다(새 빌드로 다시 떴다)
+        std::fprintf(stderr, "ipc: %s producer wakes again, waiting on futex\n", name.c_str());
+    }
+    // waiters는 이 방식 전 빌드의 생산자(waiters가 0이면 깨우지 않았다)를 위해 계속 센다.
+    waiters->fetch_add(1);
+    const uint32_t before = word->load();
+    bool timed_out = false;
+    if (still_waiting()) {
+        const uint64_t ns = std::min(timeout_ns, kMaxFutexWaitNs);
+        timespec relative{static_cast<time_t>(ns / 1000000000ULL), static_cast<long>(ns % 1000000000ULL)};
+        // 공유 메모리라 FUTEX_PRIVATE_FLAG는 쓰지 않는다. 깨움·시간 초과·신호 어느 것이든 돌아가 호출자가 다시 본다.
+        timed_out =
+            syscall(SYS_futex, reinterpret_cast<uint32_t *>(word), FUTEX_WAIT, before, &relative, nullptr, 0) != 0 &&
+            errno == ETIMEDOUT;
+    }
+    waiters->fetch_sub(1);
+    // 시간 초과로 깼는데 그사이 데이터가 왔고 깨움 단어가 그대로면 생산자가 깨우지 않는 빌드다. 막 발행하던(데이터를 쓰고
+    // 깨우기 직전인) 새 생산자를 잘못 보지 않게 1 ms 뒤 한 번 더 본다.
+    if (timed_out && !still_waiting() && word->load() == before) {
+        usleep(1000);
+        if (word->load() == before) {
+            polling_ = true;
+            polled_word_ = before;
+            std::fprintf(stderr, "ipc: %s producer does not wake (older build?), polling every 1 ms\n", name.c_str());
+        }
+    }
+#else
+    (void)word;
+    (void)waiters;
+    (void)timeout_ns;
+    (void)still_waiting;
+    (void)name;
+    (void)polling_;
+    (void)polled_word_;
+    usleep(1000);
+#endif
+}
 
 // ---- ShmRegion ----
 
@@ -220,11 +290,11 @@ bool LatestChannel::open(const char *name, size_t payload_capacity, bool create)
         header_->magic = kIpcMagic;
         header_->version = kIpcVersion;
         header_->payload_capacity = static_cast<uint32_t>(payload_capacity);
-        header_->reserved0 = 0;
+        header_->wake.store(0);
         header_->seq.store(0, std::memory_order_release);
         header_->timestamp_ns.store(0, std::memory_order_release);
         header_->payload_size.store(0, std::memory_order_release);
-        header_->reserved1 = 0;
+        header_->waiters.store(0);
         std::memset(payload_, 0, payload_capacity);
     }
     // 다른 빌드의 레이아웃이 남은 채널은 매핑도 풀어 valid()가 거짓이게 한다(CanQueue·FrameRing과 같다).
@@ -243,14 +313,34 @@ void LatestChannel::close() {
 bool LatestChannel::publish(const void *payload, size_t payload_size) {
     if (!header_ || !payload || payload_size > header_->payload_capacity) return false;
 
-    uint64_t seq = header_->seq.load(std::memory_order_acquire);
+    uint64_t seq = header_->seq.load(std::memory_order_relaxed);
     if ((seq & 1ULL) != 0) ++seq;
-    header_->seq.store(seq + 1, std::memory_order_release);
+    header_->seq.store(seq + 1, std::memory_order_relaxed);
+    // 홀수 seq가 아래 페이로드 쓰기보다 먼저 보이게 한다. release 저장만으로는 뒤의 쓰기가 앞당겨질 수 있다(ARM은
+    // 약한 순서). FrameRing::begin_write와 같다.
+    std::atomic_thread_fence(std::memory_order_release);
     std::memcpy(payload_, payload, payload_size);
     header_->payload_size.store(static_cast<uint32_t>(payload_size), std::memory_order_release);
     header_->timestamp_ns.store(monotonic_now_ns(), std::memory_order_release);
     header_->seq.store(seq + 2, std::memory_order_release);
+    // 새 seq를 쓴 뒤 깨운다. 기다리는 쪽은 깨움 단어를 읽은 뒤 seq를 다시 보고 잠들므로 이 순서면 깨움을 놓치지 않는다.
+    wake_all(&header_->wake);
     return true;
+}
+
+void LatestChannel::wait_publish(uint64_t seen_seq, uint64_t timeout_ns) const {
+    if (!header_) {
+        usleep(1000);
+        return;
+    }
+    // 발행이 진행 중(홀수 seq)이어도 기다린다. 다 쓴 뒤 깨우므로, 그 사이의 시간 초과를 깨우지 않는 생산자로 보지 않는다.
+    waiter_.wait(
+        &header_->wake, &header_->waiters, timeout_ns,
+        [&] {
+            const uint64_t seq = header_->seq.load();
+            return seq == seen_seq || (seq & 1ULL) != 0;
+        },
+        name_);
 }
 
 bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) const {
@@ -261,7 +351,9 @@ bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) 
         const uint32_t payload_size = header_->payload_size.load(std::memory_order_acquire);
         if (payload_size == 0 || payload_size > payload_capacity) return false;
         std::memcpy(payload, payload_, payload_size);
-        const uint64_t after = header_->seq.load(std::memory_order_acquire);
+        // 복사한 읽기가 뒤의 seq 확인보다 늦게 끝나지 않게 한다(FrameRing::read와 같다).
+        std::atomic_thread_fence(std::memory_order_acquire);
+        const uint64_t after = header_->seq.load(std::memory_order_relaxed);
         if (before == after && (after & 1ULL) == 0) {
             if (seq) *seq = after;
             return true;
@@ -271,17 +363,23 @@ bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) 
 }
 
 bool LatestChannel::read_new(uint64_t *last_seq, void *payload, size_t payload_capacity, int timeout_ms) const {
-    const uint64_t start = monotonic_now_ns();
     const uint64_t timeout_ns = timeout_ms < 0 ? UINT64_MAX : static_cast<uint64_t>(timeout_ms) * 1000000ULL;
+    uint64_t start = 0;  // 기다려야 할 때만 시계를 읽는다(CLOCK_BOOTTIME은 이 보드에서 진짜 syscall이다)
     while (true) {
+        // seq가 그대로면 페이로드를 복사하지 않는다(폴링하는 쪽이 대부분 이 경우다)
+        const uint64_t current = header_ ? header_->seq.load(std::memory_order_acquire) : 0;
+        const bool unchanged = header_ && last_seq && current == *last_seq;
         uint64_t seq = 0;
-        if (read(payload, payload_capacity, &seq) && (!last_seq || seq != *last_seq)) {
+        if (!unchanged && read(payload, payload_capacity, &seq) && (!last_seq || seq != *last_seq)) {
             if (last_seq) *last_seq = seq;
             return true;
         }
         if (timeout_ms == 0) return false;
-        if (timeout_ms > 0 && monotonic_now_ns() - start >= timeout_ns) return false;
-        usleep(1000);
+        const uint64_t now = monotonic_now_ns();
+        if (start == 0) start = now;
+        const uint64_t elapsed = now - start;
+        if (timeout_ms > 0 && elapsed >= timeout_ns) return false;
+        wait_publish(current, timeout_ms > 0 ? timeout_ns - elapsed : kMaxFutexWaitNs);
     }
 }
 
@@ -370,14 +468,31 @@ void CanQueue::reset() {
     }
 }
 
+namespace {
+
+// 머리와 채운 프레임만 옮긴다. 배치 하나가 21.5 KB(프레임 256개)라 통째로 복사하면 10 ms마다 몇십 개를 위해
+// 다 옮기게 된다. 받는 쪽은 count까지만 읽는다(넘는 count는 자른다).
+void copy_can_batch(CanBatch *to, const CanBatch &from) {
+    const uint32_t count = std::min<uint32_t>(from.count, kCanBatchMaxFrames);
+    to->timestamp_ns = from.timestamp_ns;
+    to->valid = from.valid;
+    to->count = count;
+    to->dropped = from.dropped;
+    to->reserved = from.reserved;
+    std::memcpy(to->frames, from.frames, count * sizeof(IpcCanFrame));
+}
+
+}  // namespace
+
 bool CanQueue::push(const CanBatch &batch) {
     if (!header_ || !slots_) return false;
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_relaxed);
     const uint64_t read_seq = header_->read_seq.load(std::memory_order_acquire);
     if (write_seq - read_seq >= header_->slot_count) return false;
 
-    slots_[write_seq % header_->slot_count] = batch;
+    copy_can_batch(&slots_[write_seq % header_->slot_count], batch);
     header_->write_seq.store(write_seq + 1, std::memory_order_release);
+    wake_all(&header_->wake);  // 기다리는 소비자(pandad 송신 스레드)를 깨운다
     return true;
 }
 
@@ -387,12 +502,29 @@ bool CanQueue::pop(CanBatch *batch) {
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_acquire);
     if (read_seq == write_seq) return false;
     if (write_seq < read_seq || write_seq - read_seq > header_->slot_count) {
+        // 정상이면 생길 수 없는 인덱스(생산자 reset과 꺼내기가 겹친 경우 등). 소비자 몫인 읽기 위치를 쓰기 위치에 맞춰
+        // 큐를 비운다. 그대로 두면 push도 계속 가득 찼다고 실패한다.
+        header_->read_seq.store(write_seq, std::memory_order_release);
         return false;
     }
 
-    *batch = slots_[read_seq % header_->slot_count];
+    copy_can_batch(batch, slots_[read_seq % header_->slot_count]);
     header_->read_seq.store(read_seq + 1, std::memory_order_release);
     return true;
+}
+
+bool CanQueue::pop_wait(CanBatch *batch, uint64_t timeout_ns) {
+    if (pop(batch)) return true;
+    if (!header_) return false;
+    const uint64_t start = monotonic_now_ns();
+    while (true) {
+        const uint64_t elapsed = monotonic_now_ns() - start;
+        if (elapsed >= timeout_ns) return false;
+        waiter_.wait(
+            &header_->wake, &header_->waiters, timeout_ns - elapsed,
+            [&] { return header_->write_seq.load() == header_->read_seq.load(); }, name_);
+        if (pop(batch)) return true;
+    }
 }
 
 uint64_t CanQueue::depth() const {

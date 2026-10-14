@@ -122,9 +122,10 @@ The mode chip reads `LANE` or `LANELESS` while control is active, `READY` or
   and a Wi-Fi fan lit by signal, or `OFFLINE` unless a `wlan` link is
   associated with an AP. The USB link does not count.
 - **Chips** below the pill only when they apply: `PANDA` (not connected or not
-  healthy), `STORAGE FULL`, and a lead that only the car's SCC radar sees
-  (`LEAD` and its distance). The K7 has no SCC radar, so that chip never shows
-  on it.
+  healthy), `STORAGE FULL` (SD reserve exhausted), `SD CARD SLOW` (recording
+  stopped because the tmpfs staging filled), and a lead that only the car's
+  SCC radar sees (`LEAD` and its distance). The K7 has no SCC radar, so that
+  chip never shows on it.
 - **Green-light wait** as a traffic-light icon (red lamp lit) while the
   green-light alert is armed
   ([Departure alerts](departure-alerts.md#green-light)).

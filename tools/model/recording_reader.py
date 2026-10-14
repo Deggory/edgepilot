@@ -129,6 +129,34 @@ CALIBRATION_STATE = np.dtype([
     ("spread", "<f4", (3,)),
 ])
 
+# ModelState.pose: 모델의 카메라 오도메트리(ipc_messages.h PoseState). model_layout()["pose"]에서 읽는다.
+POSE_STATE = np.dtype([
+    ("valid", "<u4"),
+    ("trans", "<f4", (3,)),
+    ("rot", "<f4", (3,)),
+    ("trans_std", "<f4", (3,)),
+    ("rot_std", "<f4", (3,)),
+])
+
+# CanRx·CanTx 레코드: RecordedCanBatchHeader(count, dropped) 뒤에 RecordedCanFrame count개(recording_format.h).
+# can_frames()로 읽는다.
+RECORDED_CAN_BATCH_HEAD = struct.Struct("<II")
+RECORDED_CAN_FRAME = np.dtype([
+    ("address", "<u4"),
+    ("src", "<u4"),
+    ("bus_time", "<u4"),
+    ("data_len", "<u4"),
+    ("flags", "<u4"),
+    ("data", "u1", (64,)),
+])
+
+
+def can_frames(payload: bytes) -> np.ndarray:
+    """CanRx·CanTx 레코드 페이로드의 프레임들(잘린 레코드면 들어 있는 만큼)."""
+    count, _dropped = RECORDED_CAN_BATCH_HEAD.unpack_from(payload, 0)
+    count = min(count, (len(payload) - RECORDED_CAN_BATCH_HEAD.size) // RECORDED_CAN_FRAME.itemsize)
+    return np.frombuffer(payload, RECORDED_CAN_FRAME, count, RECORDED_CAN_BATCH_HEAD.size)
+
 # ModelState.flow_calibration(v10+): 광류 보정기의 상태, 각도는 rad. v10은 앞 56바이트를 기록했고,
 # v11이 mount_changes, window_parallax(px), estimate_blocks, rejected_windows를 덧붙였다. sd_*는
 # 블록 중앙값들의 표준편차다. v10은 같은 자리에 그 범위(max - min)를 저장했다.

@@ -620,6 +620,20 @@ TEST(LateralLearners, TorqueGates) {
     }
 }
 
+// 새 점이 없으면(주차 중이라 입력이 없으면) 처음 한 번 뒤로는 저장하지 않는다. 점이 그대로인 동안 필터값만
+// 수렴해 바뀌는 캐시를 12초마다 다시 쓰지 않게 한다.
+TEST(LateralLearners, TorqueCacheSavedOnlyAfterNewPoints) {
+    TorqueEstimator est(prior(), kTorqueLag, 5);
+    int saves = 0;
+    for (long i = 0; i < 60000; ++i) {  // 100 Hz로 600 s, 입력 없음
+        TorqueEstimatorInput in;
+        in.t_s = i * 0.01;
+        est.update(in);
+        saves += est.persist_due() ? 1 : 0;
+    }
+    EXPECT_EQ(saves, 1);
+}
+
 TEST(LateralLearners, TorqueScheduleAndCache) {
     TorqueTruth tr;
     const TorqueTuning tuning = prior();
@@ -633,7 +647,8 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
         const bool published = est.update(torque_input(tr, i * 0.01));
         if (i % 5 != 0) continue;
         ++frame;
-        ASSERT_EQ(est.persist_due(), (frame % 240 == 0)) << "첫 프레임부터 240프레임마다 캐시한다";
+        ASSERT_EQ(est.persist_due(), (frame % 240 == 0))
+            << "첫 프레임부터 240프레임마다 캐시한다(주행 중에는 늘 새 점이 있다)";
         ASSERT_EQ(published, (frame % 5 == 0)) << "5프레임마다 발행한다";
         if (!est.persist_due()) continue;
         if (frame == 2400) calibrating_cache = est.cache();  // 120초: 계산 가능, 아직 무효
