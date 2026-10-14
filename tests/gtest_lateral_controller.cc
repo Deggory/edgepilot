@@ -20,6 +20,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1050,6 +1051,78 @@ TEST(LateralController, DriverTakeoverHoldsUntilCentered) {
     ASSERT_FALSE(result.large_angle_hold);
     ASSERT_FALSE(result.large_angle_hold_by_driver);
     ASSERT_LE(std::abs(result.apply_torque), sp.steer_delta_up);
+}
+
+// 운전자가 85도를 잠깐 넘겨 넘겨받았어도 커브를 붙잡고 있으면(램프): 핸들이 80도 아래이고 계획이 지금 핸들과 같은
+// 커브(곡률 ±25%)를 1초 가리키면 다시 조향하고, 토크는 0부터 커브 쪽으로 올린다. 80도 위나 계획이 직진에 가까우면
+// (교차로 탈출) 핸들을 잡고 있어도 15도 규칙대로 쉰다.
+TEST(LateralController, DriverHoldingThePlannedCurveResumes) {
+    LateralControllerConfig config;
+    config.force_engaged = true;
+    config.timing.vehicle_state_timeout_ms = 2000;
+    const SteeringParams &sp = config.steering_params;
+    constexpr float kSpeedKph = 35.0f;
+    // 오른쪽 70도가 내는 곡률을 그대로 이어 가는 계획(곡률 일정: psi = k·v·t)
+    TorqueController model;
+    const float held_curvature = model.curvature_at_angle(kSpeedKph / 3.6f, -70.0f, sp);
+    ASSERT_GT(held_curvature, 0.0f) << "오른쪽 = 양의 곡률(제어 부호)";
+    const auto curve_target = [](float curvature) {
+        LateralTarget target;
+        target.valid = true;
+        target.mpc_solution_valid = true;
+        for (int i = 0; i < kLateralControlN; ++i) {
+            target.curvatures[i] = curvature;
+            target.psis[i] = curvature * (kSpeedKph / 3.6f) * model_t_idx(i);
+        }
+        return target;
+    };
+    auto run = [&](float plan_curvature, float held_angle) {
+        LateralController controller(config);
+        VehicleCanState vehicle = ready_vehicle();
+        vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = kSpeedKph;
+        vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = kSpeedKph;
+        vehicle.cluster_speed_raw = kSpeedKph + 2.0f;
+        const LateralTarget target = curve_target(plan_curvature);
+        int frame = 0;
+        auto step = [&](float angle, int driver_torque) {
+            vehicle.steering_angle_deg = angle;
+            vehicle.driver_torque = driver_torque;
+            const int f = frame++;
+            stamp_can_times(&vehicle, 1.0 + f * 0.01);
+            return controller.update(replay_path(), target, vehicle, 1.0 + f * 0.01, f);
+        };
+        LateralControlResult result;
+        for (int i = 0; i < 200; ++i) result = step(-20.0f, 0);
+        EXPECT_TRUE(result.lat_active);
+        // 운전자가 95도까지 감아 85도 위에 머물면 요청을 끄고 운전자가 넘겨받은 정지가 된다
+        for (int i = 0; i < sp.avoid_lkas_fault_max_frames + 20; ++i) result = step(-95.0f, -300);
+        EXPECT_TRUE(result.large_angle_hold_by_driver);
+        // 82도: 85도 아래지만 다시 켜는 80도 위
+        for (int i = 0; i < 100; ++i) {
+            result = step(-82.0f, -300);
+            EXPECT_TRUE(result.large_angle_hold) << "82도 " << i;
+        }
+        int resumed = -1;
+        LateralControlResult first;
+        for (int i = 0; i < 300 && resumed < 0; ++i) {
+            first = step(held_angle, -300);
+            if (!first.large_angle_hold) resumed = i;
+        }
+        for (int i = 0; i < 50; ++i) result = step(held_angle, -300);
+        return std::make_pair(resumed, std::make_pair(first, result));
+    };
+
+    const auto [resumed, results] = run(held_curvature, -70.0f);
+    const auto &[first, later] = results;
+    EXPECT_EQ(resumed, 99) << "80도 아래에서 계획이 맞은 지 1초(100프레임)째";
+    EXPECT_TRUE(first.lat_active);
+    EXPECT_FALSE(first.large_angle_hold_by_driver);
+    EXPECT_LE(std::abs(first.apply_torque), sp.steer_delta_up) << "토크는 0부터 올린다";
+    EXPECT_LT(later.apply_torque, -50) << "0.5초 뒤 커브(오른쪽, 각도와 같은 음의 토크)를 돕는다";
+    EXPECT_FALSE(later.large_angle_hold);
+    EXPECT_EQ(run(held_curvature * 0.6f, -70.0f).first, -1) << "계획이 커브보다 훨씬 완만하면 쉰다";
+    EXPECT_EQ(run(-held_curvature, -70.0f).first, -1) << "계획이 반대쪽이면 쉰다";
+    EXPECT_EQ(run(held_curvature, -50.0f).first, -1) << "핸들이 계획보다 많이 풀렸으면(계획이 1.4배) 쉰다";
 }
 
 // 운전자가 핸들을 잡지 않으면 컨트롤러 목표를 avoid_lkas_fault_hold_angle_deg(80도) 조향각이 내는

@@ -27,10 +27,10 @@ HudAlertCard hud_select_alert(const HudState &hud, bool model_ok) {
     if (hud.steering_fault) return {"STEERING FAULT", links, HudAlertLevel::critical};
     if (hud.panda_faults != 0) return {"PANDA FAULT", links, HudAlertLevel::critical};
     if (hud.controller_active && hud.steer_paused)
-        return {
-            "STEERING PAUSED",
-            hud.steer_paused_by_driver ? "Resumes when you let go below 15\xb0" : "Wheel past 85\xb0, resumes below it",
-            HudAlertLevel::caution};
+        return {"STEERING PAUSED",
+                hud.steer_paused_by_driver ? "Resumes on the planned curve or below 15\xb0"
+                                           : "Wheel past 85\xb0, resumes below it",
+                HudAlertLevel::caution};
     if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", HudAlertLevel::caution};
     if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, HudAlertLevel::caution};
     if (hud.controller_active && hud.lane_change == 1) {

@@ -398,7 +398,7 @@ constexpr uint32_t kHudFlagLaneChangePending = 1U << 4;    // 차선 변경 대�
 constexpr uint32_t kHudFlagLaneChanging = 1U << 5;         // 차선 변경 중(시작·마무리)
 constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;      // 차선 변경 방향(없으면 왼쪽)
 constexpr uint32_t kHudFlagSteerPaused = 1U << 7;          // 85도 위에서 조향 요청을 끄고 쉰다
-constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받아 15도 아래에서 손을 떼야 다시 조향
+constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받음: 15도 아래 손 뗌 또는 계획 커브 1초
 constexpr uint32_t kHudFlagBrakeLights = 1U << 9;  // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
 
 struct ControlState {

@@ -353,7 +353,7 @@
   "param.steering.steer_actuator_delay.decrease": "조향 선행량이 줄어 커브 반응이 늦어질 수 있습니다.",
   "param.steering.steer_actuator_delay.learned_role": "lagd 추정이 확정(5블록, 블록 사이 편차 0.1초 이하)되기 전, 무효가 됐을 때, locationd 상태가 2초 넘게 끊겼을 때 이 값을 씁니다. 추정 자체는 이 값의 영향을 받지 않습니다.",
   "param.steering.avoid_lkas_fault_enabled.label": "LKAS fault 회피",
-  "param.steering.avoid_lkas_fault_enabled.description": "steer request를 낸 채 핸들이 85도 위에 머물면 MDPS fault 전에(0.89초 안에) 토크를 0까지 줄이고 request를 끈 뒤, 85도 아래로 돌아올 때까지 끈 채로 둡니다(85도 위에서는 다시 켜지 않습니다). 운전자가 넘겨받아 돌린 회전이면 핸들이 15도 아래로 오고 손을 뗄 때까지 끕니다. '스스로 가는 최대 조향각' 제한도 이 스위치가 켜져 있을 때만 동작합니다.",
+  "param.steering.avoid_lkas_fault_enabled.description": "steer request를 낸 채 핸들이 85도 위에 머물면 MDPS fault 전에(0.89초 안에) 토크를 0까지 줄이고 request를 끈 뒤, 85도 아래로 돌아올 때까지 끈 채로 둡니다(85도 위에서는 다시 켜지 않습니다). 운전자가 넘겨받아 돌린 회전이면 핸들이 15도 아래로 오고 손을 뗄 때까지, 또는 80도 아래에서 1초 동안 계획한 커브를 따를 때까지(운전자가 붙잡은 램프) 끕니다. '스스로 가는 최대 조향각' 제한도 이 스위치가 켜져 있을 때만 동작합니다.",
   "param.steering.avoid_lkas_fault_enabled.increase": "켜면 85도 위에서 약 0.35초 토크를 유지하다 0.89초까지 0으로 줄이고 request를 끕니다(HUD STEERING PAUSED).",
   "param.steering.avoid_lkas_fault_enabled.decrease": "끄면 openpilot 방식으로 85도 위에서 0.89초마다 request를 2프레임 끊고 토크는 계속 냅니다. 최대 조향각 제한도 꺼집니다. 일부 MDPS는 끊었던 request를 다시 켜는 순간 fault를 냅니다.",
   "param.steering.avoid_lkas_fault_hold_angle_deg.label": "스스로 가는 최대 조향각",

@@ -12,6 +12,14 @@ namespace {
 constexpr double kPandaEngageGraceS = 1.0;
 // 운전자가 넘겨받은 큰 회전에서 조향을 다시 켜는 각도(carrotpilot lat_suspend_control의 resume_angle)
 constexpr float kDriverReleaseAngleDeg = 15.0f;
+// 운전자가 넘겨받은 정지라도 핸들이 고장 각도(85도)보다 이만큼 아래이고 계획 곡률이 지금 핸들 곡률의 ±25% 안(같은 쪽)인
+// 채로 1초 가면 다시 조향한다. 램프처럼 운전자가 85도를 잠깐 넘긴 뒤 커브를 붙잡고 있는 경우다. 교차로를 빠져나오며
+// 펴는 핸들은 계획(직진)과 어긋나 그대로 쉰다: 2026-10-03 2:54 탈출은 계획이 직진인데 핸들이 77도인 채 다시 켜져
+// 최대 토크로 핸들을 밀었다. 0.3초면 탈출 중 잠깐 멈춘 핸들에서도 켜졌다(녹화 15개 재생: 0.3초 26번 중 25번이 교차로
+// 탈출, 1초는 9번 중 8번이고 기존보다 0.5~2.2초 일찍. 2026-10-05 16:46 램프는 두 경우 다 켜져 7~10초 일찍 돕는다).
+constexpr float kHeldTurnResumeMarginDeg = 5.0f;
+constexpr float kHeldTurnPlanTolerance = 0.25f;
+constexpr int kHeldTurnResumeFrames = 100;
 
 float interp_lateral(float x, const float *values) {
     if (x <= 0.0f) return values[0];
@@ -122,8 +130,10 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     // MDPS가 고장을 알리는 동안은 요청을 내리지 않는다(상류 latActive=false면 요청 비트도 0)
     const bool steer_request = (result.active || steer_availability_hold_) && !result.steer_fault;
     result.cut_steer_temp = update_cut_steer_state(steer_request, vehicle_state.steering_angle_deg);
+    const bool plan_matches = large_angle_hold_ && driver_took_wheel_ &&
+                              plan_matches_wheel(target, speed_mps, plan_age, vehicle_state.steering_angle_deg, live);
     result.large_angle_hold =
-        update_large_angle_hold(steer_request, vehicle_state.steering_angle_deg, steering_pressed);
+        update_large_angle_hold(steer_request, vehicle_state.steering_angle_deg, steering_pressed, plan_matches);
     result.large_angle_hold_by_driver = result.large_angle_hold && driver_took_wheel_;
     // 상류 latActive: 정차(최소 조향 속도·0.3 m/s 이하 또는 바퀴 정지)와 MDPS 일시 고장에서는 조향하지 않는다.
     // 큰 조향각에서 요청을 끈 동안도 활성이라도 조향을 쉰다.
@@ -434,23 +444,32 @@ bool LateralController::update_steer_fault_alert(bool steer_fault, bool steering
 // 요청을 다시 켜는 순간 3~14 ms 뒤 고장을 냈고(2026-10-03, 4번 중 4번), 정차 대기 중에는 세지도
 // 않아 1초 뒤 고장이 났다. 그래서 85도 위에서는 요청을 새로 켜지 않는다(결합이나 차단 해제가
 // 85도 위에서 일어나도 같다).
-// 끈 요청은 85도 아래로 오면 다시 켠다. 다만 그 체류 중 운전자가 핸들을 돌렸으면(넘겨받은 회전)
-// 핸들이 kDriverReleaseAngleDeg(15도) 아래로 오고 손을 뗄 때까지 끈 채로 둔다(carrotpilot
-// lat_suspend_control과 같은 해제 조건). 회전을 빠져나오며 핸들을 펴는 운전자를 시스템이 미리
-// 밀지 않는다(2026-10-03 2:54 탈출에서 최대 213).
-bool LateralController::update_large_angle_hold(bool steer_requested, float steering_angle_deg, bool steering_pressed) {
+// 끈 요청은 85도 아래로 오면 다시 켠다. 다만 그 체류 중 운전자가 핸들을 돌렸으면(넘겨받은 회전) 핸들이
+// kDriverReleaseAngleDeg(15도) 아래로 오고 손을 떼거나(carrotpilot lat_suspend_control과 같은 해제 조건), 80도
+// 아래에서 계획이 지금 핸들과 같은 커브를 1초 가리킬 때까지 끈 채로 둔다. 회전을 빠져나오며 핸들을 펴는 운전자를
+// 시스템이 미리 밀지 않고(2026-10-03 2:54 탈출에서 최대 213), 램프에서 85도를 잠깐 넘긴 뒤 커브를 붙잡은 운전자에게는
+// 커브가 끝날 때까지 손을 놓게 하지 않는다(2026-10-05 16:46 램프는 14초 동안 토크 0).
+bool LateralController::update_large_angle_hold(bool steer_requested, float steering_angle_deg, bool steering_pressed,
+                                                bool plan_matches_wheel) {
     const SteeringParams &params = config_.steering_params;
     const float angle = std::fabs(steering_angle_deg);
     const bool above = params.avoid_lkas_fault_enabled && angle >= params.avoid_lkas_fault_max_angle_deg;
     if (above && steer_requested && steering_pressed) driver_took_wheel_ = true;
     if (!above) {
         fault_angle_frames_ = 0;
-        if (large_angle_hold_ && driver_took_wheel_ && (angle >= kDriverReleaseAngleDeg || steering_pressed))
-            return true;
+        if (large_angle_hold_ && driver_took_wheel_) {
+            const bool on_planned_turn =
+                angle < params.avoid_lkas_fault_max_angle_deg - kHeldTurnResumeMarginDeg && plan_matches_wheel;
+            held_turn_frames_ = on_planned_turn ? held_turn_frames_ + 1 : 0;
+            const bool centered = angle < kDriverReleaseAngleDeg && !steering_pressed;
+            if (!centered && held_turn_frames_ < kHeldTurnResumeFrames) return true;
+        }
         large_angle_hold_ = false;
         driver_took_wheel_ = false;
+        held_turn_frames_ = 0;
         return false;
     }
+    held_turn_frames_ = 0;
     if (!steer_requested) {
         fault_angle_frames_ = 0;
         return large_angle_hold_;
@@ -470,7 +489,18 @@ void LateralController::reset_control_state() {
     fault_angle_frames_ = 0;
     large_angle_hold_ = false;
     driver_took_wheel_ = false;
+    held_turn_frames_ = 0;
     angle_limit_counter_ = 0;
+}
+
+bool LateralController::plan_matches_wheel(const LateralTarget &target, float speed_mps, float plan_age_s,
+                                           float steering_angle_deg, const LiveLateralParams &live) {
+    if (!target.valid || !std::isfinite(speed_mps) || !std::isfinite(steering_angle_deg)) return false;
+    const float plan = lag_adjusted_curvature(target, speed_mps, plan_age_s, plan_delay_s());
+    const float wheel =
+        torque_controller_.curvature_at_angle(speed_mps, steering_angle_deg, config_.steering_params, live);
+    return std::isfinite(plan) && plan * wheel > 0.0f &&
+           std::fabs(plan - wheel) <= kHeldTurnPlanTolerance * std::fabs(wheel);
 }
 
 // active를 막는 현재 gate reason을 계산한다.

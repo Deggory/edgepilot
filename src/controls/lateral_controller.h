@@ -104,10 +104,10 @@ struct LateralControlResult {
     // 낸 뒤 2프레임 요청을 끄고 ToiFlt를 켠다. 토크는 그대로 보낸다.
     bool cut_steer_temp = false;
     // 큰 조향각 고장 회피: 85도 위에서 요청을 끈 상태. 토크가 0일 때 들어가고 ToiFlt 없이 요청
-    // 비트만 내린다. 85도 아래로 오면 풀리고, 운전자가 넘겨받은 회전이면 15도 아래에서 손을 떼야 풀린다.
-    // 그동안 조향은 비활성처럼 쉰다(토크 0, 목표 곡률은 실제를 따라감).
+    // 비트만 내린다. 85도 아래로 오면 풀리고, 운전자가 넘겨받은 회전이면 15도 아래에서 손을 떼거나 80도 아래에서
+    // 계획이 핸들과 같은 커브를 1초 가리켜야 풀린다. 그동안 조향은 비활성처럼 쉰다(토크 0, 목표 곡률은 실제를 따라감).
     bool large_angle_hold = false;
-    // 그중 운전자가 넘겨받은 회전이라 15도 아래에서 손을 떼야 풀리는 경우
+    // 그중 운전자가 넘겨받은 회전인 경우(위의 두 조건으로 풀린다)
     bool large_angle_hold_by_driver = false;
     // 해제 예고: 캘리브레이션 같은 SoftDisable 사유로 3초 뒤 해제된다. 조향은 계속한다(MDPS 일시 고장이
     // 사유면 고장 동안은 쉰다).
@@ -184,8 +184,14 @@ private:
     // avoid_lkas_fault를 끈 경우: 상류 common_fault_avoidance로 85도 위에서 요청을 잠깐 끊는다.
     bool update_cut_steer_state(bool steer_request, float steering_angle_deg);
 
-    // 큰 조향각 고장 회피: 85도 위 체류를 세고 요청을 끌지 정한다.
-    bool update_large_angle_hold(bool steer_requested, float steering_angle_deg, bool steering_pressed);
+    // 큰 조향각 고장 회피: 85도 위 체류를 세고 요청을 끌지 정한다. plan_matches_wheel은 운전자가 넘겨받은 정지를
+    // 계획 곡률로 풀지 볼 때 쓴다(plan_matches_wheel()).
+    bool update_large_angle_hold(bool steer_requested, float steering_angle_deg, bool steering_pressed,
+                                 bool plan_matches_wheel);
+    // 계획 곡률(조향하면 낼 목표)이 지금 핸들이 내는 곡률과 같은 쪽이고 kHeldTurnPlanTolerance 안인가. 그러면 다시
+    // 조향해도 핸들을 끌지 않고 운전자가 붙잡은 커브를 이어 간다.
+    bool plan_matches_wheel(const LateralTarget &target, float speed_mps, float plan_age_s, float steering_angle_deg,
+                            const LiveLateralParams &live);
 
     // 제어 내부 상태를 초기값으로 되돌린다.
     void reset_control_state();
@@ -238,10 +244,13 @@ private:
     double last_disengage_s_ = -1000.0;
     // steer 요청을 낸 채 85도 위에 머문 연속 프레임(요청을 끄면 멈춘다)
     int fault_angle_frames_ = 0;
-    // 85도 위에서 요청을 끈 상태. 85도 아래로 와야 풀린다(운전자가 넘겨받았으면 15도 아래, 손을 떼야).
+    // 85도 위에서 요청을 끈 상태. 85도 아래로 와야 풀린다(운전자가 넘겨받았으면 15도 아래에서 손을 떼거나, 80도
+    // 아래에서 계획이 지금 핸들과 같은 커브를 가리켜야).
     bool large_angle_hold_ = false;
     // 이번 85도 위 체류 중 운전자가 핸들을 돌렸다(steering pressed)
     bool driver_took_wheel_ = false;
+    // 운전자가 넘겨받은 정지에서 80도 아래이고 계획이 핸들과 맞은 연속 프레임
+    int held_turn_frames_ = 0;
     // 지난 프레임에 steer 요청 비트를 실제로 보냈다(85도 위에서 새로 켜지 않기 위해)
     bool steer_req_sent_ = false;
     // 상류 CarController.angle_limit_counter(avoid_lkas_fault를 끈 경우만)

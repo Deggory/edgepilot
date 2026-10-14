@@ -72,7 +72,9 @@ R=<route>; ./build-host/bin/replay_planner --exact --vehicle --lane \
 controlsd tick, at 10 ms ticks. The recorded CAN, `ModelState`, `PandaState`
 and `Localization` records go in, the planner is computed in place and the
 clock is the tick time, so identical code gives a bit-identical `--dump` and
-digest. It also reports how often engaged, active and desire agree with the
+digest. The dump has a line per tick: the state, the torque and curvature, the
+HUD flags, the wheel angle, the driver torque, the tick time and the frames
+sent. It also reports how often engaged, active and desire agree with the
 recorded `ControlState`. A route engaged before recording started needs
 `--force-engaged`.
 

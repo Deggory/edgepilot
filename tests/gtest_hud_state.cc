@@ -80,7 +80,7 @@ TEST(HudState, AlertCardPriority) {
     idle.soft_disabling = false;
     idle.controller_active = true;
     idle.steer_paused_by_driver = true;
-    EXPECT_EQ(hud_select_alert(idle, true).detail, "Resumes when you let go below 15\xb0");
+    EXPECT_EQ(hud_select_alert(idle, true).detail, "Resumes on the planned curve or below 15\xb0");
 }
 
 TEST(HudState, ControlStateMapping) {

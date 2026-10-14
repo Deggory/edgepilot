@@ -184,7 +184,9 @@ first that applies in this order:
 | `GREEN LIGHT` | check the road and proceed | green | departure alert |
 
 `STEERING PAUSED` says the wheel is past 85° (steering resumes below it) or
-that the driver holds it (steering resumes when the driver lets go below 15°).
+that the driver holds it. Then steering resumes when the driver lets go below
+15°, or below 80° once the wheel has followed the planned curve for 1 s, as on
+a ramp the driver holds after a brief pass over 85°.
 
 <table>
   <tr>
