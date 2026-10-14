@@ -481,6 +481,28 @@ class I18nCatalogTest(unittest.TestCase):
         unused = sorted(key for key in keys - used if not any(key.startswith(prefix) for prefix in prefixes))
         self.assertEqual(unused, [], "catalog keys nothing uses")
 
+    def test_nothing_shadows_the_translation_function(self):
+        """t를 가져다 쓰는 모듈은 t라는 이름을 따로 묶지 않는다(지역 변수, 매개변수). 가리면 t("...")가 숫자를 부르다
+        멈춘다: BEV의 frame()이 모델 시각을 t에 두어 상태 줄이 "t is not a function"으로 끊겼다(2026-10-14)."""
+        binding = re.compile(r"\b(?:let|const|var)\s+t\b|(?<![\w.$])t\s*=>|\bcatch\s*\(\s*t\s*\)")
+        params = re.compile(r"(?<![\w.$])(\w*)\s*\(([^()]*)\)\s*(?:=>|\{)")
+        found = []
+        for module in page_modules():
+            text = module.read_text(encoding="utf-8")
+            if not re.search(r'import\s*\{[^}]*\bt\b[^}]*\}\s*from\s*"\./i18n\.js"', text):
+                continue
+            for number, line in js_code(text):
+                if binding.search(line):
+                    found.append(f"{module.name}:{number}")
+                    continue
+                for name, args in params.findall(line):
+                    if name in ("if", "while", "for", "switch", "return"):
+                        continue
+                    names = [re.split(r"[\s=]", arg.strip().lstrip("{[").rstrip("}]"))[0] for arg in args.split(",")]
+                    if "t" in names:
+                        found.append(f"{module.name}:{number}")
+        self.assertEqual(found, [])
+
     def test_no_screen_text_left_in_code(self):
         """한글은 주석과 문구 묶음에만 있다: 페이지 모듈과 index.html의 코드, 서버 모듈의 문자열(독스트링 빼고).
         그 언어로 쓴 언어 이름처럼 일부러 둔 줄은 i18n-allow 주석을 단다."""

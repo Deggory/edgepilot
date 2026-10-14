@@ -81,7 +81,7 @@ const BLACK = new THREE.Color(0, 0, 0);
 const inks = new Map();
 const ink = (hex) => inks.get(hex) || inks.set(hex, new THREE.Color(hex)).get(hex);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const smoothstep = (a, b, x) => { const u = clamp((x - a) / (b - a), 0, 1); return u * u * (3 - 2 * u); };
 const el = (tag, className = "", text) => {
   const node = document.createElement(tag);
   if (className) node.className = className;

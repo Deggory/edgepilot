@@ -498,7 +498,7 @@ function trendChart(chart, rows, windowS, manual, state) {
   lo -= pad;
   hi += pad;
   const W = 300, H = 90;
-  const x = t => ((t - (end - windowS)) / windowS) * W;
+  const x = time => ((time - (end - windowS)) / windowS) * W;
   const y = v => H - ((v - lo) / (hi - lo)) * H;
   const title = t(chart.title);
   const plot = svg("svg", {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": title});

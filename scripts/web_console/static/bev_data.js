@@ -310,20 +310,20 @@ export class BevStream {
 
   // 모델 프레임 하나의 앞차를 앞차 카드(scene().leads)에 넣는다. 행의 trend와 level은 그보다 TREND.half s
   // 뒤의 행들이 들어오면 채워진다. 아직 기다리는 행은 언제나 가장 새로운 것들이다.
-  addLead(t, lead) {
+  addLead(stamp, lead) {
     const rows = this.leads, last = rows[rows.length - 1];
-    if (last && t < last.t) rows.length = 0;                     // 재부팅
+    if (last && stamp < last.t) rows.length = 0;                 // 재부팅
     const x = lead ? lead.raw.x : NaN;
     if (!lead || !last || !Number.isFinite(last.x) || Math.abs(x - last.x) > TREND.jump) this.segment++;
-    rows.push({t, x, v: lead && lead.raw.relative !== null ? lead.raw.relative : NaN, flow: lead && lead.flow ? lead.flow.relative : NaN,
+    rows.push({t: stamp, x, v: lead && lead.raw.relative !== null ? lead.raw.relative : NaN, flow: lead && lead.flow ? lead.flow.relative : NaN,
                fx: lead && lead.tracked ? lead.x : NaN, fv: lead && lead.tracked ? lead.relative : NaN,
                trend: undefined, level: undefined, segment: lead ? this.segment : -1});
     let i = rows.length - 1;
     while (i > 0 && rows[i - 1].trend === undefined) i--;
-    for (; i < rows.length && rows[i].t <= t - TREND.half; i++) {
+    for (; i < rows.length && rows[i].t <= stamp - TREND.half; i++) {
       [rows[i].trend, rows[i].level] = rows[i].segment < 0 ? [NaN, NaN] : trendAt(rows, i);
     }
-    while (rows.length && rows[0].t < t - LEAD_HISTORY_S) rows.shift();
+    while (rows.length && rows[0].t < stamp - LEAD_HISTORY_S) rows.shift();
   }
 
   // 자차 차선선을 controlsd의 속도와 측정 곡률(플래너가 받는 그대로, ControlState ego_speed_kph와
@@ -348,20 +348,20 @@ export class BevStream {
 
   frame(model, control, now) {
     const layout = this.layout, fresh = model.length >= layout.model.size;
-    let t = 0;
+    let stamp = 0;  // 모델 프레임 시각(s). t는 번역 함수라 쓰지 않는다
     this.control = control.length >= layout.control.size ? readControl(layout.control, layout.hud_flags, control) : null;
     if (fresh) {
       this.model = readModel(layout.model, model);
       this.filterLanes(this.model, now);
       this.arrivals.push(performance.now());
-      t = Number(this.model.stamp) / 1e9;
+      stamp = Number(this.model.stamp) / 1e9;
       const history = this.history;
-      if (history.length && t < history[history.length - 1][0]) history.length = 0;     // 재부팅
-      history.push([t, this.model.gas[GAS_PRESS_HORIZON], this.model.planEnd]);
-      while (history.length && history[0][0] < t - HISTORY_S) history.shift();
+      if (history.length && stamp < history[history.length - 1][0]) history.length = 0;  // 재부팅
+      history.push([stamp, this.model.gas[GAS_PRESS_HORIZON], this.model.planEnd]);
+      while (history.length && history[0][0] < stamp - HISTORY_S) history.shift();
     }
     const shown = scene(this.model, this.control, now, this.history);
-    if (fresh) this.addLead(t, shown.lead);
+    if (fresh) this.addLead(stamp, shown.lead);
     shown.leads = this.leads;
     this.onScene(shown);
     const since = performance.now() - 1000;
