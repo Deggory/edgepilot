@@ -299,12 +299,12 @@ struct LateralPlanner::Impl {
     }
 
     LateralTarget update(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
-                         bool active) {
+                         bool lat_active, bool steering_pressed) {
         LateralTarget target;
         if (!model.valid) return target;
 
         lane_planner.parse(model, v_ego, measured_curvature);
-        update_desire(model, vehicle, v_ego, active);
+        update_desire(model, vehicle, v_ego, lat_active, steering_pressed);
         std::array<std::array<double, 3>, kTrajectorySize> path{};
         std::array<double, kTrajectorySize> path_t{};
         for (int i = 0; i < kTrajectorySize; ++i) {
@@ -364,15 +364,18 @@ struct LateralPlanner::Impl {
     }
 
     // 모델 프레임의 차선 변경 확률·차선·경계로 desire를 갱신하고, 변경 중이면 가까운 차선선을 뺀다.
-    void update_desire(const ModelState &model, const VehicleCanState &vehicle, float v_ego, bool active) {
+    void update_desire(const ModelState &model, const VehicleCanState &vehicle, float v_ego, bool lat_active,
+                       bool steering_pressed) {
         DesireModelInputs desire_inputs;
         desire_inputs.lane_change_prob = model.desire_state[3] + model.desire_state[4];
         for (size_t i = 0; i < desire_inputs.lane_probabilities.size(); ++i)
             desire_inputs.lane_probabilities[i] = model.lane_probabilities[i];
         for (size_t i = 0; i < desire_inputs.road_edge_stds.size(); ++i)
             desire_inputs.road_edge_stds[i] = model.road_edge_stds[i];
-        desire_helper.update(vehicle, v_ego, active, desire_inputs);
+        desire_helper.update(vehicle, v_ego, lat_active, steering_pressed, desire_inputs);
         if (desire_helper.changing_lanes()) lane_planner.scale_near_probability(desire_helper.lane_change_lane_prob());
+        // 회전 중에는 차선선을 빼 Lane 모드에서도 회전 desire를 받은 모델 경로를 따른다(교차로는 원래 차선이 흐리다)
+        if (desire_helper.turning()) lane_planner.scale_near_probability(0.0);
     }
 
     // Lane 모드에서 이번 프레임에 모델 경로를 따를지(차선이 안 보일 때) 정하고, 출력 인계 비율 plan_mix를
@@ -521,6 +524,6 @@ void LateralPlanner::update_params(const SteeringParams &params) { impl_->update
 void LateralPlanner::set_lane_filter_weight(double weight) { impl_->lane_planner.set_filter_weight(weight); }
 
 LateralTarget LateralPlanner::update(const ModelState &model, const VehicleCanState &vehicle, float v_ego,
-                                     float measured_curvature, bool active) {
-    return impl_->update(model, vehicle, v_ego, measured_curvature, active);
+                                     float measured_curvature, bool lat_active, bool steering_pressed) {
+    return impl_->update(model, vehicle, v_ego, measured_curvature, lat_active, steering_pressed);
 }

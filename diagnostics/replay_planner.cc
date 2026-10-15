@@ -13,6 +13,7 @@
 #include "common/ipc_messages.h"
 #include "controls/control_params.h"
 #include "controls/lateral_controller.h"
+#include "controls/steering_pressed.h"
 #include "planning/lateral_planner.h"
 #include "recorded_vehicle_can.h"
 #include "recording/event_log_reader.h"
@@ -109,7 +110,8 @@ int main(int argc, char **argv) {
     }
 
     float v_kph = 0.0f, measured = 0.0f, des_rec = 0.0f, prev_des = 0.0f;
-    bool have_cs = false, active = true;
+    bool have_cs = false, active = true, steering_pressed = false;
+    SteeringPressedFilter pressed_filter;  // controlsd처럼 녹화된 운전자 토크를 거른다
     for (size_t a = 1; a < positional.size(); ++a) {
         EventLogReader reader(positional[a]);
         if (!reader.ok()) continue;
@@ -125,14 +127,18 @@ int main(int argc, char **argv) {
                 v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
                 measured = cs.actual_curvature;
                 des_rec = cs.desired_curvature;
-                if (use_vehicle) active = cs.active != 0;
+                if (use_vehicle) {
+                    // 녹화에는 latActive가 없다: 큰 조향각에서 쉬는 동안(HUD 플래그)만 빼고 active로 대신한다
+                    active = cs.active != 0 && (cs.hud_flags & kHudFlagSteerPaused) == 0;
+                    steering_pressed = pressed_filter.update(cs.driver_torque, steering.steering_pressed_threshold);
+                }
                 have_cs = true;
             } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
                 if (!have_cs) continue;
                 ModelState ms{};
                 if (!decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) continue;
                 const float v = v_kph / 3.6f;
-                LateralTarget t = planner.update(ms, vehicle, v, measured, active);
+                LateralTarget t = planner.update(ms, vehicle, v, measured, active, steering_pressed);
                 // 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이
                 // 있어 모델 주기로 한 번만 부르면 5배 과하게 걸린다. plan 나이는 틱마다
                 // 늘어난다.

@@ -374,8 +374,9 @@ void ControlsTick::on_model(const ModelState &model) {
     model_ = model;
     model_updated_ = true;
     // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다. 결과는 이번 틱 step이 쓴다.
-    lateral_target_ = planner_.update(model_, vehicle_, std::max(0.0f, last_result_.control_speed_kph / 3.6f),
-                                      last_result_.actual_curvature, last_result_.active);
+    lateral_target_ =
+        planner_.update(model_, vehicle_, std::max(0.0f, last_result_.control_speed_kph / 3.6f),
+                        last_result_.actual_curvature, last_result_.lat_active, last_result_.steering_pressed);
 }
 
 void ControlsTick::on_localization(const LocalizationRead &localization, uint64_t can_now_ns, double now_s) {

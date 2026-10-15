@@ -395,8 +395,9 @@ Library `planning`.
   the new frame. See [Lane-line filter](lane-line-filter.md).
 - `desire_helper.*`: the openpilot desire_helper port the planner runs each
   model frame: lane change states (`LaneChangeState`), the
-  blinker/torque/blind-spot/road-edge gates, the lane-line fade, and the
-  `Desire` the model gets.
+  blinker/torque/blind-spot/road-edge gates, the lane-line fade, one lane
+  change per blinker, the turn detection and turn desire, and the `Desire` the
+  model gets.
 - `lateral_mpc.*`: the lateral MPC itself: one Gauss-Newton SQP iteration per
   call over the openpilot 0.8.16 OCP, solved by a backward Riccati recursion.
   No external solver. See [Verification](verification.md#lateral-mpc-solver).

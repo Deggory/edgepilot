@@ -429,7 +429,7 @@
   "param.steering.laneless_mode.increase": "Follows only the model path even with visible lines, shown as LANELESS on the HUD. The path offset and the lane-centring weight are not used.",
   "param.steering.laneless_mode.decrease": "Back to Lane mode, which blends in the lane-centre path while the lines are likely. In Lane mode too, lost lines fall back to the model path and the HUD shows LANELESS meanwhile.",
   "param.steering.lane_change_min_speed_kph.label": "Lane-change minimum speed",
-  "param.steering.lane_change_min_speed_kph.description": "No lane change starts below this speed (upstream 20 mph ≈ 32 km/h). It starts when you push the wheel towards the blinker's side. A blinker switched on below the speed does nothing even after the car speeds up, so switch it on again; dropping below while waiting cancels, but a change under way continues.",
+  "param.steering.lane_change_min_speed_kph.description": "No lane change starts below this speed (upstream 20 mph ≈ 32 km/h). It starts when you push the wheel towards the blinker's side. A blinker switched on below the speed does nothing even after the car speeds up, so switch it on again; dropping below while waiting cancels, but a change under way continues. One blinker gives one lane change (switch it off and on for another), steering back cancels it, and a turn with the blinker on (45° of wheel, or braking below 55 km/h) gets a turn desire instead.",
   "param.steering.lane_change_min_speed_kph.increase": "Lane changes start only at higher speeds.",
   "param.steering.lane_change_min_speed_kph.decrease": "Lane changes also start at lower speeds.",
   "param.adaptive_cruise.enabled.label": "Vision cruise",

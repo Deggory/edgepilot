@@ -25,6 +25,8 @@
 class SupercomboTemporalState {
 public:
     static constexpr int kDesireHistoryTicks = 100;
+    static constexpr int kDesireTurnLeft = 1;  // 상류 DESIRES의 turnLeft, turnRight
+    static constexpr int kDesireTurnRight = 2;
     static constexpr int kDesirePool = 4;
     static constexpr int kDesireInputTicks = kDesireHistoryTicks / kDesirePool;
     static constexpr int kFeatureHistoryTicks = 96;
@@ -39,12 +41,20 @@ public:
           desire_history_(kDesireHistoryTicks * kDesireLen, 0.0f),
           feature_history_(kFeatureHistoryTicks * kModelFeatureLen, 0.0f) {}
 
-    // openpilot 방식 rising-edge 펄스: desire가 바뀐 틱에만 1. 0(없음)은 항상 0.
+    // openpilot 방식 rising-edge 펄스: desire가 바뀐 틱에만 1. 0(없음)은 항상 0. 회전 desire(1, 2)가 아니게 되면
+    // 이력의 회전 펄스를 지운다: 회전을 마친 뒤에도 5초 동안 모델이 회전하려 하지 않게 한다(차선 변경 펄스는
+    // 상류처럼 남긴다).
     void set_desire(int desire) {
         for (int i = 1; i < static_cast<int>(desire_.size()); ++i) {
             const float current = i == desire ? 1.0f : 0.0f;
             desire_[i] = current - prev_desire_[i] > 0.99f ? current : 0.0f;
             prev_desire_[i] = current;
+        }
+        if (desire != kDesireTurnLeft && desire != kDesireTurnRight) {
+            for (int t = 0; t < kDesireHistoryTicks; ++t) {
+                desire_history_[t * kDesireLen + kDesireTurnLeft] = 0.0f;
+                desire_history_[t * kDesireLen + kDesireTurnRight] = 0.0f;
+            }
         }
     }
 

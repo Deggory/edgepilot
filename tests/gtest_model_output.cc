@@ -7,6 +7,8 @@
 #include "model/model_output_assembly.h"
 
 #include <gtest/gtest.h>
+
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -69,6 +71,32 @@ TEST(ModelOutputParser, Master) {
     ASSERT_TRUE(ModelOutputParser::parse(std::vector<float>(kModelOutputFloats + 2, 0.0f)).valid)
         << "더 긴 버퍼는 받아준다";
     ASSERT_FALSE(ModelOutputParser::parse(std::vector<float>(100, 0.0f)).valid);
+}
+
+// 회전 desire(1, 2)는 회전이 끝나면(다른 desire가 오면) 이력에서 지운다. 차선 변경 펄스는 상류처럼 남긴다.
+TEST(ModelTemporal, TurnDesireClearsWhenTheTurnEnds) {
+    SupercomboTemporalState state;
+    const auto &desire = state.desire_history();
+    const size_t last = (SupercomboTemporalState::kDesireHistoryTicks - 1) * kDesireLen;
+    state.set_desire(3);
+    state.push_desire_pulse();
+    state.set_desire(1);
+    state.push_desire_pulse();
+    ASSERT_EQ(desire[last + 1], 1.0f);
+    for (int i = 0; i < 10; ++i) {
+        state.set_desire(1);
+        state.push_desire_pulse();
+    }
+    ASSERT_EQ(desire[last - 10 * kDesireLen + 1], 1.0f) << "회전 중에는 펄스가 이력에 남는다";
+    state.set_desire(0);
+    state.push_desire_pulse();
+    float turn = 0.0f, lane_change = 0.0f;
+    for (int t = 0; t < SupercomboTemporalState::kDesireHistoryTicks; ++t) {
+        turn = std::max({turn, desire[t * kDesireLen + 1], desire[t * kDesireLen + 2]});
+        lane_change = std::max(lane_change, desire[t * kDesireLen + 3]);
+    }
+    ASSERT_EQ(turn, 0.0f) << "회전을 마치면 이력의 회전 펄스를 지운다";
+    ASSERT_EQ(lane_change, 1.0f) << "차선 변경 펄스는 남긴다";
 }
 
 // desire: rising-edge 펄스, 100틱 이력 밀기, 4틱 max-pool.

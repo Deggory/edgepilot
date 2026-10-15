@@ -476,7 +476,7 @@ int main(int argc, char **argv) {
                 transform_model(ms_sim, dy + opt.camera_shift, dpsi);
                 have_model = true;
                 VehicleCanState planner_vehicle{};
-                target = planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim, active_prev);
+                target = planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim, active_prev, false);
             }
         }
     }

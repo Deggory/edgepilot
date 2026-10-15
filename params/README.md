@@ -221,12 +221,32 @@ friction = friction_raw ÷ 1000.
 | `lane_change_min_speed_kph` | 30.0 | km/h | 0 to 80 | No lane-change desire below this speed. |
 
 Lane changes work as in openpilot's desire_helper. Turning on the blinker and
-pushing the wheel that way (driver torque over 150) starts one: the model gets
-a lane-change desire pulse, and the lane-line weight is taken away over 0.5 s.
-It ends only when the model says the lane change is done (`desire_state`
-lane-change probability below 0.02), when 10 s have passed, or when the
-steering is inactive. At the end the lane lines come back over 0.5 s (openpilot
-takes 1 s).
+pushing the wheel that way (driver torque over `steering_pressed_threshold`)
+starts one: the model gets a lane-change desire pulse, and the lane-line weight
+is taken away over 0.5 s. It ends when the model says the lane change is done
+(`desire_state` lane-change probability below 0.02), when 10 s have passed, or
+when the steering is inactive (openpilot `latActive`: also at a standstill and
+in the large-angle pause). At the end the lane lines come back over 0.5 s
+(openpilot takes 1 s).
+
+On top of openpilot:
+
+- **One lane change per blinker.** With the blinker still on after a lane
+  change, another needs the blinker switched off and on again (switching to the
+  other side counts). A blinker left on through a ramp or a turn exit used to
+  start a lane change every 4.5 s.
+- **Pushing back cancels.** Steering against the lane change for 0.2 s
+  (filtered like the controller's steering-pressed) cancels it.
+- **A blinker turn is a turn, not a lane change.** Below 55 km/h a lane change
+  does not start while the car slows by more than 0.75 m/s² (the driver is
+  braking for a turn). Turning the wheel 45° or more with the blinker on ends
+  any lane change and blocks another for that blinker. Turned toward the
+  blinker, the model gets a turn desire (repeated every 2.5 s, since the model
+  input is a pulse it remembers for 5 s) and Lane mode follows the model path,
+  until the wheel is back under 15° or 15 s have passed; then modeld drops the
+  turn from the model's desire history. On the drives of 2026-10-14 and 15,
+  4 of 27 lane changes were really intersection turns; replaying 12 drives, a
+  turn desire came on 44 times, all in turns past 53°.
 
 Holding the wheel does not reduce the requested torque (as in openpilot). Only
 torque against the driver is reduced, gradually, by the same driver clamp as
