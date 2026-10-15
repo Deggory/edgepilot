@@ -5,6 +5,8 @@
   "torque_kp": 0.8,
   "torque_ki": 0.15,
   "torque_friction": 0.083,
+  "steering_angle_deadzone_deg": 1.0,
+  "torque_straight_kp_scale": 0.7,
   "steer_ratio": 14.72,
   "tire_stiffness_factor": 0.83,
   "steer_actuator_delay": 0.42,

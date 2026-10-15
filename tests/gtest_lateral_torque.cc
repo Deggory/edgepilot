@@ -322,4 +322,81 @@ TEST(LateralTorque, IntegratorDoesNotMoveWhileClipping) {
     EXPECT_GT(std::fabs(bounded.normalized_output()), 0.99f);
 }
 
+// 마찰 보상 deadzone(상류 steeringAngleDeadzoneDeg): 조향각 deadzone이 만드는 횡가속 안의 오차에는 마찰 보상이 없다.
+// 횡가속으로는 v^2에 비례해 넓어지므로 40 km/h부터 줄여 60 km/h 위에서는 꺼진다.
+TEST(LateralTorque, FrictionDeadzoneOnlyAtLowSpeed) {
+    SteeringParams params;
+    params.enabled = true;
+    params.angle_offset_deg = 0.0f;
+    params.torque_ki = 0.0f;
+    params.torque_lat_accel_offset = 0.0f;
+    params.live_bank_compensation = false;
+    const auto feedforward = [&](float v, float angle_deg, float deadzone_deg) {
+        SteeringParams p = params;
+        p.steering_angle_deadzone_deg = deadzone_deg;
+        TorqueController torque;
+        for (int i = 0; i < 120; ++i) torque.update(true, v, 0.0f, angle_deg, false, false, p, p.steer_actuator_delay);
+        return torque.feedforward();
+    };
+    // 8 m/s에서 조향각 0.5도의 오차는 1도 deadzone 안이다
+    EXPECT_NEAR(feedforward(8.0f, 0.5f, 1.0f), 0.0f, 1e-6f) << "deadzone 안의 오차에는 마찰 보상이 없다";
+    EXPECT_GT(std::fabs(feedforward(8.0f, 0.5f, 0.0f)), 0.01f) << "deadzone 0이면 상류처럼 마찰 보상이 붙는다";
+    // deadzone 밖은 deadzone만큼 줄어든 오차로 보상한다
+    EXPECT_LT(std::fabs(feedforward(8.0f, 2.0f, 1.0f)), std::fabs(feedforward(8.0f, 2.0f, 0.0f)));
+    EXPECT_GT(std::fabs(feedforward(8.0f, 2.0f, 1.0f)), 0.0f);
+    // 60 km/h 위에서는 deadzone이 없다
+    EXPECT_EQ(feedforward(20.0f, 0.2f, 1.0f), feedforward(20.0f, 0.2f, 0.0f));
+    // 40~60 km/h 사이는 중간이다: 50 km/h에서는 0.5도만 쓴다
+    EXPECT_NEAR(feedforward(50.0f / 3.6f, 0.4f, 1.0f), 0.0f, 1e-6f);
+    EXPECT_GT(std::fabs(feedforward(50.0f / 3.6f, 0.6f, 1.0f)), 1e-3f);
+}
+
+// 저속 직선 이득 배율: 36 km/h 아래 직선에서만 비례 이득에 곱한다. 회전(요청 곡률 0.008 위)과 54 km/h 위는
+// 원래 이득이고, 회전에서 빠져나온 직후에도 지연 비교 대상이 곡률을 들고 있는 동안은 원래 이득이다.
+TEST(LateralTorque, StraightKpScaleOnlyOnSlowStraights) {
+    SteeringParams params;
+    params.enabled = true;
+    params.angle_offset_deg = 0.0f;
+    params.torque_ki = 0.0f;
+    params.torque_friction = 0.0f;
+    params.torque_lat_accel_offset = 0.0f;
+    params.live_bank_compensation = false;
+    params.steering_angle_deadzone_deg = 0.0f;
+    const auto output = [&](float v, float desired, float angle_deg, float scale) {
+        SteeringParams p = params;
+        p.torque_straight_kp_scale = scale;
+        TorqueController torque;
+        for (int i = 0; i < 120; ++i) torque.update(true, v, desired, angle_deg, false, false, p, p.steer_actuator_delay);
+        return torque.normalized_output();
+    };
+    // 8 m/s 직선(요청 0, 조향각 3도): FF가 없어 출력이 P뿐이고 배율만큼 줄어든다
+    const float straight = output(8.0f, 0.0f, 3.0f, 0.7f) / output(8.0f, 0.0f, 3.0f, 1.0f);
+    EXPECT_NEAR(straight, 0.7f, 1e-4f);
+    // 8 m/s 회전(요청 0.02, 조향각 -45도면 거의 따라가 출력이 포화하지 않는다. 양의 곡률은 음의 조향각이다):
+    // 배율과 무관하다
+    const float turn = output(8.0f, 0.02f, -45.0f, 1.0f);
+    ASSERT_LT(std::fabs(turn), 0.95f);
+    EXPECT_EQ(output(8.0f, 0.02f, -45.0f, 0.7f), turn);
+    // 16 m/s 직선: 배율과 무관하다
+    EXPECT_EQ(output(16.0f, 0.0f, 1.0f, 0.7f), output(16.0f, 0.0f, 1.0f, 1.0f));
+    // 12.5 m/s 직선: 10~15 m/s 사이라 배율의 절반만 쓴다
+    const float half = output(12.5f, 0.0f, 1.0f, 0.7f) / output(12.5f, 0.0f, 1.0f, 1.0f);
+    EXPECT_NEAR(half, 0.85f, 1e-4f);
+
+    // 회전에서 직선으로: 요청이 0이 된 뒤에도 조향 지연 동안은 지연 비교 대상이 곡률을 들고 있어 원래 이득이다
+    TorqueController scaled, full;
+    SteeringParams p_scaled = params, p_full = params;
+    p_full.torque_straight_kp_scale = 1.0f;
+    for (int i = 0; i < 120; ++i) {
+        scaled.update(true, 8.0f, 0.02f, -45.0f, false, false, p_scaled, p_scaled.steer_actuator_delay);
+        full.update(true, 8.0f, 0.02f, -45.0f, false, false, p_full, p_full.steer_actuator_delay);
+    }
+    for (int i = 0; i < 20; ++i) {
+        scaled.update(true, 8.0f, 0.0f, -45.0f, false, false, p_scaled, p_scaled.steer_actuator_delay);
+        full.update(true, 8.0f, 0.0f, -45.0f, false, false, p_full, p_full.steer_actuator_delay);
+        ASSERT_LT(std::fabs(full.normalized_output()), 0.95f);
+        ASSERT_EQ(scaled.normalized_output(), full.normalized_output()) << "회전 탈출 직후 " << i;
+    }
+}
+
 }  // namespace

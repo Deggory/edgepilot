@@ -37,6 +37,13 @@ struct SteeringParams {
     float torque_kp = 0.8f;
     float torque_ki = 0.15f;
     float torque_friction = 0.083f;  // 토크 공간, torqued 학습값(2026-09-27)
+    // 상류 steeringAngleDeadzoneDeg: 오차가 이 조향각만큼의 횡가속 안이면 마찰 보상을 넣지 않는다. 상류는 일부
+    // Toyota만 0.2도를 쓰고, openpilot_c2(TorqueAngDeadZone)는 1도였다. 상류와 달리 40 km/h 위에서 줄여
+    // 60 km/h에서 0으로 만든다(lateral_torque.cc).
+    float steering_angle_deadzone_deg = 1.0f;
+    // 저속 직선의 비례 이득 배율. 36 km/h 아래 직선(요청 곡률 0.003 미만)에서 KP_INTERP에 곱하고, 54 km/h와
+    // 곡률 0.008 쪽으로 가며 1로 돌린다(lateral_torque.cc). 1이면 상류 그대로다.
+    float torque_straight_kp_scale = 0.7f;
 
     // paramsd 학습값(2026-09-27): 조향비 14.72, 타이어 강성 0.83.
     float steer_ratio = 14.72f;

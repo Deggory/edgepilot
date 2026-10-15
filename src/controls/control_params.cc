@@ -24,6 +24,8 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
     {"torque_kp", 0.0f, 10.0f, &SteeringParams::torque_kp},
     {"torque_ki", 0.0f, 2.0f, &SteeringParams::torque_ki},
     {"torque_friction", 0.0f, 0.3f, &SteeringParams::torque_friction},
+    {"steering_angle_deadzone_deg", 0.0f, 3.0f, &SteeringParams::steering_angle_deadzone_deg},
+    {"torque_straight_kp_scale", 0.3f, 1.0f, &SteeringParams::torque_straight_kp_scale},
     {"steer_ratio", 8.0f, 25.0f, &SteeringParams::steer_ratio},
     {"tire_stiffness_factor", 0.2f, 2.0f, &SteeringParams::tire_stiffness_factor},
     {"steer_actuator_delay", 0.01f, 1.0f, &SteeringParams::steer_actuator_delay},

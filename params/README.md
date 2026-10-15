@@ -186,6 +186,40 @@ friction = friction_raw ÷ 1000.
 | `torque_kp` | 0.8 | gain | 0 to 10 | Proportional gain on the lateral-acceleration error (openpilot `KP`). It is the last point (30 m/s and above) of the gain-by-speed curve `KP_INTERP` [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]. The other points are fixed upstream values, so this value does not change the low-speed gain. The earlier 2.0 was an inherited value never tuned since the v0.11 port. Checked on the road on 2026-09-20. |
 | `torque_ki` | 0.15 | gain | 0 to 2 | Integral gain on the lateral-acceleration error (openpilot `KI`, the upstream default). The old raw notation hid that the earlier value, 0.33, was 2.2 times upstream's. With 0.15 on the road on 2026-09-24, the left-curve curvature ratio went from 0.90 to 0.96 (n≈17), and the wobble on straights stayed the same. |
 | `torque_friction` | 0.083 | normalised torque | 0 to 0.3 | Torque added in the error's direction to overcome the steering friction (openpilot `friction`; upstream adds it in torque space too). |
+| `steering_angle_deadzone_deg` | 1.0 | ° | 0 to 3 | No friction compensation while the lateral-acceleration error is within what this steering angle produces (openpilot `steeringAngleDeadzoneDeg`; upstream uses it only on some Toyotas, 0.2°, and openpilot_c2 used 1°). Unlike upstream it fades from 40 km/h to zero at 60 km/h: set as an angle it grows with v², and at 80 km/h and above a 1° dead zone would remove about 90% of the friction compensation. See [Low-speed wheel shake](#low-speed-wheel-shake). |
+| `torque_straight_kp_scale` | 0.7 | factor | 0.3 to 1.0 | Factor on the `KP_INTERP` curve on slow straights: in full below 10 m/s (36 km/h) with a desired curvature under 0.003 1/m, back to 1 at 15 m/s (54 km/h) or 0.008 1/m. The desired curvature is the larger of the current request and the delayed one the error compares against, so the whole of a turn keeps the full gain. 1 is upstream. See [Low-speed wheel shake](#low-speed-wheel-shake). |
+
+### Low-speed wheel shake
+
+On straights at 20–50 km/h the wheel shook at 1.7–2.3 Hz by 3–7° (drives of
+2026-10-10 to 10-15). The share of engaged straight time shaking was:
+
+| Speed (km/h) | 10–20 | 20–30 | 30–40 | 40–50 | 60–80 | 80+ |
+|---|---|---|---|---|---|---|
+| Shaking | 15.5% | 11.5% | 5.4% | 2.7% | 0.6% | 0% |
+
+The desired curvature stays flat. The proportional term and the friction
+compensation push back on the angle. The torque rate limit (3 up / 7 down per
+10 ms) delays that request by another 40–50°. The angle lags the applied torque
+by about 130°, so the loop closes at 360° with a gain of about 1. The wheel is
+light at low speed, which is where the loop gain peaks.
+
+- `steering_angle_deadzone_deg` stops the friction term from chattering on
+  small errors.
+- `torque_straight_kp_scale` lowers the gain on straights only.
+
+In slow turns the proportional term makes most of the torque: at 10–30 km/h
+its mean is 312–646 against 78–103 for the feed-forward, and the car already
+turns 0.68–0.81 of the request. The scale therefore leaves turns alone.
+
+In a model of the loop that reproduces the shake, together they cut the
+ringing after a disturbance:
+
+| Speed | Before | After |
+|---|---|---|
+| 20 km/h | 4.7 s | 0.9 s |
+| 30 km/h | 2.3 s | 0.7 s |
+| 40 km/h | 2.1 s | 0.5 s |
 
 ### Vehicle model and delay
 

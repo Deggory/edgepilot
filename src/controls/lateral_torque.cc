@@ -18,6 +18,21 @@ constexpr float kJerkFilterAlpha = 1.0f / (1.0f + 1.0f / (2.0f * 3.14159265f * 1
 // 쓰지 않는다(상류 PR #36364). 마지막 점만 파라미터(torque_kp)다.
 constexpr float kKpSpeedsMps[] = {1.0f, 1.5f, 2.0f, 3.0f, 5.0f, 7.5f, 10.0f, 15.0f, 30.0f};
 constexpr float kKpValues[] = {250.0f, 120.0f, 65.0f, 30.0f, 11.5f, 5.5f, 3.5f, 2.0f};
+// 저속 떨림 대책(2026-10-15). 20~50 km/h 직선에서 핸들이 1.7~2.3 Hz, 3~7도로 떨렸다(10-10~10-15 주행 7건, 조향 중
+// 직선 시간의 10~20 km/h 15.5%, 20~30 km/h 11.5%, 30~40 km/h 5.4%, 80 km/h 위 0%). 요청 곡률은 평평한데 P항과 마찰
+// 보상이 조향각을 되밀고, 그 요청이 토크 변화율 한계(3/7)에 걸려 40~50도 늦게 나가 루프가 스스로 돈다. 핸들이 가벼운
+// 저속일수록 루프 이득이 크다. 마찰 보상 deadzone과 직선 이득 배율을 저속에만 건다.
+// 조향각 deadzone은 횡가속으로 v^2에 비례해 커진다. 그대로 두면 80 km/h 위에서 마찰 보상의 90%가 사라지므로
+// 40 km/h부터 줄여 60 km/h에서 끈다.
+constexpr float kDeadzoneFullSpeedMps = 40.0f / 3.6f;
+constexpr float kDeadzoneOffSpeedMps = 60.0f / 3.6f;
+// 직선 이득 배율은 10 m/s까지 다 쓰고 15 m/s에서 1로 돌린다.
+constexpr float kStraightKpFullSpeedMps = 10.0f;
+constexpr float kStraightKpOffSpeedMps = 15.0f;
+// 요청 곡률(지금 요청과 지연 비교 대상 중 큰 쪽)이 이보다 작으면 직선, kTurnCurvature 위면 회전이라 배율이 1이다.
+// 저속 회전은 P항이 토크 대부분을 낸다(10~30 km/h 회전에서 |P| 평균 312~646, FF 78~103).
+constexpr float kStraightCurvature = 0.003f;
+constexpr float kTurnCurvature = 0.008f;
 constexpr float kStdCargoKg = 136.0f;
 constexpr float kCivicMass = 1326.0f + kStdCargoKg;
 constexpr float kCivicWheelbase = 2.70f;
@@ -88,7 +103,14 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
         (lat_accel_request_[at(lookahead_back - 1)] - lat_accel_request_[at(lookahead_back + 1)]) / (2.0f * kDtCtrl);
     jerk_filtered_ += kJerkFilterAlpha * (raw_jerk - jerk_filtered_);
 
-    const float curvature_deadzone = 0.0f;  // 조향각 deadzone 0 고정
+    // 상류처럼 deadzone 조향각을 차량 모델 곡률(학습 SR·강성)로 바꿔 횡가속으로 쓴다. 저속에만 건다.
+    const float deadzone_deg = params.steering_angle_deadzone_deg *
+                               interp(speed_mps, {kDeadzoneFullSpeedMps, kDeadzoneOffSpeedMps}, {1.0f, 0.0f});
+    const float curvature_deadzone =
+        deadzone_deg > 0.0f && std::isfinite(speed_mps)
+            ? std::fabs(vehicle_model_curvature(deg_to_rad(deadzone_deg), speed_mps,
+                                                live.use_vehicle ? live_vehicle_params_ : params))
+            : 0.0f;
 
     const float lat_accel_deadzone = curvature_deadzone * speed_sq;
 
@@ -125,9 +147,19 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
     feedforward += interp(apply_deadzone(error + kJerkGain * jerk_filtered_, lat_accel_deadzone),
                           {-kFrictionThreshold, kFrictionThreshold}, {-friction, friction});
 
+    // 저속 직선에서만 비례 이득을 torque_straight_kp_scale배로 낮춘다. 회전 진입은 지금 요청이, 회전 탈출은 지연
+    // 비교 대상이 곡률을 들고 있어 회전 내내 원래 이득이다.
+    const float request_curvature =
+        std::max(std::isfinite(desired_curvature) ? std::fabs(desired_curvature) : 0.0f,
+                 std::fabs(expected_lat_accel) / std::max(speed_sq, 1.0f));
+    const float straight = interp(request_curvature, {kStraightCurvature, kTurnCurvature}, {1.0f, 0.0f}) *
+                           interp(speed_mps, {kStraightKpFullSpeedMps, kStraightKpOffSpeedMps}, {1.0f, 0.0f});
+    const float kp =
+        scheduled_kp(speed_mps, params.torque_kp) * (1.0f - (1.0f - params.torque_straight_kp_scale) * straight);
+
     const bool freeze_integrator = steer_limited_by_safety || steering_pressed || speed_mps < 5.0f;
     const float output_lat_accel =
-        pid_update(error, feedforward, freeze_integrator, params, tuning.lat_accel_factor, speed_mps);
+        pid_update(error, feedforward, freeze_integrator, kp, params.torque_ki, tuning.lat_accel_factor);
     // opendbc torque_from_lateral_accel_linear
     const float output_torque = output_lat_accel / tuning.lat_accel_factor;
 
@@ -230,12 +262,12 @@ float TorqueController::roll_compensation(float roll_rad, float speed_mps) const
 }
 
 // PID 한 스텝을 계산한다.
-float TorqueController::pid_update(float error, float feedforward, bool freeze_integrator, const SteeringParams &params,
-                                   float limit, float speed_mps) {
-    p_ = scheduled_kp(speed_mps, params.torque_kp) * error;
+float TorqueController::pid_update(float error, float feedforward, bool freeze_integrator, float kp, float ki,
+                                   float limit) {
+    p_ = kp * error;
     f_ = feedforward;
     if (!freeze_integrator) {
-        const float i = i_ + params.torque_ki * kDtCtrl * error;
+        const float i = i_ + ki * kDtCtrl * error;
         // 이미 한계에 걸려 있으면 그 방향으로는 더 감지 않는다(상류 "Don't allow windup if already clipping")
         const float test_control = p_ + i + f_;
         const float i_upper = test_control > limit ? i_ : limit;

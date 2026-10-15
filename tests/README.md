@@ -14,7 +14,7 @@ flowchart TB
     gtest(["googletest v1.18.0<br>first configure, SHA256 pinned"]) --> configure
     configure --> build["build the host_tests target<br>32 gtest_* executables"]
     build --> ctest["ctest<br>from the repository root"]
-    ctest --> cpp["build-host/bin/gtest_*<br>283 cases"]
+    ctest --> cpp["build-host/bin/gtest_*<br>285 cases"]
     ctest --> py["Python checks<br>check_web_console.py<br>check_recording_reader.py<br>check_docs.py"]
     py -.-> mjs["check_bev_lane_filter.mjs<br>jsc or node, if present"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
@@ -30,7 +30,7 @@ flowchart TB
 ```
 
 The script configures `build-host`, builds the `host_tests` target and runs
-everything with `ctest`: 283 C++ cases and 3 Python checks. googletest v1.18.0
+everything with `ctest`: 285 C++ cases and 3 Python checks. googletest v1.18.0
 is downloaded on the first configure (its SHA256 is pinned).
 
 To run one test:
@@ -70,7 +70,7 @@ the root as well.
 | `gtest_lateral_learners` | 19 | paramsd EKF (Jacobian, Joseph positive definiteness, convergence, gate, output limits, save, gyro bias), torqued (TLS against the closed form, buckets, gate, filter and decay, the 4 Hz/12 s schedule, a cache saved only after new points), the controlsd wiring |
 | `gtest_lateral_mpc` | 1 | Lateral MPC optimality: the dynamics and the cost are implemented separately, and the gradient is checked at the converged point of 8 scenarios ([Verification](../docs/verification.md#lateral-mpc-solver)) |
 | `gtest_lateral_planner` | 6 | The lateral planner: laneless (openpilot `get_curvature_from_plan`), lane change (upstream desire_helper), no desire from a blinker below the minimum speed, where `path_offset_m` applies, `lane_path_weight`, Lane mode's stretch without lanes matching laneless, and the handover blend |
-| `gtest_lateral_torque` | 10 | The torque lateral controller: a request buffer as long as the steering delay, the speed-dependent gain (KP_INTERP), upstream PID integrator limits (stopped while saturated, reset when inactive), live bank and latAccelOffset feedforward, the use of learned values (opendbc `calc_curvature`, the upstream latAccelFactor structure) |
+| `gtest_lateral_torque` | 12 | The torque lateral controller: a request buffer as long as the steering delay, the speed-dependent gain (KP_INTERP) and its low-speed straight scale (turns and turn exits keep the full gain), the friction dead zone that fades out from 40 to 60 km/h, upstream PID integrator limits (stopped while saturated, reset when inactive), live bank and latAccelOffset feedforward, the use of learned values (opendbc `calc_curvature`, the upstream latAccelFactor structure) |
 | `gtest_lead_flow` | 6 | The hardware-independent part of the lead expansion rate: projecting the box of the lead's rear (including the mount offset) and rejecting it when out of range; choosing corners at source resolution; a similarity RANSAC that drops background points. On a synthetic approach scene drawn with a textured board: points that drift at each step brought back with the template from 10 frames earlier, matching the closing speed; points that fail the forward-backward check dropped, the gaps refilled and the window continued; the window restarted when the lead changes or frames drop |
 | `gtest_lead_tracker` | 5 | The lead track (a Kalman filter of the model distance and the flow expansion rate): on a noisy approaching lead the distance shake falls a lot, and it finds the true closing speed even when it starts from an under-read relative speed; one jumping distance is dropped, and five frames in a row elsewhere restart on a different lead; with the expansion rate the relative speed is more accurate and steadier at the same delay; jumping expansion rates and repeats of the same window-end frame are not used; it restarts when there is no lead or frames drop, and starts from 0 when the ego speed is unknown |
 | `gtest_localization` | 11 | locationd (PoseKalman, LocationEstimator: convergence at rest, yaw-rate tracking, gyro cross-check, rewind, independence from IMU batching, standstill speed guard, boot, IMU mount tilt) and lagd (against the upstream correlation formula, the delay estimate while driving, ignoring interventions and low speed) |

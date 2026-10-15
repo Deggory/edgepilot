@@ -76,9 +76,8 @@ private:
     float roll_compensation(float roll_rad, float speed_mps) const;
 
     // 상류 common/pid.py PIDController.update(k_d 0). 횡가속도 공간에서 돌고 출력과 적분기는
-    // ±limit(= latAccelFactor, 상류 update_limits)로 묶인다. 비례 이득은 속도별 곡선을 따른다.
-    float pid_update(float error, float feedforward, bool freeze_integrator, const SteeringParams &params, float limit,
-                     float speed_mps);
+    // ±limit(= latAccelFactor, 상류 update_limits)로 묶인다. kp는 속도별 곡선에 저속 직선 배율을 곱한 값이다.
+    float pid_update(float error, float feedforward, bool freeze_integrator, float kp, float ki, float limit);
 
     // PID 항(횡가속도 공간). 비활성이면 지운다.
     float p_ = 0.0f;

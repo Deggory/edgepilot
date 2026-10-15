@@ -65,6 +65,8 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
                                           caution="torqued_restart"),
         "torque_kp": number("torque_controller", "gain", 0.05, 0, 10),
         "torque_ki": number("torque_controller", "gain", 0.01, 0, 2),
+        "steering_angle_deadzone_deg": number("torque_controller", "°", 0.1, 0, 3),
+        "torque_straight_kp_scale": number("torque_controller", "x", 0.05, 0.3, 1),
         "torque_friction": number("torque_model", "torque", 0.005, 0, 0.3, tab="vehicle", learned=True,
                                   caution="torqued_restart"),
         "steer_ratio": number("vehicle_model", "ratio", 0.1, 8, 25, tab="vehicle", learned=True),
