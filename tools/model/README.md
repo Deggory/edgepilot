@@ -4,7 +4,8 @@
 
 Host scripts that read recorded routes and reproduce the device's model input
 pipeline, and in [`axmodel/`](axmodel/README.md) the build of the model itself.
-Use them to make a replay for the board, to measure lateral bias, or to rebuild
+Use them to make a replay for the board, to measure lateral bias, to compare
+the lanes with the stock camera's, or to rebuild
 the axmodel.
 
 Which tool reads which part of a route:
@@ -12,16 +13,19 @@ Which tool reads which part of a route:
 ```mermaid
 flowchart LR
     video["segments/NNN/<br>frames.bin, road.h264"]
-    events["events/*.bin<br>ModelState, ControlState"]
+    events["events/*.bin<br>ModelState, ControlState, CAN"]
     video --> replay["make_replay.py"]
     video --> m2["axmodel/<br>make_m2_data.py"]
     events --> m2
     events --> bias["lane_bias.py"]
+    events --> bench["lane_benchmark.py"]
+    video --> bench
     replay --> scnv12["replay.scnv12<br>modeld replay mode"]
     m2 --> sets["calibration and<br>evaluation sets"]
     bias --> terms["translation and<br>rotation terms"]
+    bench --> card["scorecard and<br>scene frames"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
-    class video,events,replay,m2,bias,scnv12,sets,terms proc
+    class video,events,replay,m2,bias,bench,scnv12,sets,terms,card proc
 ```
 
 All of them decode the route through `recording_reader.py`, and
@@ -65,6 +69,7 @@ the CPU warp in `src/model/model_input_transform.cc`.
 | `recording_reader.py` | the Python mirror of `src/recording/recording_format.h` and `src/common/ipc_messages.h` for the analysis tools |
 | `make_replay.py` | writes an `SCNV12R1` replay for `modeld` replay mode on the board |
 | `lane_bias.py` | measures the lateral bias of a drive and splits it into a translation term and a rotation term |
+| `lane_benchmark.py` | compares the model's ego lanes with the stock camera's (K7 `LKA14`) per drive, and draws both on the video frames where they disagree |
 | `model_warp.py` | the device warp in numpy, and the MaixCAM2 intrinsics in one place |
 
 ### `recording_reader.py`
@@ -91,6 +96,28 @@ It decodes the route's frames into `DIR/replay.scnv12` (with
 Splitting the bias is what tells you whether a lane-hugging complaint is a
 camera-calibration problem or not. See
 [Lateral bias](../../docs/diagnostics.md#lateral-bias).
+
+### `lane_benchmark.py`
+
+```sh
+python tools/model/lane_benchmark.py <route_dir> [<route_dir> ...] --out DIR [--scenes N] [--no-frames]
+```
+
+The K7's stock camera sends each ego lane line's position and heading in
+`LKA14` (0x484, bus 2). The tool fits a cubic to each model lane over 0–50 m
+and compares the position and slope at 1.5 m, where the two agree best. The
+stock values arrive 0.3 s (position) and 0.1 s (heading) after the model's
+capture. It prints one scorecard row per drive (the position RMS and
+correlation per side, the lane-centre and width differences, and the heading
+difference on straights) and writes `DIR/scorecard.json`.
+
+It also picks the scenes where the two disagree: both see the line but differ
+by more than 25 cm from the drive's median, or only one of them sees it. For
+each scene it decodes that frame with `ffmpeg` from the previous keyframe and
+draws both lanes on it (`DIR/<route>/scenes/*.jpg`, details in
+`DIR/<route>/report.json`). The stock camera is not ground truth; the frames
+are there to tell which one is on the paint. See
+[Stock lane comparison](../../docs/diagnostics.md#stock-lane-comparison).
 
 ### `model_warp.py`
 

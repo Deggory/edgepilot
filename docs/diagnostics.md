@@ -19,6 +19,7 @@ flowchart LR
         controls["replay_controls<br>controlsd tick"]
         dataset["extract_lateral_dataset<br>CSV for fits"]
         bias["lane_bias.py<br>lateral bias"]
+        bench["lane_benchmark.py<br>stock lane comparison"]
         hud["hud_tools.py, hud_snapshot<br>HUD frames"]
         make["make_replay.py<br>SCNV12R1 file"]
     end
@@ -29,6 +30,7 @@ flowchart LR
     route --> controls
     route --> dataset
     route --> bias
+    route --> bench
     route --> hud
     route --> make
     make --> modeld
@@ -37,7 +39,7 @@ flowchart LR
     classDef group fill:#ffffff,stroke:#d1d9e0,color:#59636e
     class host,board group
     class modeld compute
-    class route,planner,controls,dataset,bias,hud,make proc
+    class route,planner,controls,dataset,bias,bench,hud,make proc
 ```
 
 ## Lateral planner replay
@@ -132,6 +134,41 @@ angle. When the car needs a non-zero angle to go straight, an `|angle| < k`
 filter keeps one side of the curve distribution and manufactures a rotation
 term that is not there. On the 2026-08-19 route that mistake reported
 -4.22 mrad where the honest figure is -0.74 mrad.
+
+## Stock lane comparison
+
+The K7's stock camera keeps reporting its own lane lines in `LKA14` while
+edgepilot drives. `tools/model/lane_benchmark.py` uses them as a second,
+independent detector:
+
+```sh
+python tools/model/lane_benchmark.py <route_dir> [<route_dir> ...] --out DIR
+```
+
+It compares frames where both see the lanes clearly (stock quality 3, model
+lane probability above 0.7, above 30 km/h). It leaves out 2 s around lane
+changes, blinkers and the moments the car is on or crossing a line.
+
+| Column | Meaning |
+| --- | --- |
+| `c0 rms L/R` | position difference at 1.5 m, per side |
+| `corr L/R` | correlation of the in-lane wander with the means removed |
+| `centre` | stock minus model lane centre; negative means the stock camera puts the car further right |
+| `width` | stock minus model lane width (median) |
+| `c1 str` | heading difference on straights (above 50 km/h, under 3° steering, under 0.6°/s yaw rate) |
+
+The scenes are drawn on the video frames: model lanes solid orange, stock
+lanes dashed blue. The stock line is its 1.5 m position and heading extended
+straight, so it drifts on curves.
+
+Results on the six drives of 2026-10-10 to 10-15, 121 minutes compared:
+- position RMS 7–15 cm, wander correlation 0.80–0.90, 0.64 on the 10-15 night
+  drive;
+- lane-centre difference −7 to −9 cm on the pose-calibration drives and −2 to
+  −4 cm after the switch to flow calibration;
+- in 15 scenes where the two disagreed by more than 25 cm, the model's line
+  was on the paint in 10 and the stock camera's in 3;
+- road text, overpass shadows and lane widening pulled the stock line inward.
 
 Measured on the two logged drives (no lane-line offset was applied on either):
 

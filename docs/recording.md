@@ -257,9 +257,9 @@ no reader has its layout, and `recording_reader.py` rejects its payload size.
 - `tools/model/recording_reader.py` reads the v2 to v13 layouts. It checks each
   payload's size against the layout of its version, so a layout changed
   without a version bump fails instead of decoding garbage.
-- `lane_bias.py`, `hud_tools.py`, `fit_lateral_params.py lag`, and
-  `export_can_fixture.py` all walk the event log through its
-  `iter_event_records`.
+- `lane_bias.py`, `lane_benchmark.py`, `hud_tools.py`,
+  `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event
+  log through its `iter_event_records`.
 - In C++, `src/recording/event_log_reader.h` reads the event log for the
   diagnostic tools and `replayd`, and `recorded_model_state.h` turns any
   version's `ModelState` into the current struct.
