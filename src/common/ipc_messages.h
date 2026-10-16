@@ -14,6 +14,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <type_traits>
 #include <vector>
 
 // ---- 채널 매직·버전 ----
@@ -40,6 +42,8 @@ constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
 constexpr char kImuTopic[] = "/edgepilot_imu";
 constexpr char kLocalizationStateTopic[] = "/edgepilot_localization";
 constexpr char kRecordStateTopic[] = "/edgepilot_record_state";
+// LaneState 레이아웃이 바뀌면 끝의 번호를 올린다: 다른 빌드의 modeld가 발행해도 다른 채널이라 섞여 읽히지 않는다.
+constexpr char kLaneStateTopic[] = "/edgepilot_lane_state2";
 
 // ---- 크기 ----
 constexpr unsigned kFrameSlots = 8;
@@ -295,6 +299,99 @@ static_assert(offsetof(LeadFlowState, valid) == 8 && offsetof(LeadFlowState, exp
 static_assert(offsetof(LeadTrackState, valid) == 0 && offsetof(LeadTrackState, distance_m) == 8 &&
                   offsetof(LeadTrackState, relative_speed_mps) == 12,
               "web BEV reads LeadTrackState by position");
+
+// 차선선 플러그인(modeld 안, 플러그인이 있을 때만; docs/lane-line-plugin.md). 프레임마다 supercombo 뒤에 돈 결과다.
+// 녹화에는 LaneState 레코드(9)로 그대로 남는다. 열거값(slot·shape·double_line·color·type)은
+// model/lane_plugin_abi.h의 Ep* 값이다.
+constexpr unsigned kLaneMaxLines = 6;
+constexpr unsigned kLaneMaxBoundaries = 4;
+constexpr unsigned kLaneMaxPoints = 72;
+constexpr unsigned kLaneMaxRoadLines = kLaneMaxLines + kLaneMaxBoundaries;
+// 도로면으로 옮긴 선의 점: ModelState 차선과 같은 거리 격자 X_IDXS의 앞쪽 17개(0~48 m).
+constexpr unsigned kLaneRoadPoints = 17;
+constexpr int8_t kLaneRoadKindLine = 0;      // LaneRoadLine.kind: 차선선(lines[index])
+constexpr int8_t kLaneRoadKindBoundary = 1;  // 도로 경계(boundaries[index])
+constexpr int8_t kLaneSlotEgoLeft = 0;       // 차선선 slot의 자차 왼쪽·오른쪽 선(EP_LANE_EGO_LEFT·RIGHT)
+constexpr int8_t kLaneSlotEgoRight = 1;
+
+// 점 하나. 원본 프레임 화소의 4배를 정수로 둔다(1/4 화소 단위).
+struct LanePointState {
+    int16_t x4 = 0;  // 차선선은 도색 가운데
+    int16_t y4 = 0;
+    int16_t width4 = 0;   // 도색 폭(가로). 도로 경계는 0
+    int16_t edge_x4 = 0;  // 차로 쪽 안쪽 경계. 도로 경계는 x4와 같다
+};
+static_assert(sizeof(LanePointState) == 8, "LanePointState is recorded as-is");
+
+struct LaneLineState {
+    int8_t slot = 0;  // EpLaneSlot
+    int8_t shape = 0;
+    int8_t double_line = 0;
+    int8_t color = 0;
+    float confidence = 0.0f;
+    uint32_t point_count = 0;
+    LanePointState points[kLaneMaxPoints] = {};  // 가까운 쪽(영상 아래)부터
+};
+static_assert(sizeof(LaneLineState) == 588, "LaneLineState is recorded as-is");
+
+struct LaneBoundaryState {
+    int8_t slot = 0;  // EpBoundarySlot
+    int8_t type = 0;  // EpBoundaryType
+    int8_t reserved[2] = {};
+    float confidence = 0.0f;
+    uint32_t point_count = 0;
+    LanePointState points[kLaneMaxPoints] = {};
+};
+static_assert(sizeof(LaneBoundaryState) == 588, "LaneBoundaryState is recorded as-is");
+
+// 차선선 하나 또는 도로 경계 하나를 도로면으로 옮긴 것. 같은 프레임 supercombo가 낸 노면 높이에 투영하고(못 쓰면
+// 평평한 도로면), 거리 X_IDXS[0..kLaneRoadPoints)에서 읽은 가로 위치(m, 오른쪽 +, ModelState 차선과 같은 가상 카메라
+// 기준)다. 차선선은 차로 쪽 안쪽 경계, 도로 경계는 그 점이다. 측정은 first..last 격자를 덮고, 가장 가까운 측정이 8 m
+// 안이면 그보다 가까운 격자(x = 0까지)는 4~20 m 점에 맞춘 2차식으로 늘린 값이다. 덮지 않는 점은 NaN이다.
+struct LaneRoadLine {
+    int8_t kind = kLaneRoadKindLine;
+    int8_t index = 0;        // lines 또는 boundaries 안의 번호
+    int8_t slot = 0;         // EpLaneSlot 또는 EpBoundarySlot
+    int8_t type = 0;         // 차선선은 EpLaneShape, 도로 경계는 EpBoundaryType
+    int8_t double_line = 0;  // 차선선만(EpLaneDouble)
+    int8_t color = 0;        // 차선선만(EpLaneColor)
+    int8_t first = -1;       // 측정이 덮은 첫·마지막 격자 번호. 측정이 없으면 -1
+    int8_t last = -1;
+    float confidence = 0.0f;
+    float y[kLaneRoadPoints];
+    LaneRoadLine() {
+        for (float &v : y) v = std::numeric_limits<float>::quiet_NaN();
+    }
+};
+static_assert(sizeof(LaneRoadLine) == 80, "LaneRoadLine is recorded as-is");
+
+struct LaneState {
+    uint64_t frame_id = 0;
+    uint64_t capture_timestamp_ns = 0;  // ModelState와 같은 센서 캡처 시각
+    uint64_t lane_timestamp_ns = 0;     // 결과를 낸 시각
+    float execution_ms = 0.0f;          // VPP + NPU + 해석
+    uint32_t valid = 0;                 // 1이면 이 프레임을 해석했다(0이면 아래 값이 없다)
+    uint16_t image_width = 0;
+    uint16_t image_height = 0;
+    uint32_t line_count = 0;
+    uint32_t boundary_count = 0;
+    // 도로면 블록(헤더 바로 뒤라 도로면 선만 쓰는 쪽은 앞부분만 읽으면 된다). 선이 앞, 경계가 뒤다.
+    uint32_t road_count = 0;
+    LaneRoadLine road[kLaneMaxRoadLines];
+    LaneLineState lines[kLaneMaxLines] = {};
+    LaneBoundaryState boundaries[kLaneMaxBoundaries] = {};
+    float vanishing_x = 0.0f;  // 원본 프레임 화소
+    float vanishing_y = 0.0f;
+    float vanishing_confidence = 0.0f;
+    char plugin_name[32] = {};  // 플러그인이 알린 이름(모델·버전)
+    uint32_t reserved = 0;      // 끝 맞춤(바이트가 늘 같도록 0)
+};
+// 녹화 LaneState 레코드의 페이로드다. tools/model/recording_reader.py LANE_STATE가 같은 배치를 읽는다.
+static_assert(sizeof(LaneState) == 6776 && offsetof(LaneState, road_count) == 44 && offsetof(LaneState, road) == 48 &&
+                  offsetof(LaneState, lines) == 848 && offsetof(LaneState, boundaries) == 4376 &&
+                  offsetof(LaneState, vanishing_x) == 6728 && offsetof(LaneState, plugin_name) == 6740,
+              "LaneState layout is shared with the recording reader");
+static_assert(std::is_trivially_copyable<LaneState>::value, "LaneState goes through shared memory as bytes");
 
 struct ProcessState {
     char name[16] = {};

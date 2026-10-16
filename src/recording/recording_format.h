@@ -53,8 +53,11 @@ enum class RecordType : uint16_t {
     LearnerState = 6,
     Imu = 7,
     Localization = 8,
+    // v13에 더한 타입이다(레이아웃을 바꾸지 않아 버전은 그대로). 이 타입을 모르는 예전 C++ 리더는 이 레코드에서
+    // 청크 읽기를 멈추고, Python 리더는 건너뛴다.
+    LaneState = 9,
 };
-constexpr uint16_t kLastRecordType = static_cast<uint16_t>(RecordType::Localization);
+constexpr uint16_t kLastRecordType = static_cast<uint16_t>(RecordType::LaneState);
 
 #pragma pack(push, 1)
 struct EventFileHeader {

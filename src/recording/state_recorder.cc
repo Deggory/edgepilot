@@ -8,7 +8,7 @@
 // 기록 버전과 그대로 저장하는 구조체 크기를 한 줄에 묶어, 둘 중 하나만 바꾸면 컴파일이 깨진다.
 static_assert(kRecordingVersion == 13 && sizeof(ModelState) == 3736 && sizeof(ControlState) == 240 &&
                   sizeof(PandaState) == 96 && sizeof(LearnerState) == 128 && sizeof(ImuSample) == 40 &&
-                  offsetof(ImuBatch, samples) == 16 && sizeof(LocalizationState) == 128,
+                  offsetof(ImuBatch, samples) == 16 && sizeof(LocalizationState) == 128 && sizeof(LaneState) == 6776,
               "recording v13 pins these payloads; bump kRecordingVersion together");
 
 StateRecorder::StateRecorder(const std::string &topic_suffix)
@@ -17,7 +17,8 @@ StateRecorder::StateRecorder(const std::string &topic_suffix)
       panda_topic_(kPandaStateTopic + topic_suffix),
       learner_topic_(kLearnerStateTopic + topic_suffix),
       imu_topic_(kImuTopic + topic_suffix),
-      localization_topic_(kLocalizationStateTopic + topic_suffix) {}
+      localization_topic_(kLocalizationStateTopic + topic_suffix),
+      lane_topic_(kLaneStateTopic + topic_suffix) {}
 
 void StateRecorder::record(RecordingWriter &writer) {
     if (model_.attach(model_topic_.c_str()) && model_.poll()) {
@@ -45,5 +46,10 @@ void StateRecorder::record(RecordingWriter &writer) {
     if (localization_.attach(localization_topic_.c_str()) && localization_.poll()) {
         const LocalizationState &localization = localization_.latest();
         writer.write_state(RecordType::Localization, localization.timestamp_ns, &localization, sizeof(localization));
+    }
+    // 차선선 플러그인은 있을 때만(modeld가 플러그인을 열었을 때만 채널이 생긴다)
+    if (lane_.attach(lane_topic_.c_str()) && lane_.poll()) {
+        const LaneState &lane = lane_.latest();
+        writer.write_state(RecordType::LaneState, lane.lane_timestamp_ns, &lane, sizeof(lane));
     }
 }

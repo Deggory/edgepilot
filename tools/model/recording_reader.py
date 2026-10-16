@@ -31,6 +31,7 @@ RECORD_PANDA_STATE = 5
 RECORD_LEARNER_STATE = 6
 RECORD_IMU = 7
 RECORD_LOCALIZATION = 8
+RECORD_LANE_STATE = 9
 
 FRAME_INDEX_RECORD = np.dtype([
     ("frame_id", "<u8"),
@@ -90,6 +91,37 @@ LOCALIZATION_STATE = np.dtype([
     ("lag_valid_blocks", "<i4"), ("lag_cal_perc", "<i4"), ("lag_points", "<u4"), ("input_flags", "<u4"),
 ])
 assert LOCALIZATION_STATE.itemsize == 128
+
+# LaneState(modeld 안의 차선선 플러그인, 프레임마다; v13에 더한 레코드 9). 점은 원본 화소의 4배 정수다. 열거값
+# (slot·shape·double_line·color·type)은 src/model/lane_plugin_abi.h의 Ep* 값이다.
+LANE_POINT = np.dtype([("x4", "<i2"), ("y4", "<i2"), ("width4", "<i2"), ("edge_x4", "<i2")])
+LANE_MAX_POINTS = 72
+LANE_LINE = np.dtype([
+    ("slot", "i1"), ("shape", "i1"), ("double_line", "i1"), ("color", "i1"),
+    ("confidence", "<f4"), ("point_count", "<u4"), ("points", LANE_POINT, LANE_MAX_POINTS),
+])
+LANE_BOUNDARY = np.dtype([
+    ("slot", "i1"), ("type", "i1"), ("reserved", "i1", 2),
+    ("confidence", "<f4"), ("point_count", "<u4"), ("points", LANE_POINT, LANE_MAX_POINTS),
+])
+# 도로면 블록(LaneState.road): 선 하나 또는 도로 경계 하나를 거리 X_IDXS[0..17)(0~48 m)의 가로 위치(m, 오른쪽 +,
+# ModelState 차선과 같은 가상 카메라 기준)로. kind 0은 차선선(lines[index]), 1은 도로 경계(boundaries[index]). 선의
+# type은 shape, 경계는 type이다. first..last 격자가 측정이고 first보다 가까운 점은 늘린 값, 나머지는 NaN이다.
+LANE_ROAD_POINTS = 17
+LANE_ROAD_LINE = np.dtype([
+    ("kind", "i1"), ("index", "i1"), ("slot", "i1"), ("type", "i1"), ("double_line", "i1"), ("color", "i1"),
+    ("first", "i1"), ("last", "i1"), ("confidence", "<f4"), ("y", "<f4", LANE_ROAD_POINTS),
+])
+LANE_STATE = np.dtype([
+    ("frame_id", "<u8"), ("capture_timestamp_ns", "<u8"), ("lane_timestamp_ns", "<u8"),
+    ("execution_ms", "<f4"), ("valid", "<u4"), ("image_width", "<u2"), ("image_height", "<u2"),
+    ("line_count", "<u4"), ("boundary_count", "<u4"), ("road_count", "<u4"), ("road", LANE_ROAD_LINE, 10),
+    ("lines", LANE_LINE, 6), ("boundaries", LANE_BOUNDARY, 4),
+    ("vanishing_x", "<f4"), ("vanishing_y", "<f4"), ("vanishing_confidence", "<f4"),
+    ("plugin_name", "S32"), ("reserved", "<u4"),
+])
+assert LANE_POINT.itemsize == 8 and LANE_LINE.itemsize == 588 and LANE_BOUNDARY.itemsize == 588
+assert LANE_ROAD_LINE.itemsize == 80 and LANE_STATE.itemsize == 6776
 
 # LearnerState(paramsd/torqued 출력, 20 Hz). flags 비트: ipc_messages.h kLearner*.
 LEARNER_STATE = np.dtype([
@@ -569,8 +601,20 @@ def read_route_localization(route_dir: Path) -> np.ndarray | None:
             continue
         for rec in iter_event_records(path):
             if rec.type == RECORD_LOCALIZATION and len(rec.payload) == LOCALIZATION_STATE.itemsize:
-                rows.append(np.frombuffer(rec.payload, LOCALIZATION_STATE, 1)[0])
+                rows.append(np.frombuffer(bytes(rec.payload), LOCALIZATION_STATE, 1)[0])  # 청크 파일 전체를 붙잡지 않게 복사
     return np.array(rows, dtype=LOCALIZATION_STATE) if rows else None
+
+
+def read_route_lane_state(route_dir: Path) -> np.ndarray | None:
+    """route의 차선선 플러그인 출력(LaneState) 전부. 플러그인 없이 녹화했으면 None."""
+    rows = []
+    for path in route_event_files(route_dir):
+        if path.stat().st_size <= 32:
+            continue
+        for rec in iter_event_records(path):
+            if rec.type == RECORD_LANE_STATE and len(rec.payload) == LANE_STATE.itemsize:
+                rows.append(np.frombuffer(bytes(rec.payload), LANE_STATE, 1)[0])  # 청크 파일 전체를 붙잡지 않게 복사
+    return np.array(rows, dtype=LANE_STATE) if rows else None
 
 
 def read_route_calibration(route_dir: Path) -> np.ndarray | None:

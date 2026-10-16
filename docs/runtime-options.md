@@ -66,6 +66,7 @@ axmodel rather than misreading it.
 | `EDGEPILOT_CALIB_AUTO=0` | on | Disables pose-based online calibration and keeps the restored or manually supplied projection. |
 | `EDGEPILOT_LOG_CALIB=1` | off | Prints the online calibrator status, accepted/rejected sample counts, valid block count, rpy, and spread. |
 | `EDGEPILOT_FLOW_CALIB=0` | on | Turns off the optical-flow calibrator (VPP/IVE). On, it is recorded in `ModelState.flow_calibration` and logged as `flowcal:` lines; the warp uses it only when the device setting `calibration_use_flow` is on ([Flow calibration](flow-calibration.md#using-the-estimate)). Off, nothing new is measured; a stored estimate (`params/flow_calibration.json`) is still recorded and can still be applied, and with none the recorded status stays 0. |
+| `EDGEPILOT_LANE_PLUGIN=<path>` | `/root/edgepilot-private/lane/liblane_plugin.so` | The optional [lane-line plugin](lane-line-plugin.md) `modeld` runs after supercombo. With no file there, the slot stays off and `modeld` runs as before. `0` turns it off. |
 
 ### Camera and input warp
 

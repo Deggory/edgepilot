@@ -50,6 +50,10 @@ constexpr float kDefaultInputWarpFy = default_input_warp_fy(kDefaultAiHeight);
 constexpr float kDefaultInputWarpCx = default_input_warp_cx(kDefaultAiWidth);
 constexpr float kDefaultInputWarpCy = default_input_warp_cy(kDefaultAiHeight);
 
+// 차선선 플러그인(선택, docs/lane-line-plugin.md)의 기본 위치. 공개 런타임(/root/edgepilot) 밖에 둔다: 플러그인과 그
+// 모델은 이 저장소에 없고 따로 배포한다.
+constexpr char kDefaultLanePluginPath[] = "/root/edgepilot-private/lane/liblane_plugin.so";
+
 struct AppConfig {
     std::string axmodel_path;
 
@@ -73,6 +77,8 @@ struct AppConfig {
     // 광류 보정기(VPP·IVE 작업 스레드). 끄면 새로 재지 않는다. 저장해 둔 추정(params/flow_calibration.json)은 그래도
     // 기록되고 설정이 광류면 워프에 쓰이며, 없으면 ModelState.flow_calibration.status가 0이다. EDGEPILOT_FLOW_CALIB=0.
     bool flow_calibration = true;
+    // 차선선 플러그인 경로. 파일이 없으면 끈 채로 돈다. EDGEPILOT_LANE_PLUGIN=<경로>로 바꾸고, 0(끔 규약)이면 비운다.
+    std::string lane_plugin_path = kDefaultLanePluginPath;
 
     // 카메라 내부 파라미터(1920x1080 기준). EDGEPILOT_CAMERA_INTRINSICS="fx,fy,cx,cy"로
     // 바꿀 수 있다(다른 카메라로 찍은 영상을 재생할 때). input_warp_*는

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tools/model/recording_reader.py의 바이너리 배치가 C++ 헤더의 고정값과 같은지 본다:
-ControlState·LearnerState·ModelState의 offsetof 고정값과 크기, LocalizationState·ImuSample·
+ControlState·LearnerState·ModelState·LaneState의 offsetof 고정값과 크기, LocalizationState·ImuSample·
 CalibrationState 크기, 이벤트 레코드 머리·프레임 인덱스 레코드 크기, 기록 타입 번호. 도구가 쓰는
 MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지, 그 워프 행렬이
 런타임(gtest_calibration의 기준값)과 같은지도 본다.
@@ -79,6 +79,19 @@ class RecordingReaderLayout(unittest.TestCase):
         for name, offset in offsets.items():
             self.assertEqual(offset_in(rr.LEARNER_STATE, name), offset, name)
         self.assertEqual(rr.LEARNER_STATE.itemsize, size_of("LearnerState"))
+
+    def test_lane_state(self):
+        self.assertEqual(rr.LANE_STATE.itemsize, size_of("LaneState"))
+        self.assertEqual(rr.LANE_LINE.itemsize, size_of("LaneLineState"))
+        self.assertEqual(rr.LANE_BOUNDARY.itemsize, size_of("LaneBoundaryState"))
+        self.assertEqual(rr.LANE_POINT.itemsize, size_of("LanePointState"))
+        offsets = {name: int(at) for name, at in re.findall(r"offsetof\(LaneState, (\w+)\) == (\d+)", IPC)}
+        self.assertGreater(len(offsets), 4)
+        for name, offset in offsets.items():
+            self.assertEqual(offset_in(rr.LANE_STATE, name), offset, name)
+        self.assertEqual(rr.LANE_ROAD_LINE.itemsize, size_of("LaneRoadLine"))
+        self.assertEqual(rr.LANE_MAX_POINTS, pinned(r"kLaneMaxPoints = (\d+);"))
+        self.assertEqual(rr.LANE_ROAD_POINTS, pinned(r"kLaneRoadPoints = (\d+);"))
 
     def test_localization_and_imu(self):
         self.assertEqual(rr.LOCALIZATION_STATE.itemsize, size_of("LocalizationState"))
@@ -185,7 +198,7 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(rr.FRAME_INDEX_RECORD.itemsize, size_of("FrameIndexRecord", FORMAT))
         body = re.search(r"enum class RecordType : uint16_t \{(.*?)\};", FORMAT, re.S).group(1)
         types = {name: int(value) for name, value in re.findall(r"(\w+) = (\d+),", body)}
-        self.assertEqual(len(types), 8)
+        self.assertEqual(len(types), 9)
         for name, value in types.items():
             constant = "RECORD_" + re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
             self.assertEqual(getattr(rr, constant), value, constant)

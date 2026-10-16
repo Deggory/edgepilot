@@ -382,10 +382,11 @@ TEST(StateRecorder, WritesEachNewSnapshotOnce) {
     const std::string suffix = "_" + std::to_string(getpid() % 100000);
     const std::string topics[] = {kModelStateTopic + suffix, kControlStateTopic + suffix,
                                   kPandaStateTopic + suffix, kLearnerStateTopic + suffix,
-                                  kImuTopic + suffix,        kLocalizationStateTopic + suffix};
+                                  kImuTopic + suffix,        kLocalizationStateTopic + suffix,
+                                  kLaneStateTopic + suffix};
     // ASSERT가 중간에 빠져나가도 공유 메모리를 지운다.
     struct Unlink {
-        const std::string (&names)[6];
+        const std::string (&names)[7];
         ~Unlink() {
             for (const std::string &name : names) shm_unlink(name.c_str());
         }
@@ -398,16 +399,17 @@ TEST(StateRecorder, WritesEachNewSnapshotOnce) {
     LearnerState learner;
     ImuBatch imu;
     LocalizationState localization;
+    LaneState lane;
     {
         RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
         writer.set_enabled(true, t0);
         StateRecorder recorder(suffix);
         recorder.record(writer);  // 생산자가 아직 없다
 
-        LatestChannel pubs[6];
-        const size_t sizes[] = {sizeof(model),   sizeof(control), sizeof(panda),
-                                sizeof(learner), sizeof(imu),     sizeof(localization)};
-        for (int i = 0; i < 6; ++i) ASSERT_TRUE(pubs[i].open(topics[i].c_str(), sizes[i], true)) << topics[i];
+        LatestChannel pubs[7];
+        const size_t sizes[] = {sizeof(model), sizeof(control),      sizeof(panda), sizeof(learner),
+                                sizeof(imu),   sizeof(localization), sizeof(lane)};
+        for (int i = 0; i < 7; ++i) ASSERT_TRUE(pubs[i].open(topics[i].c_str(), sizes[i], true)) << topics[i];
         model.model_timestamp_ns = t0 + 1;
         control.timestamp_ns = t0 + 2;
         panda.timestamp_ns = t0 + 3;
@@ -415,18 +417,19 @@ TEST(StateRecorder, WritesEachNewSnapshotOnce) {
         imu.timestamp_ns = t0 + 5;
         imu.count = 2;
         localization.timestamp_ns = t0 + 6;
-        const void *payloads[] = {&model, &control, &panda, &learner, &imu, &localization};
-        for (int i = 0; i < 6; ++i) pubs[i].publish(payloads[i], sizes[i]);
+        lane.lane_timestamp_ns = t0 + 7;
+        const void *payloads[] = {&model, &control, &panda, &learner, &imu, &localization, &lane};
+        for (int i = 0; i < 7; ++i) pubs[i].publish(payloads[i], sizes[i]);
         recorder.record(writer);
         recorder.record(writer);  // 새 스냅샷이 없으면 쓰지 않는다
 
-        control.timestamp_ns = t0 + 7;
+        control.timestamp_ns = t0 + 8;
         pubs[1].publish(&control, sizeof(control));
-        imu.timestamp_ns = t0 + 8;
+        imu.timestamp_ns = t0 + 9;
         imu.count = 0;  // 빈 IMU 묶음은 남기지 않는다
         pubs[4].publish(&imu, sizeof(imu));
         recorder.record(writer);
-        writer.set_enabled(false, t0 + 9);
+        writer.set_enabled(false, t0 + 10);
         writer.close();
     }
 
@@ -446,7 +449,8 @@ TEST(StateRecorder, WritesEachNewSnapshotOnce) {
         {RecordType::LearnerState, t0 + 4, sizeof(LearnerState)},
         {RecordType::Imu, t0 + 5, offsetof(ImuBatch, samples) + 2 * sizeof(ImuSample)},
         {RecordType::Localization, t0 + 6, sizeof(LocalizationState)},
-        {RecordType::ControlState, t0 + 7, sizeof(ControlState)},
+        {RecordType::LaneState, t0 + 7, sizeof(LaneState)},
+        {RecordType::ControlState, t0 + 8, sizeof(ControlState)},
     };
     EventRecordHeader header{};
     std::vector<char> payload;

@@ -59,6 +59,7 @@ flowchart TB
 | --- | --- |
 | [Runtime](runtime.md) | the processes, start-up and supervision, CPU and hardware engine load |
 | [Model pipeline](model-pipeline.md) | from the frame ring through the warp and the NPU to `ModelState` |
+| [Lane-line plugin](lane-line-plugin.md) | the optional plugin slot in modeld: loading, the per-frame stage, `LaneState` |
 | [HUD](hud.md) | what `overlayd` draws on the LCD and how |
 | [Recording](recording.md) | the route layout, the event log and its versions |
 | [Source layout](source-layout.md) | where the code lives and how the libraries depend on each other |

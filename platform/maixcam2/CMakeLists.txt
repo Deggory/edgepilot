@@ -22,9 +22,9 @@ target_link_directories(maixcam2_media PUBLIC "${MAIX_DEPS}/maix")
 target_link_libraries(maixcam2_media PUBLIC
   -Wl,--as-needed maixcam_lib samplerate ${AX_ALL_LIBS} pthread dl)
 
-# 모델 입력 워프용 GDC. MSP SDK 헤더만 쓰고 미들웨어는 쓰지 않는다(NPU 세션과 같은
-# 프로세스에서 AX SYS를 두 번 초기화하지 않도록).
-add_library(maixcam2_gdc STATIC maix_gdc_warp.cc maix_cmm.cc)
+# 모델 입력 워프용 GDC와 차선선 플러그인 입력용 VPP crop-resize. MSP SDK 헤더만 쓰고 미들웨어는 쓰지 않는다(NPU
+# 세션과 같은 프로세스에서 AX SYS를 두 번 초기화하지 않도록).
+add_library(maixcam2_gdc STATIC maix_gdc_warp.cc maix_cmm.cc maix_vpp.cc)
 target_include_directories(maixcam2_gdc PUBLIC "${PROJECT_SOURCE_DIR}/platform")
 target_include_directories(maixcam2_gdc SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_msp/out/arm64_glibc/include")
 target_compile_options(maixcam2_gdc PRIVATE ${PROJECT_WARNINGS})

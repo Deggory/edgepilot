@@ -49,6 +49,13 @@ AppConfig AppConfig::from_env_defaults() {
     config.log_calibration = env_flag("EDGEPILOT_LOG_CALIB");
     config.profile = env_flag("EDGEPILOT_PROFILE");
     config.flow_calibration = env_flag("EDGEPILOT_FLOW_CALIB", true);
+    // 차선선 플러그인: 0/false/off 등이면 끈다. 파일 경로(이름만이면 작업 디렉터리의 것: dlopen은 '/'가 없는 이름을
+    // 로더 경로에서 찾는다)면 그것, 비었거나 1/true/on 같은 켜기 값이면 기본 경로.
+    const std::string lane = env_string("EDGEPILOT_LANE_PLUGIN");
+    if (!env_flag("EDGEPILOT_LANE_PLUGIN", true))
+        config.lane_plugin_path.clear();
+    else if (lane.find_first_of("/.") != std::string::npos)
+        config.lane_plugin_path = lane.find('/') == std::string::npos ? "./" + lane : lane;
     return config;
 }
 

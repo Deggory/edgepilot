@@ -12,9 +12,9 @@ Each test file is one executable (`gtest_<name>.cc` →
 flowchart TB
     script["scripts/run_host_tests.sh"] --> configure["configure build-host<br>runtime off, diagnostics on"]
     gtest(["googletest v1.18.0<br>first configure, SHA256 pinned"]) --> configure
-    configure --> build["build the host_tests target<br>32 gtest_* executables"]
+    configure --> build["build the host_tests target<br>34 gtest_* executables"]
     build --> ctest["ctest<br>from the repository root"]
-    ctest --> cpp["build-host/bin/gtest_*<br>285 cases"]
+    ctest --> cpp["build-host/bin/gtest_*<br>298 cases"]
     ctest --> py["Python checks<br>check_web_console.py<br>check_recording_reader.py<br>check_docs.py"]
     py -.-> mjs["check_bev_lane_filter.mjs<br>jsc or node, if present"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
@@ -30,7 +30,7 @@ flowchart TB
 ```
 
 The script configures `build-host`, builds the `host_tests` target and runs
-everything with `ctest`: 285 C++ cases and 3 Python checks. googletest v1.18.0
+everything with `ctest`: 298 C++ cases and 3 Python checks. googletest v1.18.0
 is downloaded on the first configure (its SHA256 is pinned).
 
 To run one test:
@@ -66,6 +66,8 @@ the root as well.
 | `gtest_hud_state` | 6 | The mapping from control, recording, learner, locationd and calibration state to the HUD (lane-change and steering-pause flags, STORAGE FULL apart from SD CARD SLOW, the driver torque gauge, the learned values the controls use, FLOW on the CAL card for the flow source), the position in the lane, labels for every `BlockReason`, alert card priority |
 | `gtest_ipc_channels` | 8 | The shared-memory CAN queue (order, a full queue, copying only the filled frames), a subscriber that does not attach to a latest-value channel whose header does not match, the futex waits (a latest-value read and a CAN queue pop that wake right after a publish and otherwise time out, fall back to polling for a producer that never wakes, and go back to futex waits once a producer wakes again), and a pop that clears impossible queue indices |
 | `gtest_lane_line_filter` | 6 | The lane-line time filter: weight 1 gives the measurement as it is; no bias while following a curve (linear interpolation would pull it towards the inside); no lag when the car turns on a straight road, thanks to the ego-motion compensation; the noise falls with the weight; it starts again from the measurement when a line changes a lot or frames drop; the golden output shared with the BEV's JS copy (`check_bev_lane_filter.mjs`) |
+| `gtest_lane_plugin` | 5 | The lane-line plugin loader, with two fake plugins built as shared libraries (`fake_lane_plugin.cc`): opening one and decoding through it with the tensors passed by name; a plugin failure code passed on, and an exception from the plugin caught as a failure; a result with an enum out of range or a non-finite point dropped whole; confidences clipped to 0..1; a plugin with another ABI version or a missing file refused; the crop rounded to even pixels inside an odd frame; the crash guard (cleared by a clean exit or 200 good frames, skipping the plugin after two starts that never finished, not cleared while an exception unwinds) |
+| `gtest_lane_state_fill` | 8 | The lane-line plugin result packed into `LaneState`: the pixel-to-road projection is the inverse of the forward projection (calibration, height, virtual camera offset); the projection onto supercombo's road surface on a slope (and equal to the flat one on a flat road); every line and boundary read on the distance grid, NaN where it does not reach or has a gap over 8 m; the near extension along a curve, only when the nearest point is within 8 m and never across a gap; each line's own road height with the fallback to the ego lines' mean; an unfilled state with no road lines; points as quarter pixels and the types copied as they are |
 | `gtest_lateral_controller` | 33 | The lateral controller: the engage gate and holds; the torque limit and the MDPS fault avoidance (torque cap and steer request off above 85°, waiting at a stop and engaging above 85°, the 80° cap with hands off and its limit below the fault angle, the request kept off until under 15° after a turn the driver took over, or back below 80° after the wheel follows the planned curve for 1 s, and the upstream 85° cut with the avoidance off); MDPS temporary faults (steering pause and disengage warning, quiet if the driver took over); inactive at a stop; the curvature limit (minimum stable delay, saturation warning); the Panda gate and handover; the LKAS HUD; the use of learned values (bit-identical when off, `paramsd_invalid` as a soft disable, the road-bank estimate held through curves and faded when stale, roll-aware curvature limit, lagd delay); every `params/steering.json` key equal to the code default; the CAN fixture replay |
 | `gtest_lateral_learners` | 19 | paramsd EKF (Jacobian, Joseph positive definiteness, convergence, gate, output limits, save, gyro bias), torqued (TLS against the closed form, buckets, gate, filter and decay, the 4 Hz/12 s schedule, a cache saved only after new points), the controlsd wiring |
 | `gtest_lateral_mpc` | 1 | Lateral MPC optimality: the dynamics and the cost are implemented separately, and the gradient is checked at the converged point of 8 scenarios ([Verification](../docs/verification.md#lateral-mpc-solver)) |
