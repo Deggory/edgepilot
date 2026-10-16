@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <random>
 
 namespace {
@@ -130,6 +131,100 @@ TEST(LaneLineFilter, RestartsOnAJumpAndAGap) {
     EXPECT_NEAR(out[5], 1.7 - kLaneLineFilterWeight * 0.1, 1e-5) << "작은 변화는 섞는다";
     feed(11 * kDt + 0.5, 1.4);
     EXPECT_FLOAT_EQ(out[5], 1.4f) << "프레임이 끊기면 다시 시작한다";
+}
+
+// predict는 update가 섞기 전에 만드는 예측과 같다(가중 0의 update가 예측 그대로를 낸다). 다른 것은 옮기며 짧아진 먼
+// 끝뿐이다: update는 그 점에서 측정을 그대로 쓰고, predict는 마지막 구간을 늘린다.
+TEST(LaneLineFilter, PredictMatchesTheUpdatePrediction) {
+    LaneLineFilter filter;
+    float x[kTrajectorySize], y[kTrajectorySize], out[kTrajectorySize], predicted[kTrajectorySize];
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        x[i] = static_cast<float>(x_idx(i));
+        y[i] = static_cast<float>(lane_y_on_circle(0.002, x_idx(i)) + 0.01 * std::sin(i));
+    }
+    filter.update(1.0, x, y, 25.0, 0.002, out);
+    LaneLineFilter blended = filter;
+    blended.set_measurement_weight(0.0);
+    for (int i = 0; i < kTrajectorySize; ++i) y[i] += 0.03f;
+    blended.update(1.05, x, y, 25.0, 0.002, out);
+    ASSERT_TRUE(filter.predict(1.05, x, kTrajectorySize, 25.0, 0.002, predicted));
+    for (int i = 0; i < kTrajectorySize - 1; ++i) EXPECT_EQ(predicted[i], out[i]) << i;
+    EXPECT_TRUE(std::isfinite(predicted[kTrajectorySize - 1])) << "192 m 점은 1.25 m 짧아진 끝 너머다";
+}
+
+// 옮긴 선은 자차가 간 거리만큼 짧아진다. predict는 그만큼 마지막 구간을 늘려 측정이 닿은 마지막 점을 계속 읽는다
+// (Lanebow는 LD가 같은 프레임인지 한 프레임 전인지에 따라 시야 끝이 한 격자씩 오가지 않는다). 그보다 먼 점은 NaN이다.
+TEST(LaneLineFilter, PredictKeepsTheReach) {
+    LaneLineFilter filter;
+    float x[kTrajectorySize], y[kTrajectorySize], out[kTrajectorySize];
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        x[i] = static_cast<float>(x_idx(i));
+        y[i] = static_cast<float>(-1.7 + 0.001 * x_idx(i));
+    }
+    const int count = 12;  // 22.7 m까지
+    filter.update_prefix(1.0, x, y, count, 20.0, 0.0, out);
+    for (const double dt : {0.05, 0.1}) {
+        ASSERT_TRUE(filter.predict(1.0 + dt, x, kTrajectorySize, 20.0, 0.0, out));
+        const double travel = 20.0 * dt;  // 도로에 고정된 선이므로 지금 x에서는 x + travel의 값이다
+        for (int i = 0; i < count; ++i)
+            EXPECT_NEAR(out[i], -1.7 + 0.001 * (x_idx(i) + travel), 1e-5) << "dt " << dt << " x " << x[i];
+        EXPECT_TRUE(std::isnan(out[count])) << "dt " << dt;
+    }
+}
+
+// 도로에 고정된 선은 몇 프레임 뒤의 시각으로 옮겨도 그 시각에 보이는 선과 같다.
+TEST(LaneLineFilter, PredictFollowsARoadFixedLine) {
+    for (const double kappa : {0.0, 0.003, -0.002}) {
+        LaneLineFilter filter;
+        float x[kTrajectorySize], y[kTrajectorySize], out[kTrajectorySize];
+        for (int i = 0; i < kTrajectorySize; ++i) {
+            x[i] = static_cast<float>(x_idx(i));
+            y[i] = static_cast<float>(lane_y_on_circle(kappa, x_idx(i)));
+        }
+        filter.update(2.0, x, y, 25.0, kappa, out);
+        ASSERT_TRUE(filter.predict(2.15, x, kTrajectorySize, 25.0, kappa, out));
+        for (int i = 0; i < kTrajectorySize; ++i) {
+            if (x_idx(i) < 3.0 || x_idx(i) > 60.0) continue;
+            EXPECT_NEAR(out[i], lane_y_on_circle(kappa, x_idx(i)), 0.003) << "kappa " << kappa << " x " << x[i];
+        }
+    }
+    LaneLineFilter empty;
+    float x[kTrajectorySize] = {}, out[kTrajectorySize];
+    EXPECT_FALSE(empty.predict(1.0, x, kTrajectorySize, 20.0, 0.0, out)) << "거른 선이 없다";
+}
+
+TEST(LaneLineFilter, PredictRefusesAnEarlierTime) {
+    LaneLineFilter filter;
+    float x[kTrajectorySize], y[kTrajectorySize], out[kTrajectorySize];
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        x[i] = static_cast<float>(x_idx(i));
+        y[i] = -1.7f;
+    }
+    filter.update(5.0, x, y, 20.0, 0.0, out);
+    EXPECT_FALSE(filter.predict(4.99, x, kTrajectorySize, 20.0, 0.0, out));
+    ASSERT_TRUE(filter.predict(5.0, x, kTrajectorySize, 20.0, 0.0, out)) << "같은 시각은 거른 선 그대로다";
+    EXPECT_NEAR(out[10], -1.7, 1e-6);
+}
+
+// 시야가 짧은 선: 앞쪽 count개 점만 거르고 나머지는 NaN이다. 시야가 프레임마다 달라도 다시 시작하지 않는다.
+TEST(LaneLineFilter, PrefixLinesWithAChangingReach) {
+    LaneLineFilter filter;
+    float x[kTrajectorySize], y[kTrajectorySize], out[kTrajectorySize];
+    for (int i = 0; i < kTrajectorySize; ++i) x[i] = static_cast<float>(x_idx(i));
+    auto feed = [&](double t, int count, double offset) {
+        for (int i = 0; i < kTrajectorySize; ++i) y[i] = static_cast<float>(offset);
+        filter.update_prefix(t, x, y, count, 20.0, 0.0, out);
+    };
+    feed(0.0, 17, -1.8);
+    for (int i = 17; i < kTrajectorySize; ++i) EXPECT_TRUE(std::isnan(out[i])) << i;
+    feed(0.05, 15, -1.7);
+    EXPECT_NEAR(out[5], -1.8 + kLaneLineFilterWeight * 0.1, 1e-5) << "짧아진 선도 섞는다";
+    feed(0.10, 17, -1.7);
+    EXPECT_NEAR(out[5], -1.75 + kLaneLineFilterWeight * 0.05, 1e-5);
+    EXPECT_FLOAT_EQ(out[16], -1.7f) << "직전 선이 닿지 않던 먼 점은 측정 그대로다";
+    y[3] = std::numeric_limits<float>::quiet_NaN();
+    filter.update_prefix(0.15, x, y, 17, 20.0, 0.0, out);
+    EXPECT_FALSE(filter.has_line()) << "앞쪽 점이 비면 다시 시작한다";
 }
 
 // tests/check_bev_lane_filter.mjs가 같은 장면으로 BEV의 JS 사본(lane_filter.js)을 이 값에 맞춘다. 알고리즘을 바꾸면

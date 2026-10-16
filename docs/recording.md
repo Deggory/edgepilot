@@ -248,6 +248,10 @@ Notes on the changes:
   types it does not know; a C++ reader built before it stops reading that chunk
   at the first `LaneState` record. Before it was released, its layout gained
   the road block (6016 to 6776 B); the readers take only the 6776 B form.
+- **`ControlState.lane_state_frame`.** The frame of the `LaneState` the
+  Lanebow plan used (low 32 bits, 0 otherwise) took the 4 padding bytes at the
+  end of `ControlState` without a version bump; older recordings have 0
+  there.
 
 ### Older recordings
 

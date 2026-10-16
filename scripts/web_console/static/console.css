@@ -220,7 +220,8 @@ main {
   display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .param-notes:empty { display: none; }
-.card.param > .switch-control, .card.param > .stepper, .card.param > .slider-control { margin-top: 12px; }
+.card.param > .switch-control, .card.param > .stepper, .card.param > .slider-control,
+.card.param > .segmented { margin-top: 12px; }
 .card.param.ignored .param-description, .card.param.ignored .stepper,
 .card.param.ignored .switch-control, .card.param.ignored .slider-control { opacity: 0.5; }
 .param-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; min-height: 26px; }

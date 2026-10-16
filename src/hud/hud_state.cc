@@ -5,6 +5,7 @@
 #include "controls/control_params.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <limits>
 
@@ -58,6 +59,7 @@ void hud_apply_control_state(const ControlState &c, bool fresh, HudState *hud) {
     hud->controller_engaged = fresh && c.engaged != 0;
     hud->controller_active = fresh && c.active != 0;
     hud->laneless_mode = fresh && (c.hud_flags & kHudFlagLaneless) != 0;
+    hud->lanebow_mode = fresh && (c.hud_flags & kHudFlagLanebow) != 0;
     hud->vehicle_fresh = fresh && c.vehicle_fresh != 0;
     hud->steering_fault = fresh && c.steering_fault != 0;
     hud->left_blinker = fresh && c.left_blinker != 0;
@@ -231,4 +233,17 @@ ProjectionState projection_from_model_state(const ModelState &state) {
         make_projection_state(state.calibration.roll, state.calibration.pitch, state.calibration.yaw);
     projection.lateral_offset_m = state.camera_offset_m;
     return projection;
+}
+
+float hud_lane_ego_y(const LaneState &lane, int8_t slot, int index) {
+    // Lanebow 플래너가 선을 온전히 믿는 신뢰도(lanebow_source.h kConfidence1). 모델 차선의 확률 0.5 문턱에 해당한다.
+    constexpr float kMinConfidence = 0.4f;
+    const LaneRoadLine *line = lane_ego_road_line(lane, slot);
+    return line && line->confidence >= kMinConfidence && index >= 0 && index < static_cast<int>(kLaneRoadPoints)
+               ? line->y[index]
+               : std::numeric_limits<float>::quiet_NaN();
+}
+
+float hud_lane_state_center_offset_m(const LaneState &lane) {
+    return 0.5f * (hud_lane_ego_y(lane, kLaneSlotEgoLeft, 0) + hud_lane_ego_y(lane, kLaneSlotEgoRight, 0));
 }

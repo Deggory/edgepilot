@@ -69,7 +69,7 @@ CONTROL_STATE = np.dtype([
     ("engage_event_id", "<u4"), ("disengage_event_id", "<u4"),
     ("engage_reject_event_id", "<u4"),
     ("engage_reject_block", "S32"),
-    ("ego_speed_kph", "<f4"),
+    ("ego_speed_kph", "<f4"), ("lane_state_frame", "<u4"),
 ])
 
 # ImuBatch(src/common/ipc_messages.h): 16바이트 머리 뒤에 `count`개 샘플(그만큼만 기록된다).

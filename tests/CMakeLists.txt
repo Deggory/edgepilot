@@ -45,6 +45,7 @@ add_host_test(gtest_lateral_learners learners)
 add_host_test(gtest_lateral_mpc planning)
 add_host_test(gtest_lateral_planner planning)
 add_host_test(gtest_lane_line_filter planning)
+add_host_test(gtest_lanebow_source planning)
 # 차선선 플러그인: 가짜 플러그인 두 개(정상, ABI가 다른 것)를 공유 라이브러리로 만들어 연다.
 foreach(plugin fake_lane_plugin fake_lane_plugin_bad_abi)
   add_library(${plugin} MODULE fake_lane_plugin.cc)

@@ -9,7 +9,7 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from .backlight import DisplayBacklight
 from .param_metadata import PARAM_GROUPS, PARAM_METADATA, VEHICLE_TAB
@@ -17,6 +17,21 @@ from .process_status import signal_process
 
 # 백라이트 하드웨어에 적용하는 기기 설정 항목. 나머지(알림음 등)는 overlayd·modeld가 파일에서 읽는다.
 BACKLIGHT_KEYS = ("enabled", "brightness_percent")
+
+# 이름이 바뀐 항목: 그룹 -> 예전 키 -> (새 키, 값 바꾸기). 키 집합을 기본값에 맞추기 전에 옮긴다(그냥 맞추면 예전 값을
+# 버리고 새 키가 기본값이 된다). 런타임 로더도 예전 키를 같은 뜻으로 읽는다(control_params.cc read_path_mode).
+RENAMED_KEYS: Dict[str, Dict[str, Tuple[str, Callable[[Any], Any]]]] = {
+    "steering": {"laneless_mode": ("path_mode", lambda laneless: 1 if laneless is True else 0)},
+}
+
+
+def check_choice(group: str, key: str, value: Any) -> None:
+    """고르는 항목(메타데이터 control "choice")은 선택지 번호만 받는다."""
+    meta = PARAM_METADATA.get(group, {}).get(key, {})
+    if meta.get("control") != "choice":
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < len(meta["options"]):
+        raise ValueError(f"{key} must be one of 0..{len(meta['options']) - 1}")
 
 
 def params_dir() -> Path:
@@ -94,6 +109,9 @@ class ParamStore:
                 runtime = read_document(runtime_path) if runtime_path.is_file() else {}
             except ValueError:
                 continue
+            for old, (new, convert) in RENAMED_KEYS.get(group, {}).items():
+                if old in runtime and new not in runtime:
+                    runtime = {**runtime, new: convert(runtime[old])}
             merged = {key: runtime.get(key, value) for key, value in defaults.items()}
             if merged != runtime:
                 write_document(runtime_path, merged)
@@ -139,6 +157,8 @@ class ParamStore:
             unknown = sorted(set(values) - set(document))
             if unknown:
                 raise KeyError(", ".join(unknown))
+            for key, value in values.items():
+                check_choice(group, key, value)
             document.update(values)
             if group == "display" and any(key in values for key in BACKLIGHT_KEYS):
                 if self.backlight is None:

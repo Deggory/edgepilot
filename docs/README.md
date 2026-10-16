@@ -83,6 +83,7 @@ flowchart TB
 | [Flow calibration](flow-calibration.md) | the camera mount measured from optical flow |
 | [Lead flow](lead-flow.md) | the lead's closing speed from optical flow, the lead track, the vision cruise |
 | [Lane-line filter](lane-line-filter.md) | steadying the ego lane lines without lag |
+| [Lanebow](lanebow.md) | the path mode that keeps to the lane-line plugin's lines |
 
 ## Code and tools
 

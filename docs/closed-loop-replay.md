@@ -166,6 +166,11 @@ scale before trusting such a comparison.
 - The pose correction moves the plan's positions but not its yaw, which is
   all the Laneless law reads, so Laneless mode cannot be checked
   ([Lane-line filter](lane-line-filter.md#how)).
+- `--lanebow` moves the lane-line plugin's road lines the same way, and the
+  CSV adds `ld_lane_y`, the lane-centre offset by those lines. The recorded
+  frames do not move with the simulated car, so where the recorded car
+  straddles a line, the plugin's lane names flip with it and the simulation
+  chases them ([Lanebow](lanebow.md#evidence)).
 
 **Coverage.** The hands-off requirement is not a detail: it decides which
 questions the tool can answer.

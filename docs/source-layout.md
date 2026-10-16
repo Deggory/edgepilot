@@ -387,12 +387,17 @@ released after that short hold if they persist.
 Library `planning`.
 
 - `lateral_planner.*`: applies openpilot lane probability/width logic and the
-  lateral MPC (Lane mode), or the plan yaw (Laneless mode and Lane mode's
-  model-path stretches), to produce curvature targets. This is the only
-  producer of `LateralTarget`.
+  lateral MPC (Lane and Lanebow modes), or the plan yaw (Laneless mode and the
+  model-path stretches of the other two), to produce curvature targets. This is
+  the only producer of `LateralTarget`.
 - `lane_line_filter.*`: smooths the two ego lane lines over time for the
   planner: the last filtered lines moved by the car's own motion, blended with
   the new frame. See [Lane-line filter](lane-line-filter.md).
+- `lane_measurement.h`, `lanebow_source.*`, `lane_state_selector.h`: the
+  [Lanebow](lanebow.md) lane source. The selector picks the plugin result for a
+  model frame, and the source checks, filters, moves and extends its ego lines
+  into the measurement the planner's lane core takes (supercombo's lines go
+  through the same core).
 - `desire_helper.*`: the openpilot desire_helper port the planner runs each
   model frame: lane change states (`LaneChangeState`), the
   blinker/torque/blind-spot/road-edge gates, the lane-line fade, one lane

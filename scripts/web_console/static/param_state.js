@@ -13,16 +13,21 @@ export const unitText = unit => (unit && has(`unit.${unit}`) ? t(`unit.${unit}`)
 
 export const sectionName = id => t(`section.${id}`);
 
-// 항목 하나의 글자: 이름, 설명, 줄이거나 끄면·키우거나 켜면, 자동 학습 중의 쓰임(learned), 주의(caution)
+// 항목 하나의 글자: 이름, 설명, 줄이거나 끄면·키우거나 켜면(고르는 항목은 선택지마다 이름과 설명), 자동 학습 중의
+// 쓰임(learned), 주의(caution)
 function describe(group, key, meta) {
   const base = `param.${group}.${key}`;
+  const choice = meta.control === "choice";
   return {
     ...meta,
     unit: unitText(meta.unit || ""),
     label: t(`${base}.label`),
     description: t(`${base}.description`),
-    increase: t(`${base}.increase`),
-    decrease: t(`${base}.decrease`),
+    increase: choice ? "" : t(`${base}.increase`),
+    decrease: choice ? "" : t(`${base}.decrease`),
+    options: choice ? meta.options.map(name => ({
+      name, label: t(`${base}.option.${name}.label`), description: t(`${base}.option.${name}.description`),
+    })) : undefined,
     learned_role: meta.learned ? t(`${base}.learned_role`) : "",
     caution: meta.caution ? t(`caution.${meta.caution}`) : "",
   };

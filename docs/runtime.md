@@ -447,7 +447,7 @@ behind a seqlock; a queue holds up to 64 CAN batches in order. In rehearsal,
 | `edgepilot_imu` | `ImuBatch` | latest | `imud` | `locationd`, `recordd` |
 | `edgepilot_localization` | `LocalizationState` | latest | `locationd` | `controlsd`, `overlayd`, `recordd`, web console |
 | `edgepilot_record_state` | `RecordState` | latest | `recordd` | `overlayd` |
-| `edgepilot_lane_state2` | `LaneState` | latest | `modeld`, only with a [lane-line plugin](lane-line-plugin.md) | `recordd` |
+| `edgepilot_lane_state2` | `LaneState` | latest | `modeld`, only with a [lane-line plugin](lane-line-plugin.md) | `controlsd` ([Lanebow](lanebow.md)), `overlayd`, `recordd`, web console |
 | `edgepilot_manager_state` | `ManagerState` | latest | `manager.py` | `overlayd`, web console |
 
 The layouts are in `src/common/ipc_messages.h`, the channels in

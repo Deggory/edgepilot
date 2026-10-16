@@ -32,6 +32,13 @@ const LANE_WIDTH = 0.15;                 // 차선선은 도색 폭만큼의 띠
 const RAW_LANE = {width: 0.05, alpha: [0.15, 0.35]};  // 거른 선 아래의 모델 자체 자차 차로 선
 const CURB = {width: 0.2, height: 0.12};
 const PATH_WIDTH = 1.8;                  // hud_scene.cc kPathHalfWidth의 양쪽 합
+// 차선선 플러그인(LD) 선: 도색 색(lane_plugin_abi.h EpLaneColor 순서, 모르면 회색), 띠 폭(m, 도색보다 가늘게),
+// 점선 무늬(dash on m, 주기 period m, 표시용), 경계 종류(EpBoundaryType)별 색
+const LD = {colors: ["#f5f5f5", "#ffcc00", "#409cff"], unknown: "#afb4bc", width: 0.1, dash: 4, period: 9, step: 0.5,
+            boundary: "#c8ccd4", cones: "#ffb020", curb: "#ff785a"};
+// Lanebow로 조향하는 동안의 경로: hud_draw.h kRainbow(가까운 빨강 → 먼 끝 보라)와 테두리·점의 보라(kViolet)
+const RAINBOW = ["#ff453a", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff", "#5e5ce6", "#bf5af2"];
+const VIOLET = "#bf5af2";
 // hud_scene.cc: 이 확률보다 낮은 선과 이 신뢰도보다 낮은 경계는 그리지 않는다
 const LANE_MIN_PROBABILITY = 0.05, EDGE_MIN_CONFIDENCE = 0.05;
 // lead_risk(): 이 간격이나 이 접근 속도에서 최대
@@ -71,9 +78,9 @@ const HUD = {white: "#ffffff", green: "#30d158", blue: "#409cff", gray: "#969ca5
              cyan: "#5ac8fa"};
 
 // 도구 막대의 레이어 버튼(이름은 bev.layer.<이름> 문구)과, 버튼마다 보이거나 숨기는 그룹.
-const LAYERS = ["path", "lanes", "rawLanes", "edges", "lead", "curvature", "labels"];
-const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], rawLanes: ["rawLanes"], edges: ["edges"], lead: ["lead"],
-                      curvature: ["curvature"], labels: ["lead_labels", "path_labels"]};
+const LAYERS = ["path", "lanes", "rawLanes", "ldLanes", "edges", "lead", "curvature", "labels"];
+const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], rawLanes: ["rawLanes"], ldLanes: ["ldLanes"], edges: ["edges"],
+                      lead: ["lead"], curvature: ["curvature"], labels: ["lead_labels", "path_labels"]};
 const VIEWS = ["behind", "top"];   // 시점 버튼, bev.view.<이름> 문구
 
 // -- 색 --------------------------------------------------------------------------------------------
@@ -479,7 +486,7 @@ export class BevView {
     this.controls.addEventListener("change", () => this.requestRender());
 
     this.layers = {};
-    for (const name of ["path", "lanes", "edges", "lead", "curvature"]) this.scene.add(this.layers[name] = new THREE.Group());
+    for (const name of ["path", "lanes", "ldLanes", "edges", "lead", "curvature"]) this.scene.add(this.layers[name] = new THREE.Group());
     this.layers.lead.add(this.layers.lead_labels = new THREE.Group());
     this.layers.path.add(this.layers.path_labels = new THREE.Group());
     this.layers.lanes.add(this.layers.rawLanes = new THREE.Group());
@@ -524,6 +531,8 @@ export class BevView {
                                                  uStop: {value: ink(HUD.red)}, uLength: {value: 1}, uWidth: {value: PATH_WIDTH},
                                                  uStrength: {value: 1}, uTint: {value: SLOW.tint}});
     this.path = put("path", new Batch("corridor", 3, this.corridorMaterial, 3));
+    this.rainbow = put("path", new Batch("color", 4, overlayMaterial(), 3));
+    this.ldLines = put("ldLanes", new Batch("color", 4, overlayMaterial(), 4));
     this.speedTag = this.tag("path_labels", "speed");
     this.speedTag.center.set(0, 0);             // 점의 오른쪽 아래에 매단다: 앞차 라벨을 피한다
     this.arcs = put("curvature", new Batch("color", 4, overlayMaterial(), 6));
@@ -669,13 +678,17 @@ export class BevView {
   draw(scene) {
     this.plan = planSummary(scene.path, scene.planNow);
     this.container.classList.toggle("stale", scene.stale);
-    this.drawLanes(scene.lanes);
-    this.drawEdges(scene.edges);
+    // Lanebow에서 LD 결과가 있으면 LCD처럼 LD 선이 supercombo 차선·경계를 대신한다(같이 그리면 선이 겹쳐 보인다).
+    // LD 층을 숨기면 supercombo 것을 그린다.
+    const ldOnly = scene.state.lanebow && !!scene.ld && this.layers.ldLanes.visible;
+    this.drawLanes(ldOnly ? [] : scene.lanes);
+    this.drawLd(scene.ld);
+    this.drawEdges(ldOnly ? [] : scene.edges);
     this.drawPath(scene);
     this.drawCurvature(scene);
     this.drawLead(scene);
     this.drawEgo(scene);
-    this.drawHud(scene);
+    this.drawHud(scene, ldOnly);
     this.drawDeparture(scene);
     this.drawLeadCard(scene);
     this.sideEmpty.hidden = !(this.card.hidden && this.leadPanel.hidden);
@@ -710,18 +723,45 @@ export class BevView {
     b.end();
   }
 
-  // 계획을 HUD 경로 색의 띠로, 모델이 감속을 계획한 곳은 물들여 그린다.
+  // 차선선 플러그인(LD) 선을 실제 도색 색과 모양(실선, 점선, 보츠; 겹선도 그 무늬의 한 줄)으로, 도로 경계를 가는
+  // 선으로 그린다.
+  drawLd(ld) {
+    const b = this.ldLines;
+    b.begin();
+    for (const line of ld ? ld.lines : []) {
+      if (line.points.length < 2) continue;
+      if (line.boundary) {
+        const hex = line.type === 5 ? LD.cones : line.type === 3 ? LD.curb : LD.boundary;
+        band(b, line.points, 0.08, 0.035, ink(hex), 0.6);
+        continue;
+      }
+      const color = ink(LD.colors[line.color] || LD.unknown), alpha = 0.55 + 0.4 * clamp(line.confidence, 0, 1);
+      const shape = line.double > 0 ? line.double - 1 : line.type;
+      for (const piece of ldPattern(line.points, shape)) band(b, piece, LD.width, 0.04, color, alpha);
+    }
+    b.end();
+  }
+
+  // 계획을 HUD 경로 색의 띠로, 모델이 감속을 계획한 곳은 물들여 그린다. Lanebow로 조향하는 동안에는 같은 점·폭의
+  // 무지개 띠를 LD 차로 가운데에 그린다(두 자차 선이 없거나 차선을 바꾸는 중이면 경로 그대로, LCD와 같다).
   drawPath(scene) {
-    const path = scene.path;
+    const path = scene.path, state = scene.state, ld = scene.ld;
     this.path.begin();
+    this.rainbow.begin();
     this.speedTag.visible = false;
     if (path.length > 1) {
-      const [hex, strength] = pathStyle(scene.state), now = Number.isFinite(scene.planNow) ? scene.planNow : 0;
+      const now = Number.isFinite(scene.planNow) ? scene.planNow : 0;
       const slow = path.map(([, , speed]) => clamp((now - speed) / Math.max(now, SLOW.floor), 0, 1));
-      const uniforms = this.corridorMaterial.uniforms;
-      uniforms.uColor.value.copy(ink(hex));
-      uniforms.uStrength.value = strength;
-      uniforms.uLength.value = Math.max(corridor(this.path, path, PATH_WIDTH, 0.025, slow), 1);
+      if (ld && state.lanebow && !state.laneless && state.steering) {
+        const centered = !state.changing && ld.left && ld.right && centeredPath(path, ld.left.points, ld.right.points);
+        rainbowBand(this.rainbow, centered || path, slow);
+      } else {
+        const [hex, strength] = pathStyle(state);
+        const uniforms = this.corridorMaterial.uniforms;
+        uniforms.uColor.value.copy(ink(hex));
+        uniforms.uStrength.value = strength;
+        uniforms.uLength.value = Math.max(corridor(this.path, path, PATH_WIDTH, 0.025, slow), 1);
+      }
       // 계획의 가장 느린 지점(또는 STOP, 또는 가속해 도달하는 속도)을 경로 옆에 쓴다. 단 앞차가 보이면 쓰지
       // 않는다: 원근 때문에 어디에 있든 앞차 라벨 위에 겹치고, 칩이 같은 내용을 보여 준다
       const plan = this.plan;
@@ -730,6 +770,7 @@ export class BevView {
         this.place(this.speedTag, path[plan.i][0] - nx * beside, path[plan.i][1] - ny * beside, 0, plan.text, "", plan.color);
       }
     }
+    this.rainbow.end();
     this.path.end();
   }
 
@@ -829,16 +870,17 @@ export class BevView {
     this.egoGlow.end();
   }
 
-  // 아래쪽 칩: 모드, 속도, 차로 폭, 간격, 모델 프레임이 얼마나 오래됐는지.
-  drawHud(scene) {
+  // 아래쪽 칩: 모드, 속도, 차로 폭(LD 선을 그리면 LD 선 사이), 간격, 모델 프레임이 얼마나 오래됐는지.
+  drawHud(scene, ldOnly) {
     const lead = scene.lead;
     // 앞차 트랙의 상대 속도는 항상, 모델 자체 상대 속도는 다가가는 동안만
     const relative = lead && lead.relative !== null && (lead.tracked || lead.relative * 3.6 <= -3) ? ` ${kph(lead.relative)}` : "";
-    this.chip("mode", `<i style="background:${stateColor(scene.state) || "#566170"}"></i>${modeText(scene.state)}`);
+    this.chip("mode", `<i style="background:${stateColor(scene.state) || "#566170"}"></i>${modeText(scene.state, scene.ld)}`);
     this.chip("speed", Number.isFinite(scene.speedKph) ? `${Math.round(scene.speedKph)} km/h` : "");
     const plan = this.plan;
     this.chip("plan", plan ? `<b>PLAN</b><em style="color:${plan.color}">${plan.text}</em> · ${Math.max(0, scene.path[plan.i][0]).toFixed(0)} m` : "");
-    this.chip("lane", Number.isFinite(scene.laneWidth) ? `<b>LANE W</b>${scene.laneWidth.toFixed(2)} m` : "");
+    const width = ldOnly ? scene.ld.width : scene.laneWidth;
+    this.chip("lane", Number.isFinite(width) ? `<b>LANE W</b>${width.toFixed(2)} m` : "");
     const curvature = scene.curvature, speed = scene.speedKph / 3.6;
     this.chip("lat", curvature && speed >= ARC.speed
       ? `<b>LAT</b><i style="background:${HUD.white}"></i>${Math.abs(curvature.desired * speed * speed).toFixed(2)}`
@@ -1051,21 +1093,75 @@ function planSummary(path, now) {
 
 // hud_draw.h state_color(): 조향 상태의 색, engaged가 아니면 null.
 function stateColor(state) {
-  if (state.steering) return state.laneless ? HUD.blue : HUD.green;
+  if (state.steering) return state.laneless ? HUD.blue : state.lanebow ? VIOLET : HUD.green;
   return state.engaged ? HUD.gray : null;
 }
 
-function modeText(state) {
+// hud_renderer.cc mode_text(). Lanebow에서 LD가 없어 모델 경로로 가면 NO LD.
+function modeText(state, ld) {
+  if (state.active && state.lanebow) return !state.laneless ? "LANEBOW" : ld ? "LANELESS" : "NO LD";
   if (state.active) return state.laneless ? "LANELESS" : "LANE";
   return state.engaged || state.enabled ? "READY" : "OFF";
 }
 
-// path_color(): [색, 세기]: engaged가 아니면 옅은 흰색, 조향하지 않으면 회색, 조향 중이면 초록이나 파랑.
-// (출력 한계 부근의 호박색은 여기서는 자차 후광에 있다, drawEgo().)
+// path_color(): [색, 세기]: engaged가 아니면 옅은 흰색, 조향하지 않으면 회색, 조향 중이면 초록이나 파랑(Lanebow는
+// 보라). (출력 한계 부근의 호박색은 여기서는 자차 후광에 있다, drawEgo().)
 function pathStyle(state) {
   if (!state.engaged) return [HUD.white, 0.6];
   if (!state.steering) return [HUD.gray, 0.85];
-  return [state.laneless ? HUD.blue : HUD.green, 1];
+  return [state.laneless ? HUD.blue : state.lanebow ? VIOLET : HUD.green, 1];
+}
+
+// 선을 모양대로 조각낸다: 실선은 그대로, 점선은 거리 LD.period마다 LD.dash m, 보츠는 짧은 점들. 첫 조각은 선의
+// 가까운 끝에 걸친 것부터(가까운 끝이 조각 안이면 그 나머지).
+function ldPattern(points, shape) {
+  if (shape !== 1 && shape !== 2) return [points];
+  const [on, period] = shape === 1 ? [LD.dash, LD.period] : [0.3, 1.5];
+  const x0 = points[0][0], x1 = points[points.length - 1][0], pieces = [];
+  for (let start = Math.floor(x0 / period) * period; start < x1; start += period) {
+    const piece = [];
+    for (let x = Math.max(start, x0); x <= Math.min(start + on, x1) + 1e-6; x += Math.min(LD.step, on / 2)) {
+      const y = lateralAt(points, x);
+      if (y !== null) piece.push([x, y]);
+    }
+    if (piece.length >= 2) pieces.push(piece);
+  }
+  return pieces;
+}
+
+// Lanebow 무지개 경로의 점: path(plan)와 같은 점에서 가로 위치만 LD 차로 가운데로 옮긴다. LD 두 선이 같이 있는
+// 거리 안에서는 그 가운데와 path의 차이를, 밖에서는 가까운 끝·먼 끝의 차이를 쓴다(hud_lanes.cc lanebow_center_path).
+// 두 선이 같이 있는 곳이 없으면 null.
+function centeredPath(path, left, right) {
+  const x0 = Math.max(left[0][0], right[0][0]), x1 = Math.min(left[left.length - 1][0], right[right.length - 1][0]);
+  const offsets = [];
+  for (let x = x0; x <= x1 + 1e-6; x += 1) {
+    const yl = lateralAt(left, x), yr = lateralAt(right, x), yp = lateralAt(path, x);
+    if (yl !== null && yr !== null && yp !== null) offsets.push([x, (yl + yr) / 2 - yp]);
+  }
+  if (offsets.length < 2) return null;
+  const first = offsets[0], last = offsets[offsets.length - 1];
+  return path.map(([x, y]) => [x, y + (x <= first[0] ? first[1] : x >= last[0] ? last[1] : lateralAt(offsets, x))]);
+}
+
+// points를 따라 경로 폭의 무지개 띠: 가까운 빨강에서 먼 끝의 보라로(LCD처럼 띠 길이에 펼친다). 모델이 감속을 계획한
+// 곳(slow[i])은 경로 띠처럼 호박색, 멈추는 곳은 빨강으로 물든다(CORRIDOR 셰이더와 같은 식).
+function rainbowBand(b, points, slow) {
+  const n = points.length, h = PATH_WIDTH / 2;
+  const colors = RAINBOW.map((hex) => ink(hex)), amber = ink(HUD.amber), red = ink(HUD.red);
+  const along = [0];
+  for (let i = 1; i < n; i++) along.push(along[i - 1] + Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  const total = Math.max(along[n - 1], 1e-6), base = b.reserve(2 * n, 6 * (n - 1));
+  for (let i = 0; i < n; i++) {
+    const [px, py] = points[i], [nx, ny] = normalAt(points, i);
+    const u = along[i] / total, f = u * (colors.length - 1), k = Math.min(Math.floor(f), colors.length - 2);
+    const tint = amber.clone().lerp(red, smoothstep(0.45, 0.9, slow[i]));
+    const color = colors[k].clone().lerp(colors[k + 1], f - k).lerp(tint, smoothstep(SLOW.tint, SLOW.tint + 0.25, slow[i]));
+    const alpha = 0.6 - 0.25 * u;
+    b.put(px + nx * h, py + ny * h, 0.03, color.r, color.g, color.b, alpha);
+    b.put(px - nx * h, py - ny * h, 0.03, color.r, color.g, color.b, alpha);
+    if (i) { const v = base + 2 * i; b.tri(v - 2, v - 1, v); b.tri(v - 1, v + 1, v); }
+  }
 }
 
 // lead_risk(): 가깝거나 빠르게 다가갈수록 1에 가깝다. 흰색, 호박색, 그다음 빨간색. (HUD는 SCC 레이더의

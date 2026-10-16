@@ -7,6 +7,7 @@ from typing import Any
 
 MODEL_STATE_TOPIC = "/edgepilot_model_state"
 CONTROL_STATE_TOPIC = "/edgepilot_control_state"
+LANE_STATE_TOPIC = "/edgepilot_lane_state2"
 MODEL_STATE_SIZE = 3736
 CONTROL_STATE_SIZE = 240
 
@@ -24,7 +25,13 @@ CONTROL_STATE_AT = {
     "desired_curvature": 72, "actual_curvature": 76, "normalized_output": 80,
     "departure_alert_type": 144, "green_light_alert_armed": 152, "hud_flags": 184, "ego_speed_kph": 232,
 }
-HUD_FLAG_BITS = {"Laneless": 0, "SteerPaused": 7, "BrakeLights": 9}  # ipc_messages.h kHudFlag<이름>의 비트
+# 차선선 플러그인 결과(LaneState)의 앞부분: 헤더와 도로면 블록(kLaneStateRoadPrefixBytes). 도로면 선 하나
+# (LaneRoadLine)는 size 바이트이고 y는 거리 격자 X_IDXS의 앞쪽 points개 점의 가로 위치(m, 오른쪽 +)다.
+LANE_STATE_PREFIX_SIZE = 848
+LANE_STATE_AT = {"frame_id": 0, "capture_timestamp_ns": 8, "valid": 28, "road_count": 44, "road": 48}
+LANE_ROAD_AT = {"size": 80, "points": 17, "kind": 0, "slot": 2, "type": 3, "double_line": 4, "color": 5,
+                "confidence": 8, "y": 12}
+HUD_FLAG_BITS = {"Laneless": 0, "LaneChanging": 5, "SteerPaused": 7, "BrakeLights": 9, "Lanebow": 10}  # ipc_messages.h kHudFlag<이름>의 비트
 GEAR_PARK = 0  # car/can_frame.h kGearPark
 
 

@@ -75,6 +75,10 @@ from scripts.web_console.state_layout import (
     CONTROL_STATE_TOPIC,
     GEAR_PARK,
     HUD_FLAG_BITS,
+    LANE_ROAD_AT,
+    LANE_STATE_AT,
+    LANE_STATE_PREFIX_SIZE,
+    LANE_STATE_TOPIC,
     MODEL_CALIBRATION_AT,
     MODEL_CALIBRATION_SOURCE_AT,
     MODEL_FLOW_CALIBRATION_AT,
@@ -275,6 +279,23 @@ class ParamStoreTest(unittest.TestCase):
         self.assertEqual(store.defaults(), {"adaptive_cruise": {"following_time_s": 1.8,
                                                                 "deceleration_rate_kph_per_s": 1.5}})
 
+    def test_renamed_key_keeps_its_value(self):
+        """2026-10-15 전 steering.json의 laneless_mode는 키를 맞추기 전에 path_mode로 옮긴다(버리면 Laneless를 쓰던
+        보드가 말없이 Lane으로 돌아간다). 고르는 항목은 선택지 번호만 받는다."""
+        defaults = self.root / "steering.defaults.json"
+        defaults.write_text(json.dumps({"path_mode": 0, "enabled": True}), encoding="utf-8")
+        for laneless, mode in ((True, 1), (False, 0)):
+            self.paths["steering"].write_text(json.dumps({"laneless_mode": laneless, "enabled": False}),
+                                              encoding="utf-8")
+            store = ParamStore(self.paths, {"steering": defaults}, notify=self.notify)
+            self.assertEqual(store.read_group("steering"), {"path_mode": mode, "enabled": False})
+        for bad in (3, -1, 1.5, True, "lanebow"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                store.update("steering", {"path_mode": bad})
+        self.assertEqual(store.read_group("steering")["path_mode"], 0)
+        store.update("steering", {"path_mode": 2})
+        self.assertEqual(store.read_group("steering")["path_mode"], 2)
+
     def test_defaults_sit_next_to_the_params_directory(self):
         """EDGEPILOT_PARAMS_DIR(없으면 params/)와 그 옆의 <이름>.defaults/(업로드 스크립트가 채운다)."""
         defaults = group_paths(self.root / "params.defaults")
@@ -310,7 +331,15 @@ class ParamMetadataTest(unittest.TestCase):
             for key, value in params.items():
                 meta = metadata[key]
                 self.assertTrue(meta.get("section"), f"{group}.{key}.section")
-                fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+                if meta.get("control") == "choice":
+                    # 고르는 항목: 값은 선택지 번호, 선택지마다 이름과 설명(increase/decrease 대신)
+                    self.assertEqual((meta["min"], meta["max"]), (0, len(meta["options"]) - 1), f"{group}.{key}")
+                    self.assertIsInstance(value, int, f"{group}.{key}")
+                    fields = ["label", "description"] + [f"option.{name}.{part}" for name in meta["options"]
+                                                         for part in ("label", "description")]
+                else:
+                    fields = ["label", "description", "increase", "decrease"]
+                fields += ["learned_role"] if meta.get("learned") else []
                 for lang, texts in catalogs.items():
                     for field in fields:
                         self.assertTrue(texts.get(f"param.{group}.{key}.{field}"), f"{lang}: param.{group}.{key}.{field}")
@@ -451,7 +480,12 @@ class I18nCatalogTest(unittest.TestCase):
         # 메타데이터에서 나오는 키(param_state.js가 만든다)
         for group, items in PARAM_METADATA.items():
             for key, meta in items.items():
-                fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+                if meta.get("control") == "choice":
+                    fields = ["label", "description"] + [f"option.{name}.{part}" for name in meta["options"]
+                                                         for part in ("label", "description")]
+                else:
+                    fields = ["label", "description", "increase", "decrease"]
+                fields += ["learned_role"] if meta.get("learned") else []
                 used.update(f"param.{group}.{key}.{field}" for field in fields)
                 used.add(f"section.{meta['section']}")
                 if meta.get("caution"):
@@ -993,6 +1027,15 @@ class ProcessStatusTest(unittest.TestCase):
 
 
 # ------------------------------------------------------------ BEV
+def bev_split(test: unittest.TestCase, frame: bytes) -> tuple[bytes, bytes, bytes, int]:
+    """BEV 스트림 프레임 하나 → (ModelState, ControlState, LaneState 앞부분, 보드 시각)."""
+    magic, model, control, lane, now = BEV_FRAME.unpack_from(frame)
+    test.assertEqual(magic, BEV_FRAME_MAGIC)
+    test.assertEqual(len(frame), BEV_FRAME.size + model + control + lane)
+    body = frame[BEV_FRAME.size:]
+    return body[:model], body[model:model + control], body[model + control:], now
+
+
 class BevTest(unittest.TestCase):
     def test_layout_matches_cpp_offsets(self):
         """페이지가 위치로 읽는 필드는 ipc_messages.h가 offsetof로 고정한 그 위치여야 한다."""
@@ -1007,8 +1050,17 @@ class BevTest(unittest.TestCase):
             self.assertEqual(flags.get(name), bit, name)
         self.assertIn(f'kModelStateTopic[] = "{MODEL_STATE_TOPIC}";', cpp())
         self.assertIn(f'kControlStateTopic[] = "{CONTROL_STATE_TOPIC}";', cpp())
+        self.assertIn(f'kLaneStateTopic[] = "{LANE_STATE_TOPIC}";', cpp())
+        # 차선선 플러그인 결과: 앞부분(헤더와 도로면 블록)과 도로면 선 하나의 배치
+        self.assertEqual(cpp_offsets("LANE_STATE"), LANE_STATE_AT)
+        road = {name: at for name, at in LANE_ROAD_AT.items() if name not in ("size", "points")}
+        self.assertEqual(cpp_offsets("LANE_ROAD"), road)
+        self.assertEqual(LANE_ROAD_AT["size"], cpp_size("LaneRoadLine"))
+        self.assertEqual(LANE_ROAD_AT["points"], int(re.search(r"kLaneRoadPoints = (\d+);", cpp()).group(1)))
+        self.assertEqual(LANE_STATE_PREFIX_SIZE, int(re.search(r"kLaneStateRoadPrefixBytes == (\d+)", cpp()).group(1)))
         layout = bev_layout()
         self.assertEqual((layout["model"]["size"], layout["control"]["size"]), (MODEL_STATE_SIZE, CONTROL_STATE_SIZE))
+        self.assertEqual(layout["lane"]["size"], LANE_STATE_PREFIX_SIZE)
 
     def test_lead_constants_match_cpp(self):
         """페이지의 앞차 확률 문턱과 레이더-카메라 거리는 비전 크루즈·출발 알림·HUD와 같은 model_output.h 값이어야 한다."""
@@ -1050,11 +1102,20 @@ class BevTest(unittest.TestCase):
         self.assertEqual(depart["gas"], cpp_value(alert, "kGasPressGoProbability"))
         self.assertEqual(depart["open"], cpp_value(alert, "kOpenPlanDistanceM"))
         self.assertEqual(depart["arm"], cpp_value(alert, "kStoppedPlanDistanceM"))
-        self.assertEqual(js_value(data, "LANE_WIDTH_INDEX"), cpp_value(scene, "kLaneRulerIndex"))
+        self.assertEqual(js_value(data, "LANE_WIDTH_INDEX"),
+                         cpp_value(cpp(ROOT / "src" / "hud" / "hud_draw.h"), "kLaneRulerIndex"))
         draw = js_object(data, "DRAW")
         self.assertEqual((draw["min"], draw["max"]),
                          (cpp_value(scene, "kMinDrawDistance"), cpp_value(scene, "kMaxDrawDistance")))
         self.assertEqual(js_value(data, "DRIVE_GEAR"), cpp_value(cpp(ROOT / "src" / "car" / "can_frame.h"), "kGearDrive"))
+        # Lanebow 무지개와 보라(hud_draw.h kRainbow, kViolet)
+        draw_h = cpp(ROOT / "src" / "hud" / "hud_draw.h")
+        rainbow = re.search(r"kRainbow\[\] = \{([^}]*)\}", draw_h).group(1)
+        self.assertEqual(re.findall(r'"#([0-9a-f]{6})"', re.search(r"const RAINBOW = \[([^\]]*)\]", bev).group(1)),
+                         [value[2:] for value in re.findall(r"0x[0-9a-f]{6}", rainbow)])
+        violet = re.search(r"kViolet = hud_argb\(255, (\d+), (\d+), (\d+)\)", draw_h).groups()
+        self.assertEqual(re.search(r'const VIOLET = "#([0-9a-f]{6})"', bev).group(1),
+                         "".join(f"{int(value):02x}" for value in violet))
 
     def test_vehicle_tab_bands_and_bev_frame_match(self):
         """차량 특성 탭이 보이는 허용 폭(torqued 배율 ±30%, 마찰 ±50%, paramsd 조향비 0.5~2배)과 BEV 프레임 매직이
@@ -1127,11 +1188,9 @@ class BevTest(unittest.TestCase):
             publish(path, bytes([value]) * size, seq=seq)
 
         def split(frame):
-            magic, model, control, now = BEV_FRAME.unpack_from(frame)
-            self.assertEqual(magic, BEV_FRAME_MAGIC)
-            self.assertEqual(len(frame), BEV_FRAME.size + model + control)
-            body = frame[BEV_FRAME.size:]
-            return body[:model], body[model:], now
+            model, control, lane, now = bev_split(self, frame)
+            self.assertEqual(lane, b"", "플러그인이 없으면 LaneState 0바이트")
+            return model, control, now
 
         with tempfile.TemporaryDirectory() as directory:
             model, control = Path(directory) / "model_state", Path(directory) / "control_state"
@@ -1139,7 +1198,7 @@ class BevTest(unittest.TestCase):
             fill(control, 2, 7, CONTROL_STATE_SIZE)
 
             async def take():
-                frames = bev_frames(20, str(model), str(control), idle_s=0.2)
+                frames = bev_frames(20, str(model), str(control), idle_s=0.2, lane_path="/nonexistent/lane")
                 first = await anext(frames)
                 fill(model, 4, 2, MODEL_STATE_SIZE)
                 second = await anext(frames)
@@ -1154,6 +1213,36 @@ class BevTest(unittest.TestCase):
         self.assertEqual((third[0], third[1]), (b"", b""))
         self.assertLess(first[2], third[2])
 
+    def test_stream_carries_the_newest_lane_state(self):
+        """플러그인이 있으면 모델 프레임마다 그때 나와 있는 가장 새 LaneState 앞부분(헤더와 도로면 블록)을 함께
+        보낸다. 같은 프레임 것을 기다리지 않는다(페이지가 촬영 시각으로 맞는지 본다)."""
+        def payload(size, capture, fill):
+            body = bytearray([fill]) * size
+            body[8:16] = struct.pack("<Q", capture)
+            return bytes(body)
+
+        with tempfile.TemporaryDirectory() as directory:
+            model, control, lane = (Path(directory) / name for name in ("model", "control", "lane"))
+            publish(model, payload(MODEL_STATE_SIZE, 1000, 1), seq=2)
+            publish(control, bytes([7]) * CONTROL_STATE_SIZE, seq=2)
+            publish(lane, payload(6776, 1000, 9), seq=2)
+
+            async def take():
+                frames = bev_frames(20, str(model), str(control), idle_s=1.0, lane_path=str(lane))
+                same = await anext(frames)
+                publish(model, payload(MODEL_STATE_SIZE, 2000, 2), seq=4)  # LaneState는 아직 1000
+                late = await anext(frames)
+                await frames.aclose()
+                return same, late
+
+            same, late = asyncio.run(take())
+        _, _, same_lane, _ = bev_split(self, same)
+        self.assertEqual(len(same_lane), LANE_STATE_PREFIX_SIZE)
+        self.assertEqual(struct.unpack_from("<Q", same_lane, 8)[0], 1000)
+        model_payload, _, late_lane, _ = bev_split(self, late)
+        self.assertEqual(struct.unpack_from("<Q", model_payload, 8)[0], 2000)
+        self.assertEqual(struct.unpack_from("<Q", late_lane, 8)[0], 1000, "직전 프레임의 것")
+
     def test_stream_ends_when_the_server_stops(self):
         """uvicorn은 응답이 끝나기를 기다리므로, 서버가 내려가기 시작하면 스트림이 스스로 끝나야 한다."""
         stopping = [False]
@@ -1167,7 +1256,7 @@ class BevTest(unittest.TestCase):
                 await asyncio.wait_for(anext(frames), 1.0)
             return first
 
-        self.assertEqual(BEV_FRAME.unpack_from(asyncio.run(take()))[1:3], (0, 0))
+        self.assertEqual(BEV_FRAME.unpack_from(asyncio.run(take()))[1:4], (0, 0, 0))
 
 
 # ------------------------------------------------------------ 페이지 파일

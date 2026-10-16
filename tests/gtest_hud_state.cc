@@ -247,4 +247,30 @@ TEST(HudState, RecordStateMapping) {
     ASSERT_FALSE(hud.storage_slow);
 }
 
+// Lanebow 비트와 LD 차로 가운데 오프셋
+TEST(HudState, LanebowFlagAndCenterOffset) {
+    ControlState c;
+    c.hud_flags = kHudFlagLanebow;
+    HudState hud;
+    hud_apply_control_state(c, true, &hud);
+    EXPECT_TRUE(hud.lanebow_mode);
+    EXPECT_FALSE(hud.laneless_mode) << "LD로 조향 중";
+    hud_apply_control_state(c, false, &hud);
+    EXPECT_FALSE(hud.lanebow_mode);
+    LaneState lane;
+    lane.road_count = 3;
+    lane.road[0].slot = kLaneSlotEgoLeft;
+    lane.road[0].confidence = 0.9f;
+    lane.road[0].y[0] = -1.9f;
+    lane.road[1].slot = kLaneSlotEgoRight;
+    lane.road[1].confidence = 0.3f;
+    lane.road[1].y[0] = 2.5f;
+    lane.road[2].slot = kLaneSlotEgoRight;  // 같은 slot이 둘이면 신뢰도가 높은 것(플래너와 같다)
+    lane.road[2].confidence = 0.8f;
+    lane.road[2].y[0] = 1.5f;
+    EXPECT_NEAR(hud_lane_state_center_offset_m(lane), -0.2f, 1e-6f) << "차로 가운데가 왼쪽 = 차가 오른쪽";
+    lane.road[2].confidence = 0.35f;
+    EXPECT_TRUE(std::isnan(hud_lane_state_center_offset_m(lane))) << "확실하지 않은 선으로는 재지 않는다";
+}
+
 }  // namespace

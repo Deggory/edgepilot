@@ -375,7 +375,7 @@ struct LaneState {
     uint16_t image_height = 0;
     uint32_t line_count = 0;
     uint32_t boundary_count = 0;
-    // 도로면 블록(헤더 바로 뒤라 도로면 선만 쓰는 쪽은 앞부분만 읽으면 된다). 선이 앞, 경계가 뒤다.
+    // 도로면 블록(헤더 바로 뒤라 웹 BEV는 앞쪽 kLaneStateRoadPrefixBytes만 보낸다). 선이 앞, 경계가 뒤다.
     uint32_t road_count = 0;
     LaneRoadLine road[kLaneMaxRoadLines];
     LaneLineState lines[kLaneMaxLines] = {};
@@ -391,6 +391,41 @@ static_assert(sizeof(LaneState) == 6776 && offsetof(LaneState, road_count) == 44
                   offsetof(LaneState, lines) == 848 && offsetof(LaneState, boundaries) == 4376 &&
                   offsetof(LaneState, vanishing_x) == 6728 && offsetof(LaneState, plugin_name) == 6740,
               "LaneState layout is shared with the recording reader");
+// 웹 BEV가 받는 앞부분: 헤더와 도로면 블록
+constexpr unsigned kLaneStateRoadPrefixBytes = offsetof(LaneState, lines);
+// 웹 BEV(scripts/web_console/state_layout.py LANE_STATE_AT·LANE_ROAD_AT, LANE_STATE_PREFIX_SIZE)가 위치로 읽는
+// 필드(check_web_console.py가 대조)
+#define EDGEPILOT_LANE_STATE_AT(field, expected) \
+    static_assert(offsetof(LaneState, field) == (expected), "LaneState." #field " moved: web BEV")
+EDGEPILOT_LANE_STATE_AT(frame_id, 0);
+EDGEPILOT_LANE_STATE_AT(capture_timestamp_ns, 8);
+EDGEPILOT_LANE_STATE_AT(valid, 28);
+EDGEPILOT_LANE_STATE_AT(road_count, 44);
+EDGEPILOT_LANE_STATE_AT(road, 48);
+#undef EDGEPILOT_LANE_STATE_AT
+#define EDGEPILOT_LANE_ROAD_AT(field, expected) \
+    static_assert(offsetof(LaneRoadLine, field) == (expected), "LaneRoadLine." #field " moved: web BEV")
+EDGEPILOT_LANE_ROAD_AT(kind, 0);
+EDGEPILOT_LANE_ROAD_AT(slot, 2);
+EDGEPILOT_LANE_ROAD_AT(type, 3);
+EDGEPILOT_LANE_ROAD_AT(double_line, 4);
+EDGEPILOT_LANE_ROAD_AT(color, 5);
+EDGEPILOT_LANE_ROAD_AT(confidence, 8);
+EDGEPILOT_LANE_ROAD_AT(y, 12);
+#undef EDGEPILOT_LANE_ROAD_AT
+static_assert(kLaneStateRoadPrefixBytes == 848, "web BEV LANE_STATE_PREFIX_SIZE");
+
+// 도로면 블록에서 slot 자차 선(같은 slot이 여럿이면 신뢰도가 높은 것), 없으면 nullptr. 플래너, HUD, 재생 도구가 같은
+// 선을 고르도록 모두 이것을 쓴다(웹 BEV의 bev.js도 같은 규칙).
+inline const LaneRoadLine *lane_ego_road_line(const LaneState &lane, int8_t slot) {
+    const LaneRoadLine *best = nullptr;
+    for (uint32_t i = 0; i < std::min<uint32_t>(lane.road_count, kLaneMaxRoadLines); ++i) {
+        const LaneRoadLine &road = lane.road[i];
+        if (road.kind == kLaneRoadKindLine && road.slot == slot && (!best || road.confidence > best->confidence))
+            best = &road;
+    }
+    return best;
+}
 static_assert(std::is_trivially_copyable<LaneState>::value, "LaneState goes through shared memory as bytes");
 
 struct ProcessState {
@@ -497,6 +532,7 @@ constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;      // 차선 변경 방�
 constexpr uint32_t kHudFlagSteerPaused = 1U << 7;          // 85도 위에서 조향 요청을 끄고 쉰다
 constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받음: 15도 아래 손 뗌 또는 계획 커브 1초
 constexpr uint32_t kHudFlagBrakeLights = 1U << 9;  // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
+constexpr uint32_t kHudFlagLanebow = 1U << 10;     // 경로 모드가 Lanebow(LD로 조향 중인지는 Laneless 비트가 꺼졌는지)
 
 struct ControlState {
     uint64_t timestamp_ns = 0;
@@ -543,7 +579,9 @@ struct ControlState {
     uint32_t engage_reject_event_id = 0;
     char engage_reject_block[32] = {};
     float ego_speed_kph = 0.0f;
-    uint32_t reserved = 0;  // 정렬 꼬리를 0으로 채워 발행·기록 바이트가 매번 같다
+    // 이번 횡 계획이 쓴 차선선 플러그인 결과(LaneState)의 frame_id 아래 32비트. Lanebow 모드가 아니거나 쓴 것이
+    // 없으면 0. 녹화의 LaneState 레코드와 맞춰 보는 데 쓴다(2026-10-15 전 녹화는 정렬 꼬리라 0).
+    uint32_t lane_state_frame = 0;
 };
 
 // paramsd·torqued 출력(상류 vehicleParameters·lateralTorqueParameters). controlsd가
@@ -734,6 +772,7 @@ EDGEPILOT_CONTROL_STATE_AT(disengage_event_id, 192);
 EDGEPILOT_CONTROL_STATE_AT(engage_reject_event_id, 196);
 EDGEPILOT_CONTROL_STATE_AT(engage_reject_block, 200);
 EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
+EDGEPILOT_CONTROL_STATE_AT(lane_state_frame, 236);
 #undef EDGEPILOT_CONTROL_STATE_AT
 static_assert(sizeof(ControlState) == 240, "ControlState layout is shared by controlsd, overlayd and the recording");
 // recordd가 RecordType::PandaState로 그대로 저장한다.

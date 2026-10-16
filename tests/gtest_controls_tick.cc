@@ -111,7 +111,7 @@ public:
 
     static ControlParams laneless_params() {
         ControlParams params;
-        params.steering.laneless_mode = true;
+        params.steering.path_mode = static_cast<int>(PathMode::Laneless);
         return params;
     }
 
@@ -377,11 +377,67 @@ TEST(ControlsTick, ReloadedParamsReachThePlanner) {
         tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
     }
     ASSERT_FALSE(tick.target().laneless_mode) << "settled lanes give a lane-mode plan";
-    params.steering.laneless_mode = true;
+    params.steering.path_mode = static_cast<int>(PathMode::Laneless);
     tick.apply_params(params);
     tick.on_model(lane_model(now_ns));
     tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
     EXPECT_TRUE(tick.target().laneless_mode) << "the first frame after the reload plans laneless";
+}
+
+// 같은 프레임의 LD 결과: 자차 선 둘(-1.6, 1.9 m), 36 m까지
+LaneState lane_result(uint64_t frame, uint64_t capture_ns, bool valid = true) {
+    LaneState lane;
+    lane.frame_id = frame;
+    lane.capture_timestamp_ns = capture_ns;
+    lane.valid = valid ? 1U : 0U;
+    for (const auto &[slot, y] :
+         {std::pair<int8_t, float>{kLaneSlotEgoLeft, -1.6f}, std::pair<int8_t, float>{kLaneSlotEgoRight, 1.9f}}) {
+        LaneRoadLine &road = lane.road[lane.road_count++];
+        road.kind = kLaneRoadKindLine;
+        road.slot = slot;
+        road.confidence = 0.9f;
+        for (unsigned i = 0; i < kLaneRoadPoints && model_x_idx(static_cast<int>(i)) <= 36.0f; ++i) road.y[i] = y;
+    }
+    return lane;
+}
+
+// 고르는 LD: 모델 프레임보다 새 것과 120 ms보다 낡은 것, 해석하지 못한 것은 고르지 않는다.
+TEST(LaneStateSelector, PicksTheLatestUsableResult) {
+    const uint64_t frame_ns = 50'000'000ULL, t0 = 10'000'000'000ULL;
+    LaneStateSelector selector;
+    EXPECT_EQ(selector.pick(t0), nullptr);
+    selector.offer(lane_result(7, t0 - frame_ns));
+    selector.offer(lane_result(8, t0));
+    ASSERT_NE(selector.pick(t0), nullptr);
+    EXPECT_EQ(selector.pick(t0)->frame_id, 8u) << "같은 프레임";
+    EXPECT_EQ(selector.pick(t0 + 2 * frame_ns)->frame_id, 8u) << "두 프레임 늦은 것(100 ms)까지";
+    EXPECT_EQ(selector.pick(t0 + 3 * frame_ns), nullptr) << "150 ms는 낡았다";
+    EXPECT_EQ(selector.pick(t0 - frame_ns), nullptr) << "모델보다 새 것은 쓰지 않는다";
+    selector.offer(lane_result(9, t0 + frame_ns, false));
+    EXPECT_EQ(selector.pick(t0 + frame_ns)->frame_id, 8u) << "해석하지 못한 프레임은 받지 않는다";
+}
+
+// Lanebow에서는 같은 틱에 받은 LD를 그 틱의 계획에 쓰고, ControlState에 Lanebow 비트와 쓴 LD 프레임을 남긴다.
+TEST(ControlsTick, LanebowUsesTheLaneStateItReceived) {
+    for (const PathMode mode : {PathMode::Lane, PathMode::Lanebow}) {
+        ControlParams params;
+        params.steering.path_mode = static_cast<int>(mode);
+        ControlsTick tick(params, false, std::string(), std::string(), 1);
+        uint64_t now_ns = 1'000'000'000ULL;
+        ControlState state;
+        for (uint64_t frame = 1; frame <= 40; ++frame, now_ns += 50'000'000ULL) {
+            tick.on_lane_state(lane_result(frame - 1, now_ns - 50'000'000ULL));  // 보통 한 프레임 늦다
+            tick.on_model(lane_model(now_ns));
+            state = tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
+        }
+        const bool lanebow = mode == PathMode::Lanebow;
+        EXPECT_EQ((state.hud_flags & kHudFlagLanebow) != 0, lanebow);
+        EXPECT_EQ(state.lane_state_frame, lanebow ? 39u : 0u) << "직전 프레임의 LD";
+        if (lanebow) {
+            EXPECT_NEAR(tick.target().lane_left_y_m, -1.6f, 0.01f) << "관측값도 LD";
+            EXPECT_NEAR(tick.target().lane_age_s, 0.05f, 1e-6f);
+        }
+    }
 }
 
 // 새 모델의 플랜은 그 모델을 받은 틱의 step이 바로 쓴다(예전 작업 스레드는 한 틱 늦어, 이 틱에는 직전

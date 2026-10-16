@@ -114,6 +114,8 @@ int main(int argc, char **argv) {
         std::fclose(f);
     }
 
+    // LaneState는 Lanebow 재생에서만 결과를 바꾼다(다른 모드에서는 시간당 약 0.5 GB를 들고 있을 까닭이 없다)
+    const bool lanebow = params.steering.path() == PathMode::Lanebow;
     std::deque<Record> records;
     for (const std::string &path : events) {
         EventLogReader reader(path);
@@ -123,7 +125,8 @@ int main(int argc, char **argv) {
         while (reader.next(&rh, &buf)) {
             const auto type = static_cast<RecordType>(rh.type);
             if (type != RecordType::CanRx && type != RecordType::ModelState && type != RecordType::PandaState &&
-                type != RecordType::Localization && type != RecordType::ControlState)
+                type != RecordType::Localization && type != RecordType::ControlState &&
+                !(lanebow && type == RecordType::LaneState && rh.payload_size == sizeof(LaneState)))
                 continue;
             records.push_back({rh.timestamp_ns, type, reader.version(), buf});
         }
@@ -165,6 +168,13 @@ int main(int argc, char **argv) {
         }
         std::stable_partition(tick_records.begin(), tick_records.end(),
                               [](const Record &r) { return r.type == RecordType::CanRx; });
+        // controlsd는 한 틱에 LaneState를 ModelState보다 먼저 읽는다
+        for (const Record &r : tick_records) {
+            if (r.type != RecordType::LaneState) continue;
+            LaneState lane;
+            std::memcpy(&lane, r.payload.data(), sizeof(lane));
+            tick.on_lane_state(lane);
+        }
         for (const Record &r : tick_records) {
             switch (r.type) {
                 case RecordType::CanRx:

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 // MaixCAM2 HUD(640x480). 주행 화면에는 필요한 것만 둔다: 상태 테두리, 현재 속도와 그 양옆
@@ -28,6 +29,8 @@ constexpr float kTurnChevronAlpha[] = {0.35f, 0.65f, 1.0f};
 // ---- 상태 → 문구 ----
 
 std::string mode_text(const HudState &hud) {
+    if (hud.controller_active && hud.lanebow_mode)
+        return !hud.laneless_mode ? "LANEBOW" : hud.lane_fresh ? "LANELESS" : "NO LD";
     if (hud.controller_active) return hud.laneless_mode ? "LANELESS" : "LANE";
     if (!hud.controller_engaged) return hud.controller_enabled ? "READY" : "OFF";
     if (hud.active_block[0] == '\0') return "READY";
@@ -340,7 +343,7 @@ int draw_maneuver(HudCanvas &canvas, int y, const HudState &hud) {
 }  // namespace hud_draw
 
 void HudRenderer::draw(const HudTarget &target, const ParsedModelOutput &output, const ProjectionState &projection,
-                       const HudState &hud) {
+                       const HudState &hud, const LaneState *lane) {
     using namespace hud_draw;
     const uint32_t buffer_h = target.orientation.transpose ? target.width : target.height;
     BufferDamage *damage = nullptr;
@@ -357,9 +360,17 @@ void HudRenderer::draw(const HudTarget &target, const ParsedModelOutput &output,
     last_damage_ = &damage->rows;
     last_tile_shift_ = canvas.tile_shift();
     const LeadInfo lead = lead_info(hud, output);
-    draw_scene(canvas, output, projection, hud, lead);
-    draw_lane_position(canvas, output, projection, hud.lane_center_offset_m,
-                       steering_now(hud) ? state_color(hud) : kText);
+    draw_scene(canvas, output, projection, hud, lead, lane);
+    // 차로 안 위치 눈금: Lanebow에서는 LD 자차 선(6.75 m 격자, 높이는 supercombo 차선)
+    if (output.valid) {
+        ModelPoint left = output.lanes[1].points[kLaneRulerIndex], right = output.lanes[2].points[kLaneRulerIndex];
+        if (lane) {
+            left.y = hud_lane_ego_y(*lane, kLaneSlotEgoLeft, kLaneRulerIndex);
+            right.y = hud_lane_ego_y(*lane, kLaneSlotEgoRight, kLaneRulerIndex);
+        }
+        draw_lane_position(canvas, left, right, projection, hud.lane_center_offset_m,
+                           steering_now(hud) ? state_color(hud) : kText);
+    }
     draw_border(canvas, state_color(hud));
     draw_turn_signals(canvas, hud, draw_speed(canvas, hud));
     draw_brake_hold(canvas, hud);

@@ -2,6 +2,7 @@
 add_edgepilot_library(planning
   desire_helper.cc
   lane_line_filter.cc
+  lanebow_source.cc
   lateral_mpc.cc
   lateral_planner.cc
 )

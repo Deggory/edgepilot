@@ -27,6 +27,8 @@ struct HudState {
     bool controller_engaged = false;
     bool controller_active = false;
     bool laneless_mode = false;
+    bool lanebow_mode = false;  // 경로 모드가 Lanebow(LD로 조향 중이면 laneless_mode가 꺼져 있다)
+    bool lane_fresh = false;    // 그릴 차선선 플러그인 결과(LaneState)가 있다(overlayd가 채운다)
     bool vehicle_fresh = false;
     bool steering_fault = false;
     bool left_blinker = false;
@@ -119,6 +121,12 @@ struct HudState {
     // 모델이 본 가까운 차선 중앙(+ = 오른쪽 = 차가 왼쪽에 있다). 모르면 NaN.
     float lane_center_offset_m = std::numeric_limits<float>::quiet_NaN();
 };
+
+// 차선선 플러그인 결과의 자차 선(slot, 같은 slot이 여럿이면 신뢰도가 높은 것)의 도로면 격자 index 횡위치(m). 그 선이
+// 없거나 확실하지 않으면(신뢰도 0.4 아래) NaN.
+float hud_lane_ego_y(const LaneState &lane, int8_t slot, int index);
+// 같은 결과에서 LD 차로 가운데 오프셋(m, x = 0, + = 오른쪽 = 차가 왼쪽). 두 자차 선이 다 확실하지 않으면 NaN.
+float hud_lane_state_center_offset_m(const LaneState &lane);
 
 // 받은 ModelState를 렌더러가 그리는 모델 출력과 투영으로 되돌린다(overlayd·hud_snapshot). lead는
 // t=0 하나뿐이고 road_transform은 ModelState에 없다.

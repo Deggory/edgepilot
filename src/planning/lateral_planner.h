@@ -4,6 +4,7 @@
 
 #include <memory>
 
+struct LaneState;
 struct ModelState;
 struct SteeringParams;
 struct VehicleCanState;
@@ -20,10 +21,11 @@ public:
     // 차선선 시간 필터의 새 측정 가중(planning/lane_line_filter). 재생 도구가 비교할 때 바꾼다. 1이면 끈다.
     void set_lane_filter_weight(double weight);
 
-    // lat_active: 지금 조향하는가(상류 latActive), steering_pressed: 컨트롤러가 거른 운전자 조향. 둘 다 차선 변경
-    // 판단(DesireHelper)에 쓴다.
-    LateralTarget update(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
-                         bool lat_active, bool steering_pressed);
+    // lane: 이번 프레임에 쓸 차선선 플러그인 결과(planning/lane_state_selector, 없으면 nullptr). Lanebow 모드의 차선
+    // 출처다. 다른 모드에서도 넘기면 LD 쪽 필터가 데워져 있어 모드를 바꿀 때 바로 쓴다. lat_active: 지금 조향하는가
+    // (상류 latActive), steering_pressed: 컨트롤러가 거른 운전자 조향. 둘 다 차선 변경 판단(DesireHelper)에 쓴다.
+    LateralTarget update(const ModelState &model, const LaneState *lane, const VehicleCanState &vehicle, float v_ego,
+                         float measured_curvature, bool lat_active, bool steering_pressed);
 
 private:
     struct Impl;

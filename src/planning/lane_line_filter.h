@@ -26,11 +26,21 @@ public:
     // x는 점의 거리(앞이 +, 증가), y는 측정 횡위치(오른쪽이 +), t_s는 촬영 시각, v_mps는 자차 속도,
     // curvature는 실측 곡률(오른쪽이 +). 거른 횡위치를 out에 쓴다(y와 같은 배열이어도 된다).
     void update(double t_s, const float *x, const float *y, double v_mps, double curvature, float *out);
+    // update와 같지만 앞쪽 count개 점만 쓴다(LD처럼 시야가 짧은 선). out의 나머지는 NaN이다. count개 안에
+    // 유한하지 않은 값이 있으면 update처럼 측정을 그대로 내고 다시 시작한다.
+    void update_prefix(double t_s, const float *x, const float *y, int count, double v_mps, double curvature,
+                       float *out);
+    // 직전에 거른 선을 t_s까지 자차 움직임(속도와 곡률의 원호)만큼 옮겨 x[0..count)에서 읽는다. 옮기며 짧아진 앞
+    // 끝(간 거리만큼)은 마지막 구간을 곧게 늘리고, 그보다 먼 점은 NaN이다. 거른 선이 없거나 t_s가 그 선보다 앞서면 false.
+    bool predict(double t_s, const float *x, int count, double v_mps, double curvature, float *out) const;
+    bool has_line() const { return have_; }
+    double time_s() const { return t_s_; }
 
 private:
     double weight_ = kLaneLineFilterWeight;
     bool have_ = false;
     double t_s_ = 0.0;
+    int count_ = 0;                                  // 거른 선의 점 개수
     std::array<double, kTrajectorySize> x_{}, y_{};  // 직전 프레임 차체 좌표의 거른 선
 };
 

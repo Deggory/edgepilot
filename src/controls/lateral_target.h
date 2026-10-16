@@ -34,6 +34,9 @@ struct LateralTarget {
     float lane_left_std = 0.0f;
     float lane_right_std = 0.0f;
     float lane_d_prob = 0.0f;
+    // Lanebow만: 쓴 LD 선의 가장 새 frame_id(없으면 0)와 그 나이(s, 모델 촬영 시각 - LD 촬영 시각, 없으면 음수)
+    float lane_age_s = -1.0f;
+    uint64_t lane_frame_id = 0;
 };
 
 #endif

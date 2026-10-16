@@ -273,7 +273,7 @@ press. A value is written as soon as it is changed.
 
 | Tab | Address | Holds |
 | --- | --- | --- |
-| Steering | `#steering` | the controller tuning, the path mode (Laneless) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
+| Steering | `#steering` | the controller tuning, the path mode (Lane, Laneless, Lanebow) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
 | Vehicle | `#vehicle` | the steering values that belong to the car rather than to the controller, the camera calibration, the learners' trend, the learner input source and the fixed specs |
 | Vision cruise | `#adaptive_cruise` | `adaptive_cruise.json` |
 | Recording | `#recording` | `recording.json` |
@@ -341,8 +341,10 @@ bootstub ([Panda firmware](../firmware/panda/README.md)).
 The BEV tab shows what the model sees from above: lane lines, road edges, the
 planned path and the lead, round the ego car, with the HUD's colours and limits
 (`hud_renderer.cc`). The browser does all the work. The board copies the
-`ModelState` and `ControlState` payloads, unparsed, into one streamed response
-(`/api/bev/stream`, a frame per new model frame, 4.0 kB at up to 20 Hz). It
+`ModelState` and `ControlState` payloads, and with the lane-line plugin the
+head of the newest `LaneState`, unparsed, into one streamed response
+(`/api/bev/stream`, a frame per new model frame, 4.0 kB, or 4.8 kB with the
+plugin, at up to 20 Hz). It
 sleeps until the next model frame is due, so a viewer costs about 3% of one
 core at nice 10, and nothing once the tab is closed or hidden. `/api/bev` says
 where the fields sit. `ipc_messages.h` pins those offsets, and
@@ -373,6 +375,11 @@ the bottom.
   the drawn lines tremble about 60% less from frame to frame, but still sway:
   the slower swing over a second drops only 13-26%. The `LANE W` chip measures
   the drawn lines. Without `controlsd` the model's lines are drawn as they are.
+- **LD lines.** The `LD lanes` layer draws the
+  [lane-line plugin](lane-line-plugin.md)'s lines in their painted colour and
+  pattern, and its road boundaries as thin lines. In Lanebow mode they replace
+  the model's lines and road edges, as on the LCD, and while LD steers the
+  path is drawn as a rainbow along the LD lane centre ([Lanebow](lanebow.md)).
 - **Planned slowdown.** The inside of the path turns amber, then red, where the
   model plans to slow down. The `PLAN` chip gives the slowest planned speed and
   where it is, or `STOP`, or the speed the plan reaches when moving off. The
@@ -436,7 +443,7 @@ The page talks to the server over these routes (`console_server.py`):
 | `GET /api/panda` | the Panda firmware and the installed image |
 | `POST /api/panda/flash` | ask for a Panda flash, `{"version": ...}` (parked only) |
 | `GET /api/bev` | where the fields the BEV reads sit |
-| `GET /api/bev/stream` | the BEV stream (`ModelState` and `ControlState` payloads) |
+| `GET /api/bev/stream` | the BEV stream (`ModelState`, `ControlState` and `LaneState` head payloads) |
 | `GET /static/{path}` | the page's files |
 
 ## Production defaults

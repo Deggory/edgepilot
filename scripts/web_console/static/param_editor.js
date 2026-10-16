@@ -6,6 +6,7 @@ import {clock, el, note, toast} from "./ui.js";
 
 export function formatValue(value, meta) {
   if (typeof value === "boolean") return value ? t("common.on") : t("common.off");
+  if (meta.options) return meta.options[value]?.label ?? String(value);
   return `${value}${meta.unit ? ` ${meta.unit}` : ""}`;
 }
 
@@ -53,11 +54,22 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
   };
 
   const value = valueOf(group, key);
-  control = typeof value === "boolean" ? switchControl(meta, save)
+  control = meta.control === "choice" ? choiceControl(meta, save)
+    : typeof value === "boolean" ? switchControl(meta, save)
     : meta.control === "slider" ? sliderControl(meta, save) : stepperControl(meta, save);
   resetButton.addEventListener("click", () => save(defaultOf(group, key)));
   refresh();
   return {meta, control, status, modifiedBadge, resetButton, refresh, save};
+}
+
+// 접힌 "선택지": 고르는 항목의 선택지마다 이름과 설명.
+function optionsDetails(meta) {
+  return el("details.param-effects",
+    {},
+    el("summary", {text: t("params.options")}),
+    el("div.effects",
+      {},
+      ...meta.options.map(option => el("div.effect", {}, el("b", {text: option.label}), option.description))));
 }
 
 // 접힌 "바꾸면": 값을 줄이거나 끄면, 키우거나 켜면 어떻게 되는지. lead가 있으면 그 앞에 둔다(설명 등).
@@ -98,7 +110,7 @@ export function paramCard(group, key) {
     editor.control.element,
     el("footer.param-foot",
       {},
-      effectsDetails(meta, typeof valueOf(group, key) === "boolean"),
+      meta.options ? optionsDetails(meta) : effectsDetails(meta, typeof valueOf(group, key) === "boolean"),
       editor.resetButton,
       editor.status));
   card.search = `${meta.label} ${key} ${meta.description}`.toLowerCase();
@@ -108,6 +120,23 @@ export function paramCard(group, key) {
 }
 
 // ------------------------------------------------------------ 컨트롤: {element, show(value), setDisabled(bool)}
+// 몇 개 중 하나: 선택지마다 버튼(누른 것이 aria-pressed). 값은 선택지 번호다.
+function choiceControl(meta, save) {
+  let shown = null;
+  const buttons = meta.options.map((option, index) => el("button",
+    {type: "button", text: option.label, title: option.description, onclick: () => index !== shown && save(index)}));
+  return {
+    element: el("div.segmented", {role: "group", "aria-label": meta.label}, ...buttons),
+    show(value) {
+      shown = value;
+      buttons.forEach((button, index) => button.setAttribute("aria-pressed", String(index === value)));
+    },
+    setDisabled(disabled) {
+      for (const button of buttons) button.disabled = disabled;
+    },
+  };
+}
+
 function switchControl(meta, save) {
   const text = el("span");
   const button = el("button.switch-control",

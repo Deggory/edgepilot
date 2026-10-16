@@ -2,6 +2,7 @@
 // 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
 // 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
 // 아래 모서리 카드, 상태 알약 터치 영역도 본다.
+#include "common/projection.h"
 #include "hud/hud_canvas.h"
 #include "hud/hud_renderer.h"
 
@@ -79,6 +80,30 @@ TEST(HudCanvas, FadedPolygonFadesTowardFar) {
     EXPECT_NEAR(s.at(20, 109) >> 24, 200, 3);
     EXPECT_NEAR(s.at(20, 10) >> 24, 20, 3);
     EXPECT_GT(s.at(20, 60) >> 24, s.at(20, 30) >> 24);
+}
+
+// 무지개 띠(색 띠가 있는 fill_polygon_faded): 색이 화면 높이를 따라 가까운 색에서 먼 색으로 바뀌고, 세로 패널 버퍼도
+// 같다. 흐림은 색 띠와 따로 near_y·far_y를 따른다.
+TEST(HudCanvas, RampPolygonChangesColourWithHeight) {
+    const uint32_t stops[] = {0xff0000, 0x00ff00, 0x0000ff};
+    const HudColorRamp ramp{stops, 3, 110.0f, 10.0f};
+    const HudPoint rect[] = {{0, 10}, {40, 10}, {40, 110}, {0, 110}};
+    Surface s(40, 120);
+    s.canvas().fill_polygon_faded(rect, 4, hud_argb(200, 255, 255, 255), 0.0f, 0.0f, 1.0f, &ramp);
+    EXPECT_NEAR(channel(s.at(20, 109), 16), 255, 6) << "가까운 쪽은 첫 색";
+    EXPECT_NEAR(channel(s.at(20, 60), 8), 255, 6) << "가운데는 가운데 색";
+    EXPECT_NEAR(channel(s.at(20, 10), 0), 255, 6) << "먼 쪽은 끝 색";
+    EXPECT_NEAR(s.at(20, 60) >> 24, 200, 2) << "흐림이 없으면 알파는 그대로";
+    Surface portrait(120, 40);
+    HudCanvas canvas(portrait.pixels.data(), 40, 120, 120 * 4, portrait.coverage, portrait.damage,
+                     {true, false, false});
+    canvas.fill_polygon_faded(rect, 4, hud_argb(200, 255, 255, 255), 0.0f, 0.0f, 1.0f, &ramp);
+    for (int y : {12, 60, 108}) EXPECT_EQ(portrait.at(y, 20), s.at(20, y)) << y;
+
+    Surface faded(40, 120);  // 흐림은 색 띠와 다른 높이(띠보다 먼 아래 210에서 시작)를 따른다
+    faded.canvas().fill_polygon_faded(rect, 4, hud_argb(200, 255, 255, 255), 210.0f, 10.0f, 0.1f, &ramp);
+    EXPECT_NEAR(channel(faded.at(20, 109), 16), 255, 6) << "색 띠는 그대로";
+    EXPECT_NEAR(faded.at(20, 110 - 1) >> 24, 200 * (1.0 - 0.9 * 101.5 / 200.0), 3) << "알파는 210에서 잰다";
 }
 
 TEST(HudCanvas, RoundRectStraightRowsMatchPolygon) {
@@ -272,6 +297,80 @@ TEST(HudRenderer, CornerCardsAndStatusTouch) {
     EXPECT_FALSE(hud_left_column_touch(60, 430, 480));
     for (int y = 0; y < 480; y += 10)  // 두 영역은 겹치지 않는다
         for (int x = 0; x < 640; x += 10) EXPECT_FALSE(hud_status_touch(x, y, 640) && hud_left_column_touch(x, y, 480));
+}
+
+// Lanebow 장면: LD로 조향하는 동안 경로는 모델 경로와 같은 띠(화면 아래까지)를 LD 차로 가운데로 옮긴 무지개(아래
+// 빨강, 위 보라)이고, 대체(Laneless)로 넘어가면 같은 크기의 plan 띠다. 선은 실제 색으로 그리고 모드 칩은 LANEBOW다.
+TEST(HudRenderer, LanebowDrawsTheRainbowOnTheLdLaneCentre) {
+    ParsedModelOutput road;
+    road.valid = road.plan.valid = true;
+    for (int i = 0; i < kTrajectorySize; ++i) road.plan.points[i] = {model_x_idx(i), 0.0f, 0.0f};
+    LaneState lane;
+    lane.valid = 1;
+    lane.image_width = 1280;
+    lane.image_height = 720;
+    lane.line_count = 2;
+    lane.road_count = 2;
+    // 1280x720 프레임에서 아래(570)에서 위(400)로 모이는 두 선, 도로면 블록에서는 차로 가운데가 0.5 m 오른쪽
+    for (int s = 0; s < 2; ++s) {
+        LaneLineState &line = lane.lines[s];
+        line.slot = static_cast<int8_t>(s == 0 ? kLaneSlotEgoLeft : kLaneSlotEgoRight);
+        line.color = static_cast<int8_t>(s == 0 ? 1 : 0);  // 노랑, 흰색
+        line.confidence = 0.9f;
+        for (int k = 0; k < 40; ++k) {
+            const float v = 570.0f - 4.25f * k;
+            const float spread = (v - 380.0f) * 2.2f;
+            const float u = 640.0f + (s == 0 ? -spread : spread);
+            line.points[k] = {static_cast<int16_t>(u * 4), static_cast<int16_t>(v * 4), 24,
+                              static_cast<int16_t>((u + (s == 0 ? 3.0f : -3.0f)) * 4)};
+            line.point_count = static_cast<uint32_t>(k + 1);
+        }
+        LaneRoadLine &road_line = lane.road[s];
+        road_line.kind = kLaneRoadKindLine;
+        road_line.slot = line.slot;
+        road_line.confidence = 0.9f;
+        for (unsigned i = 0; i < kLaneRoadPoints && model_x_idx(static_cast<int>(i)) <= 36.0f; ++i)
+            road_line.y[i] = s == 0 ? -1.25f : 2.25f;
+    }
+    HudState hud;
+    hud.services_healthy = true;
+    hud.controller_enabled = hud.controller_engaged = hud.controller_active = true;
+    hud.lanebow_mode = hud.lane_fresh = true;
+    const ProjectionState projection = make_projection_state(0, 0, 0);
+    Surface steering(640, 480), fallback(640, 480);
+    HudRenderer a, b;
+    a.draw({steering.pixels.data(), 640, 480, 640 * 4}, road, projection, hud, &lane);
+    hud.laneless_mode = true;
+    b.draw({fallback.pixels.data(), 640, 480, 640 * 4}, road, projection, hud, &lane);
+    // 행 y에서 띠(경로가 칠한 화소)의 가로 가운데. 칠한 화소가 없으면 -1.
+    const auto ribbon_center = [](const Surface &surface, const Surface &other, int y) {
+        int lo = -1, hi = -1;
+        for (int x = 150; x < 490; ++x) {
+            if (channel(surface.at(x, y), 24) == 0 || surface.at(x, y) == other.at(x, y)) continue;
+            if (lo < 0) lo = x;
+            hi = x;
+        }
+        return lo < 0 ? -1.0f : 0.5f * static_cast<float>(lo + hi);
+    };
+    const Surface blank(640, 480);
+    // 화면 아래 테두리(4 px)와 토크 막대(y ≈ 462) 위의 두 행
+    for (const int y : {448, 410}) {
+        EXPECT_GT(ribbon_center(steering, blank, y), 0.0f) << "y " << y << ": 무지개도 화면 아래까지";
+        EXPECT_GT(ribbon_center(fallback, blank, y), 0.0f) << "y " << y << ": plan 띠도 화면 아래까지";
+        EXPECT_GT(ribbon_center(steering, blank, y), ribbon_center(fallback, blank, y) + 8.0f)
+            << "y " << y << ": 무지개는 LD 차로 가운데(0.5 m 오른쪽)로 옮겨졌다";
+    }
+    const int cx = static_cast<int>(ribbon_center(steering, blank, 448));
+    const uint32_t near = steering.at(cx, 448);
+    EXPECT_GT(channel(near, 16), 200) << std::hex << near << ": 가까운 쪽 빨강";
+    EXPECT_LT(channel(near, 0), 120) << std::hex << near;
+    // 노란 왼선: 프레임 (640 - 2.2·(560 - 380), 560) → 화면 (≈56, 373)
+    float lx = 0.0f, ly = 0.0f;
+    frame_pixel_to_screen(640.0f - 2.2f * 180.0f, 560.0f, 1280, 720, 640, 480, &lx, &ly);
+    const uint32_t yellow = steering.at(static_cast<int>(std::lround(lx)), static_cast<int>(std::lround(ly)));
+    EXPECT_GT(channel(yellow, 16), 200) << std::hex << yellow;
+    EXPECT_GT(channel(yellow, 8), 150);
+    EXPECT_LT(channel(yellow, 0), 120) << "노란 선은 노랗게";
 }
 
 }  // namespace

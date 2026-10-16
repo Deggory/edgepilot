@@ -20,7 +20,7 @@
   "path_offset_m": 0.0,
   "lane_path_weight": 3.0,
   "min_steer_speed_mps": 1.0,
-  "laneless_mode": false,
+  "path_mode": 0,
   "lane_change_min_speed_kph": 30.0,
   "live_bank_compensation": true,
   "use_live_vehicle_params": true,

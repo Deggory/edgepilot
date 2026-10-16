@@ -100,11 +100,13 @@ The border and the mode chip's dot take the steering state colour:
 | Red | steering fault, Panda fault, or disengaging in 3 s |
 | Amber | waiting for services: a process is down or there is no fresh model |
 | Green | steering in Lane mode |
-| Blue | steering in Laneless mode |
+| Violet | steering in Lanebow mode on the LD lines |
+| Blue | steering in Laneless mode, or on the model path in Lane or Lanebow mode |
 | Grey | engaged but not steering, including the large-angle pause |
 | None | not engaged |
 
-The mode chip reads `LANE` or `LANELESS` while control is active, `READY` or
+The mode chip reads `LANE`, `LANELESS` or `LANEBOW` while control is active
+(`NO LD` in Lanebow mode when there is no lane-line plugin result), `READY` or
 `OFF` when not engaged, and the reason when engaged but blocked.
 
 ### Top of the screen
@@ -133,18 +135,32 @@ The mode chip reads `LANE` or `LANELESS` while control is active, `READY` or
 ### Road scene
 
 - Road edges (red) and lane lines (wider and brighter the surer the model is)
-  are drawn in Lane mode only. The path is drawn in both modes.
+  are drawn in Lane mode only. The path is drawn in every mode.
+- In Lanebow mode the [lane-line plugin](lane-line-plugin.md)'s lines replace
+  them, drawn from its pixels in their painted colour (white, yellow, blue) and
+  pattern (solid, dashed, Botts' dots), a double line as one line of its
+  pattern, and the road boundaries as thin lines. A line is 0.6 of the paint
+  width LD measures, 2 to 10 px wide. A frame the plugin could not decode
+  keeps the last good result on screen for up to 0.3 s.
+- While LD steers, the path is the same ribbon as the model path (width,
+  length, down to the bottom of the screen), moved sideways onto the LD lane
+  centre and coloured as a rainbow, red near the car and violet far ahead.
+  During a lane change, or with only one LD line, the rainbow follows the
+  model path. Switching to the model path (`LANELESS`) changes only the colour
+  and the sideways place ([Lanebow](lanebow.md)).
 - Lanes and path fade with distance, out to the end of the plan (10-100 m).
 - The path is translucent white when not engaged, grey when engaged but not
-  steering, and green (Lane) or blue (Laneless) while steering, turning amber
-  as the steering output nears its limit.
+  steering, and green (Lane), violet (Lanebow) or blue (Laneless) while
+  steering, turning amber as the steering output nears its limit. The rainbow
+  turns amber the same way.
 - The vision lead is a chevron that turns from white to amber, then red, the
   closer it is within 40 m and the faster it closes in. Its label is the
   distance, and the closing speed when it closes in by 3 km/h or more.
 - A **lane-position marker** lies across the ego lane about 7 m ahead: ticks at
   both lane lines, the lane centre above the line and the car below it at true
-  scale, and the offset in cm. It shows only when both ego lines are sure, and
-  the offset is smoothed over about 0.5 s.
+  scale, and the offset in cm. It shows only when both ego lines are sure (in
+  Lanebow mode the LD ego lines, with a confidence of at least 0.4), and the
+  offset is smoothed over about 0.5 s.
 
 ### Corner cards
 

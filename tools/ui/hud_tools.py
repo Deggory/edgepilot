@@ -3,7 +3,8 @@
 
   hud_tools.py inputs <route_dir> <out_dir> [--time SECONDS]
       recordd route에서 hud_snapshot 입력을 뽑는다: model.bin(현재 배치의 ModelState 원본, 옛 기록은 끝을
-      0으로 채운다), control.bin(240바이트로 채운 ControlState 원본), camera.png(맞는 도로 프레임).
+      0으로 채운다), control.bin(240바이트로 채운 ControlState 원본), lane.bin(같은 프레임의 LaneState 원본,
+      차선선 플러그인으로 녹화했을 때), camera.png(맞는 도로 프레임).
       --time이 없으면 순간을 자동으로 고른다: 컨트롤러 활성, 40~95 km/h, 차선이 모두 확실하고, 있으면
       앞차도 있는 때.
 
@@ -26,9 +27,9 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
-from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE, RECORDING_VERSION,  # noqa: E402
-                              iter_event_records, model_state_layout,
-                              route_event_files, route_segments, segment_video)
+from recording_reader import (LANE_STATE, RECORD_CONTROL_STATE, RECORD_LANE_STATE, RECORD_MODEL_STATE,  # noqa: E402
+                              RECORDING_VERSION, iter_event_records, model_state_layout, route_event_files,
+                              route_segments, segment_video)
 
 MODEL_STATE_SIZE = model_state_layout(RECORDING_VERSION)["__size__"]  # hud_snapshot은 현재 구조체를 읽는다
 CONTROL_STATE_SIZE = 240
@@ -45,8 +46,9 @@ class ModelMoment(NamedTuple):
     lead_valid: int
 
 
-def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment]]:
-    controls, models = [], []
+def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment], dict[int, bytes]]:
+    """route를 한 번 읽어 ControlState, ModelState 순간, 해석된 LaneState(frame_id → 원본 바이트)를 모은다."""
+    controls, models, lane_states = [], [], {}
     for path in route_event_files(route):
         for rec in iter_event_records(path):
             if rec.type == RECORD_CONTROL_STATE:
@@ -57,7 +59,11 @@ def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment]]:
                 lanes = struct.unpack_from("<4f", rec.payload, layout["lane_probabilities"])
                 lead_valid, = struct.unpack_from("<I", rec.payload, layout["lead"])
                 models.append(ModelMoment(rec.timestamp_ns, rec.payload, frame_id, lanes, lead_valid))
-    return controls, models
+            elif rec.type == RECORD_LANE_STATE and len(rec.payload) == LANE_STATE.itemsize:
+                lane = np.frombuffer(rec.payload, LANE_STATE, 1)[0]
+                if lane["valid"] == 1:
+                    lane_states.setdefault(int(lane["frame_id"]), bytes(rec.payload))
+    return controls, models, lane_states
 
 
 def score(control: np.void, model: ModelMoment) -> float:
@@ -75,7 +81,7 @@ def score(control: np.void, model: ModelMoment) -> float:
 
 
 def cmd_inputs(args: argparse.Namespace) -> int:
-    controls, models = scan(args.route)
+    controls, models, lane_states = scan(args.route)
     if not controls or not models:
         sys.exit("route has no control/model records")
     control_ts = np.array([c[0] for c in controls], dtype=np.uint64)
@@ -104,6 +110,13 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     (args.out / "model.bin").write_bytes(raw_model + b"\0" * (MODEL_STATE_SIZE - len(raw_model)))
     raw = control.tobytes()
     (args.out / "control.bin").write_bytes(raw + b"\0" * (CONTROL_STATE_SIZE - len(raw)))
+    lane = lane_states.get(model.frame_id)
+    if lane is not None:
+        (args.out / "lane.bin").write_bytes(lane)
+        lines = int(np.frombuffer(lane, LANE_STATE, 1)[0]["line_count"])
+        print(f"lane state: frame {model.frame_id} lines={lines} -> {args.out / 'lane.bin'}")
+    elif lane_states:
+        print("no valid LaneState for this frame", file=sys.stderr)
     seconds = (int(model.ts) - int(model_ts[0])) / 1e9
     print(f"moment t={seconds:.1f}s frame_id={model.frame_id} speed={control['cluster_speed_kph']:.1f} "
           f"active={control['active']} lanes={np.round(model.lanes, 2)} lead={model.lead_valid}")

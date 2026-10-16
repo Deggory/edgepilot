@@ -18,11 +18,13 @@ flowchart TB
     decode --> fill["LaneState<br>pixels, lines on the road surface"]
     fill --> topic["/edgepilot_lane_state2"]
     topic --> recordd["recordd<br>LaneState record (9)"]
+    topic --> controlsd["controlsd<br>Lanebow path"]
+    topic --> overlayd["overlayd and web BEV<br>LD lines, rainbow path"]
     classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
     classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
-    class ring,vpp pixel
-    class npu,decode,fill compute
+    class ring,vpp,overlayd pixel
+    class npu,decode,fill,controlsd compute
     class topic,recordd proc
 ```
 
@@ -113,7 +115,9 @@ stage ran on (`src/common/ipc_messages.h`, 6776 B). The number in the name goes
 up with the layout, so a `modeld` from another build publishes on another
 channel instead of being read with the wrong layout. recordd writes it as
 record type 9 ([Recording](recording.md)), and
-`tools/model/recording_reader.py` reads it with `read_route_lane_state`.
+`tools/model/recording_reader.py` reads it with `read_route_lane_state`. The
+Lanebow path mode steers from it ([Lanebow](lanebow.md)), and the HUD and the
+web BEV draw it.
 
 | Field | Meaning |
 | --- | --- |
@@ -127,8 +131,8 @@ record type 9 ([Recording](recording.md)), and
 | `vanishing_*` | the vanishing point in pixels and its confidence |
 | `plugin_name` | the plugin's `name` |
 
-The road block sits right after the header, so a reader that needs only the
-road lines can take the first 848 bytes. Each `LaneRoadLine` holds:
+The road block sits right after the header, so the web BEV streams only the
+first 848 bytes. Each `LaneRoadLine` holds:
 
 - **What it is.** `kind` (line or boundary), its index, slot, type or shape,
   double, colour and confidence.
@@ -179,7 +183,7 @@ The plugin and its model are not in this repository. They do not ship with it.
 ## Limits
 
 - **Single frame.** Every result comes from one frame, with no tracking or
-  smoothing.
+  smoothing. The Lanebow planner filters it ([Lanebow](lanebow.md)).
 - **Borrowed distance.** The road block's distances come from supercombo's road
   surface, so they are not an independent measurement. Only the lateral
   positions are LD's own.
@@ -188,6 +192,7 @@ The plugin and its model are not in this repository. They do not ship with it.
 
 ## Related
 
+- [Lanebow](lanebow.md): the path mode that steers from `LaneState`
 - [Model pipeline](model-pipeline.md): the supercombo path the stage follows
 - [Runtime](runtime.md): the processes, topics and hardware engine load
 - [Runtime options](runtime-options.md): `EDGEPILOT_LANE_PLUGIN`

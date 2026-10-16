@@ -56,7 +56,7 @@ branch keeps the earlier Kendryte K230 port.
   and a web parameter editor pushes changes the controller picks up within
   100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite (298 tests) that needs neither the
+  macOS or Linux, with a googletest suite (327 tests) that needs neither the
   board nor its SDK.
 
 ## How it works
@@ -149,6 +149,7 @@ config:
 ---
 flowchart TB
     model["supercombo<br>plan, lanes, lead"] --> lane["lane mode<br>lane-centre path + MPC"]
+    ld["lane-line plugin<br>optional, LD lanes"] -. "Lanebow mode" .-> lane
     model --> laneless["laneless mode<br>curvature from the plan"]
     lane --> desired["desired curvature<br>jerk-limited, lag-compensated"]
     laneless --> desired
@@ -162,7 +163,7 @@ flowchart TB
     classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
     classDef safety fill:#eaf7ee,stroke:#2da44e,color:#1f2328
     class model,lane,laneless,desired,torque compute
-    class learners proc
+    class learners,ld proc
     class limits,safety safety
     class mdps external
 ```

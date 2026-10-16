@@ -96,3 +96,12 @@ bool project_point_subpixel(const ProjectionState &projection, float x_forward, 
     return *px > -200.0f && *px < static_cast<float>(width + 200) && *py > -200.0f &&
            *py < static_cast<float>(height + 200);
 }
+
+void frame_pixel_to_screen(float u, float v, int image_w, int image_h, int screen_w, int screen_h, float *x, float *y) {
+    // 1080p 기준으로 옮긴 뒤 project_point_subpixel과 같은 가운데 자르기와 축척
+    const float u1080 = u * static_cast<float>(kDefaultSensorWidth) / static_cast<float>(image_w);
+    const float v1080 = v * static_cast<float>(kDefaultSensorHeight) / static_cast<float>(image_h);
+    const float crop_x = (static_cast<float>(kDefaultSensorWidth) - kPreviewCropWidth1080) * 0.5f;
+    *x = (u1080 - crop_x) * static_cast<float>(screen_w) / kPreviewCropWidth1080;
+    *y = v1080 * static_cast<float>(screen_h) / static_cast<float>(kDefaultSensorHeight);
+}
