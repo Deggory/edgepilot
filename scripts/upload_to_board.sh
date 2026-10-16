@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 교차 빌드한 런타임을 MaixCAM2에 올린다: 실행 파일, 보드용 Python, 웹 콘솔(web_console/, 페이지 포함),
-# 파라미터 기본값, 그리고 모델(models/supercombo.axmodel, 보드의 것과 체크섬이 다를 때만 보낸다).
+# 파라미터 기본값, 그리고 모델(models/supercombo.axmodel은 보드의 것과 체크섬이 다를 때만, 학습한 토크 모델
+# models/lateral_nn.json은 늘 보낸다).
 # Panda 펌웨어 이미지(build.sh가 만든 build-ax630/panda/obj/panda.bin.signed)가 있으면
 # firmware/panda.bin.signed로 올린다. 판다에 쓰는 것은 웹 콘솔이나 panda_flash다.
 # 보드의 params/는 덮어쓰지 않고, 기본값은 params.defaults/에 두어 없는 파일만 채운다.
@@ -21,6 +22,7 @@ fi
 DEST="${EDGEPILOT_BOARD_DIR:-/root/edgepilot}"
 BIN_DIR="${EDGEPILOT_BIN_DIR:-build-ax630/bin}"
 AXMODEL="models/supercombo.axmodel"
+LATERAL_NN="models/lateral_nn.json"  # controlsd가 시작할 때 읽는다(docs/lateral-nn.md)
 PANDA_IMAGE="${EDGEPILOT_PANDA_IMAGE:-build-ax630/panda/obj/panda.bin.signed}"
 SSH=(ssh -o StrictHostKeyChecking=no)
 SCP=(scp -q -o StrictHostKeyChecking=no)
@@ -41,7 +43,7 @@ runtime_files=(
 [ -x "${BIN_DIR}/panda_flash" ] && runtime_files+=("${BIN_DIR}/panda_flash")
 param_files=(calibration.json adaptive_cruise.json steering.json recording.json display.json)
 
-for file in "${runtime_files[@]}" "$AXMODEL" scripts/web_console/__main__.py; do
+for file in "${runtime_files[@]}" "$AXMODEL" "$LATERAL_NN" scripts/web_console/__main__.py; do
   [ -f "$file" ] || { echo "Missing: $file" >&2; exit 1; }
 done
 
@@ -57,6 +59,7 @@ if [ "$model_sha" != "$board_sha" ]; then
   "${SCP[@]}" "$AXMODEL" "$BOARD:$DEST/.upload/supercombo.axmodel"
   model_note="model updated"
 fi
+"${SCP[@]}" "$LATERAL_NN" "$BOARD:$DEST/.upload/lateral_nn.json"
 "${SCP[@]}" "${param_files[@]/#/params/}" "$BOARD:$DEST/params.defaults/"
 panda_note=""
 if [ -f "$PANDA_IMAGE" ]; then
@@ -65,6 +68,7 @@ if [ -f "$PANDA_IMAGE" ]; then
 fi
 "${SSH[@]}" "$BOARD" "set -e; cd '$DEST'
   if [ -f .upload/supercombo.axmodel ]; then mv .upload/supercombo.axmodel models/; fi
+  mv .upload/lateral_nn.json models/
   if [ -f .upload/panda.bin.signed ]; then mv .upload/panda.bin.signed firmware/; fi
   rm -rf web_console && mv .upload/web_console .
   rm -f models/supercombo_npu1.axmodel  # 예전 AI-ISP용 별도 모델(이제 supercombo.axmodel 하나)

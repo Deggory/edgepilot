@@ -5,12 +5,14 @@
 // 실제 출력과의 대조에 쓴다. 보드와 틱 경계(10 ms 격자의 위상)가 다르므로 녹화 출력과 틱마다 같지는 않다. 2026-10-13
 // 전 녹화에서는 보드가 새 플랜을 한 틱 늦게 썼으므로(플래너 작업 스레드) 모델 프레임의 첫 틱이 그만큼 더 다르다.
 // 사용: replay_controls [--steering s.json] [--cruise c.json] [--vehicle-json j]
-//                       [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt]
-//                       <events.bin...>
+//                       [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--lateral-nn m.json]
+//                       [--dump out.txt] <events.bin...>
 //   --force-engaged는 EDGEPILOT_FORCE_ENGAGED처럼 버튼 없이 결합한다(녹화 전에 결합해 둔 route용).
 //   --lead-track은 녹화 v13 전 route의 ModelState.lead_track을 프레임 번호로 채운다(오프라인으로 만든 앞차
 //   추적, 줄마다 "frame_id valid flags distance relative_speed distance_std speed_std"). 없는 프레임은 0이다.
 //   --lane-filter는 차선선 시간 필터의 새 측정 가중이다(planning/lane_line_filter, 1이면 끈다).
+//   --lateral-nn은 학습한 토크 모델 파일이다(docs/lateral-nn.md, 녹화 route의 models/lateral_nn.json이 그 주행의
+//   모델이다). 쓰려면 --steering의 nn_feedforward도 켠다. 켜져 있는데 모델을 주지 않으면 경고하고 선형으로 돈다.
 //   마지막 줄에 출력 전체의 FNV-1a 다이제스트와, 녹화된 ControlState와의 일치율을 쓴다.
 #include "common/ipc_messages.h"
 #include "common/utils_file.h"
@@ -28,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -57,7 +60,7 @@ struct Digest {
 int main(int argc, char **argv) {
     std::string steering_path, cruise_path, vehicle_json_path, dump_path;
     bool force_engaged = false;
-    std::string lead_track_path;
+    std::string lead_track_path, lateral_nn_path;
     double lane_filter = 0.0;  // 0이면 코드 기본값
     std::vector<std::string> events;
     for (int i = 1; i < argc; ++i) {
@@ -77,6 +80,8 @@ int main(int argc, char **argv) {
             lead_track_path = next();
         else if (arg == "--lane-filter")
             lane_filter = std::atof(next().c_str());
+        else if (arg == "--lateral-nn")
+            lateral_nn_path = next();
         else if (arg.rfind("--", 0) == 0)
             events.clear(), i = argc;
         else
@@ -85,8 +90,8 @@ int main(int argc, char **argv) {
     if (events.empty() || lane_filter < 0.0 || lane_filter > 1.0) {
         std::fprintf(stderr,
                      "usage: %s [--steering s.json] [--cruise c.json] [--vehicle-json live_parameters.json] "
-                     "[--force-engaged] [--lead-track track.txt] [--lane-filter W] [--dump out.txt] "
-                     "<events.bin...>\n",
+                     "[--force-engaged] [--lead-track track.txt] [--lane-filter W] [--lateral-nn m.json] "
+                     "[--dump out.txt] <events.bin...>\n",
                      argv[0]);
         return 2;
     }
@@ -98,6 +103,10 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "params: %s\n", error.c_str());
         return 1;
     }
+    if (params.steering.nn_feedforward && lateral_nn_path.empty())
+        std::fprintf(stderr,
+                     "warning: nn_feedforward is on but no --lateral-nn model is given; the replay uses the "
+                     "linear feed-forward\n");
     const std::string vehicle_json = vehicle_json_path.empty() ? std::string() : read_text_file(vehicle_json_path);
     std::unordered_map<uint64_t, LeadTrackState> lead_tracks;
     if (!lead_track_path.empty()) {
@@ -143,6 +152,14 @@ int main(int argc, char **argv) {
 
     ControlsTick tick(params, force_engaged, vehicle_json, std::string(), 1);
     if (lane_filter > 0.0) tick.planner().set_lane_filter_weight(lane_filter);
+    if (!lateral_nn_path.empty()) {
+        auto nn = std::make_shared<LateralNnModel>();
+        if (!nn->load(lateral_nn_path, &error)) {
+            std::fprintf(stderr, "lateral nn: %s\n", error.c_str());
+            return 1;
+        }
+        tick.set_lateral_nn(nn);
+    }
     uint64_t tick_ns = first_record_ns;
     tick.controller().set_clock([&tick_ns] { return tick_ns; });
     const uint64_t start_ns = tick_ns;
@@ -234,11 +251,11 @@ int main(int argc, char **argv) {
         if (dump) {
             std::fprintf(dump,
                          "%lu eng=%u act=%u block=%s torque=%d/%d curv=%a/%a desire=%u cruise=%u/%a/%a hud=%x "
-                         "angle=%.1f driver=%d ts=%llu",
+                         "angle=%.1f driver=%d ff=%.4f ts=%llu",
                          ticks, state.engaged, state.active, state.active_block, state.desired_torque,
                          state.apply_torque, state.desired_curvature, state.actual_curvature, state.desire,
                          state.cruise_active, state.cruise_max_speed_kph, state.cruise_command_speed_kph,
-                         state.hud_flags, state.steering_angle_deg, state.driver_torque,
+                         state.hud_flags, state.steering_angle_deg, state.driver_torque, result.feedforward,
                          static_cast<unsigned long long>(tick_ns));
             if (send)
                 for (const CanFrame &frame : result.frames) {

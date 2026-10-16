@@ -29,7 +29,7 @@ LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "vehicle_inputs_ok", "vehicle_valid", "sensor_valid", "steer_ratio_valid",
     "stiffness_valid", "offset_average_valid", "offset_valid", "torque_inputs_ok",
     "torque_valid", "use_vehicle", "use_torque", "vehicle_restored", "torque_restored", "use_delay",
-    "localizer_inputs", "torque_partly_restored",
+    "localizer_inputs", "torque_partly_restored", "lateral_nn_loaded",
 )
 LEARNER_HISTORY_S = 600
 GRAVITY = 9.81
@@ -134,6 +134,12 @@ class LearnerMonitor:
             _, stamp, state = latest
             result.update(age_s=age_s(stamp), state=state, trend_row=learner_trend_row(state))
         return result
+
+    def runtime_facts(self, max_age_s: float = 3.0) -> Dict[str, Any]:
+        """파라미터 안내가 보는 런타임 사실(param_metadata.RUNTIME_FACTS). controlsd 상태가 없거나 낡으면 None이다."""
+        latest = self.sample()
+        fresh = latest is not None and age_s(latest[1]) <= max_age_s
+        return {"lateral_nn_loaded": bool(latest[2]["flags"]["lateral_nn_loaded"]) if fresh else None}
 
 
 class LocalizationReader(IpcReader):

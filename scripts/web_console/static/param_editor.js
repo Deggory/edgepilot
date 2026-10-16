@@ -1,7 +1,9 @@
 // 파라미터 항목 하나를 고치는 부품: 컨트롤(켜고 끄기, −/+, 슬라이더), 저장(그동안 막고 결과를 상태 줄에), 바뀜 표시와
 // 기본값으로 되돌리기, 그리고 이것들로 짠 기본 항목 카드. 파라미터 탭과 차량 특성 탭이 같이 쓴다.
 import {t} from "./i18n.js";
-import {clampToMeta, defaultOf, isModified, metaFor, params, saveParam, valueOf} from "./param_state.js";
+import {
+  clampToMeta, conditionNotes, defaultOf, isModified, metaFor, onParamsChanged, params, saveParam, valueOf,
+} from "./param_state.js";
 import {clock, el, note, toast} from "./ui.js";
 
 export function formatValue(value, meta) {
@@ -84,8 +86,28 @@ export function effectsDetails(meta, boolean, {summary = t("params.effects"), le
       el("div.effect.up", {}, el("b", {text: boolean ? t("params.when_on") : t("params.when_higher")}), meta.increase)));
 }
 
-// 항목 카드: 이름·키·기본값, 설명(눌러 펼침), 주의, 컨트롤, 바꾸면, 되돌리기, 상태. 파라미터 탭의 검색이 쓰는 search와
-// isModified, 다시 그리는 refresh를 단다.
+// 다른 항목 때문에 쓰이지 않거나 쓰임이 바뀐다는 안내. update()는 지금 값으로 다시 고르고(바뀐 것이 없으면 그대로
+// 둔다), 쓰이지 않으면 카드에 ignored를 달아 흐리게 한 뒤 참을 돌려준다. 이유가 여럿이면 메타데이터 순서로 첫째(가장
+// 직접적인 것)만 보이고, 쓰이지 않는 동안은 쓰임이 바뀐다는 안내를 숨긴다.
+export function conditionNoteList(group, key, card) {
+  const element = el("div.param-notes");
+  let shown = null;
+  const update = () => {
+    const {unused, role} = conditionNotes(group, key);
+    const notes = unused.length ? [["ignored", unused[0]]] : role.map(text => ["prior", text]);
+    const signature = JSON.stringify(notes);
+    if (signature !== shown) {
+      shown = signature;
+      card.classList.toggle("ignored", unused.length > 0);
+      element.replaceChildren(...notes.map(([tone, text]) => note(text, tone)));
+    }
+    return unused.length > 0;
+  };
+  return {element, update};
+}
+
+// 항목 카드: 이름·키·기본값, 설명(눌러 펼침), 주의, 다른 항목에 따른 안내, 컨트롤, 바꾸면, 되돌리기, 상태. 파라미터
+// 탭의 검색이 쓰는 search와 isModified, 다시 그리는 refresh를 단다.
 export function paramCard(group, key) {
   const card = el("article.card.param", {dataset: {key}});
   const editor = paramEditor(group, key, {card});
@@ -93,6 +115,8 @@ export function paramCard(group, key) {
   const fallback = defaultOf(group, key);
   const description = el("p.param-description.clamped", {text: meta.description});
   description.addEventListener("click", () => description.classList.toggle("clamped"));
+  const conditions = conditionNoteList(group, key, card);
+  conditions.update();
   card.append(
     el("header.param-head",
       {},
@@ -107,6 +131,7 @@ export function paramCard(group, key) {
       meta.unit ? el("span.param-unit", {text: meta.unit}) : null),
     description,
     meta.caution ? note(meta.caution, "warn") : "",
+    conditions.element,
     editor.control.element,
     el("footer.param-foot",
       {},
@@ -115,7 +140,12 @@ export function paramCard(group, key) {
       editor.status));
   card.search = `${meta.label} ${key} ${meta.description}`.toLowerCase();
   card.isModified = () => isModified(group, key);
-  card.refresh = editor.refresh;
+  card.refresh = () => {
+    editor.refresh();
+    conditions.update();
+  };
+  // 다른 항목(다른 탭 것도)이 저장되면 값과 안내를 다시 그린다
+  onParamsChanged(card.refresh);
   return card;
 }
 

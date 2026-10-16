@@ -102,6 +102,7 @@ Mdps12Values decode_mdps12(const std::array<uint8_t, 8> &data) {
     values.msg_count = static_cast<int>(get_signal_le(data.data(), 16, 8));
     values.checksum = static_cast<int>(get_signal_le(data.data(), 24, 8));
     values.sensor_error = get_signal_le(data.data(), 37, 1) != 0;
+    values.output_torque = static_cast<int>(get_signal_le(data.data(), 52, 12)) - 2048;
     return values;
 }
 

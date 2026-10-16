@@ -123,6 +123,7 @@ Panda's health confirm that configuration
 | --- | --- | --- |
 | `EDGEPILOT_ENABLE_CONTROL=1` | on | The manager starts `controlsd`. It does not start `pandad` on its own; that needs `EDGEPILOT_ENABLE_PANDA=1`. No openpilot checkout or Python native extension is required. |
 | `EDGEPILOT_FORCE_ENGAGED=0\|1` | `0` | Bypasses the SET/CANCEL engage latch, for offline replay only. |
+| `EDGEPILOT_LATERAL_NN_MODEL=path` | `models/lateral_nn.json` | The learned torque model `controlsd` reads at start ([Lateral NN](lateral-nn.md)), relative to the install directory. `recordd` copies the same file into each route. |
 
 > [!WARNING]
 > `EDGEPILOT_FORCE_ENGAGED` must remain `0` in a vehicle.

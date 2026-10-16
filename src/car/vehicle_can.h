@@ -20,6 +20,7 @@ struct Mdps12Values {
     bool sensor_error = false;
     int msg_count = 0;
     int checksum = 0;
+    int output_torque = 0;  // CR_Mdps_OutTq: MDPS가 실제로 내는 토크(원시값 - 2048, DBC 0.1 단위)
 };
 
 struct Esp12Values {

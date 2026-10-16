@@ -123,9 +123,11 @@ scripts/upload_to_board.sh root@<board-ip>
 
 The script copies the binaries from `build-ax630/bin`, the board-side Python,
 the web console (`web_console/`, the server and its page, replaced as a whole),
-the parameter defaults and `models/supercombo.axmodel`
-([how it is built](../tools/model/axmodel/README.md)) to `/root/edgepilot`. The
-33 MB model is sent only when its SHA-256 differs from the board's copy. The
+the parameter defaults, `models/supercombo.axmodel`
+([how it is built](../tools/model/axmodel/README.md)) and the learned torque
+model `models/lateral_nn.json` ([Lateral NN](lateral-nn.md)) to
+`/root/edgepilot`. The 33 MB model is sent only when its SHA-256 differs from
+the board's copy; the 0.2 MB torque model is sent every time. The
 Panda firmware image, when built, goes to `firmware/panda.bin.signed`; the
 Panda itself is flashed from the web console or with `panda_flash`.
 
@@ -154,7 +156,7 @@ scripts/run_host_tests.sh
 ```
 
 Builds `build-host/` with the runtime off and runs every test through `ctest`:
-327 googletest cases, `check_web_console.py`, `check_recording_reader.py` and
+348 googletest cases, `check_web_console.py`, `check_recording_reader.py` and
 `check_docs.py`. It needs neither the board nor `deps/`; googletest is
 downloaded on the first configure. See [Host tests](../tests/README.md).
 

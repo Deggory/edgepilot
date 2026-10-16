@@ -56,8 +56,8 @@ from scripts.web_console.panda_update import (
     PandaUpdate,
     panda_image_info,
 )
-from scripts.web_console.param_metadata import PARAM_GROUPS, PARAM_METADATA, VEHICLE_TAB
-from scripts.web_console.param_store import ParamStore, group_paths
+from scripts.web_console.param_metadata import PARAM_GROUPS, PARAM_METADATA, RUNTIME_FACTS, VEHICLE_TAB
+from scripts.web_console.param_store import ParamStore, check_choice, group_paths, read_document
 from scripts.web_console.refusal import Refusal
 from scripts.web_console.process_status import (
     MANAGER_STATE_HEAD,
@@ -370,6 +370,44 @@ class ParamMetadataTest(unittest.TestCase):
         for tab, (sections, used) in tabs.items():
             self.assertEqual([name for name in sections if name not in used], [], f"{tab}: empty sections")
 
+    def test_conditions_name_real_options(self):
+        """다른 항목에 따른 안내(unused·role, param_metadata.when): 조건의 항목이 있고 자기 자신이 아니며, 값은 그
+        항목이 가질 수 있는 것(켜고 끄는 항목은 bool, 고르는 항목은 선택지 번호, 숫자 항목은 범위 안의 수, 런타임 사실은
+        bool)이다. also도 같고 문구가 없다. 문구가 두 언어에 다 있는지는 I18nCatalogTest가 본다."""
+        files = {group: read_document(path) for group, path in group_paths(ROOT / "params").items()}
+
+        def check(condition, group, key, name):
+            self.assertEqual(set(condition) - {"group", "also"}, {"key", "value", "text"}, name)
+            other_group, other_key, value = condition.get("group", group), condition["key"], condition["value"]
+            if other_group == "runtime":
+                self.assertIn(other_key, RUNTIME_FACTS, name)
+                self.assertIsInstance(value, bool, name)
+            else:
+                self.assertIn(other_key, files[other_group], name)
+                self.assertNotEqual((other_group, other_key), (group, key), name)
+                other = PARAM_METADATA[other_group][other_key]
+                if other.get("control") == "choice":
+                    check_choice(other_group, other_key, value)
+                elif isinstance(files[other_group][other_key], bool):
+                    self.assertIsInstance(value, bool, name)
+                else:
+                    self.assertIsInstance(value, (int, float), name)
+                    self.assertNotIsInstance(value, bool, name)
+                    self.assertTrue(other["min"] <= value <= other["max"], name)
+            if "also" in condition:
+                self.assertEqual(condition["also"]["text"], "", name)
+                check(condition["also"], group, key, f"{name} also")
+
+        seen = 0
+        for group, items in PARAM_METADATA.items():
+            for key, meta in items.items():
+                for kind in ("unused", "role"):
+                    for condition in meta.get(kind, []):
+                        seen += 1
+                        self.assertTrue(condition["text"], f"{group}.{key} {kind}")
+                        check(condition, group, key, f"{group}.{key} {kind} {condition}")
+        self.assertGreater(seen, 0)
+
     def test_vehicle_tab_matches_the_page(self):
         """차량 특성 탭: 학습기 섹션마다 스위치가 하나 있고, 나머지 항목은 학습값을 읽는 법(vehicle_view.js LIVE)과
         자동 학습 중의 쓰임(learned, learned_role 문구)이 있다. 학습기 이름은 페이지의 LEARNERS와 같다."""
@@ -490,6 +528,8 @@ class I18nCatalogTest(unittest.TestCase):
                 used.add(f"section.{meta['section']}")
                 if meta.get("caution"):
                     used.add(f"caution.{meta['caution']}")
+                for kind in ("unused", "role"):
+                    used.update(f"{kind}.{condition['text']}" for condition in meta.get(kind, []))
                 if meta.get("unit") and f"unit.{meta['unit']}" in keys:
                     used.add(f"unit.{meta['unit']}")
         for group, spec in PARAM_GROUPS.items():
@@ -605,6 +645,20 @@ class LearnerStateTest(unittest.TestCase):
         self.assertIsNone(reader.read())
         self.path.unlink()
         self.assertIsNone(reader.read())
+
+    def test_runtime_facts_follow_a_fresh_state(self):
+        """파라미터 안내가 보는 런타임 사실: controlsd가 학습한 토크 모델을 읽었는지(플래그). 상태가 없거나 낡으면
+        None이다(그때는 어느 조건도 참이 아니다)."""
+        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        self.assertEqual(monitor.runtime_facts(), {"lateral_nn_loaded": None})
+        self.assertEqual(set(monitor.runtime_facts()), set(RUNTIME_FACTS))
+        loaded = 1 << LEARNER_FLAGS.index("lateral_nn_loaded")
+        publish(self.path, learner_payload(flags=loaded), seq=2)
+        self.assertEqual(monitor.runtime_facts(), {"lateral_nn_loaded": True})
+        publish(self.path, learner_payload(flags=0), seq=4)
+        self.assertEqual(monitor.runtime_facts(), {"lateral_nn_loaded": False})
+        publish(self.path, learner_payload(flags=loaded), seq=6, stamp=123)  # 오래전 상태
+        self.assertEqual(monitor.runtime_facts(), {"lateral_nn_loaded": None})
 
     def test_monitor_keeps_one_trend_row_per_publish(self):
         monitor = LearnerMonitor(LearnerStateReader(str(self.path)))

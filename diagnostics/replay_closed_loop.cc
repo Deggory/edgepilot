@@ -18,6 +18,7 @@
 //   --lane-filter W            차선선 시간 필터의 새 측정 가중(planning/lane_line_filter, 1이면 끈다).
 //   --lanebow                  Lanebow 모드로 돈다. 녹화의 LaneState(차선선 플러그인) 도로면 선도 supercombo 차선처럼
 //                              시뮬 차의 차체 좌표로 옮겨 넘긴다.
+//   --lateral-nn m.json        학습한 토크 모델(docs/lateral-nn.md). --steering의 nn_feedforward가 켜져 있을 때 쓴다.
 #include "car/hyundai_can.h"
 #include "car/vehicle_can.h"
 #include "common/ipc_messages.h"
@@ -38,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -56,6 +58,7 @@ struct Options {
     const char *gain_pts = nullptr;
     const char *steering_path = nullptr;
     const char *torque = nullptr;
+    const char *lateral_nn = nullptr;
     std::optional<double> lane_filter;
     bool lanebow = false;
     float camera_shift = 0.0f;
@@ -69,7 +72,7 @@ struct Options {
                  "usage: %s [--open-loop] [--wn W] [--zeta Z] [--delay N] [--gain G | --gain-pts a,b,c,d]\n"
                  "       [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T] [--driver-low T]\n"
                  "       [--driver-release N] [--steering steering.json] [--camera-shift D]\n"
-                 "       [--torque factor,offset,friction] [--lane-filter W] [--lanebow]\n"
+                 "       [--torque factor,offset,friction] [--lane-filter W] [--lanebow] [--lateral-nn m.json]\n"
                  "       <out.csv|-> <events.bin...>\n",
                  argv0);
     std::exit(2);
@@ -119,6 +122,8 @@ Options parse_options(int argc, char **argv) {
             o.lane_filter = std::atof(value());
         else if (arg == "--lanebow")
             o.lanebow = true;
+        else if (arg == "--lateral-nn")
+            o.lateral_nn = value();
         else if (arg.rfind("--", 0) == 0)
             usage(argv[0]);
         else
@@ -293,6 +298,19 @@ int main(int argc, char **argv) {
     cfg.force_engaged = true;
     cfg.steering_params = steering;
     LateralController controller(cfg);
+    if (opt.lateral_nn != nullptr) {
+        auto nn = std::make_shared<LateralNnModel>();
+        std::string error;
+        if (!nn->load(opt.lateral_nn, &error)) {
+            std::fprintf(stderr, "lateral nn: %s\n", error.c_str());
+            return 1;
+        }
+        controller.set_lateral_nn(nn);
+    } else if (steering.nn_feedforward) {
+        std::fprintf(stderr,
+                     "warning: nn_feedforward is on but no --lateral-nn model is given; the replay uses the "
+                     "linear feed-forward\n");
+    }
     constexpr uint64_t kControllerNowNs = 1'000'000'000'000ULL;  // plan 나이를 재는 컨트롤러 시계(고정)
     controller.set_clock([] { return kControllerNowNs; });
     TorqueController inverse_model;

@@ -292,6 +292,9 @@ Libraries `common` and `utils_json`, and the object library `build_version`.
   `parse_json_optional_*` helpers, and the `Json*Field` tables that
   `control_params` and `adaptive_cruise` fill their structs from: one
   `{key, min, max, member}` row per parameter.
+- `json_value.*`: a small JSON document reader (objects, arrays, string
+  escapes, a nesting limit), part of `utils_json`, for files with nested data
+  such as the lateral NN model.
 - `utils_file.h`, `background_writer.h`:
   - `file_stamp` is the stat fingerprint the processes poll parameter files
     with; `read_text_file`; and `write_file_atomic` (temporary file + rename,
@@ -331,6 +334,9 @@ Libraries `control_core` and `controls`, process `controlsd`.
 - `lateral_controller.*`, `lateral_torque.*`, `control_params.*`: apply the
   planner's lag-adjusted curvature through the validated K7 torque/CAN path
   (`car/hyundai_can`).
+- `lateral_nn.*`: the learned torque feed-forward: the model file loader,
+  the network and the inputs built from the plan and a 1 s history
+  ([Lateral NN](lateral-nn.md)).
 - `lateral_target.h`: declares `LateralTarget`, the planner-to-controller
   interface.
 - `lateral_path.*`: reduces `modelState` to the steering-usability gate (reach
@@ -614,6 +620,10 @@ the event log are described in [Recording](recording.md).
   `header_size`, and stops without resyncing at a truncated tail (record type
   out of range, a payload over 1 MiB, or a short header or payload), which
   `truncated()` reports.
+- `time_ordered_events.h`: reads several event logs in time order. recordd
+  writes the queued CAN before the state snapshots, so file order is not time
+  order; it reorders within a 0.5 s window, so a route is never held in memory
+  (`extract_lateral_dataset`).
 - `recorded_can.h`, `recorded_model_state.h`: the recorded CAN payload
   (written by `recordd`, read back by `replayd` and the tools, whole frames
   only) and the reader that turns a v3 to v13 `ModelState` payload into the

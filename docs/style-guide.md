@@ -88,7 +88,9 @@ lives in `static/i18n/ko.json` and `en.json` under the same key:
 - Keys are dotted, by where they show: `app.*`, `params.*`, `vehicle.*`,
   `calibration.*`, `panda.*`, `bev.*`. The parameters' texts are
   `param.<group>.<key>.label`, `.description`, `.increase`, `.decrease` and
-  `.learned_role`, next to `group.*`, `section.*`, `unit.*` and `caution.*`;
+  `.learned_role`, next to `group.*`, `section.*`, `unit.*` and `caution.*`.
+  `unused.*` and `role.*` are the notes a value gets while another value
+  leaves it unused or changes what it does (`when` in `param_metadata.py`).
   `param_metadata.py` holds only their structure.
 - Values fill `{name}` placeholders. An English text that changes with a count
   is `{"one": ..., "other": ...}` and is picked by `{count}`.

@@ -26,5 +26,6 @@
   "use_live_vehicle_params": true,
   "use_live_torque_params": true,
   "use_live_delay": false,
+  "nn_feedforward": false,
   "use_locationd_learner_inputs": true
 }

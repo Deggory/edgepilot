@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -180,6 +181,19 @@ int main() {
                                                                                         : "fresh",
                      params.steering.use_live_vehicle_params ? 1U : 0U,
                      params.steering.use_live_torque_params ? 1U : 0U);
+        // 학습한 토크 모델(docs/lateral-nn.md). 없거나 못 읽으면 선형 피드포워드만 쓴다(nn_feedforward를 켜도).
+        {
+            const std::string nn_path = lateral_nn_model_path();
+            auto nn = std::make_shared<LateralNnModel>();
+            std::string nn_error;
+            if (nn->load(nn_path, &nn_error)) {
+                tick.set_lateral_nn(nn);
+                std::fprintf(stderr, "controlsd: lateral nn %s (%s, %zu inputs) nn_feedforward=%u\n", nn_path.c_str(),
+                             nn->name().c_str(), nn->input_count(), params.steering.nn_feedforward ? 1U : 0U);
+            } else {
+                std::fprintf(stderr, "controlsd: lateral nn off: %s\n", nn_error.c_str());
+            }
+        }
         TickStats stats;
         uint64_t model_seq = 0;
         uint64_t lane_state_seq = 0;

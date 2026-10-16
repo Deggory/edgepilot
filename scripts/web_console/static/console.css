@@ -222,8 +222,11 @@ main {
 .param-notes:empty { display: none; }
 .card.param > .switch-control, .card.param > .stepper, .card.param > .slider-control,
 .card.param > .segmented { margin-top: 12px; }
-.card.param.ignored .param-description, .card.param.ignored .stepper,
-.card.param.ignored .switch-control, .card.param.ignored .slider-control { opacity: 0.5; }
+/* 다른 항목 때문에 쓰이지 않는 항목: 제목을 흐린 색으로, 설명과 컨트롤을 반투명으로 한다(고칠 수는 있다). 이유는
+   card-note.ignored */
+.card.ignored .card-title { color: var(--muted); }
+.card.param.ignored .param-description, .card.param.ignored .stepper, .card.param.ignored .switch-control,
+.card.param.ignored .slider-control, .card.param.ignored .segmented { opacity: 0.5; }
 .param-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; min-height: 26px; }
 .param-effects { flex: 1 1 auto; color: var(--faint); font-size: 12px; }
 .param-effects[open] { flex-basis: 100%; order: 1; }
@@ -339,6 +342,7 @@ main {
 .quantity-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-left: auto; color: var(--faint); font-size: 11px; }
 .quantity-foot .param-status { margin-left: 0; }
 .card.quantity .card-note.prior { margin-top: 8px; }
+.card.quantity.ignored .quantity-now-row, .card.quantity.ignored .quantity-row { opacity: 0.5; }
 .adopt-button {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; margin-top: 10px; padding: 8px 12px;
   border: 1px solid var(--btn-border); border-radius: var(--radius); background: var(--btn-bg);

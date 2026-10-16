@@ -90,6 +90,7 @@ A route is a directory named after its start time in Korea Standard Time
 flowchart LR
     route["route directory"] --> manifest["manifest.json"]
     route --> params["params/<br>parameter files"]
+    route --> models["models/<br>lateral_nn.json"]
     route --> events["events/"]
     events --> e0["000.bin, 001.bin, ...<br>60 s each"]
     route --> segments["segments/"]
@@ -97,13 +98,14 @@ flowchart LR
     s0 --> video["road.h264"]
     s0 --> index["frames.bin"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
-    class route,manifest,params,events,e0,segments,s0,video,index proc
+    class route,manifest,params,models,events,e0,segments,s0,video,index proc
 ```
 
 | Path | Holds |
 | --- | --- |
 | `manifest.json` | `version`, `complete`, `video_codec` (`"h264"`), `width`, `height`, `fps`, `bitrate`, `segment_seconds` (60), `video_frames`, `event_records` |
 | `params/` | a copy of every `*.json` in the parameter directory when the route started |
+| `models/lateral_nn.json` | a copy of the learned torque model controlsd reads ([Lateral NN](lateral-nn.md)), when the file exists, so a replay can use the model that drove |
 | `events/NNN.bin` | the event log, one 60 s chunk per file |
 | `segments/NNN/road.h264` | the H.264 stream of one segment, starting with its SPS and PPS so it decodes alone |
 | `segments/NNN/frames.bin` | the frame index of that segment |

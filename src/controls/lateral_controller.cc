@@ -21,6 +21,26 @@ constexpr float kHeldTurnResumeMarginDeg = 5.0f;
 constexpr float kHeldTurnPlanTolerance = 0.25f;
 constexpr int kHeldTurnResumeFrames = 100;
 
+// 학습한 토크 모델 피드포워드를 섞는 무게의 틱당 변화(100 Hz에서 1초 램프)
+constexpr float kNnBlendStep = 0.01f;
+// 학습 데이터는 3 m/s 위만 썼다(nnlc csvdata.usable_mask). 그 아래에서는 선형 피드포워드로 돌아간다.
+constexpr float kNnMinSpeedMps = 3.0f;
+// 모델이 읽는 가장 먼 시각에 계획 나이 보정을 더해도 계획 격자 끝(model_t_idx(kLateralControlN - 1) = 2.5 s) 안이다
+static_assert(kLateralNnLatestS + kMaxPlanAgeCompS <= 10.0f * (kLateralControlN - 1) * (kLateralControlN - 1) /
+                                                              ((kTrajectorySize - 1.0f) * (kTrajectorySize - 1.0f)) +
+                                                          1e-4f,
+              "lateral NN inputs must stay inside the plan");
+
+// 곡률 상한: 횡가속 ±kMaxLateralAccel(학습 롤만큼 이동, 속도 하한 kMinCurvatureSpeedMps)과 ±kMaxCurvature.
+// clip_curvature와 학습한 토크 모델의 입력 궤적이 같이 쓴다.
+float limit_curvature(float speed_mps, float curvature, float roll_rad) {
+    const float speed = std::max(speed_mps, kMinCurvatureSpeedMps);
+    const float roll_lat_accel = roll_rad * 9.81f;
+    curvature = clamp_float(curvature, (-kMaxLateralAccel + roll_lat_accel) / (speed * speed),
+                            (kMaxLateralAccel + roll_lat_accel) / (speed * speed));
+    return clamp_float(curvature, -kMaxCurvature, kMaxCurvature);
+}
+
 float interp_lateral(float x, const float *values) {
     if (x <= 0.0f) return values[0];
     for (int i = 1; i < kLateralControlN; ++i) {
@@ -157,10 +177,12 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
                                            yaw_rate_valid, live, &plan_curvature),
                        live.use_vehicle ? live.roll_rad : 0.0f, &curvature_limited);
     prev_desired_curvature_ = result.desired_curvature;
+    const float nn_feedforward =
+        lateral_nn_feedforward(target, vehicle_state, speed_mps, plan_age, steering, steering_pressed, live);
 
     if (steering) {
         steer(vehicle_state, speed_mps, now_s, steering_pressed, yaw_rate_valid, curvature_limited, plan_curvature,
-              live, &result);
+              live, nn_feedforward, &result);
     } else {
         // 상류 LaC.reset(): 포화 시간을 지운다(PID는 토크 제어기가 비활성 틱에 지운다)
         sat_time_ = 0.0f;
@@ -306,14 +328,24 @@ float LateralController::requested_curvature(const LateralTarget &target, const 
     // 유지한다. 운전자가 조향 중이면 묶지 않는다: 교차로에서 더 감는 운전자를 80도 쪽으로 밀지
     // 않고, 85도 위에서는 시간 규칙이 그대로 적용된다. 횡가속 한계가 더 좁은 약 35 km/h 위에서는
     // 걸리지 않는다.
-    const float hold_angle_deg = control_params.avoid_lkas_fault_hold_angle_deg;
-    if (steering && !steering_pressed && control_params.avoid_lkas_fault_enabled && hold_angle_deg > 0.0f &&
-        std::isfinite(speed_mps) && std::isfinite(requested_curvature)) {
-        const float left = torque_controller_.curvature_at_angle(speed_mps, hold_angle_deg, control_params, live);
-        const float right = torque_controller_.curvature_at_angle(speed_mps, -hold_angle_deg, control_params, live);
-        requested_curvature = std::clamp(requested_curvature, std::min(left, right), std::max(left, right));
-    }
+    float lo = 0.0f, hi = 0.0f;
+    if (std::isfinite(requested_curvature) && hold_angle_bounds(speed_mps, steering, steering_pressed, live, &lo, &hi))
+        requested_curvature = std::clamp(requested_curvature, lo, hi);
     return requested_curvature;
+}
+
+bool LateralController::hold_angle_bounds(float speed_mps, bool steering, bool steering_pressed,
+                                          const LiveLateralParams &live, float *lo, float *hi) {
+    const SteeringParams &control_params = config_.steering_params;
+    const float hold_angle_deg = control_params.avoid_lkas_fault_hold_angle_deg;
+    if (!steering || steering_pressed || !control_params.avoid_lkas_fault_enabled || !(hold_angle_deg > 0.0f) ||
+        !std::isfinite(speed_mps))
+        return false;
+    const float left = torque_controller_.curvature_at_angle(speed_mps, hold_angle_deg, control_params, live);
+    const float right = torque_controller_.curvature_at_angle(speed_mps, -hold_angle_deg, control_params, live);
+    *lo = std::min(left, right);
+    *hi = std::max(left, right);
+    return true;
 }
 
 // 토크 제어기의 진단값을 결과에 옮긴다.
@@ -324,12 +356,51 @@ void LateralController::copy_torque_state(LateralControlResult *result) const {
     result->curvature_error = result->desired_curvature - result->actual_curvature;
     result->normalized_output = torque_controller_.normalized_output();
     result->feedforward = torque_controller_.feedforward();
+    result->nn_feedforward_used = torque_controller_.nn_feedforward_used();
+}
+
+void LateralController::set_lateral_nn(std::shared_ptr<const LateralNnModel> model) {
+    lateral_nn_ = model && model->loaded() ? std::move(model) : nullptr;
+    nn_inputs_.reset();
+    nn_weight_ = 0.0f;
+}
+
+// 학습한 토크 모델의 입력은 목표 궤적이다(학습은 실제 궤적, docs/lateral-nn.md).
+// - la(δ): 계획 곡률(MPC 궤적을 계획 나이만큼 앞으로 보간) × v². PID가 따르는 요청과 같은 범위로 묶는다: 운전자가
+//   핸들을 잡지 않았을 때의 80도 유지 한계(hold_angle_bounds), 횡가속·곡률 상한(limit_curvature). 계획이 NaN이면 그
+//   틱은 모델도 NaN이라 선형 피드포워드를 쓴다. 조향각(δ): 그 곡률을 차량 모델로 뒤집은 각도(학습 SR·강성·영점).
+// - roll: 편경사 추정 / g(학습 데이터와 같은 추정기). long: ESP12 종가속.
+float LateralController::lateral_nn_feedforward(const LateralTarget &target, const VehicleCanState &vehicle_state,
+                                                float speed_mps, float plan_age_s, bool steering, bool steering_pressed,
+                                                const LiveLateralParams &live) {
+    if (!lateral_nn_) return NAN;
+    const float speed = std::isfinite(speed_mps) ? std::max(speed_mps, 0.0f) : 0.0f;
+    const float age = clamp_float(plan_age_s, 0.0f, kMaxPlanAgeCompS);
+    const float roll_rad = live.use_vehicle ? live.roll_rad : 0.0f;
+    float hold_lo = -kMaxCurvature, hold_hi = kMaxCurvature;
+    hold_angle_bounds(speed, steering, steering_pressed, live, &hold_lo, &hold_hi);
+    const auto curvature_at = [&](float delta_s) {
+        const float curvature = interp_lateral(delta_s + age, target.curvatures);
+        if (!std::isfinite(curvature)) return NAN;
+        return limit_curvature(speed, std::clamp(curvature, hold_lo, hold_hi), roll_rad);
+    };
+    const float speed_sq = speed * speed;
+    const TorqueController::AngleMap angle = torque_controller_.angle_map(speed, config_.steering_params, live);
+    const auto la_at = [&](float delta_s) { return curvature_at(delta_s) * speed_sq; };
+    const auto angle_at = [&](float delta_s) { return angle(curvature_at(delta_s)); };
+    nn_inputs_.push(la_at(0.0f), angle_at(0.0f));
+    // 켜고 끌 때, 그리고 조향을 시작할 때 피드포워드가 건너뛰지 않게 1초에 걸쳐 섞는다(설정은 주행 중에도 바뀐다)
+    const bool wanted = steering && config_.steering_params.nn_feedforward && target.valid && speed > kNnMinSpeedMps;
+    nn_weight_ = clamp_float(nn_weight_ + (wanted ? kNnBlendStep : -kNnBlendStep), 0.0f, 1.0f);
+    if (!steering || !target.valid || nn_weight_ <= 0.0f) return NAN;
+    return nn_inputs_.evaluate(*lateral_nn_, speed, road_bank_.lat_accel() / 9.81f, vehicle_state.long_accel_mps2,
+                               la_at, angle_at);
 }
 
 // 조향 중: 토크를 계산하고 85도 고장 회피와 Panda 한계를 적용한 뒤 포화를 본다.
 void LateralController::steer(const VehicleCanState &vehicle_state, float speed_mps, double now_s,
                               bool steering_pressed, bool yaw_rate_valid, bool curvature_limited, float plan_curvature,
-                              const LiveLateralParams &live, LateralControlResult *result) {
+                              const LiveLateralParams &live, float nn_feedforward, LateralControlResult *result) {
     const SteeringParams &control_params = config_.steering_params;
     // 85도 위에서도 컨트롤러 토크를 그대로 내되, 요청을 끄는 프레임(avoid_lkas_fault_max_frames,
     // update_large_angle_hold)에 0에 닿도록 크기를 steer_delta_down × 남은 프레임으로 묶는다.
@@ -350,7 +421,7 @@ void LateralController::steer(const VehicleCanState &vehicle_state, float speed_
     const int raw_torque = torque_controller_.update(
         true, speed_mps, result->desired_curvature, vehicle_state.steering_angle_deg, steering_pressed,
         steer_limited_by_safety_ || above_fault_angle, control_params, plan_delay_s(), vehicle_state.yaw_rate_rad_s,
-        yaw_rate_valid, road_bank_.lat_accel(), live);
+        yaw_rate_valid, road_bank_.lat_accel(), live, nn_feedforward, nn_weight_);
     result->desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
     copy_torque_state(result);
     result->apply_torque = apply_hyundai_steer_torque_limits(
@@ -577,13 +648,9 @@ float clip_curvature(float speed_mps, float prev_curvature, float new_curvature,
     // v0.9.4와 달리 틱간 계단을 실제로 막아, 변화율 제한된 와이어가 예산을
     // 노이즈에 쓰지 않는다.
     const float max_curvature_rate = kMaxLateralJerk / (speed * speed);
-    float curvature = clamp_float(new_curvature, prev_curvature - max_curvature_rate * kCurvatureRateWindowS,
-                                  prev_curvature + max_curvature_rate * kCurvatureRateWindowS);
-    const float roll_lat_accel = roll_rad * 9.81f;
-    const float rate_limited = curvature;
-    curvature = clamp_float(curvature, (-kMaxLateralAccel + roll_lat_accel) / (speed * speed),
-                            (kMaxLateralAccel + roll_lat_accel) / (speed * speed));
-    curvature = clamp_float(curvature, -kMaxCurvature, kMaxCurvature);
+    const float rate_limited = clamp_float(new_curvature, prev_curvature - max_curvature_rate * kCurvatureRateWindowS,
+                                           prev_curvature + max_curvature_rate * kCurvatureRateWindowS);
+    const float curvature = limit_curvature(speed_mps, rate_limited, roll_rad);
     if (limited) *limited = curvature != rate_limited;
     return curvature;
 }

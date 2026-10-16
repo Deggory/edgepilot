@@ -75,15 +75,23 @@ controlsd tick, at 10 ms ticks. The recorded CAN, `ModelState`, `PandaState`
 and `Localization` records go in, the planner is computed in place and the
 clock is the tick time, so identical code gives a bit-identical `--dump` and
 digest. The dump has a line per tick: the state, the torque and curvature, the
-HUD flags, the wheel angle, the driver torque, the tick time and the frames
-sent. It also reports how often engaged, active and desire agree with the
-recorded `ControlState`. A route engaged before recording started needs
-`--force-engaged`.
+HUD flags, the wheel angle, the driver torque, the torque controller's
+feed-forward, the tick time and the frames sent. It also reports how often
+engaged, active and desire agree with the recorded `ControlState`. A route
+engaged before recording started needs `--force-engaged`.
 
 ```sh
 R=<route>; ./build-host/bin/replay_controls --steering $R/params/steering.json \
   --cruise $R/params/adaptive_cruise.json --dump out.txt $R/events/*.bin
 ```
+
+`--lateral-nn` loads the learned torque model ([Lateral NN](lateral-nn.md)):
+the route's own copy is `$R/models/lateral_nn.json`. It takes effect only when
+the `--steering` file turns `nn_feedforward` on, so two runs with
+`--force-engaged`, one with the switch off and one with it on, compare the two
+feed-forwards on the same inputs. With the switch on and no model, the tool
+warns and runs the linear feed-forward. `replay_closed_loop` takes the same
+option.
 
 ## Refactor checks
 
@@ -183,8 +191,11 @@ was a lateral offset, not a camera-matrix error.
 ## Lateral dataset extraction
 
 `extract_lateral_dataset` replays a recording and writes one CSV row per
-`ControlState` record (about 62 Hz). It joins the CAN state decoded by the
-runtime's own `vehicle_can`, so signs and scaling match the board exactly:
+`ControlState` record (about 100 Hz on current recordings). It joins the CAN
+state decoded by the runtime's own `vehicle_can`, so signs and scaling match
+the board exactly. Records are read in time order
+(`recording/time_ordered_events.h`), so each row sees the CAN and the model
+frame that had arrived by then:
 
 ```sh
 cmake --build build-host --target extract_lateral_dataset -j2
@@ -203,7 +214,22 @@ The columns are:
 - the live bank estimate and its roll equivalent;
 - requested and measured curvature;
 - the NNFF-style future values `la_p03..p15` / `roll_p03..p15`, taken from the
-  recorded model plan.
+  recorded model plan;
+- the EPS state from MDPS12: `toi_active` (the MDPS takes the LKAS torque),
+  `steer_fault`, and `eps_out_tq`, the torque the MDPS actually applies (raw
+  minus 2048, in the DBC's 0.1 units; 0 while MDPS12 is stale);
+- `blinker`, for picking training samples.
+
+The event log is not in time order: recordd writes the queued CAN first and
+then the latest state snapshots, each stamped by its publisher. On the 10-15
+route a `ControlState` is written up to 14 ms after the CAN that follows it.
+`ModelState` is up to 21 ms out of order there, and `Localization` up to
+39 ms. Read in file order, a quarter of the rows lost the speed and the EPS
+state, because the CAN looked newer than the row. 9 % of the active rows also
+had a model frame from the future, and the training dropped those. Reading
+through `TimeOrderedEvents` gives 15 % more training samples.
+`TimeOrderedEvents` reorders within a 0.5 s window, so a route is never held
+in memory.
 
 Two deviations from the runtime are deliberate:
 
@@ -216,6 +242,9 @@ Both were checked against known results. Straight-line bank reproduces -0.178
 on the 2026-08-28 route (logged: -0.176), and the total-least-squares torque
 fit over the 2026-08-19 route returns `latAccelFactor` 4.00, the value that
 route was fit to.
+
+The separate `nnlc` repository trains the [lateral NN](lateral-nn.md) on these
+files.
 
 ## HUD snapshots
 
@@ -359,6 +388,8 @@ output against the host axengine runner gave a plan lateral difference of
   response simulated
 - [Rehearsal](rehearsal.md): replaying a recorded drive through the whole
   runtime on the board
+- [Lateral NN](lateral-nn.md): the torque model trained on the extracted
+  dataset, which `replay_controls --lateral-nn` loads
 - [Recording](recording.md): the route layout the tools read
 - [HUD](hud.md): what the renderer that `hud_snapshot` runs draws, and the
   alert sounds

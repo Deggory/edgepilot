@@ -3,6 +3,8 @@
 
 // openpilot latcontrol_torque(v0.11)의 C++ 이식.
 
+#include <cmath>
+
 #include "controls/control_params.h"
 
 // 보내는 조향 토크의 부호. 이 코드의 횡제어는 오른쪽이 양수이고 MDPS 토크(LKAS11 요청, MDPS12 운전자
@@ -32,15 +34,33 @@ public:
     // lat_delay_s: 조향 지연(상류 LatControlTorque.update의 lat_delay). 요청 버퍼에서 이만큼 전의
     // 요청을 지금 측정과 비교한다. 컨트롤러는 경로를 읽는 지연과 같은 값(lagd 사용 중이면 추정값,
     // 아니면 steer_actuator_delay)을 넘긴다.
+    // nn_feedforward_torque: 학습한 토크 모델(LateralNnModel)의 피드포워드(제어 부호, steer_max로 나눈 토크).
+    // nn_weight(0..1)만큼 선형 피드포워드(목표 횡가속, 편향, 롤·편경사, 마찰)와 섞는다: 1이면 모델만. NaN이거나 무게가
+    // 0이면 선형만. 켜고 끌 때 피드포워드가 건너뛰지 않게 호출자가 무게를 천천히 바꾼다. PID는 그대로 횡가속 공간에서 돈다.
     int update(bool active, float speed_mps, float desired_curvature, float steering_angle_deg, bool steering_pressed,
                bool steer_limited_by_safety, const SteeringParams &params, float lat_delay_s,
                float yaw_rate_rad_s = 0.0f, bool yaw_rate_valid = false, float road_bank_lat_accel = 0.0f,
-               const LiveLateralParams &live = LiveLateralParams{});
+               const LiveLateralParams &live = LiveLateralParams{}, float nn_feedforward_torque = NAN,
+               float nn_weight = 1.0f);
 
     // 조향각이 만드는 곡률(차량 모델: 학습 SR·강성·오프셋·롤 포함, 제어 부호). estimate_actual_curvature의
     // 각도 경로와 같은 식이고 로그용 값을 건드리지 않는다. 컨트롤러의 조향각 상한이 쓴다.
     float curvature_at_angle(float speed_mps, float steering_angle_deg, const SteeringParams &params,
                              const LiveLateralParams &live = LiveLateralParams{});
+
+    // curvature_at_angle의 역. 속도와 차량 모델이 같으면 조향각(도, MDPS 부호) = gain·곡률 + offset이라, 학습한 토크
+    // 모델의 목표 조향각 입력은 틱마다 한 번 만들어 여러 시점에 쓴다.
+    struct AngleMap {
+        float gain = 0.0f;
+        float offset = 0.0f;
+        float operator()(float curvature) const { return gain * curvature + offset; }
+    };
+    AngleMap angle_map(float speed_mps, const SteeringParams &params,
+                       const LiveLateralParams &live = LiveLateralParams{});
+    float angle_at_curvature(float speed_mps, float curvature, const SteeringParams &params,
+                             const LiveLateralParams &live = LiveLateralParams{}) {
+        return angle_map(speed_mps, params, live)(curvature);
+    }
 
     // 현재 조향각/속도에서 차량 모델 기반 실제 curvature를 추정한다.
     float estimate_actual_curvature(float speed_mps, float steering_angle_deg, const SteeringParams &params,
@@ -50,6 +70,8 @@ public:
     float normalized_output() const { return normalized_output_; }
     float error() const { return error_; }
     float feedforward() const { return feedforward_; }
+    // 마지막 update가 학습한 토크 모델의 피드포워드를 (조금이라도) 섞었다
+    bool nn_feedforward_used() const { return nn_feedforward_used_; }
     // PID 적분항(횡가속도 공간, 상류 LateralTorqueState.i)
     float integral() const { return i_; }
     float actual_curvature() const { return actual_curvature_; }
@@ -68,6 +90,9 @@ private:
 
     // 차량 모델 slip factor를 파라미터에 맞춰 갱신한다.
     void update_vehicle_model(const SteeringParams &params);
+    // 차량 모델 값(학습을 쓰면 학습 SR·강성을 넣은 사본 live_vehicle_params_)과 조향각 영점. 곡률↔조향각 변환이 같이 쓴다.
+    const SteeringParams &vehicle_model_params(const SteeringParams &params, const LiveLateralParams &live,
+                                               float *angle_offset_deg);
 
     // 조향각과 속도에서 실제 curvature를 계산한다.
     float vehicle_model_curvature(float steering_angle_rad, float speed_mps, const SteeringParams &params);
@@ -92,6 +117,7 @@ private:
     float normalized_output_ = 0.0f;
     float error_ = 0.0f;
     float feedforward_ = 0.0f;
+    bool nn_feedforward_used_ = false;
     float actual_curvature_ = 0.0f;
     float actual_curvature_vm_ = 0.0f;
     float actual_curvature_yaw_ = 0.0f;

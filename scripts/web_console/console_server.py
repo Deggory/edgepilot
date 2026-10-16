@@ -6,7 +6,7 @@ EDGEPILOT_WEB_CONSOLE_HOST·EDGEPILOT_WEB_CONSOLE_PORT로도 바꿀 수 있다)
 
 API
   GET   /api/status              매니저의 프로세스 상태와 백라이트
-  GET   /api/params              파라미터 그룹·현재값·기본값·설명
+  GET   /api/params              파라미터 그룹·현재값·기본값·설명, 안내가 보는 런타임 사실(runtime)
   PATCH /api/params/{group}      값 바꾸기 {"values": {...}}
   GET   /api/learners            paramsd·torqued 학습값, 카메라 보정, locationd 조향 지연
   GET   /api/learners/trend      학습값 10분 추이
@@ -122,7 +122,7 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
     @application.get("/api/params")
     def get_params() -> Dict[str, Any]:
         try:
-            return store.snapshot()
+            return {**store.snapshot(), "runtime": learners.runtime_facts()}
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

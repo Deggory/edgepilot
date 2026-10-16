@@ -3,8 +3,8 @@
 // 그 출처, 학습값, 수동값(바로 고친다)과 자동 학습 중 그 쓰임을 함께 둔다. 그 아래 카메라 보정, 최근 10분 추이, 학습
 // 입력, 고정 제원. 1초마다 /api/learners를 읽는다.
 import {locale, t} from "./i18n.js";
-import {clampToMeta, defaultOf, metaFor, params, saveParam, sectionName, valueOf} from "./param_state.js";
-import {effectsDetails, formatValue, paramCard, paramEditor} from "./param_editor.js";
+import {clampToMeta, defaultOf, metaFor, onParamsChanged, params, saveParam, sectionName, valueOf} from "./param_state.js";
+import {conditionNoteList, effectsDetails, formatValue, paramCard, paramEditor} from "./param_editor.js";
 import {
   actionButton, api, badges, clock, confirmAction, deg, el, infoTable, liveCard, ms, note, num, poller, section, sgn, svg,
   toast,
@@ -219,6 +219,7 @@ function quantityCard(key, switchKey, learner) {
       editor.modifiedBadge, editor.resetButton, editor.status),
     editor.control.element);
   const role = el("p.card-note.prior");
+  const conditions = conditionNoteList("steering", key, card);
   const adopt = spec.adopt === false ? null : el("button.adopt-button", {type: "button", onclick: () => adoptLearned()});
   const adoptValue = () => (typeof spec.adopt === "function" ? spec.adopt(live) : spec.learned(live));
   const showNow = (text, unit = "") => now.replaceChildren(text, unit ? el("small", {text: ` ${unit}`}) : "");
@@ -252,9 +253,19 @@ function quantityCard(key, switchKey, learner) {
     await editor.save(target);
   };
 
+  // 다른 항목 때문에 이 값을 쓰지 않으면 지금 쓰는 값이 없고, 학습값·수동값 어느 줄도 사용 중이 아니다
+  const showUnused = () => {
+    source.className = "badge muted";
+    source.textContent = t("params.unused");
+    showNow("–");
+    learnedRow.classList.remove("in-use");
+    manualRow.classList.remove("in-use");
+  };
+
   function render() {
     const auto = steering()[switchKey] === true;
     const manual = valueOf("steering", key);
+    const unused = conditions.update();
     role.textContent = auto && meta.learned_role ? t("vehicle.role", {role: meta.learned_role}) : "";
     role.hidden = !role.textContent;
     if (!live) {
@@ -267,6 +278,7 @@ function quantityCard(key, switchKey, learner) {
       learnedDetail.textContent = t("vehicle.no_controlsd_state");
       learnedRow.classList.remove("in-use");
       manualRow.classList.toggle("in-use", !auto);
+      if (unused) showUnused();
       updateAdopt(false);
       return;
     }
@@ -292,6 +304,7 @@ function quantityCard(key, switchKey, learner) {
     }
     learnedRow.classList.toggle("in-use", inUse);
     manualRow.classList.toggle("in-use", !inUse || Boolean(spec.both));
+    if (unused) showUnused();
     updateAdopt(valid);
   }
 
@@ -301,22 +314,26 @@ function quantityCard(key, switchKey, learner) {
     learnedRow,
     manualRow,
     role,
+    conditions.element,
     meta.caution ? note(meta.caution, "warn") : null,
     adopt,
     effectsDetails(meta, typeof valueOf("steering", key) === "boolean",
                    {summary: t("vehicle.description"), lead: el("p.param-description", {text: meta.description})}),
   ].filter(Boolean));
   render();
+  const refresh = () => {
+    editor.refresh();
+    render();
+  };
+  // 다른 항목(조향 탭의 스위치 등)이 저장되면 값과 안내를 다시 그린다
+  onParamsChanged(refresh);
   return {
     element: card,
     update(next) {
       live = next;
       render();
     },
-    refresh() {
-      editor.refresh();
-      render();
-    },
+    refresh,
   };
 }
 

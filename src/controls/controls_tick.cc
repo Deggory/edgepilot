@@ -138,7 +138,8 @@ ControlState make_control_state(const LateralControllerConfig &config, const Lat
                       (result.large_angle_hold ? kHudFlagSteerPaused : 0U) |
                       (result.large_angle_hold_by_driver ? kHudFlagSteerPausedByDriver : 0U) |
                       (result.vehicle_fresh && brake_lights_on(vehicle, now_s) ? kHudFlagBrakeLights : 0U) |
-                      (config.steering_params.path() == PathMode::Lanebow ? kHudFlagLanebow : 0U);
+                      (config.steering_params.path() == PathMode::Lanebow ? kHudFlagLanebow : 0U) |
+                      (result.nn_feedforward_used ? kHudFlagNnFeedforward : 0U);
     state.seeds_ready = result.seeds_ready ? 1U : 0U;
     state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
     // 결합 중 MDPS 일시 고장(상류도 결합 중에만 경고한다)
@@ -289,7 +290,8 @@ namespace {
 
 // 학습기·컨트롤러 상태를 HUD와 웹 콘솔이 읽는 LearnerState로(timestamp_ns 제외).
 LearnerState make_learner_state(const LateralLearners &learners, const SteeringParams &params,
-                                float road_bank_lat_accel, bool live_delay_in_use, float plan_delay_s) {
+                                float road_bank_lat_accel, bool live_delay_in_use, float plan_delay_s,
+                                bool lateral_nn_loaded) {
     const VehicleParams &v = learners.vehicle_params();
     const TorqueParams &t = learners.torque_params();
     const LiveLateralParams live = learners.live();
@@ -306,7 +308,8 @@ LearnerState make_learner_state(const LateralLearners &learners, const SteeringP
         (learners.vehicle_restored() ? kLearnerVehicleRestored : 0U) |
         (learners.torque_restore_status() == TorqueRestore::Restored ? kLearnerTorqueRestored : 0U) |
         (learners.torque_restore_status() == TorqueRestore::SourceChanged ? kLearnerTorquePartlyRestored : 0U) |
-        (live_delay_in_use ? kLearnerUseDelay : 0U) | (learners.localizer_inputs() ? kLearnerLocalizerInputs : 0U);
+        (live_delay_in_use ? kLearnerUseDelay : 0U) | (learners.localizer_inputs() ? kLearnerLocalizerInputs : 0U) |
+        (lateral_nn_loaded ? kLearnerLateralNnLoaded : 0U);
     state.steer_ratio = static_cast<float>(v.steer_ratio);
     state.stiffness_factor = static_cast<float>(v.stiffness_factor);
     state.roll_rad = static_cast<float>(v.roll_rad);
@@ -494,7 +497,8 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
     }
     if (learners_.vehicle_published()) {
         out.learner_state = make_learner_state(learners_, config_.steering_params, controller_.road_bank_lat_accel(),
-                                               controller_.live_delay_in_use(), controller_.plan_delay_s());
+                                               controller_.live_delay_in_use(), controller_.plan_delay_s(),
+                                               controller_.lateral_nn_loaded());
     }
     return out;
 }

@@ -533,6 +533,8 @@ constexpr uint32_t kHudFlagSteerPaused = 1U << 7;          // 85도 위에서 �
 constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받음: 15도 아래 손 뗌 또는 계획 커브 1초
 constexpr uint32_t kHudFlagBrakeLights = 1U << 9;  // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
 constexpr uint32_t kHudFlagLanebow = 1U << 10;     // 경로 모드가 Lanebow(LD로 조향 중인지는 Laneless 비트가 꺼졌는지)
+// 피드포워드에 학습한 토크 모델이 섞임(docs/lateral-nn.md). 비트 11은 2026-10-09 전 녹화에서 브레이크등이었다.
+constexpr uint32_t kHudFlagNnFeedforward = 1U << 12;
 
 struct ControlState {
     uint64_t timestamp_ns = 0;
@@ -603,6 +605,7 @@ constexpr uint32_t kLearnerUseDelay = 1U << 13;         // 경로 지연에 lagd
 constexpr uint32_t kLearnerLocalizerInputs = 1U << 14;  // paramsd·torqued 입력이 locationd
 // 학습 입력 출처가 바뀐 torqued 캐시에서 배율·마찰만 이어 썼다(점·절편은 새로 모은다)
 constexpr uint32_t kLearnerTorquePartlyRestored = 1U << 15;
+constexpr uint32_t kLearnerLateralNnLoaded = 1U << 16;  // controlsd가 학습한 토크 모델 파일을 읽었다
 
 struct LearnerState {
     uint64_t timestamp_ns = 0;

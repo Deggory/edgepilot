@@ -10,6 +10,7 @@
 #include "recording/recording_writer.h"
 #include "recording/replay_route.h"
 #include "recording/state_recorder.h"
+#include "recording/time_ordered_events.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -616,6 +617,46 @@ TEST(RecordedCan, RoundTripAndTruncation) {
     ASSERT_EQ(for_each_recorded_can_frame(oversized.data(), oversized.size(), ignore), 300);
     ASSERT_EQ(decode_recorded_can(oversized.data(), oversized.size(), 0).count, kCanBatchMaxFrames)
         << "CanBatch로 되돌릴 때도 최대치로 자른다";
+}
+
+// 파일 순서가 시각 순이 아닌 녹화(recordd는 쌓인 CAN을 먼저, 상태 스냅샷을 뒤에 쓴다): 창 안에서 시각 순으로 내고,
+// 같은 시각은 파일 순서를 지키며, 파일을 넘어서도 이어 붙인다. 열지 못한 파일은 알리고 건너뛴다.
+TEST(TimeOrderedEvents, ReordersAcrossFiles) {
+    char root_template[] = "/tmp/gtest_ordered_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    using Entry = std::pair<uint64_t, uint16_t>;
+    const auto write_log = [&](const std::string &name, const std::vector<Entry> &records) {
+        std::ofstream out(root + "/" + name, std::ios::binary);
+        const EventFileHeader file_header;
+        out.write(reinterpret_cast<const char *>(&file_header), sizeof(file_header));
+        for (const auto &[timestamp_ns, type] : records) {
+            EventRecordHeader record;
+            record.timestamp_ns = timestamp_ns;
+            record.type = type;
+            record.payload_size = 1;
+            out.write(reinterpret_cast<const char *>(&record), sizeof(record));
+            out.put('x');
+        }
+        return root + "/" + name;
+    };
+    const auto can = static_cast<uint16_t>(RecordType::CanRx);
+    const auto control = static_cast<uint16_t>(RecordType::ControlState);
+    // ms: CAN 10·20 뒤에 늦게 쓴 ControlState 15·20, 다음 파일의 CAN 18·30
+    const std::string a =
+        write_log("000.bin", {{10'000'000, can}, {20'000'000, can}, {15'000'000, control}, {20'000'000, control}});
+    const std::string b = write_log("001.bin", {{18'000'000, can}, {30'000'000, can}});
+    TimeOrderedEvents events({a, root + "/missing.bin", b}, 100'000'000);
+    std::vector<std::string> ends;
+    events.on_file_end = [&](const std::string &path, const EventLogReader &reader) {
+        ends.push_back(path + (reader.ok() ? "" : " bad"));
+    };
+    std::vector<Entry> got;
+    TimeOrderedEvents::Record record;
+    while (events.next(&record)) got.emplace_back(record.header.timestamp_ns, record.header.type);
+    const std::vector<Entry> want = {{10'000'000, can}, {15'000'000, control}, {18'000'000, can},
+                                     {20'000'000, can}, {20'000'000, control}, {30'000'000, can}};
+    EXPECT_EQ(got, want);
+    EXPECT_EQ(ends, (std::vector<std::string>{a, root + "/missing.bin bad", b}));
 }
 
 // 끊긴 이벤트 로그: tmpfs가 차서 0으로 채워진 꼬리, 모자란 페이로드·레코드 머리, 1 MiB를 넘는

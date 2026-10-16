@@ -16,6 +16,7 @@ constexpr JsonBoolField<SteeringParams> kSteeringBools[] = {
     {"use_live_vehicle_params", &SteeringParams::use_live_vehicle_params},
     {"use_live_torque_params", &SteeringParams::use_live_torque_params},
     {"use_live_delay", &SteeringParams::use_live_delay},
+    {"nn_feedforward", &SteeringParams::nn_feedforward},
     {"use_locationd_learner_inputs", &SteeringParams::use_locationd_learner_inputs},
 };
 constexpr JsonIntField<SteeringParams> kSteeringInts[] = {

@@ -33,6 +33,7 @@ flowchart TB
 | File | What it is |
 | --- | --- |
 | `supercombo.axmodel` | the model `modeld` loads |
+| `lateral_nn.json` | the learned steering torque model `controlsd` loads |
 | `manifest.sha256` | SHA-256 manifest for the tracked files |
 | `.gitignore` | keeps a `work/` folder out of git |
 
@@ -42,6 +43,12 @@ the other. It is built with
 [axmodel pipeline](../tools/model/axmodel/README.md), and
 `scripts/upload_to_board.sh` puts it on the board as
 `/root/edgepilot/models/supercombo.axmodel`.
+
+`lateral_nn.json` is the torque feed-forward of
+[Lateral NN](../docs/lateral-nn.md): `k7_hev_v2` from the separate `nnlc`
+repository (its `models/k7_hev_v2.json`). `controlsd` reads it at start-up as
+`/root/edgepilot/models/lateral_nn.json`, and `recordd` copies it into every
+route. `scripts/upload_to_board.sh` sends it on every upload.
 
 ## Contract
 

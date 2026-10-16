@@ -27,6 +27,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -107,6 +108,8 @@ public:
 
     // 다시 읽은 파라미터를 컨트롤러·플래너·크루즈에 넘긴다.
     void apply_params(const ControlParams &params);
+    // 학습한 토크 모델(docs/lateral-nn.md). controlsd와 재생 도구가 시작할 때 한 번 준다.
+    void set_lateral_nn(std::shared_ptr<const LateralNnModel> model) { controller_.set_lateral_nn(std::move(model)); }
     // 수신 CAN 묶음. 100 ms보다 오래된 묶음은 버리고 false다.
     bool on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s);
     // 새로 읽은 차선선 플러그인 결과(LaneState). 같은 틱의 on_model보다 먼저 부른다.

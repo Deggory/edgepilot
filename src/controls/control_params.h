@@ -87,6 +87,9 @@ struct SteeringParams {
     // lagd(locationd) 조향 지연 사용. 켜고 lagd가 확정(5블록)되면 경로 지연(목표 곡률을 읽는
     // 시점), 토크 컨트롤러의 요청 지연, torqued 지연에 추정값을 쓴다(상류 lat_delay).
     bool use_live_delay = false;
+    // 학습한 토크 모델로 피드포워드를 낸다(docs/lateral-nn.md). 모델 파일(models/lateral_nn.json)이 있어야 하고, 없으면
+    // 켜도 선형 피드포워드를 쓴다. PID는 그대로다.
+    bool nn_feedforward = false;
     // paramsd·torqued 입력을 상류처럼 locationd 요레이트·롤로 받는다. 끄면 ESP12 요레이트(자체 바이어스
     // 추정)와 ESP12 횡가속 롤. locationd가 없거나 낡으면 ESP12로 돌아간다.
     bool use_locationd_learner_inputs = true;

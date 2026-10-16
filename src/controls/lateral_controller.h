@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "car/vehicle_can.h"
 #include "controls/control_block.h"
 #include "controls/control_params.h"
+#include "controls/lateral_nn.h"
 #include "controls/lateral_path.h"
 #include "controls/lateral_target.h"
 #include "controls/lateral_torque.h"
@@ -94,6 +96,8 @@ struct LateralControlResult {
     float curvature_error = 0.0f;
     float normalized_output = 0.0f;
     float feedforward = 0.0f;
+    // 이번 틱 피드포워드를 학습한 토크 모델(nn_feedforward)이 냈다
+    bool nn_feedforward_used = false;
     int desired_torque = 0;
     int apply_torque = 0;
     bool steering_pressed = false;
@@ -144,6 +148,10 @@ public:
     // plan 나이를 잴 시계(monotonic_now_ns와 같은 시간축). 기본은 monotonic_now_ns이고, 검사와 재생
     // 도구가 기록 시각으로 바꾼다.
     void set_clock(std::function<uint64_t()> clock) { clock_ = std::move(clock); }
+    // 학습한 토크 모델(docs/lateral-nn.md). 있으면 매 틱 목표 궤적 이력을 쌓고, nn_feedforward가 켜져 있으면 조향 중
+    // 피드포워드를 이 모델이 낸다. nullptr이면 선형 피드포워드만 쓴다.
+    void set_lateral_nn(std::shared_ptr<const LateralNnModel> model);
+    bool lateral_nn_loaded() const { return lateral_nn_ != nullptr; }
 
     // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
     LateralControlResult update(const LateralPath &path, const LateralTarget &target,
@@ -164,9 +172,17 @@ private:
     float requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
                               float plan_age_s, bool steering, bool steering_pressed, bool yaw_rate_valid,
                               const LiveLateralParams &live, float *plan_curvature);
+    // 운전자가 핸들을 잡지 않고 조향 중이면 목표 곡률을 avoid_lkas_fault_hold_angle_deg(80도)가 내는 [lo, hi] 안으로
+    // 묶는다. 묶지 않을 때는 false.
+    bool hold_angle_bounds(float speed_mps, bool steering, bool steering_pressed, const LiveLateralParams &live,
+                           float *lo, float *hi);
     void steer(const VehicleCanState &vehicle_state, float speed_mps, double now_s, bool steering_pressed,
                bool yaw_rate_valid, bool curvature_limited, float plan_curvature, const LiveLateralParams &live,
-               LateralControlResult *result);
+               float nn_feedforward, LateralControlResult *result);
+    // 학습한 토크 모델의 피드포워드(토크). 이력을 쌓고 섞는 무게(nn_weight_)를 1초에 걸쳐 목표(켜짐·모델·조향 중이고
+    // 학습 속도 범위면 1)로 옮긴다. 무게가 있고 조향 중일 때만 값을, 아니면 NaN을 낸다.
+    float lateral_nn_feedforward(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
+                                 float plan_age_s, bool steering, bool steering_pressed, const LiveLateralParams &live);
     bool update_saturation(const LateralControlResult &result, float plan_curvature, float speed_mps, double now_s,
                            bool steering_pressed, bool curvature_limited);
     void copy_torque_state(LateralControlResult *result) const;
@@ -209,6 +225,9 @@ private:
     LateralControllerConfig config_{};
     std::function<uint64_t()> clock_;
     TorqueController torque_controller_;
+    std::shared_ptr<const LateralNnModel> lateral_nn_;
+    LateralNnInputs nn_inputs_;
+    float nn_weight_ = 0.0f;  // 선형 ↔ 모델 피드포워드를 섞는 무게(0..1, 1초 램프)
     LiveLateralParams live_{};
     bool live_vehicle_valid_ = true;
     bool live_calibrated_ = false;

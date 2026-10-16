@@ -6,6 +6,7 @@ add_edgepilot_library(control_core
   control_params.cc
   departure_alert.cc
   lateral_controller.cc
+  lateral_nn.cc
   lateral_path.cc
   lateral_torque.cc
 )

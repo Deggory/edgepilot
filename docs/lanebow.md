@@ -134,7 +134,8 @@ driving starts from warm filters.
   the normal path), and the LD lane width in the `LANE W` chip. It keeps the
   last good LD result while it is within 0.15 s of the model frame
   ([Runtime options](runtime-options.md)).
-- **Telemetry.** `ControlState.hud_flags` bit 10 is set in Lanebow mode, and
+- **Telemetry.** `ControlState.hud_flags` bit 10 is set in Lanebow mode (in
+  routes before 2026-10-09 it was the right turn signal), and
   `ControlState.lane_state_frame` holds the frame of the LD result the plan
   used.
 

@@ -79,7 +79,8 @@ std::pair<float, float> scale_tire_stiffness(float mass, float wheelbase, float 
 int TorqueController::update(bool active, float speed_mps, float desired_curvature, float steering_angle_deg,
                              bool steering_pressed, bool steer_limited_by_safety, const SteeringParams &params,
                              float lat_delay_s, float yaw_rate_rad_s, bool yaw_rate_valid, float road_bank_lat_accel,
-                             const LiveLateralParams &live) {
+                             const LiveLateralParams &live, float nn_feedforward_torque, float nn_weight) {
+    nn_feedforward_used_ = false;
     const float actual_curvature =
         estimate_actual_curvature(speed_mps, steering_angle_deg, params, yaw_rate_rad_s, yaw_rate_valid, live);
 
@@ -146,12 +147,18 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
     const float friction = tuning.friction * tuning.lat_accel_factor;
     feedforward += interp(apply_deadzone(error + kJerkGain * jerk_filtered_, lat_accel_deadzone),
                           {-kFrictionThreshold, kFrictionThreshold}, {-friction, friction});
+    const float w = clamp_float(nn_weight, 0.0f, 1.0f);
+    if (std::isfinite(nn_feedforward_torque) && w > 0.0f) {
+        // 학습한 토크 모델: 목표 궤적에 드는 토크를 직접 낸다. 편향(직진 토크), 롤·편경사(입력), 마찰과 동특성(학습한
+        // 궤적 창)이 모두 그 안에 있어 위 선형 피드포워드를 대신한다. PID와 같은 횡가속 공간으로 옮겨 섞는다.
+        feedforward += w * (nn_feedforward_torque * tuning.lat_accel_factor - feedforward);
+        nn_feedforward_used_ = true;
+    }
 
     // 저속 직선에서만 비례 이득을 torque_straight_kp_scale배로 낮춘다. 회전 진입은 지금 요청이, 회전 탈출은 지연
     // 비교 대상이 곡률을 들고 있어 회전 내내 원래 이득이다.
-    const float request_curvature =
-        std::max(std::isfinite(desired_curvature) ? std::fabs(desired_curvature) : 0.0f,
-                 std::fabs(expected_lat_accel) / std::max(speed_sq, 1.0f));
+    const float request_curvature = std::max(std::isfinite(desired_curvature) ? std::fabs(desired_curvature) : 0.0f,
+                                             std::fabs(expected_lat_accel) / std::max(speed_sq, 1.0f));
     const float straight = interp(request_curvature, {kStraightCurvature, kTurnCurvature}, {1.0f, 0.0f}) *
                            interp(speed_mps, {kStraightKpFullSpeedMps, kStraightKpOffSpeedMps}, {1.0f, 0.0f});
     const float kp =
@@ -169,24 +176,39 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
     return static_cast<int>(std::nearbyint(normalized_output_ * static_cast<float>(params.steer_max)));
 }
 
+// 상류 VM.update_params(max(x, 0.1), max(sr, 0.1)). 강성 배율은 타이어 계수에 곱해진다.
+const SteeringParams &TorqueController::vehicle_model_params(const SteeringParams &params,
+                                                             const LiveLateralParams &live, float *angle_offset_deg) {
+    *angle_offset_deg = live.use_vehicle ? live.angle_offset_deg : params.angle_offset_deg;
+    if (!live.use_vehicle) return params;
+    live_vehicle_params_ = params;
+    live_vehicle_params_.steer_ratio = std::max(live.steer_ratio, 0.1f);
+    live_vehicle_params_.tire_stiffness_factor = params.tire_stiffness_factor * std::max(live.stiffness_factor, 0.1f);
+    return live_vehicle_params_;
+}
+
 // 조향각이 만드는 곡률(차량 모델, 제어 부호).
 float TorqueController::curvature_at_angle(float speed_mps, float steering_angle_deg, const SteeringParams &params,
                                            const LiveLateralParams &live) {
-    // 상류 VM.update_params(max(x, 0.1), max(sr, 0.1)). 강성 배율은 타이어 계수에 곱해진다.
-    const SteeringParams *vm = &params;
-    float angle_offset_deg = params.angle_offset_deg;
-    if (live.use_vehicle) {
-        live_vehicle_params_ = params;
-        live_vehicle_params_.steer_ratio = std::max(live.steer_ratio, 0.1f);
-        live_vehicle_params_.tire_stiffness_factor =
-            params.tire_stiffness_factor * std::max(live.stiffness_factor, 0.1f);
-        vm = &live_vehicle_params_;
-        angle_offset_deg = live.angle_offset_deg;
-    }
+    float angle_offset_deg = 0.0f;
+    const SteeringParams &vm = vehicle_model_params(params, live, &angle_offset_deg);
     // vm 경로의 부호 반전은 openpilot latcontrol_torque와 동일하다.
-    float curvature = vehicle_model_curvature(deg_to_rad(steering_angle_deg - angle_offset_deg), speed_mps, *vm);
+    float curvature = vehicle_model_curvature(deg_to_rad(steering_angle_deg - angle_offset_deg), speed_mps, vm);
     if (live.use_vehicle) curvature += roll_compensation(live.roll_rad, speed_mps);
     return -curvature;
+}
+
+// curvature_at_angle의 곡률 = -(1 rad당 곡률 · (각도 - 영점) + 롤 보정)을 각도로 푼다. 롤 보정은 slip을 갱신한 뒤에 쓴다.
+TorqueController::AngleMap TorqueController::angle_map(float speed_mps, const SteeringParams &params,
+                                                       const LiveLateralParams &live) {
+    float angle_offset_deg = 0.0f;
+    const SteeringParams &vm = vehicle_model_params(params, live, &angle_offset_deg);
+    const float per_rad = vehicle_model_curvature(1.0f, speed_mps, vm);
+    const float roll = live.use_vehicle ? roll_compensation(live.roll_rad, speed_mps) : 0.0f;
+    AngleMap map;
+    map.gain = rad_to_deg(-1.0f / per_rad);
+    map.offset = rad_to_deg(-roll / per_rad) + angle_offset_deg;
+    return map;
 }
 
 // 현재 조향각·속도에서 차량 모델로 실제 곡률을 낸다(상류 controlsd self.curvature, 현대·기아와 같음). 상류처럼

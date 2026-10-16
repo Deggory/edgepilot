@@ -10,7 +10,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(common PUBLIC rt pthread)
 endif()
 
-add_edgepilot_library(utils_json utils_json.cc)
+add_edgepilot_library(utils_json utils_json.cc json_value.cc)
 
 # 빌드한 소스의 버전(common/build_version.h). 빌드마다 cmake/build_version.cmake가 git describe를 다시 읽고,
 # 바뀌었을 때만 다시 컴파일한다. OBJECT 라이브러리라 링크한 실행 파일마다 웹 콘솔이 읽는 표식이 들어간다.
