@@ -88,14 +88,15 @@ flowchart TB
     class common,utils_json,car proc
 ```
 
-The other libraries build on `common`; `localization` and `model` also link
-`utils_json`:
+The other libraries build on `common`; `localization`, `model` and
+`recording` also link `utils_json`:
 
 ```mermaid
 flowchart LR
     hud --> hud_state
     hud_state --> common
     recording --> common
+    recording --> utils_json
     panda -.-> common
     localization --> common
     localization --> utils_json
@@ -295,6 +296,9 @@ Libraries `common` and `utils_json`, and the object library `build_version`.
 - `json_value.*`: a small JSON document reader (objects, arrays, string
   escapes, a nesting limit), part of `utils_json`, for files with nested data
   such as the lateral NN model.
+- `lateral_nn_path.*`: which learned torque model is chosen
+  (`params/lateral_nn.json`, or `EDGEPILOT_LATERAL_NN_MODEL`) and its path in
+  `models/lateral_nn/`; controlsd and recordd share it.
 - `utils_file.h`, `background_writer.h`:
   - `file_stamp` is the stat fingerprint the processes poll parameter files
     with; `read_text_file`; and `write_file_atomic` (temporary file + rename,
@@ -337,6 +341,8 @@ Libraries `control_core` and `controls`, process `controlsd`.
 - `lateral_nn.*`: the learned torque feed-forward: the model file loader,
   the network and the inputs built from the plan and a 1 s history
   ([Lateral NN](lateral-nn.md)).
+- `lateral_nn_select.*`: watches the chosen model, loads a new choice in the
+  background, swaps it in and writes the status the web console shows.
 - `lateral_target.h`: declares `LateralTarget`, the planner-to-controller
   interface.
 - `lateral_path.*`: reduces `modelState` to the steering-usability gate (reach

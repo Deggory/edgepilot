@@ -200,6 +200,17 @@ main {
 .info-table td.warn { color: var(--warn); }
 .info-table td.bad { color: var(--bad); }
 
+/* 학습 토크 모델 목록: 줄 하나(파일 이름과 배지)가 고르는 버튼(고른 것은 aria-pressed) */
+.nn-models { display: flex; flex-direction: column; gap: 6px; }
+.nn-model {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken);
+  text-align: left; cursor: pointer;
+}
+.nn-model:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--btn-bg); }
+.nn-model[aria-pressed="true"] { border-color: #2b4d73; background: var(--accent-bg); cursor: default; }
+.nn-model-name { margin-right: 4px; color: var(--text); font: 600 13px var(--mono); overflow-wrap: anywhere; }
+
 .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; margin: 0; font-size: 13px; }
 .facts dt { color: var(--faint); }
 .facts dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; min-width: 0; }

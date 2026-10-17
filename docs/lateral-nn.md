@@ -4,22 +4,24 @@
 
 The lateral NN is an optional feed-forward for the torque controller. It is a
 small neural network, trained on the K7's own recorded drives, that gives the
-steering torque a target trajectory needs. With `nn_feedforward` on and
-`models/lateral_nn.json` in place, it replaces the linear feed-forward while
-the PID stays as it is.
+steering torque a target trajectory needs. With `nn_feedforward` on and a
+model chosen from `models/lateral_nn/`, it replaces the linear feed-forward's
+lateral-acceleration, offset and bank terms. In curves the friction
+compensation stays on top of it, and the PID stays as it is.
 
 This diagram shows where the model comes from and where it enters the
 controller:
 
 ```mermaid
 flowchart TB
-    rec["recorded drives"] --> train["nnlc repository<br>dataset, training, export"]
-    train --> file["models/lateral_nn.json"]
+    rec["recorded drives"] --> train["edgepilot-nnlc repository<br>dataset, training, export"]
+    train --> file["models/lateral_nn/<br>CAR_vN.json"]
+    choice["params/lateral_nn.json<br>web console"] --> file
     subgraph ctl["controlsd, every 10 ms"]
         plan["MPC curvatures<br>+ desired history"] --> inputs["33 inputs<br>la, angle, roll, long accel"]
         vm["inverse vehicle model<br>live SR, stiffness, zero"] --> inputs
         inputs --> nn["lateral NN<br>3 nets, 32×32 tanh"]
-        nn --> blend["blend with linear FF<br>1 s ramp"]
+        nn --> blend["blend with linear FF<br>1 s ramp<br>+ friction in curves"]
         blend --> pid["feed-forward + PID<br>lateral-accel space"]
     end
     file --> nn
@@ -30,7 +32,7 @@ flowchart TB
     classDef group fill:#ffffff,stroke:#d1d9e0,color:#59636e
     class ctl group
     class plan,vm,inputs,nn,blend,pid compute
-    class rec,train,file proc
+    class rec,train,file,choice proc
     class lkas external
 ```
 
@@ -47,10 +49,11 @@ tyres and tuning.
 
 ### The model
 
-The model is trained in the separate `nnlc` repository (its README has the
-details). It is an inverse steering model: given the lateral-acceleration
-trajectory around the moment the car responds, it gives the torque command
-that produced it.
+The model is trained in the separate [edgepilot-nnlc][nnlc] repository,
+which also holds the K7 drives it was trained on, the CSV format and a guide
+for training another car (its README has the details). It is an inverse
+steering model: given the lateral-acceleration trajectory around the moment
+the car responds, it gives the torque command that produced it.
 
 - **Target:** the torque sent at time t, as a fraction of `steer_max`, with
   right positive (the control sign).
@@ -116,8 +119,28 @@ trajectory in the same places (`LateralController::lateral_nn_feedforward`).
 blends in the model, converted to lateral-acceleration units by
 `latAccelFactor`, by a weight from 0 to 1. The PID, its limits and the torque
 limits are unchanged. The model's output already contains the
-straight-driving bias, bank, friction and dynamics, so at weight 1 none of the
-linear terms remain.
+straight-driving bias, bank and dynamics, so at weight 1 those linear terms
+are gone.
+
+The friction compensation is the exception. The linear feed-forward adds up to
+`torque_friction` in the direction of the tracking error plus the request's
+jerk, which pushes the wheel when the car falls behind. The model sees only
+the target trajectory, not the error, so it cannot do that. The controller
+therefore adds the same friction term to the model in curves: from 0.2 m/s²
+of desired lateral acceleration, in full from 0.6 m/s². On straights the model
+runs alone, because the term would shake the torque on the noise in the error
+and undo the model's smoothness. sunnypilot's NNLC has the same term as a
+model option (`friction_override`) for models with a weak friction response,
+and blends in its error response only at high lateral acceleration.
+
+On the 2026-10-16 drive, the first with the model, the car reached 92–93 % of
+the desired lateral acceleration at curve entries, against 100–109 % with
+the linear feed-forward on earlier drives, and the PID added torque in every
+curve phase. Replayed on the same inputs (four drives), the friction raises
+the feed-forward at curve entries from 0.63–0.83 to 0.72–0.94 of the desired
+lateral acceleration, and in held curves from 0.57–0.66 to 0.63–0.71. The
+straight-line torque steps stay at half of the linear feed-forward's. The
+replay cannot show the closed loop, so the road decides.
 
 The weight ramps over 1 s toward 1 while all of these hold, and toward 0
 otherwise:
@@ -136,22 +159,49 @@ While the model contributes, `ControlState.hud_flags` bit 12
 brake lights. `LearnerState.flags` bit 16 (`kLearnerLateralNnLoaded`) says
 whether controlsd loaded a model.
 
-### Setting and file
+### Models, choice and switch
+
+A model fits only the car it was trained on. The board keeps a library of
+models and one choice, and the web console picks from the library.
 
 | Item | Value |
 | --- | --- |
-| Switch | `nn_feedforward` in `steering.json`, off by default; Steering tab of the web console |
-| Model file | `models/lateral_nn.json`, or `EDGEPILOT_LATERAL_NN_MODEL`; `upload_to_board.sh` sends it |
-| Start-up log | `controlsd: lateral nn <path> (<name>, 33 inputs) nn_feedforward=<0/1>`, or `lateral nn off: <reason>` |
-| Recording | recordd copies the model into each route as `models/lateral_nn.json` |
+| Library | `models/lateral_nn/<car>_v<version>.json`; the repository ships `k7_hev_v1` to `k7_hev_v3`, and `upload_to_board.sh` sends them all |
+| Choice | `params/lateral_nn.json`, `{"model": "k7_hev_v3"}`; the default sits in `params.defaults/` |
+| Web console | Steering tab, learned torque model card: the files in `models/lateral_nn/`, the choice and the model controlsd uses |
+| Override | `EDGEPILOT_LATERAL_NN_MODEL`, a file path, replaces the choice |
+| Switch | `nn_feedforward` in `steering.json`, off by default |
+| Status | `/dev/shm/edgepilot_lateral_nn_status.json` (`EDGEPILOT_LATERAL_NN_STATUS`): `selected`, `loaded`, `path`, `error`, `inputs` |
+| Start-up log | `controlsd: lateral nn <name> (<model name>, 33 inputs) nn_feedforward=<0/1>`, or `lateral nn off: <reason>` |
+| Switch log | `controlsd: lateral nn switched to <name> (<path>, 33 inputs)`, or `lateral nn <name> refused: <reason>; keeping <name>` |
+| Recording | recordd copies the chosen model into each route as `models/lateral_nn.json` when the route starts; the route's `params/lateral_nn.json` names it |
 | Replay | `replay_controls` and `replay_closed_loop` take `--lateral-nn <route>/models/lateral_nn.json`; with the switch on and no model, they warn and run the linear feed-forward |
 
-Without a model file, or with a file the loader refuses, the switch does
-nothing and the linear feed-forward is used.
+A model name has letters, digits, `_`, `-` and `.`, up to 64 characters, and
+does not start with `.`. The web console lists the files by name and does not
+read them; controlsd checks a file when it loads it.
 
-The web console greys out the linear terms (offset, bank, friction deadzone)
-while the switch is on and controlsd reports a loaded model. It greys out the
-switch itself when controlsd could not load one.
+controlsd checks the choice and the chosen file once a second. When either
+changes, a background thread loads the file: parsing and the test vectors take
+tens of milliseconds on the board, too long for a control tick. The control
+loop swaps the model in on the tick the load is done, without a restart.
+
+- **No jump:** the swap keeps the 1 s blend and the input history. The history
+  is the target trajectory and does not depend on the model, so the
+  feed-forward moves only by the difference between the two models' outputs.
+- **Refused file:** a file the loader refuses leaves the current model in use.
+  controlsd retries it only after the file changes.
+- **Recordings:** a route keeps the model of its start. After a switch in the
+  middle of a route, its `models/lateral_nn.json` is the old model.
+
+Without a chosen model, or with a file the loader refuses at start, the switch
+does nothing and the linear feed-forward is used.
+
+The web console greys out the linear terms the model replaces (offset, bank)
+while the switch is on and controlsd reports a loaded model. `torque_friction`
+and `steering_angle_deadzone_deg` get a note that they act in curves on top of
+the model. The console greys out the switch itself when controlsd could not
+load one.
 
 ## Evidence
 
@@ -172,6 +222,28 @@ fraction of `steer_max`:
 
 The shipped model is 31 % better than the linear model, and 35 % better above
 1 m/s².
+
+Since 2026-10-17 the shipped model is `k7_hev_v3`. It is the same
+configuration trained on the same drives, but the friction share the
+controller adds in curves is taken out of the target (nnlc `friction_free`),
+so the model and that term do not overlap. The share is recomputed from the
+recorded desired and actual curvature with the controller's formula; on the
+10-16 route it matches the controller's own value
+(`replay_controls --dump`, field `fr`) within 0.7 raw on average. Held out
+by the same folds, against the torque that was sent (RMSE, and the bias in the
+curve's direction, raw):
+
+| Phase | v2 + curve friction | v3 + curve friction |
+| --- | ---: | ---: |
+| entry | 34.3 (+11.3) | 32.3 (−0.5) |
+| hold | 25.4 | 24.2 |
+| exit | 31.0 (−14.9) | 25.7 (−2.7) |
+| straight | 14.0 | 14.3 |
+
+With v2 the friction counted twice: too much torque at curve entries and too
+little at exits. The model alone (v2 without the friction) scores 28.0 at
+entries, but it cannot react to the tracking error, which is what the
+2026-10-16 drive showed.
 
 Open-loop replays with `replay_controls --force-engaged` give the same
 recorded inputs to both feed-forwards, without the car responding:
@@ -239,11 +311,13 @@ Before these, the nets alone took 82 µs a tick.
 
 ## Next
 
-- **Road comparison:** drive with the switch on and off on the same roads. The
-  recording's `hud_flags` bit 12 tells the modes apart. Compare curvature
-  tracking, torque smoothness and driver overrides.
+- **Road comparison:** drive with the switch on and off on the same roads,
+  curves included. The recording's `hud_flags` bit 12 tells the modes apart.
+  Compare curvature tracking by curve phase (entry, hold, exit), torque
+  smoothness and driver overrides. The 2026-10-16 drive had no curves with the
+  switch off.
 - **More data:** engaged drives on ramps and winding roads, then retrain and
-  replace `models/lateral_nn.json`.
+  add the model to `models/lateral_nn/` as the next version.
 
 ## Related
 
@@ -254,5 +328,12 @@ Before these, the nets alone took 82 µs a tick.
 - [Diagnostic tools](../diagnostics/README.md): `replay_controls` and its
   options
 - [Model package](../models/README.md): the model files in the repository
+- [Web console](runtime-options.md): the steering tab and its API
+- [edgepilot-nnlc][nnlc]: the training code, the K7 dataset, the
+  [data format][nnlc-format] and [training for another car][nnlc-cars]
 - [Closed-loop replay](closed-loop-replay.md): replaying a drive with the
   car's response simulated
+
+[nnlc]: https://github.com/cwal1220/edgepilot-nnlc
+[nnlc-format]: https://github.com/cwal1220/edgepilot-nnlc/blob/main/docs/data-format.md
+[nnlc-cars]: https://github.com/cwal1220/edgepilot-nnlc/blob/main/docs/other-cars.md

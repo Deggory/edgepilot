@@ -7,6 +7,7 @@
 #include "common/utils_process.h"
 #include "common/utils_time.h"
 #include "controls/controls_tick.h"
+#include "controls/lateral_nn_select.h"
 
 #include <signal.h>
 
@@ -181,18 +182,16 @@ int main() {
                                                                                         : "fresh",
                      params.steering.use_live_vehicle_params ? 1U : 0U,
                      params.steering.use_live_torque_params ? 1U : 0U);
-        // 학습한 토크 모델(docs/lateral-nn.md). 없거나 못 읽으면 선형 피드포워드만 쓴다(nn_feedforward를 켜도).
-        {
-            const std::string nn_path = lateral_nn_model_path();
-            auto nn = std::make_shared<LateralNnModel>();
-            std::string nn_error;
-            if (nn->load(nn_path, &nn_error)) {
-                tick.set_lateral_nn(nn);
-                std::fprintf(stderr, "controlsd: lateral nn %s (%s, %zu inputs) nn_feedforward=%u\n", nn_path.c_str(),
-                             nn->name().c_str(), nn->input_count(), params.steering.nn_feedforward ? 1U : 0U);
-            } else {
-                std::fprintf(stderr, "controlsd: lateral nn off: %s\n", nn_error.c_str());
-            }
+        // 학습한 토크 모델(docs/lateral-nn.md): 고른 모델을 읽고, 웹 콘솔에서 바꾸면 갈아 끼운다. 없거나 못 읽으면 선형
+        // 피드포워드만 쓴다(nn_feedforward를 켜도).
+        LateralNnSelector nn_selector;
+        if (const auto nn = nn_selector.load_now()) {
+            tick.set_lateral_nn(nn);
+            std::fprintf(stderr, "controlsd: lateral nn %s (%s, %zu inputs) nn_feedforward=%u\n",
+                         nn_selector.loaded_name().c_str(), nn->name().c_str(), nn->input_count(),
+                         params.steering.nn_feedforward ? 1U : 0U);
+        } else {
+            std::fprintf(stderr, "controlsd: lateral nn off: %s\n", nn_selector.last_error().c_str());
         }
         TickStats stats;
         uint64_t model_seq = 0;
@@ -220,6 +219,8 @@ int main() {
                 params = *reloaded;
                 tick.apply_params(params);
             }
+            std::shared_ptr<const LateralNnModel> next_nn;
+            if (nn_selector.poll(work_start, &next_nn)) tick.set_lateral_nn(next_nn);
 
             while (can_sub.pop(&can_batch)) {
                 if (!tick.on_can_batch(can_batch, can_now_ns, now_s)) {

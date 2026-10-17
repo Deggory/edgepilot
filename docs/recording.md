@@ -105,7 +105,7 @@ flowchart LR
 | --- | --- |
 | `manifest.json` | `version`, `complete`, `video_codec` (`"h264"`), `width`, `height`, `fps`, `bitrate`, `segment_seconds` (60), `video_frames`, `event_records` |
 | `params/` | a copy of every `*.json` in the parameter directory when the route started |
-| `models/lateral_nn.json` | a copy of the learned torque model controlsd reads ([Lateral NN](lateral-nn.md)), when the file exists, so a replay can use the model that drove |
+| `models/lateral_nn.json` | a copy of the learned torque model chosen when the route started ([Lateral NN](lateral-nn.md)), so a replay can use the model that drove; `params/lateral_nn.json` names it |
 | `events/NNN.bin` | the event log, one 60 s chunk per file |
 | `segments/NNN/road.h264` | the H.264 stream of one segment, starting with its SPS and PPS so it decodes alone |
 | `segments/NNN/frames.bin` | the frame index of that segment |

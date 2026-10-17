@@ -89,9 +89,10 @@ VEHICLE_TAB: Dict[str, Any] = {
 # 다른 항목 때문에 쓰이지 않는 조건(unused)과 쓰임이 바뀌는 조건(role).
 # - 조향을 끄면(enabled) 조향이 동작하지 않아(BlockReason::ControllerDisabled) 제어에만 쓰는 값은 쓰이지 않는다. 차량
 #   모델 값과 학습기 사전값은 실제 곡률(광류 보정의 직선 판정, 차선 필터)과 학습에 계속 쓰이므로 두지 않는다.
-# - 학습한 토크 모델(nn_feedforward, controlsd가 모델 파일을 읽었을 때)은 선형 피드포워드(편향, 편경사, 마찰과 그
-#   deadzone)를 대신한다. 그 값들은 모델로 넘어가는 1초 안쪽, 3 m/s 아래, 모델이 값을 못 낼 때만 쓰인다. latAccelFactor는
-#   PID의 P·I를 토크로 바꾸는 데만, 마찰은 torqued 학습의 사전값으로 남는다(TorqueController::update, LateralLearners).
+# - 학습한 토크 모델(nn_feedforward, controlsd가 모델 파일을 읽었을 때)은 선형 피드포워드의 편향과 편경사를 대신한다.
+#   그 값들은 모델로 넘어가는 1초 안쪽, 3 m/s 아래, 모델이 값을 못 낼 때만 쓰인다. 마찰 보상과 그 deadzone은 곡선
+#   (|목표 횡가속| 0.2 m/s²부터)에서 모델에 더해지고, latAccelFactor는 PID의 P·I를 토크로 바꾸는 데만 쓰인다
+#   (TorqueController::update).
 # - 크루즈 값은 크루즈를 끄면 세션이 없어 쓰이지 않고(AdaptiveCruiseController::update_session), 조향을 끄면 조향이
 #   동작하지 않아 버튼을 보내지 않는다(controls_ready, pace_buttons).
 STEERING_OFF = when("enabled", False, "steering_off")
@@ -109,13 +110,14 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
                                           role=(when("nn_feedforward", True, "nn_feedforward_pid", also=NN_LOADED),)),
         "torque_kp": number("torque_controller", "gain", 0.05, 0, 10, unused=(STEERING_OFF,)),
         "torque_ki": number("torque_controller", "gain", 0.01, 0, 2, unused=(STEERING_OFF,)),
-        "steering_angle_deadzone_deg": number("torque_controller", "°", 0.1, 0, 3, unused=(STEERING_OFF, NN_ON)),
+        "steering_angle_deadzone_deg": number("torque_controller", "°", 0.1, 0, 3, unused=(STEERING_OFF,),
+                                              role=(when("nn_feedforward", True, "nn_feedforward_curves", also=NN_LOADED),)),
         "torque_straight_kp_scale": number("torque_controller", "x", 0.05, 0.3, 1, unused=(STEERING_OFF,)),
         "nn_feedforward": toggle("torque_controller", unused=(
             STEERING_OFF, when("lateral_nn_loaded", False, "nn_not_loaded", group="runtime"))),
         "torque_friction": number("torque_model", "torque", 0.005, 0, 0.3, tab="vehicle", learned=True,
                                   caution="torqued_restart",
-                                  role=(when("nn_feedforward", True, "nn_feedforward_prior", also=NN_LOADED),)),
+                                  role=(when("nn_feedforward", True, "nn_feedforward_friction", also=NN_LOADED),)),
         "steer_ratio": number("vehicle_model", "ratio", 0.1, 8, 25, tab="vehicle", learned=True),
         "tire_stiffness_factor": number("vehicle_model", "x", 0.05, 0.2, 2, tab="vehicle", learned=True,
                                         caution="paramsd_restart"),

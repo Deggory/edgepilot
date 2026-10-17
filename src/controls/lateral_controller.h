@@ -96,6 +96,8 @@ struct LateralControlResult {
     float curvature_error = 0.0f;
     float normalized_output = 0.0f;
     float feedforward = 0.0f;
+    // 선형 피드포워드의 마찰 보상 몫(정규화 토크, TorqueController::friction_torque)
+    float friction_torque = 0.0f;
     // 이번 틱 피드포워드를 학습한 토크 모델(nn_feedforward)이 냈다
     bool nn_feedforward_used = false;
     int desired_torque = 0;

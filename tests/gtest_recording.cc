@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -89,6 +90,7 @@ TEST(RecordingWriter, RouteOnDisk) {
     const std::string recordings = root + "/recordings";
     mkdir(params.c_str(), 0775);
     std::ofstream(params + "/steering.json") << "{\"steer_max\": 384}\n";
+    std::ofstream(params + "/lateral_nn.json") << "{\"model\": \"k7_hev_v3\"}\n";  // 레포 루트에서 돈다
     std::ofstream(params + "/notes.txt") << "not a param file\n";
     setenv("EDGEPILOT_RECORD_STAGING", staging.c_str(), 1);
 
@@ -237,10 +239,12 @@ TEST(RecordingWriter, RouteOnDisk) {
     ASSERT_NE(text.find("\"complete\": true"), std::string::npos);
     ASSERT_NE(text.find("\"video_frames\": 3"), std::string::npos);
     ASSERT_NE(text.find("\"event_records\": 4"), std::string::npos);
-    const auto snapshot = list_dir(route + "/params");
+    auto snapshot = list_dir(route + "/params");
+    std::sort(snapshot.begin(), snapshot.end());
     // params 스냅샷은 json 파일만 복사한다
-    ASSERT_EQ(snapshot.size(), 1);
-    ASSERT_EQ(snapshot[0], "steering.json");
+    ASSERT_EQ(snapshot, (std::vector<std::string>{"lateral_nn.json", "steering.json"}));
+    // 고른 학습 토크 모델 파일도 route에 남는다(나중에 같은 모델로 재생)
+    ASSERT_EQ(read_file(route + "/models/lateral_nn.json"), read_file("models/lateral_nn/k7_hev_v3.json"));
 
     std::system(("rm -rf '" + root + "'").c_str());
 }

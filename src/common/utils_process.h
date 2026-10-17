@@ -42,11 +42,6 @@ inline std::string env_string(const char *name, const char *fallback = "") {
     return value && value[0] ? value : fallback;
 }
 
-// 학습한 토크 모델 파일(docs/lateral-nn.md). controlsd가 시작할 때 읽고, recordd가 route마다 남긴다.
-inline std::string lateral_nn_model_path() {
-    return env_string("EDGEPILOT_LATERAL_NN_MODEL", "models/lateral_nn.json");
-}
-
 // params 디렉토리 경로 결정 (EDGEPILOT_PARAMS_DIR 재정의 가능)
 inline std::string params_dir() {
     const char *value = std::getenv("EDGEPILOT_PARAMS_DIR");

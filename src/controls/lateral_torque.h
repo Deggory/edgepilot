@@ -35,8 +35,9 @@ public:
     // 요청을 지금 측정과 비교한다. 컨트롤러는 경로를 읽는 지연과 같은 값(lagd 사용 중이면 추정값,
     // 아니면 steer_actuator_delay)을 넘긴다.
     // nn_feedforward_torque: 학습한 토크 모델(LateralNnModel)의 피드포워드(제어 부호, steer_max로 나눈 토크).
-    // nn_weight(0..1)만큼 선형 피드포워드(목표 횡가속, 편향, 롤·편경사, 마찰)와 섞는다: 1이면 모델만. NaN이거나 무게가
-    // 0이면 선형만. 켜고 끌 때 피드포워드가 건너뛰지 않게 호출자가 무게를 천천히 바꾼다. PID는 그대로 횡가속 공간에서 돈다.
+    // nn_weight(0..1)만큼 선형 피드포워드(목표 횡가속, 편향, 롤·편경사, 마찰)와 섞는다: 1이면 모델에 곡선(|목표 횡가속|
+    // 0.2→0.6 m/s²)에서만 선형의 마찰 보상을 더한 값. NaN이거나 무게가 0이면 선형만. 켜고 끌 때 피드포워드가 건너뛰지
+    // 않게 호출자가 무게를 천천히 바꾼다. PID는 그대로 횡가속 공간에서 돈다.
     int update(bool active, float speed_mps, float desired_curvature, float steering_angle_deg, bool steering_pressed,
                bool steer_limited_by_safety, const SteeringParams &params, float lat_delay_s,
                float yaw_rate_rad_s = 0.0f, bool yaw_rate_valid = false, float road_bank_lat_accel = 0.0f,
@@ -70,6 +71,9 @@ public:
     float normalized_output() const { return normalized_output_; }
     float error() const { return error_; }
     float feedforward() const { return feedforward_; }
+    // 선형 피드포워드의 마찰 보상 몫(정규화 토크, 제어 부호). 모델을 쓸 때 실제로 더한 몫과 상관없이 선형 기준이다.
+    // 학습 쪽(nnlc)이 정답 토크에서 이 몫을 빼는 데 쓴다(replay_controls --dump의 fr).
+    float friction_torque() const { return friction_torque_; }
     // 마지막 update가 학습한 토크 모델의 피드포워드를 (조금이라도) 섞었다
     bool nn_feedforward_used() const { return nn_feedforward_used_; }
     // PID 적분항(횡가속도 공간, 상류 LateralTorqueState.i)
@@ -117,6 +121,7 @@ private:
     float normalized_output_ = 0.0f;
     float error_ = 0.0f;
     float feedforward_ = 0.0f;
+    float friction_torque_ = 0.0f;
     bool nn_feedforward_used_ = false;
     float actual_curvature_ = 0.0f;
     float actual_curvature_vm_ = 0.0f;

@@ -3,6 +3,7 @@
 // 동안만) 폴링·스트림을 돌린다.
 import {createBevView} from "./bev_view.js";
 import {LANGUAGES, lang, setLanguage, t} from "./i18n.js";
+import {createLateralNnCard} from "./lateral_nn_card.js";
 import {createPandaCard} from "./panda_card.js";
 import {loadParams, params} from "./param_state.js";
 import {createParamView} from "./param_view.js";
@@ -10,8 +11,8 @@ import {api, el, poller, toast} from "./ui.js";
 import {createVehicleView} from "./vehicle_view.js";
 
 const STATUS_INTERVAL_MS = 2000;
-// 파라미터 탭 아래에 붙는 카드
-const PARAM_EXTRAS = {display: () => [createPandaCard()]};
+// 파라미터 탭에 붙는 카드
+const PARAM_EXTRAS = {steering: () => [createLateralNnCard()], display: () => [createPandaCard()]};
 
 const main = document.getElementById("main");
 const nav = document.getElementById("tabs");

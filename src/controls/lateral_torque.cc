@@ -24,6 +24,11 @@ constexpr float kKpValues[] = {250.0f, 120.0f, 65.0f, 30.0f, 11.5f, 5.5f, 3.5f, 
 // 저속일수록 루프 이득이 크다. 마찰 보상 deadzone과 직선 이득 배율을 저속에만 건다.
 // 조향각 deadzone은 횡가속으로 v^2에 비례해 커진다. 그대로 두면 80 km/h 위에서 마찰 보상의 90%가 사라지므로
 // 40 km/h부터 줄여 60 km/h에서 끈다.
+// 학습한 토크 모델에 마찰 보상을 더하는 곡선 범위(|목표 횡가속|, m/s²): 앞 값 아래(직선)는 모델만, 뒤 값부터 전부.
+// 모델은 목표 궤적만 보고 추종 오차를 모른다(TorqueController::update). sunnypilot NNLC도 오차 응답을 높은 횡가속에서만
+// 섞는다(error_blend_factor, 1→2 m/s²); 여기서는 진입 부족이 0.4~1.5 m/s²에 있어 더 낮게 시작한다.
+constexpr float kNnFrictionStartLatAccel = 0.2f;
+constexpr float kNnFrictionFullLatAccel = 0.6f;
 constexpr float kDeadzoneFullSpeedMps = 40.0f / 3.6f;
 constexpr float kDeadzoneOffSpeedMps = 60.0f / 3.6f;
 // 직선 이득 배율은 10 m/s까지 다 쓰고 15 m/s에서 1로 돌린다.
@@ -130,6 +135,7 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
         p_ = i_ = f_ = 0.0f;
         normalized_output_ = 0.0f;
         feedforward_ = 0.0f;
+        friction_torque_ = 0.0f;
         return 0;
     }
 
@@ -145,13 +151,20 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
         feedforward += road_bank_lat_accel;
     // opendbc get_friction: 토크 공간 마찰 계수를 latAccelFactor로 횡가속 공간에 옮긴다
     const float friction = tuning.friction * tuning.lat_accel_factor;
-    feedforward += interp(apply_deadzone(error + kJerkGain * jerk_filtered_, lat_accel_deadzone),
-                          {-kFrictionThreshold, kFrictionThreshold}, {-friction, friction});
+    const float friction_term = interp(apply_deadzone(error + kJerkGain * jerk_filtered_, lat_accel_deadzone),
+                                       {-kFrictionThreshold, kFrictionThreshold}, {-friction, friction});
+    feedforward += friction_term;
+    friction_torque_ = friction_term / tuning.lat_accel_factor;
     const float w = clamp_float(nn_weight, 0.0f, 1.0f);
     if (std::isfinite(nn_feedforward_torque) && w > 0.0f) {
-        // 학습한 토크 모델: 목표 궤적에 드는 토크를 직접 낸다. 편향(직진 토크), 롤·편경사(입력), 마찰과 동특성(학습한
-        // 궤적 창)이 모두 그 안에 있어 위 선형 피드포워드를 대신한다. PID와 같은 횡가속 공간으로 옮겨 섞는다.
-        feedforward += w * (nn_feedforward_torque * tuning.lat_accel_factor - feedforward);
+        // 학습한 토크 모델: 목표 궤적에 드는 토크를 직접 낸다. 편향(직진 토크), 롤·편경사(입력)와 동특성(학습한 궤적
+        // 창)이 그 안에 있어 위 선형 피드포워드를 대신한다. PID와 같은 횡가속 공간으로 옮겨 섞는다.
+        // 마찰 보상은 곡선에서 남긴다: 모델은 추종 오차를 모르므로 차가 늦을 때 붙는 오차 방향 토크를 내지 못한다
+        // (2026-10-16 주행에서 곡선 진입 횡가속이 요구의 92~93 %, 선형은 100~109 %). 직선에서는 모델만 쓴다(오차
+        // 잡음에 토크가 흔들려 모델의 매끄러움을 잃는다). sunnypilot NNLC의 friction_override와 같은 항이다.
+        const float curve =
+            interp(std::fabs(desired_lat_accel), {kNnFrictionStartLatAccel, kNnFrictionFullLatAccel}, {0.0f, 1.0f});
+        feedforward += w * (nn_feedforward_torque * tuning.lat_accel_factor + curve * friction_term - feedforward);
         nn_feedforward_used_ = true;
     }
 

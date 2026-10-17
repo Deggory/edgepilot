@@ -123,7 +123,8 @@ Panda's health confirm that configuration
 | --- | --- | --- |
 | `EDGEPILOT_ENABLE_CONTROL=1` | on | The manager starts `controlsd`. It does not start `pandad` on its own; that needs `EDGEPILOT_ENABLE_PANDA=1`. No openpilot checkout or Python native extension is required. |
 | `EDGEPILOT_FORCE_ENGAGED=0\|1` | `0` | Bypasses the SET/CANCEL engage latch, for offline replay only. |
-| `EDGEPILOT_LATERAL_NN_MODEL=path` | `models/lateral_nn.json` | The learned torque model `controlsd` reads at start ([Lateral NN](lateral-nn.md)), relative to the install directory. `recordd` copies the same file into each route. |
+| `EDGEPILOT_LATERAL_NN_MODEL=path` | unset: the model chosen in `params/lateral_nn.json` | A learned torque model file that replaces the choice ([Lateral NN](lateral-nn.md)), relative to the install directory. `controlsd` still reloads it when the file changes, and `recordd` copies it into each route. |
+| `EDGEPILOT_LATERAL_NN_STATUS=path` | `/dev/shm/edgepilot_lateral_nn_status.json` | Where `controlsd` reports the chosen and the loaded model for the web console. |
 
 > [!WARNING]
 > `EDGEPILOT_FORCE_ENGAGED` must remain `0` in a vehicle.
@@ -168,6 +169,7 @@ atomically: to a temporary file, synced, then renamed over the old one.
 | `adaptive_cruise.json` | web console: Vision cruise tab | `controlsd` | as `steering.json` |
 | `recording.json` | web console: Recording tab | `recordd` | `enabled` within 250 ms; `bitrate_bps` when `recordd` next starts |
 | `display.json` | web console: Device settings tab; `calibration_use_flow` from the Vehicle tab's calibration card | web console (backlight), `modeld` (camera mount, calibration source), `overlayd` (alert volume) | the backlight at once; `modeld` and `overlayd` within 1 s |
+| `lateral_nn.json` | web console: Steering tab's learned torque model card | `controlsd`, `recordd` | `controlsd` checks it every second and loads the new model in the background ([Lateral NN](lateral-nn.md#models-choice-and-switch)) |
 | `calibration.json` | `modeld` | `modeld`, at start | the runtime's own state, see below |
 
 `controlsd` reads its two files together. If either is rejected, it keeps the
@@ -274,7 +276,7 @@ press. A value is written as soon as it is changed.
 
 | Tab | Address | Holds |
 | --- | --- | --- |
-| Steering | `#steering` | the controller tuning, the path mode (Lane, Laneless, Lanebow) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
+| Steering | `#steering` | the controller tuning, the learned torque model card, the path mode (Lane, Laneless, Lanebow) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
 | Vehicle | `#vehicle` | the steering values that belong to the car rather than to the controller, the camera calibration, the learners' trend, the learner input source and the fixed specs |
 | Vision cruise | `#adaptive_cruise` | `adaptive_cruise.json` |
 | Recording | `#recording` | `recording.json` |
@@ -294,9 +296,10 @@ flowchart LR
     vehicle --> reset["calibration<br>reset request"]
     vehicle --> sj["steering.json"]
     steering["Steering"] --> sj
+    steering --> lj["lateral_nn.json"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
     classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
-    class steering,vehicle,cruise,rec,device,sj,reset,dj,aj,rj,flash proc
+    class steering,vehicle,cruise,rec,device,sj,lj,reset,dj,aj,rj,flash proc
     class pwm external
 ```
 
@@ -441,6 +444,8 @@ The page talks to the server over these routes (`console_server.py`):
 | `GET /api/learners/trend` | the learned values over the last 10 minutes |
 | `POST /api/calibration/reset` | reset the camera calibration (disengaged only) |
 | `POST /api/calibration/source` | choose the calibration source, `{"use_flow": ...}` (disengaged only) |
+| `GET /api/lateral_nn` | the learned torque models, the choice, the default and what `controlsd` loaded |
+| `POST /api/lateral_nn` | choose a learned torque model, `{"model": ...}`; `controlsd` switches without a restart |
 | `GET /api/panda` | the Panda firmware and the installed image |
 | `POST /api/panda/flash` | ask for a Panda flash, `{"version": ...}` (parked only) |
 | `GET /api/bev` | where the fields the BEV reads sit |

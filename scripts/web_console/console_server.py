@@ -12,6 +12,8 @@ API
   GET   /api/learners/trend      학습값 10분 추이
   POST  /api/calibration/reset   카메라 보정 초기화(해제 상태에서만)
   POST  /api/calibration/source  보정 출처 {"use_flow": ...}(해제 상태에서만)
+  GET   /api/lateral_nn          학습 토크 모델 목록, 고른 것, controlsd가 쓰는 것
+  POST  /api/lateral_nn          학습 토크 모델 고르기 {"model": ...}(controlsd가 재시작 없이 바꾼다)
   GET   /api/panda               Panda 펌웨어와 설치된 이미지
   POST  /api/panda/flash         Panda 플래싱 요청 {"version": ...}(주차 중에만)
   GET   /api/bev                 BEV가 읽는 필드 위치
@@ -37,6 +39,7 @@ except ImportError:  # 호스트 검사: 웹 스택 없이 import된다
 from .backlight import DisplayBacklight
 from .bev_stream import BEV_MAX_HZ, bev_frames, bev_layout
 from .calibration_control import CalibrationControl
+from .lateral_nn_models import LateralNnModels
 from .learner_monitor import LearnerMonitor, LocalizationReader
 from .panda_update import PandaUpdate
 from .param_store import ParamStore
@@ -57,11 +60,15 @@ class CalibrationSourceRequest(BaseModel):  # type: ignore[misc,valid-type]
     use_flow: bool
 
 
+class LateralNnRequest(BaseModel):  # type: ignore[misc,valid-type]
+    model: str
+
+
 def create_app(store: ParamStore | None = None, processes: ProcessStatus | None = None,
                learners: LearnerMonitor | None = None, localization: LocalizationReader | None = None,
                calibration: CalibrationControl | None = None, panda: PandaUpdate | None = None,
                assets: StaticAssets | None = None, backlight: DisplayBacklight | None = None,
-               stopping: Callable[[], bool] = lambda: False) -> "FastAPI":
+               lateral_nn: LateralNnModels | None = None, stopping: Callable[[], bool] = lambda: False) -> "FastAPI":
     from fastapi import FastAPI, Header, HTTPException, Query
     from fastapi.responses import Response, StreamingResponse
 
@@ -73,6 +80,7 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
     calibration = calibration or CalibrationControl(store)
     panda = panda or PandaUpdate()
     assets = assets or StaticAssets()
+    lateral_nn = lateral_nn or LateralNnModels()
 
     @contextlib.asynccontextmanager
     async def lifespan(_application):
@@ -152,6 +160,14 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
     @application.post("/api/calibration/source")
     def set_calibration_source(request: CalibrationSourceRequest) -> Dict[str, Any]:
         return refuse(lambda: calibration.set_source(request.use_flow))
+
+    @application.get("/api/lateral_nn")
+    def get_lateral_nn() -> Dict[str, Any]:
+        return lateral_nn.status()
+
+    @application.post("/api/lateral_nn")
+    def set_lateral_nn(request: LateralNnRequest) -> Dict[str, Any]:
+        return refuse(lambda: lateral_nn.select(request.model))
 
     @application.get("/api/panda")
     def get_panda() -> Dict[str, Any]:

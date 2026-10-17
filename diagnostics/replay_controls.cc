@@ -251,12 +251,12 @@ int main(int argc, char **argv) {
         if (dump) {
             std::fprintf(dump,
                          "%lu eng=%u act=%u block=%s torque=%d/%d curv=%a/%a desire=%u cruise=%u/%a/%a hud=%x "
-                         "angle=%.1f driver=%d ff=%.4f ts=%llu",
+                         "angle=%.1f driver=%d ff=%.4f fr=%.5f ts=%llu",
                          ticks, state.engaged, state.active, state.active_block, state.desired_torque,
                          state.apply_torque, state.desired_curvature, state.actual_curvature, state.desire,
                          state.cruise_active, state.cruise_max_speed_kph, state.cruise_command_speed_kph,
                          state.hud_flags, state.steering_angle_deg, state.driver_torque, result.feedforward,
-                         static_cast<unsigned long long>(tick_ns));
+                         result.friction_torque, static_cast<unsigned long long>(tick_ns));
             if (send)
                 for (const CanFrame &frame : result.frames) {
                     std::fprintf(dump, " %x@%u:", frame.address, frame.bus);

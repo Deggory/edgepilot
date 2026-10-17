@@ -14,7 +14,7 @@ flowchart TB
     gtest(["googletest v1.18.0<br>first configure, SHA256 pinned"]) --> configure
     configure --> build["build the host_tests target<br>37 gtest_* executables"]
     build --> ctest["ctest<br>from the repository root"]
-    ctest --> cpp["build-host/bin/gtest_*<br>348 cases"]
+    ctest --> cpp["build-host/bin/gtest_*<br>349 cases"]
     ctest --> py["Python checks<br>check_web_console.py<br>check_recording_reader.py<br>check_docs.py"]
     py -.-> mjs["check_bev_lane_filter.mjs<br>jsc or node, if present"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
@@ -30,7 +30,7 @@ flowchart TB
 ```
 
 The script configures `build-host`, builds the `host_tests` target and runs
-everything with `ctest`: 348 C++ cases and 3 Python checks. googletest v1.18.0
+everything with `ctest`: 349 C++ cases and 3 Python checks. googletest v1.18.0
 is downloaded on the first configure (its SHA256 is pinned).
 
 To run one test:

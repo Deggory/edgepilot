@@ -356,11 +356,16 @@ void LateralController::copy_torque_state(LateralControlResult *result) const {
     result->curvature_error = result->desired_curvature - result->actual_curvature;
     result->normalized_output = torque_controller_.normalized_output();
     result->feedforward = torque_controller_.feedforward();
+    result->friction_torque = torque_controller_.friction_torque();
     result->nn_feedforward_used = torque_controller_.nn_feedforward_used();
 }
 
+// 실행 중 다른 모델로 갈아 끼울 때(웹 콘솔 고르기)는 이력과 섞기 무게를 둔다: 이력은 모델과 상관없는 목표
+// 궤적이라, 피드포워드는 선형으로 떨어졌다 다시 오르지 않고 두 모델 출력의 차이만큼만 움직인다.
 void LateralController::set_lateral_nn(std::shared_ptr<const LateralNnModel> model) {
+    const bool swap = lateral_nn_ && model && model->loaded();
     lateral_nn_ = model && model->loaded() ? std::move(model) : nullptr;
+    if (swap) return;
     nn_inputs_.reset();
     nn_weight_ = 0.0f;
 }

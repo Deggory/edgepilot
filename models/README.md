@@ -33,7 +33,7 @@ flowchart TB
 | File | What it is |
 | --- | --- |
 | `supercombo.axmodel` | the model `modeld` loads |
-| `lateral_nn.json` | the learned steering torque model `controlsd` loads |
+| `lateral_nn/<car>_v<version>.json` | the learned steering torque models `controlsd` chooses from |
 | `manifest.sha256` | SHA-256 manifest for the tracked files |
 | `.gitignore` | keeps a `work/` folder out of git |
 
@@ -44,11 +44,20 @@ the other. It is built with
 `scripts/upload_to_board.sh` puts it on the board as
 `/root/edgepilot/models/supercombo.axmodel`.
 
-`lateral_nn.json` is the torque feed-forward of
-[Lateral NN](../docs/lateral-nn.md): `k7_hev_v2` from the separate `nnlc`
-repository (its `models/k7_hev_v2.json`). `controlsd` reads it at start-up as
-`/root/edgepilot/models/lateral_nn.json`, and `recordd` copies it into every
-route. `scripts/upload_to_board.sh` sends it on every upload.
+`lateral_nn/` holds the torque feed-forward models of
+[Lateral NN](../docs/lateral-nn.md), one file per car and version, copied from
+the separate [edgepilot-nnlc][nnlc] repository's `models/`:
+
+| File | Trained |
+| --- | --- |
+| `k7_hev_v1.json` | the first K7 HEV model |
+| `k7_hev_v2.json` | time-ordered data, three nets |
+| `k7_hev_v3.json` | as v2, without the friction share the controller adds in curves; the default |
+
+`params/lateral_nn.json` names the one `controlsd` uses, and the web console's
+Steering tab changes it. `recordd` copies the chosen file into every route.
+`scripts/upload_to_board.sh` sends the folder on every upload and leaves
+models that exist only on the board in place.
 
 ## Contract
 
@@ -120,3 +129,5 @@ v0.9.4's Elu at U16
   new axmodel
 - [Build and deploy](../docs/build-and-deploy.md): the upload that copies the
   model to the board
+
+[nnlc]: https://github.com/cwal1220/edgepilot-nnlc

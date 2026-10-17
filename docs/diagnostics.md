@@ -76,7 +76,9 @@ and `Localization` records go in, the planner is computed in place and the
 clock is the tick time, so identical code gives a bit-identical `--dump` and
 digest. The dump has a line per tick: the state, the torque and curvature, the
 HUD flags, the wheel angle, the driver torque, the torque controller's
-feed-forward, the tick time and the frames sent. It also reports how often
+feed-forward and its friction share (`fr`, normalised torque; nnlc subtracts
+it from the target, see [Lateral NN](lateral-nn.md)), the tick time and the
+frames sent. It also reports how often
 engaged, active and desire agree with the recorded `ControlState`. A route
 engaged before recording started needs `--force-engaged`.
 
@@ -243,8 +245,9 @@ on the 2026-08-28 route (logged: -0.176), and the total-least-squares torque
 fit over the 2026-08-19 route returns `latAccelFactor` 4.00, the value that
 route was fit to.
 
-The separate `nnlc` repository trains the [lateral NN](lateral-nn.md) on these
-files.
+The separate [edgepilot-nnlc][nnlc] repository trains the
+[lateral NN](lateral-nn.md) on these files; its [data format][nnlc-format]
+describes every column.
 
 ## HUD snapshots
 
@@ -403,3 +406,6 @@ output against the host axengine runner gave a plan lateral difference of
   `alert_sound_preview` writes
 - [K7 Panda port](k7-panda-port.md): the K7 CAN signals that the replays decode
   with `vehicle_can`
+
+[nnlc]: https://github.com/cwal1220/edgepilot-nnlc
+[nnlc-format]: https://github.com/cwal1220/edgepilot-nnlc/blob/main/docs/data-format.md

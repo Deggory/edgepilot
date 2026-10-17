@@ -1,6 +1,6 @@
 #include "recording/recording_writer.h"
 
-#include "common/utils_process.h"
+#include "common/lateral_nn_path.h"
 #include "recording/recorded_can.h"
 
 #include <dirent.h>
@@ -622,10 +622,10 @@ void RecordingWriter::snapshot_params() const {
         copy_file(params_directory_ + "/" + name, destination + "/" + name);
     }
     closedir(directory);
-    // controlsd가 읽는 학습한 토크 모델도 남긴다. 다시 학습한 뒤에도 이 주행을 그때 모델로 재생한다(replay_controls
-    // --lateral-nn route/models/lateral_nn.json).
-    const std::string model = lateral_nn_model_path();
-    if (access(model.c_str(), R_OK) == 0 && make_directories(route_path_ + "/models"))
+    // controlsd가 쓰는 학습한 토크 모델(고른 것)도 남긴다. 다시 학습한 뒤에도 이 주행을 그때 모델로 재생한다
+    // (replay_controls --lateral-nn route/models/lateral_nn.json). 고르기 자체는 위의 params/lateral_nn.json이다.
+    const std::string model = lateral_nn_choice(params_directory_).path;
+    if (!model.empty() && access(model.c_str(), R_OK) == 0 && make_directories(route_path_ + "/models"))
         copy_file(model, route_path_ + "/models/lateral_nn.json");
 }
 

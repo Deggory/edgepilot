@@ -9,7 +9,8 @@ import {el, section} from "./ui.js";
 const OTHER_SECTION = "other";
 const tabLabel = tab => (tab === "vehicle" ? params().vehicle_tab.label : tab);
 
-// extras: 파라미터 섹션 뒤에 붙일 것들({element, start, stop}, 예: 기기 설정의 Panda 펌웨어 카드).
+// extras: 파라미터 섹션 뒤에 붙일 것들({element, start, stop, after}, 예: 기기 설정의 Panda 펌웨어 카드). after가
+// 섹션 이름이면 그 섹션 바로 뒤에(예: 조향의 학습 토크 모델 카드는 토크 제어기 섹션 뒤), 없으면 맨 뒤에.
 export function createParamView(group, {extras = []} = {}) {
   const spec = params().groups[group];
   const bySection = new Map(spec.sections.map(name => [name, []]));
@@ -25,8 +26,10 @@ export function createParamView(group, {extras = []} = {}) {
     bySection.get(name).push(paramCard(group, key));
   }
   const sections = [...bySection].filter(([, cards]) => cards.length).map(([name, cards]) => ({
-    cards, element: section(sectionName(name), cards, {count: cards.length}),
+    name, cards, element: section(sectionName(name), cards, {count: cards.length}),
   }));
+  const placed = new Set(sections.map(({name}) => name));
+  const extrasAfter = name => extras.filter(extra => extra.after === name).map(extra => extra.element);
   const total = sections.reduce((sum, {cards}) => sum + cards.length, 0);
 
   const count = el("span.toolbar-count");
@@ -69,9 +72,9 @@ export function createParamView(group, {extras = []} = {}) {
     spec.note ? el("p.group-note", {text: spec.note}) : null,
     el("div.toolbar", {}, search, modifiedOnly, count),
     moved,
-    sections.map(({element: node}) => node),
+    sections.map(({name, element: node}) => [node, ...extrasAfter(name)]),
     empty,
-    extras.map(extra => extra.element),
+    extras.filter(extra => !placed.has(extra.after)).map(extra => extra.element),
     el("p.file-path", {text: t("params.file", {path: params().paths[group]})}));
   return {
     element,

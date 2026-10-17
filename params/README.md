@@ -19,11 +19,13 @@ flowchart LR
         cruise["adaptive_cruise.json"]
         recording["recording.json"]
         display["display.json"]
+        nn["lateral_nn.json"]
         calib["calibration.json"]
         flow["flow_calibration.json"]
     end
-    web --> steering & cruise & recording & display
+    web --> steering & cruise & recording & display & nn
     steering --> controlsd
+    nn --> controlsd
     cruise --> controlsd
     steering -.-> locationd
     recording --> recordd
@@ -38,7 +40,7 @@ flowchart LR
     class params group
     class controlsd,locationd,modeld compute
     class overlayd pixel
-    class web,steering,cruise,recording,display,calib,flow,recordd proc
+    class web,steering,cruise,recording,display,nn,calib,flow,recordd proc
 ```
 
 modeld loads the two calibration files at start and saves them as it learns.
@@ -70,7 +72,9 @@ loader clamps a number to.
   [Runtime options](../docs/runtime-options.md#web-console).
 - The web console greys out a value while another value leaves it unused and
   says why, for example the cruise gaps while vision cruise is off, or
-  `torque_friction` while `nn_feedforward` is on. It can still be edited. The
+  `torque_lat_accel_offset` while `nn_feedforward` is on. It can still be
+  edited. A value whose role changes gets a note instead, such as
+  `torque_friction`, which with `nn_feedforward` on acts only in curves. The
   conditions are the `unused` and `role` entries in
   `scripts/web_console/param_metadata.py`.
 
@@ -193,7 +197,7 @@ friction = friction_raw ÷ 1000.
 | `torque_friction` | 0.083 | normalised torque | 0 to 0.3 | Torque added in the error's direction to overcome the steering friction (openpilot `friction`; upstream adds it in torque space too). |
 | `steering_angle_deadzone_deg` | 1.0 | ° | 0 to 3 | No friction compensation while the lateral-acceleration error is within what this steering angle produces (openpilot `steeringAngleDeadzoneDeg`; upstream uses it only on some Toyotas, 0.2°, and openpilot_c2 used 1°). Unlike upstream it fades from 40 km/h to zero at 60 km/h: set as an angle it grows with v², and at 80 km/h and above a 1° dead zone would remove about 90% of the friction compensation. See [Low-speed wheel shake](#low-speed-wheel-shake). |
 | `torque_straight_kp_scale` | 0.7 | factor | 0.3 to 1.0 | Factor on the `KP_INTERP` curve on slow straights: in full below 10 m/s (36 km/h) with a desired curvature under 0.003 1/m, back to 1 at 15 m/s (54 km/h) or 0.008 1/m. The desired curvature is the larger of the current request and the delayed one the error compares against, so the whole of a turn keeps the full gain. 1 is upstream. See [Low-speed wheel shake](#low-speed-wheel-shake). |
-| `nn_feedforward` | false | bool | | Uses the learned torque model (`models/lateral_nn.json`) for the feed-forward instead of the linear one (lateral-acceleration factor, offset, bank and friction); the PID stays. Its inputs keep the same limits as the PID request, including the 80° hold while the hands are off. Switching blends over 1 s, and every engagement ramps in the same way; below 3 m/s, where there is no training data, it ramps back to the linear one. Without the model file it does nothing. See [Lateral NN](../docs/lateral-nn.md). |
+| `nn_feedforward` | false | bool | | Uses the learned torque model chosen in [`lateral_nn.json`](#lateral_nnjson) for the feed-forward instead of the linear one's lateral-acceleration factor, offset and bank; the PID stays. The friction compensation (`torque_friction`, `steering_angle_deadzone_deg`) is added to the model in curves, from 0.2 m/s² of desired lateral acceleration and in full from 0.6 m/s², because the model does not see the tracking error. Its inputs keep the same limits as the PID request, including the 80° hold while the hands are off. Switching blends over 1 s, and every engagement ramps in the same way; below 3 m/s, where there is no training data, it ramps back to the linear one. Without the model file it does nothing. See [Lateral NN](../docs/lateral-nn.md). |
 
 ### Low-speed wheel shake
 
@@ -427,6 +431,16 @@ seed: while stopped, stop the pipeline, back up the board's
 `params/calibration.json`, rewrite it with `valid_blocks` set to 0, and start
 the pipeline. On the road, drive fast enough on a nearly straight road, with
 the camera fixed so that it cannot move.
+
+## lateral_nn.json
+
+Which learned torque model ([Lateral NN](../docs/lateral-nn.md)) controlsd
+uses: `{"model": "k7_hev_v3"}`, a name from `models/lateral_nn/` without
+`.json`. A model is trained on one car, so choose the one of this car. The
+web console's Steering tab writes it. controlsd checks it every second and
+switches models without a restart; `nn_feedforward` still decides whether the
+model is used. Without the file, or with a name that does not load, the linear
+feed-forward stays.
 
 ## flow_calibration.json
 

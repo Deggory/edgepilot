@@ -42,6 +42,13 @@ from scripts.web_console.learner_monitor import (
     LearnerStateReader,
     LocalizationReader,
 )
+from scripts.web_console.lateral_nn_models import (
+    MODEL_DIR,
+    SELECTION_FILE,
+    STATUS_PATH,
+    LateralNnModels,
+    read_choice,
+)
 from scripts.web_console.panda_update import (
     CONTROL_MAX_AGE_S,
     IMAGE_ERRORS,
@@ -460,7 +467,8 @@ class ParamMetadataTest(unittest.TestCase):
         texts += [(I18N_DIR / f"{lang}.json").read_text(encoding="utf-8") for lang in LANGUAGES]
         texts += [path.read_text(encoding="utf-8") for path in STATIC_DIR.glob("*.html")]
         texts += [path.read_text(encoding="utf-8") for path in STATIC_DIR.glob("*_view.js")]
-        texts += [(STATIC_DIR / name).read_text(encoding="utf-8") for name in ("console.js", "panda_card.js")]
+        texts += [(STATIC_DIR / name).read_text(encoding="utf-8")
+                  for name in ("console.js", "panda_card.js", "lateral_nn_card.js")]
         for text in texts:
             self.assertNotRegex(text, r"(?i)(?<![0-9a-z])k7(?![0-9a-z])|그랜저|grandeur")
         self.assertEqual([path.name for path in STATIC_DIR.rglob("*") if "k7" in path.name.lower()], [])
@@ -813,6 +821,64 @@ def panda_image(version="EDGE-f9907afb-DEBUG", body=1024):
     data[63:64 + len(version) + 1] = b"\0" + version.encode() + b"\0"
     data[body - 8:body] = b"VERS" + struct.pack("<I", 2)
     return bytes(data) + b"\xab" * PANDA_SIGNATURE_BYTES
+
+
+class LateralNnModelsTest(unittest.TestCase):
+    """학습 토크 모델 카드: 레포의 모델 파일 이름, 고르기 파일 읽기·쓰기, 거부, controlsd 상태, C++과 같은 경로·규칙."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        root = Path(self.temporary.name)
+        self.models_dir = root / "models"
+        shutil.copytree(ROOT / MODEL_DIR, self.models_dir)
+        self.selection = root / "params" / SELECTION_FILE
+        self.default = root / "params.defaults" / SELECTION_FILE
+        self.status_file = root / "status.json"
+        self.models = LateralNnModels(self.models_dir, self.selection, self.default, str(self.status_file))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_paths_and_name_rule_match_cpp(self):
+        path_cc = cpp(ROOT / "src" / "common" / "lateral_nn_path.h")
+        self.assertIn(f'kLateralNnModelDir = "{MODEL_DIR.as_posix()}";', path_cc)
+        self.assertIn(f'kLateralNnSelectionFile = "{SELECTION_FILE}";', path_cc)
+        select_cc = cpp(ROOT / "src" / "controls" / "lateral_nn_select.cc")
+        self.assertIn(f'"EDGEPILOT_LATERAL_NN_STATUS", "{STATUS_PATH}"', select_cc)
+        self.assertEqual(json.loads((ROOT / "params" / SELECTION_FILE).read_text())["model"], "k7_hev_v3")
+        for name, ok in (("k7_hev_v3", True), ("Car-2.1", True), (".hidden", False), ("../x", False),
+                         ("a" * 64, True), ("a" * 65, False)):
+            self.selection.parent.mkdir(exist_ok=True)
+            self.selection.write_text(json.dumps({"model": name}))
+            self.assertEqual(read_choice(self.selection), (name, "") if ok else ("", "bad_name"), name)
+
+    def test_lists_the_model_files_by_name(self):
+        self.assertEqual(self.models.models(), ["k7_hev_v1", "k7_hev_v2", "k7_hev_v3"])
+        (self.models_dir / "k7_hev_v10.json").write_text("{}")
+        (self.models_dir / ".hidden.json").write_text("{}")
+        (self.models_dir / "notes.txt").write_text("")
+        self.assertEqual(self.models.models()[-2:], ["k7_hev_v3", "k7_hev_v10"], "숫자는 수로 정렬, 규칙 밖 이름은 뺀다")
+
+    def test_select_writes_the_choice_and_refuses_unknown(self):
+        self.assertEqual(self.models.status()["selection_error"], "none")
+        status = self.models.select("k7_hev_v2")
+        self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v2"})
+        self.assertEqual((status["selected"], status["selection_error"]), ("k7_hev_v2", ""))
+        for name in ("k7_hev_v9", "../steering"):
+            with self.assertRaises(Refusal) as refused:
+                self.models.select(name)
+            self.assertEqual(refused.exception.code, "error.lateral_nn_unknown")
+        self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v2"}, "거부하면 그대로")
+
+    def test_status_reports_default_and_controlsd(self):
+        self.default.parent.mkdir()
+        self.default.write_text(json.dumps({"model": "k7_hev_v3"}))
+        self.assertIsNone(self.models.status()["controlsd"])
+        self.status_file.write_text(json.dumps({"selected": "k7_hev_v2", "loaded": "k7_hev_v3", "path": "",
+                                                "error": "k7_hev_v2: bad", "inputs": 33, "unix_time": 1}))
+        status = self.models.status()
+        self.assertEqual(status["default"], "k7_hev_v3")
+        self.assertEqual(status["controlsd"]["loaded"], "k7_hev_v3")
 
 
 class PandaUpdateTest(unittest.TestCase):

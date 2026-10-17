@@ -19,7 +19,7 @@
 
 namespace {
 
-constexpr const char *kModelPath = "models/lateral_nn.json";  // 시험은 레포 루트에서 돈다
+constexpr const char *kModelPath = "models/lateral_nn/k7_hev_v3.json";  // 시험은 레포 루트에서 돈다
 
 // 입력 넷(v, la, jerk, roll)에 선형 층 둘인 작은 모델. 첫 층이 v를 ±scale배로 두 갈래로 나누고 둘째 층이 더한다.
 std::string tiny_model(float scale) {
@@ -107,6 +107,15 @@ TEST(LateralNnModel, RepositoryModelLoadsWithItsTestVectors) {
     const auto model = repository_model();
     ASSERT_TRUE(model->loaded());
     EXPECT_EQ(model->input_count(), 33U);
+}
+
+TEST(LateralNnModel, EveryLibraryModelLoads) {
+    // 웹 콘솔에서 고를 수 있는 모델(models/lateral_nn/<차종>_v<버전>.json)은 모두 제 시험 벡터대로 읽힌다
+    for (const char *name : {"k7_hev_v1", "k7_hev_v2", "k7_hev_v3"}) {
+        LateralNnModel model;
+        std::string error;
+        EXPECT_TRUE(model.load(std::string("models/lateral_nn/") + name + ".json", &error)) << name << ": " << error;
+    }
 }
 
 TEST(LateralNnModel, NamesMatchTheTrainingSide) {
@@ -281,13 +290,14 @@ TEST(TorqueController, AngleAtCurvatureInvertsCurvatureAtAngle) {
 }
 
 TEST(TorqueController, NnFeedforwardReplacesTheLinearFeedforward) {
-    // 같은 입력을 50틱 넣고 마지막 상태를 본다. 마찰 계수만 다른 두 설정으로 모델 경로에 마찰이 끼지 않는지 본다.
+    // 직선(목표 횡가속 0.16 m/s²)에 같은 입력을 50틱 넣고 마지막 상태를 본다. 마찰 계수만 다른 두 설정으로 모델 경로에
+    // 마찰이 끼지 않는지 본다.
     const auto run = [](float nn, float friction) {
         SteeringParams params;
         params.torque_friction = friction;
         TorqueController controller;
         for (int i = 0; i < 50; ++i)
-            controller.update(true, 20.0f, 0.002f, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
+            controller.update(true, 20.0f, 0.0004f, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
                               LiveLateralParams{}, nn);
         return std::make_tuple(controller.feedforward(), controller.nn_feedforward_used(),
                                controller.normalized_output());
@@ -303,6 +313,30 @@ TEST(TorqueController, NnFeedforwardReplacesTheLinearFeedforward) {
     EXPECT_NE(ff_lin, ff_nn);
     const auto [ff_lin0, used_lin0, out_lin0] = run(NAN, 0.0f);
     EXPECT_NE(out_lin0, out_lin) << "선형 경로는 마찰을 쓴다";
+}
+
+TEST(TorqueController, NnFeedforwardKeepsTheFrictionInCurves) {
+    // 모델은 추종 오차를 모르므로 곡선에서는 선형과 같은 마찰 보상을 더한다: |목표 횡가속| 0.2 m/s²부터 0.6 m/s²까지
+    // 늘려 그 뒤로는 전부. 같은 입력의 선형 경로에서 마찰 계수가 바꾸는 몫과 비교한다.
+    const auto ff = [](float curvature, float friction, float nn) {
+        SteeringParams params;
+        params.torque_friction = friction;
+        TorqueController controller;
+        for (int i = 0; i < 50; ++i)
+            controller.update(true, 20.0f, curvature, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
+                              LiveLateralParams{}, nn);
+        return controller.feedforward();
+    };
+    const float laf = SteeringParams{}.torque_lat_accel_factor;
+    const auto friction_share = [&](float curvature, float nn) {
+        return ff(curvature, 0.2f, nn) - ff(curvature, 0.0f, nn);
+    };
+    // 20 m/s에서 곡률 0.002 = 0.8 m/s²(전부), 0.001 = 0.4 m/s²(절반), 0.0004 = 0.16 m/s²(없음)
+    EXPECT_FLOAT_EQ(ff(0.002f, 0.0f, 0.2f), 0.2f * laf) << "마찰 계수 0이면 모델만";
+    EXPECT_NE(friction_share(0.002f, 0.2f), 0.0f);
+    EXPECT_NEAR(friction_share(0.002f, 0.2f), friction_share(0.002f, NAN), 1e-6f);
+    EXPECT_NEAR(friction_share(0.001f, 0.2f), 0.5f * friction_share(0.001f, NAN), 1e-6f);
+    EXPECT_NEAR(friction_share(0.0004f, 0.2f), 0.0f, 1e-6f);
 }
 
 TEST(TorqueController, NnWeightBlendsTheTwoFeedforwards) {
@@ -386,4 +420,34 @@ TEST(LateralController, SwitchingBlendsOverOneSecond) {
     for (int k = 0; k < 90; ++k) EXPECT_TRUE(tick().nn_feedforward_used) << k;
     for (int k = 0; k < 20; ++k) tick();
     EXPECT_FALSE(tick().nn_feedforward_used);
+}
+
+TEST(LateralController, SwappingModelsKeepsTheBlend) {
+    // 주행 중 고르기를 바꾸면 새 모델이 바로 이어받는다: 선형으로 떨어졌다가 1초에 걸쳐 오르지 않고, 처음부터 새
+    // 모델로 달린 제어기와 같은 피드포워드를 낸다(이력은 모델과 상관없는 목표 궤적)
+    auto v2 = std::make_shared<LateralNnModel>();
+    std::string error;
+    ASSERT_TRUE(v2->load("models/lateral_nn/k7_hev_v2.json", &error)) << error;
+    LateralControllerConfig config;
+    config.force_engaged = true;
+    config.steering_params.nn_feedforward = true;
+    LateralController swapped(config), reference(config);
+    swapped.set_lateral_nn(repository_model());
+    reference.set_lateral_nn(v2);
+    const auto tick = [](LateralController &controller, int i) {
+        const double t = 1.0 + 0.01 * i;
+        return controller.update(usable_path(), curve_target(0.003f), ready_vehicle(t), t, i);
+    };
+    int i = 0;
+    for (; i < 150; ++i) {
+        tick(swapped, i);
+        tick(reference, i);
+    }
+    swapped.set_lateral_nn(v2);
+    const LateralControlResult after = tick(swapped, i);
+    const LateralControlResult expected = tick(reference, i);
+    ASSERT_TRUE(after.nn_feedforward_used);
+    EXPECT_NEAR(after.feedforward, expected.feedforward, 1e-6f);
+    swapped.set_lateral_nn(nullptr);
+    EXPECT_FALSE(tick(swapped, ++i).nn_feedforward_used) << "모델을 빼면 바로 선형";
 }
