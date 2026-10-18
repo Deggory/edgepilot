@@ -107,6 +107,7 @@ LiveLateralParams LateralController::live_params() const {
 LateralControlResult LateralController::update(const LateralPath &path, const LateralTarget &target,
                                                const VehicleCanState &vehicle_state, double now_s, int frame,
                                                bool panda_ready, bool panda_controls_allowed) {
+    nn_evaluated_ = false;
     const bool engage_requested =
         !config_.force_engaged && !engaged_ && vehicle_state.clu_button == 0 && last_button_ == kCruiseButtonSet;
     update_button_state(vehicle_state.clu_button, now_s);
@@ -398,6 +399,7 @@ float LateralController::lateral_nn_feedforward(const LateralTarget &target, con
     const bool wanted = steering && config_.steering_params.nn_feedforward && target.valid && speed > kNnMinSpeedMps;
     nn_weight_ = clamp_float(nn_weight_ + (wanted ? kNnBlendStep : -kNnBlendStep), 0.0f, 1.0f);
     if (!steering || !target.valid || nn_weight_ <= 0.0f) return NAN;
+    nn_evaluated_ = true;
     return nn_inputs_.evaluate(*lateral_nn_, speed, road_bank_.lat_accel() / 9.81f, vehicle_state.long_accel_mps2,
                                la_at, angle_at);
 }
@@ -423,11 +425,11 @@ void LateralController::steer(const VehicleCanState &vehicle_state, float speed_
             std::min(torque_cap, control_params.steer_delta_down *
                                      std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
     }
-    const int raw_torque =
-        torque_controller_.update(true, speed_mps, result->desired_curvature, vehicle_state.steering_angle_deg,
-                                  steering_pressed, steer_limited_by_safety_ || above_fault_angle, control_params,
-                                  plan_delay_s(), vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_.lat_accel(),
-                                  live, nn_feedforward, nn_weight_, lateral_nn_ && lateral_nn_->spec().friction_free);
+    const int raw_torque = torque_controller_.update(
+        true, speed_mps, result->desired_curvature, vehicle_state.steering_angle_deg, steering_pressed,
+        steer_limited_by_safety_ || above_fault_angle, control_params, plan_delay_s(), vehicle_state.yaw_rate_rad_s,
+        yaw_rate_valid, road_bank_.lat_accel(), live, nn_feedforward, nn_weight_,
+        lateral_nn_ && lateral_nn_->spec().friction_free, lateral_nn_ ? lateral_nn_->curve_gain() : 0.0f);
     result->desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
     copy_torque_state(result);
     result->apply_torque = apply_hyundai_steer_torque_limits(

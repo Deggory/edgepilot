@@ -24,11 +24,15 @@ constexpr float kKpValues[] = {250.0f, 120.0f, 65.0f, 30.0f, 11.5f, 5.5f, 3.5f, 
 // 저속일수록 루프 이득이 크다. 마찰 보상 deadzone과 직선 이득 배율을 저속에만 건다.
 // 조향각 deadzone은 횡가속으로 v^2에 비례해 커진다. 그대로 두면 80 km/h 위에서 마찰 보상의 90%가 사라지므로
 // 40 km/h부터 줄여 60 km/h에서 끈다.
-// 학습한 토크 모델에 마찰 보상을 더하는 곡선 범위(|목표 횡가속|, m/s²): 앞 값 아래(직선)는 모델만, 뒤 값부터 전부.
-// 모델은 목표 궤적만 보고 추종 오차를 모른다(TorqueController::update). sunnypilot NNLC도 오차 응답을 높은 횡가속에서만
-// 섞는다(error_blend_factor, 1→2 m/s²); 여기서는 진입 부족이 0.4~1.5 m/s²에 있어 더 낮게 시작한다.
-constexpr float kNnFrictionStartLatAccel = 0.2f;
-constexpr float kNnFrictionFullLatAccel = 0.6f;
+// 학습한 토크 모델에 마찰 보상과 곡선 이득을 거는 곡선 범위(|목표 횡가속|, m/s²): 앞 값 아래(직선)는 모델만, 뒤
+// 값부터 전부. 모델은 목표 궤적만 보고 추종 오차를 모른다(TorqueController::update). sunnypilot NNLC도 오차 응답을 높은
+// 횡가속에서만 섞는다(error_blend_factor, 1→2 m/s²); 여기서는 진입 부족이 0.4~1.5 m/s²에 있어 더 낮게 시작한다.
+constexpr float kNnCurveStartLatAccel = 0.2f;
+constexpr float kNnCurveFullLatAccel = 0.6f;
+// 곡선 이득(모델 파일 curve_gain)을 거는 속도: 30 km/h 아래는 없고 50 km/h부터 전부. 폐루프 재생(2026-10-18, 주행
+// 여섯)에서 모델의 곡선 부족은 40~80 km/h에 있었고 20~40 km/h 진입은 선형과 같았다.
+constexpr float kNnCurveGainStartSpeedMps = 30.0f / 3.6f;
+constexpr float kNnCurveGainFullSpeedMps = 50.0f / 3.6f;
 constexpr float kDeadzoneFullSpeedMps = 40.0f / 3.6f;
 constexpr float kDeadzoneOffSpeedMps = 60.0f / 3.6f;
 // 직선 이득 배율은 10 m/s까지 다 쓰고 15 m/s에서 1로 돌린다.
@@ -85,7 +89,7 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
                              bool steering_pressed, bool steer_limited_by_safety, const SteeringParams &params,
                              float lat_delay_s, float yaw_rate_rad_s, bool yaw_rate_valid, float road_bank_lat_accel,
                              const LiveLateralParams &live, float nn_feedforward_torque, float nn_weight,
-                             bool nn_curve_friction) {
+                             bool nn_curve_friction, float nn_curve_gain) {
     nn_feedforward_used_ = false;
     const float actual_curvature =
         estimate_actual_curvature(speed_mps, steering_angle_deg, params, yaw_rate_rad_s, yaw_rate_valid, live);
@@ -164,10 +168,16 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
         // (2026-10-16 주행에서 곡선 진입 횡가속이 요구의 92~93 %, 선형은 100~109 %). 직선에서는 모델만 쓴다(오차
         // 잡음에 토크가 흔들려 모델의 매끄러움을 잃는다). sunnypilot NNLC의 friction_override와 같은 항이다.
         // 보낸 토크를 그대로 배운 모델은 그 마찰까지 배웠으므로 더하지 않는다(nn_curve_friction).
+        // 곡선 이득: 모델은 계획 궤적을 그대로 따르는 토크를 내 곡선에서 늦게 덜 돈다. 선형 피드포워드는 같은 곳에서
+        // 10~20 % 더 내고 PID가 깎는다. 모델 파일의 몫(nn_curve_gain)만큼 곡선의 모델 출력을 키운다.
         const float ramp =
-            interp(std::fabs(desired_lat_accel), {kNnFrictionStartLatAccel, kNnFrictionFullLatAccel}, {0.0f, 1.0f});
+            interp(std::fabs(desired_lat_accel), {kNnCurveStartLatAccel, kNnCurveFullLatAccel}, {0.0f, 1.0f});
         const float curve = nn_curve_friction ? ramp : 0.0f;
-        feedforward += w * (nn_feedforward_torque * tuning.lat_accel_factor + curve * friction_term - feedforward);
+        const float gain =
+            1.0f + nn_curve_gain * ramp *
+                       interp(speed_mps, {kNnCurveGainStartSpeedMps, kNnCurveGainFullSpeedMps}, {0.0f, 1.0f});
+        feedforward +=
+            w * (gain * nn_feedforward_torque * tuning.lat_accel_factor + curve * friction_term - feedforward);
         nn_feedforward_used_ = true;
     }
 

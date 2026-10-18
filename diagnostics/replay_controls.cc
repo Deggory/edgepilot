@@ -6,13 +6,16 @@
 // 전 녹화에서는 보드가 새 플랜을 한 틱 늦게 썼으므로(플래너 작업 스레드) 모델 프레임의 첫 틱이 그만큼 더 다르다.
 // 사용: replay_controls [--steering s.json] [--cruise c.json] [--vehicle-json j]
 //                       [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--lateral-nn m.json]
-//                       [--dump out.txt] <events.bin...>
+//                       [--nn-inputs out.csv [--nn-inputs-every N]] [--dump out.txt] <events.bin...>
 //   --force-engaged는 EDGEPILOT_FORCE_ENGAGED처럼 버튼 없이 결합한다(녹화 전에 결합해 둔 route용).
 //   --lead-track은 녹화 v13 전 route의 ModelState.lead_track을 프레임 번호로 채운다(오프라인으로 만든 앞차
 //   추적, 줄마다 "frame_id valid flags distance relative_speed distance_std speed_std"). 없는 프레임은 0이다.
 //   --lane-filter는 차선선 시간 필터의 새 측정 가중이다(planning/lane_line_filter, 1이면 끈다).
 //   --lateral-nn은 학습한 토크 모델 파일이다(docs/lateral-nn.md, 녹화 route의 models/lateral_nn.json이 그 주행의
 //   모델이다). 쓰려면 --steering의 nn_feedforward도 켠다. 켜져 있는데 모델을 주지 않으면 경고하고 선형으로 돈다.
+//   --nn-inputs는 모델을 계산한 틱마다(N틱에 한 번, 기본 1) 그 입력을 CSV로 쓴다: t(가장 이른 기록부터 초,
+//   extract_lateral_dataset의 t와 같은 기준)와 모델 파일의 features 이름 열. 계획 조건 학습(nnlc)의 입력이다.
+//   --lateral-nn이 있어야 하고 nn_feedforward를 켠다(열린 루프라 피드포워드가 입력을 바꾸지 않는다).
 //   마지막 줄에 출력 전체의 FNV-1a 다이제스트와, 녹화된 ControlState와의 일치율을 쓴다.
 #include "common/ipc_messages.h"
 #include "common/utils_file.h"
@@ -26,6 +29,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -60,7 +64,8 @@ struct Digest {
 int main(int argc, char **argv) {
     std::string steering_path, cruise_path, vehicle_json_path, dump_path;
     bool force_engaged = false;
-    std::string lead_track_path, lateral_nn_path;
+    std::string lead_track_path, lateral_nn_path, nn_inputs_path;
+    long nn_inputs_every = 1;
     double lane_filter = 0.0;  // 0이면 코드 기본값
     std::vector<std::string> events;
     for (int i = 1; i < argc; ++i) {
@@ -82,16 +87,21 @@ int main(int argc, char **argv) {
             lane_filter = std::atof(next().c_str());
         else if (arg == "--lateral-nn")
             lateral_nn_path = next();
+        else if (arg == "--nn-inputs")
+            nn_inputs_path = next();
+        else if (arg == "--nn-inputs-every")
+            nn_inputs_every = std::atol(next().c_str());
         else if (arg.rfind("--", 0) == 0)
             events.clear(), i = argc;
         else
             events.push_back(arg);
     }
-    if (events.empty() || lane_filter < 0.0 || lane_filter > 1.0) {
+    if (events.empty() || lane_filter < 0.0 || lane_filter > 1.0 || nn_inputs_every < 1 ||
+        (!nn_inputs_path.empty() && lateral_nn_path.empty())) {
         std::fprintf(stderr,
                      "usage: %s [--steering s.json] [--cruise c.json] [--vehicle-json live_parameters.json] "
                      "[--force-engaged] [--lead-track track.txt] [--lane-filter W] [--lateral-nn m.json] "
-                     "[--dump out.txt] <events.bin...>\n",
+                     "[--nn-inputs out.csv [--nn-inputs-every N]] [--dump out.txt] <events.bin...>\n",
                      argv[0]);
         return 2;
     }
@@ -103,6 +113,7 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "params: %s\n", error.c_str());
         return 1;
     }
+    if (!nn_inputs_path.empty()) params.steering.nn_feedforward = true;
     if (params.steering.nn_feedforward && lateral_nn_path.empty())
         std::fprintf(stderr,
                      "warning: nn_feedforward is on but no --lateral-nn model is given; the replay uses the "
@@ -124,12 +135,15 @@ int main(int argc, char **argv) {
     }
 
     std::deque<Record> records;
+    // --nn-inputs의 t 기준: 모든 종류의 기록 가운데 가장 이른 시각(extract_lateral_dataset의 route 시작과 같다)
+    uint64_t origin_ns = UINT64_MAX;
     for (const std::string &path : events) {
         EventLogReader reader(path);
         if (!reader.ok()) continue;
         EventRecordHeader rh{};
         std::vector<char> buf;
         while (reader.next(&rh, &buf)) {
+            origin_ns = std::min(origin_ns, rh.timestamp_ns);
             const auto type = static_cast<RecordType>(rh.type);
             if (type != RecordType::CanRx && type != RecordType::ModelState && type != RecordType::PandaState &&
                 type != RecordType::Localization && type != RecordType::ControlState)
@@ -149,6 +163,7 @@ int main(int argc, char **argv) {
 
     ControlsTick tick(params, force_engaged, vehicle_json, std::string(), 1);
     if (lane_filter > 0.0) tick.planner().set_lane_filter_weight(lane_filter);
+    std::FILE *nn_inputs = nullptr;
     if (!lateral_nn_path.empty()) {
         auto nn = std::make_shared<LateralNnModel>();
         if (!nn->load(lateral_nn_path, &error)) {
@@ -156,6 +171,16 @@ int main(int argc, char **argv) {
             return 1;
         }
         tick.set_lateral_nn(nn);
+        if (!nn_inputs_path.empty()) {
+            nn_inputs = std::fopen(nn_inputs_path.c_str(), "w");
+            if (!nn_inputs) {
+                std::fprintf(stderr, "cannot write %s\n", nn_inputs_path.c_str());
+                return 1;
+            }
+            std::fputc('t', nn_inputs);
+            for (const std::string &name : nn->spec().names()) std::fprintf(nn_inputs, ",%s", name.c_str());
+            std::fputc('\n', nn_inputs);
+        }
     }
     uint64_t tick_ns = first_record_ns;
     tick.controller().set_clock([&tick_ns] { return tick_ns; });
@@ -235,6 +260,12 @@ int main(int argc, char **argv) {
                 digest.add(frame.data.data(), frame.length);
             }
         }
+        if (nn_inputs && ticks % static_cast<unsigned long>(nn_inputs_every) == 0 &&
+            tick.controller().lateral_nn_evaluated()) {
+            std::fprintf(nn_inputs, "%.3f", (static_cast<double>(tick_ns) - static_cast<double>(origin_ns)) * 1e-9);
+            for (float value : tick.controller().lateral_nn_inputs()) std::fprintf(nn_inputs, ",%.6g", value);
+            std::fputc('\n', nn_inputs);
+        }
         LearnerOutputs learned = tick.update_learners(now_s);
         if (learned.learner_state) digest.add(&*learned.learner_state, sizeof(LearnerState));
         if (learned.vehicle_json) digest.add(learned.vehicle_json->data(), learned.vehicle_json->size());
@@ -265,6 +296,7 @@ int main(int argc, char **argv) {
         ++ticks;
     }
     if (dump) std::fclose(dump);
+    if (nn_inputs) std::fclose(nn_inputs);
     std::printf("ticks %lu sent %lu digest %016llx\n", ticks, sent, static_cast<unsigned long long>(digest.value));
     if (compared > 0)
         std::printf(

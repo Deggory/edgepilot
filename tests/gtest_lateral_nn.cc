@@ -249,13 +249,16 @@ TEST(LateralNnInputs, PastOffsetsReadTheHistory) {
     EXPECT_NEAR(x[feature_index(*model, "jerk")], 1.0f, 1e-4f);
 }
 
-TEST(LateralNnInputs, MatchTheTrainingCode) {
-    // 모델 파일의 input_tests: 학습 코드(nnlc dataset.rows)가 합성 궤적에서 만든 입력. 운용 입력(지난 값은 이력, 앞의
-    // 값은 계획 궤적)으로 같은 입력이 나와야 한다. 이름은 그대로인데 뜻이 바뀐 학습 변경(저크 창, 시각 기준 등)을 잡는다.
-    const auto model = repository_model();
-    JsonValue root;
+namespace {
+
+// 모델 파일 하나의 input_tests를 운용 입력으로 다시 만들어 본다(MatchTheTrainingCode)
+void check_input_tests(const std::string &path) {
+    SCOPED_TRACE(path);
+    auto model = std::make_shared<LateralNnModel>();
     std::string error;
-    ASSERT_TRUE(JsonValue::parse(read_text_file(kModelPath), &root, &error)) << error;
+    ASSERT_TRUE(model->load(path, &error)) << error;
+    JsonValue root;
+    ASSERT_TRUE(JsonValue::parse(read_text_file(path), &root, &error)) << error;
     const JsonValue *tests = root.find("input_tests");
     ASSERT_TRUE(tests && tests->is_array() && !tests->array().empty());
     for (const JsonValue &test : tests->array()) {
@@ -284,6 +287,17 @@ TEST(LateralNnInputs, MatchTheTrainingCode) {
         const std::vector<std::string> names = model->spec().names();
         ASSERT_EQ(got.size(), expected.size());
         for (size_t i = 0; i < got.size(); ++i) EXPECT_NEAR(got[i], expected[i], 1e-4f) << names[i];
+    }
+}
+
+}  // namespace
+
+TEST(LateralNnInputs, MatchTheTrainingCode) {
+    // 모델 파일의 input_tests: 학습 코드(nnlc dataset.rows)가 합성 궤적에서 만든 입력. 운용 입력(지난 값은 이력, 앞의
+    // 값은 계획 궤적)으로 같은 입력이 나와야 한다. 이름은 그대로인데 뜻이 바뀐 학습 변경(저크 창, 시각 기준 등)을 잡는다.
+    // 라이브러리의 모델마다 본다.
+    for (const auto &entry : std::filesystem::directory_iterator("models/lateral_nn")) {
+        if (entry.path().extension() == ".json") check_input_tests(entry.path().string());
     }
 }
 
@@ -485,6 +499,49 @@ TEST(LateralNnModel, ReadsWhetherTheTargetIsFrictionFree) {
     LateralNnModel model;
     EXPECT_FALSE(model.load_text(text, &error));
     EXPECT_NE(error.find("friction_free"), std::string::npos) << error;
+}
+
+TEST(LateralNnModel, ReadsTheCurveGain) {
+    // curve_gain은 2026-10-18에 더한 항목이라 없으면 0이다. 0..1 밖이나 숫자가 아니면 파일을 받지 않는다
+    LateralNnModel tiny;
+    std::string error;
+    ASSERT_TRUE(tiny.load_text(tiny_model(1.0f), &error)) << error;
+    EXPECT_FLOAT_EQ(tiny.curve_gain(), 0.0f) << "항목이 없으면 0";
+    const auto with_gain = [](const std::string &value) {
+        std::string text = tiny_model(1.0f);
+        text.insert(1, "\"curve_gain\": " + value + ", ");
+        return text;
+    };
+    LateralNnModel model;
+    ASSERT_TRUE(model.load_text(with_gain("0.3"), &error)) << error;
+    EXPECT_FLOAT_EQ(model.curve_gain(), 0.3f);
+    for (const char *bad : {"-0.1", "1.5", "\"0.3\"", "true"}) {
+        EXPECT_FALSE(model.load_text(with_gain(bad), &error)) << bad;
+        EXPECT_NE(error.find("curve_gain"), std::string::npos) << error;
+    }
+    EXPECT_FLOAT_EQ(repository_model()->curve_gain(), 0.3f) << "k7_hev_v3의 폐루프 보정값";
+}
+
+TEST(TorqueController, CurveGainRaisesTheModelInCurvesAtSpeed) {
+    // 마찰을 빼고 모델 피드포워드만 보면 이득은 (1 + gain · 곡선 램프 · 속도 램프)배다: |목표 횡가속| 0.2→0.6 m/s²,
+    // 30→50 km/h
+    const auto ratio = [](float speed_mps, float curvature) {
+        const auto ff = [&](float gain) {
+            SteeringParams params;
+            params.torque_friction = 0.0f;
+            TorqueController controller;
+            for (int i = 0; i < 50; ++i)
+                controller.update(true, speed_mps, curvature, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.0f,
+                                  LiveLateralParams{}, 0.2f, 1.0f, true, gain);
+            return controller.feedforward();
+        };
+        return ff(0.3f) / ff(0.0f);
+    };
+    EXPECT_NEAR(ratio(20.0f, 0.002f), 1.3f, 1e-4f) << "72 km/h, 0.8 m/s²: 전부";
+    EXPECT_NEAR(ratio(20.0f, 0.001f), 1.15f, 1e-4f) << "0.4 m/s²: 곡선 램프 절반";
+    EXPECT_NEAR(ratio(20.0f, 0.0002f), 1.0f, 1e-6f) << "직선(0.08 m/s²)";
+    EXPECT_NEAR(ratio(40.0f / 3.6f, 0.006f), 1.15f, 1e-4f) << "40 km/h: 속도 램프 절반";
+    EXPECT_NEAR(ratio(25.0f / 3.6f, 0.02f), 1.0f, 1e-6f) << "30 km/h 아래";
 }
 
 TEST(TorqueController, CurveFrictionOnlyForFrictionFreeModels) {

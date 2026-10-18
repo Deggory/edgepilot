@@ -7,8 +7,8 @@ small neural network, trained on the K7's own recorded drives, that gives the
 steering torque a target trajectory needs. With `nn_feedforward` on and a
 model chosen from `models/lateral_nn/`, it replaces the linear feed-forward's
 lateral-acceleration, offset and bank terms. In curves the friction
-compensation stays on top of a model trained without it, and the PID stays as
-it is.
+compensation stays on top of a model trained without it, the model's output is
+raised by the gain its file carries (`curve_gain`), and the PID stays as it is.
 
 This diagram shows where the model comes from and where it enters the
 controller:
@@ -19,10 +19,10 @@ flowchart TB
     train --> file["models/lateral_nn/<br>CAR_vN.json"]
     choice["params/lateral_nn.json<br>web console"] --> file
     subgraph ctl["controlsd, every 10 ms"]
-        plan["MPC curvatures<br>+ desired history"] --> inputs["33 inputs<br>la, angle, roll, long accel"]
+        plan["MPC curvatures<br>+ desired history"] --> inputs["25 or 33 inputs<br>la, roll, long accel<br>angle in v3"]
         vm["inverse vehicle model<br>live SR, stiffness, zero"] --> inputs
         inputs --> nn["lateral NN<br>3 nets, 32×32 tanh"]
-        nn --> blend["blend with linear FF<br>1 s ramp<br>+ friction in curves"]
+        nn --> blend["blend with linear FF<br>1 s ramp<br>+ friction, gain in curves"]
         blend --> pid["feed-forward + PID<br>lateral-accel space"]
     end
     file --> nn
@@ -58,32 +58,38 @@ the car responds, it gives the torque command that produced it.
 
 - **Target:** the torque sent at time t, as a fraction of `steer_max`, with
   right positive (the control sign).
-- **Inputs:** 33 in all.
+- **Inputs:** 33 in `k7_hev_v3`, 25 in `k7_hev_v4`.
   - Speed at t.
   - Lateral acceleration, its jerk and road roll at the response time
     t + 0.3 s.
   - Lateral acceleration at −0.5…+1.5 s around the response time (13 points)
     and roll at −0.3…+1.5 s (7 points).
-  - Steering angle at the response time and at −0.3…+1.5 s around it
-    (7 points), and longitudinal acceleration.
+  - Longitudinal acceleration.
+  - `v3` only: steering angle at the response time and at −0.3…+1.5 s around
+    it (7 points).
+- **Training inputs:** `v3` learns from the trajectory that happened. `v4`
+  learns from the inputs the controller would have built at that tick from the
+  recorded plan and history (runtime inputs, below).
 - **Network:** three nets of 32×32 tanh, averaged, output clipped to ±1.
   Training mirrors every sample left to right, so the response is symmetric.
 - **File:** format `edgepilot-lateral-nn` version 1. It holds the input names,
-  the window definition, the normalisation, the weights and test vectors.
+  the window definition, the normalisation, the weights, test vectors and the
+  curve gain (`curve_gain`, 0 when absent).
   `LateralNnModel::load_text` refuses a file when:
   - the names it rebuilds from the window definition differ from the file's;
   - an input would read outside the 1 s history or the plan;
   - a value is not finite as a float;
   - the output clip is outside ±1;
+  - `curve_gain` is not a number from 0 to 1;
   - an activation is not `tanh` or `linear`;
   - or its own evaluation of the file's test vectors differs by more than
     2·10⁻⁴.
 
   The file also carries `input_tests`: a synthetic trajectory and the inputs
   the training code built from it. `gtest_lateral_nn` feeds the same
-  trajectory to `LateralNnInputs` and expects the same 33 inputs, so a
-  training change that keeps the names but changes what an input means fails
-  there.
+  trajectory to `LateralNnInputs` and expects the same inputs, for every model
+  in the library, so a training change that keeps the names but changes what an
+  input means fails there.
 
 ### Inputs at run time
 
@@ -114,6 +120,25 @@ trajectory in the same places (`LateralController::lateral_nn_feedforward`).
   the speed at t as well, but the longitudinal acceleration at the response
   time.
 
+These inputs differ from the trajectory that happened, most in curves. On the
+25 training drives, replayed open loop with the controller building its inputs
+from the recorded plans, at curve entries the plan's window is flatter than
+what the car did: 12 % larger in its near part and 5–7 % smaller in its far
+part. The jerk input correlates with the trajectory's jerk only at r = 0.17,
+and the angle inputs run 8 % high. A model trained on what happened therefore
+meets inputs at run time that it did not see in training.
+
+`k7_hev_v4` trains on the runtime inputs instead. `replay_controls
+--nn-inputs` writes, for each tick at which the model ran, the inputs the
+controller built (open loop on a recording: the plan comes from the recorded
+model output, the vehicle state from the recorded CAN). nnlc pairs them with the
+torque sent at that tick. Its clock check compares the ESP12 longitudinal
+acceleration in both files: the 25 K7 drives with runtime inputs are aligned to
+0 ms (the 26th has no usable rows and an empty file). `v4` has no
+steering-angle inputs: at run time they are the plan's curvature through the
+current vehicle model, so they do not pair with the lateral acceleration the
+way the measured angle did in training.
+
 ### In the controller
 
 `TorqueController::update` computes the linear feed-forward as before. Then it
@@ -139,6 +164,28 @@ Only a model trained without that share gets it: the file's
 `k7_hev_v3`. A model that learned the torque that was sent, friction included,
 as `k7_hev_v1` and `v2` did, runs alone: adding the term would count the
 friction twice.
+
+The model file's `curve_gain` raises the model's output in curves: ×(1 +
+`curve_gain`), ramped in over the same 0.2→0.6 m/s² of desired lateral
+acceleration as the friction and from 30 to 50 km/h. The models fit the torque
+that was sent, at curve entries too: over the entry samples of its training
+data, `v3`'s mean prediction is 1.01 of the sent torque. In the closed loop
+they still deliver less in curves than the linear feed-forward, which reads the
+plan at the lagd delay and gives 10–20 % more than the car needs while the PID
+trims the excess. A model that gives exactly what the plan asks follows it
+late, and training cannot ask for torque that was never sent. In the replay,
+training changes left the curve entry at 0.88–0.89 (`v3` 0.886):
+
+- sample weights on entries (×4, ×10) or on entries and exits;
+- a loss that counts too little torque at entries two to four times;
+- smoothed inputs (σ 50 and 100 ms) and lateral acceleration from the yaw rate;
+- a 64×64 network, 80 epochs, windows ending at +0.9 or +0.6 s;
+- the runtime inputs.
+
+The gain is calibrated per model in the [closed-loop
+replay](closed-loop-replay.md) after training; 0.3 brings `v3` and `v4` to the
+linear feed-forward's curve entry. Below 40 km/h the entries were already as
+good as linear, hence the speed ramp.
 
 On the 2026-10-16 drive, the first with the model, the car reached 92–93 % of
 the desired lateral acceleration at curve entries, against 100–109 % with
@@ -170,14 +217,19 @@ lane-centre offset by the model's lane lines):
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Linear | 0.48 s | 0.93 | 0.94 | 0.97 | 11.7 cm | 25.8 cm | 2.66 |
 | `v3` | 0.55 s | 0.89 | 0.92 | 0.95 | 12.8 cm | 27.9 cm | 2.28 |
+| **`v3` + curve gain 0.3** | 0.54 s | 0.93 | 0.95 | 0.97 | 12.7 cm | 28.4 cm | 2.31 |
+| `v4` without the gain | 0.55 s | 0.89 | 0.92 | 0.93 | 11.7 cm | 25.0 cm | 2.23 |
+| **`v4` + curve gain 0.3** | 0.54 s | 0.94 | 0.95 | 0.96 | 11.7 cm | 25.5 cm | 2.25 |
 
-All rows use the curve friction. The three drives of 10-16 and 10-18 are not in
-`v3`'s training. On them alone (21 minutes) `v3` gives 0.89/0.91/0.95 and
-27.8 cm in curves, the linear feed-forward 0.90/0.92/0.97 and 34.6 cm. `v3`
-steers 14 % more smoothly than the linear feed-forward but reaches less of the
-desired lateral acceleration in every curve phase. Earlier runs of the same
-replay rejected `k7_hev_v2` (entry 0.85) and reading the plan 0.11–0.4 s
-further ahead (worse in every phase). The road decides.
+All rows use the curve friction. The three drives of 10-16 and 10-18 are in
+neither model's training. On them alone (21 minutes) `v3` + gain gives
+0.93/0.94/0.97 and 29.0 cm in curves, `v4` + gain 0.93/0.95/0.96 and 31.1 cm,
+the linear feed-forward 0.90/0.92/0.97 and 34.6 cm. `v4`'s better lane
+position comes from the three drives it was trained on. The models steer
+13–15 % more smoothly than the linear feed-forward. Earlier runs of the same
+replay rejected `k7_hev_v2` (entry 0.85), reading the plan 0.11–0.4 s further
+ahead (worse in every phase) and an output gain of 1.2 everywhere (lane
+worse). The road decides.
 
 The weight ramps over 1 s toward 1 while all of these hold, and toward 0
 otherwise:
@@ -203,14 +255,14 @@ models and one choice, and the web console picks from the library.
 
 | Item | Value |
 | --- | --- |
-| Library | `models/lateral_nn/<car>_v<version>.json`; the repository ships `k7_hev_v3`. `v1` and `v2` were removed on 2026-10-17, also from nnlc. `upload_to_board.sh` sends the folder and leaves files that exist only on the board |
+| Library | `models/lateral_nn/<car>_v<version>.json`; the repository ships `k7_hev_v3` (curve gain 0.3 since 2026-10-18) and `k7_hev_v4` (runtime inputs, no steering angle, curve gain 0.3). `v1` and `v2` were removed on 2026-10-17, also from nnlc. `upload_to_board.sh` sends the folder and leaves files that exist only on the board |
 | Choice | `params/lateral_nn.json`, `{"model": "k7_hev_v3"}`; the default sits in `params.defaults/` |
 | Web console | Steering tab, learned torque model card: the files in `models/lateral_nn/`, the choice and the model controlsd uses |
 | Override | `EDGEPILOT_LATERAL_NN_MODEL`, a file path, replaces the choice |
 | Switch | `nn_feedforward` in `steering.json`, off by default |
 | Status | `/dev/shm/edgepilot_lateral_nn_status.json` (`EDGEPILOT_LATERAL_NN_STATUS`): `selected`, `loaded`, `path`, `error`, `inputs` |
-| Start-up log | `controlsd: lateral nn <name> (<model name>, 33 inputs) nn_feedforward=<0/1>`, or `lateral nn off: <reason>` |
-| Switch log | `controlsd: lateral nn switched to <name> (<path>, 33 inputs)`, or `lateral nn <name> refused: <reason>; keeping <name>` |
+| Start-up log | `controlsd: lateral nn <name> (<model name>, <n> inputs) nn_feedforward=<0/1>`, or `lateral nn off: <reason>` |
+| Switch log | `controlsd: lateral nn switched to <name> (<path>, <n> inputs)`, or `lateral nn <name> refused: <reason>; keeping <name>` |
 | Recording | recordd copies the chosen model into each route as `models/lateral_nn.json` when the route starts; the route's `params/lateral_nn.json` names it |
 | Replay | `replay_controls` and `replay_closed_loop` take `--lateral-nn <route>/models/lateral_nn.json`; with the switch on and no model, they warn and run the linear feed-forward |
 
@@ -282,6 +334,12 @@ little at exits. The model alone (v2 without the friction) scores 28.0 at
 entries, but it cannot react to the tracking error, which is what the
 2026-10-16 drive showed.
 
+`k7_hev_v4` (2026-10-18) learns from the runtime inputs, without the steering
+angle. By the same folds its RMSE is 0.0537, 7.5 % better than the linear
+model on the same inputs. The number is not comparable with `v3`'s: the plan
+does not determine the PID's share of the torque that was sent, and that share
+is in the target.
+
 Open-loop replays with `replay_controls --force-engaged` give the same
 recorded inputs to both feed-forwards, without the car responding:
 
@@ -345,14 +403,21 @@ Before these, the nets alone took 82 µs a tick.
 - **This car only:** the model encodes the K7's EPS and tyres and the
   controller of the drives. A change of steering hardware, tyres or the
   vehicle-model parameters calls for retraining.
+- **Runtime inputs:** `v4`'s target is the torque the drives' controller sent,
+  PID included, for the plan it followed. The model learns that controller's
+  closed-loop torque, so a replay of its own training drives flatters it. On
+  the held-out drives it is not better than `v3` with the gain.
+- **Curve gain:** calibrated in the replay, whose plant is linear in torque,
+  and not yet driven.
 
 ## Next
 
-- **Road comparison:** drive with the switch on and off on the same roads,
-  curves included. The recording's `hud_flags` bit 12 tells the modes apart.
-  Compare curvature tracking by curve phase (entry, hold, exit), torque
-  smoothness and driver overrides. The 2026-10-16 drive had no curves with the
-  switch off.
+- **Road comparison:** drive the same roads with the linear feed-forward,
+  `v3` and `v4` (both with the curve gain), curves included. The recording's
+  `hud_flags` bit 12 tells the NN from the linear feed-forward, and the route's
+  `models/lateral_nn.json` the model. Compare curvature tracking by curve phase
+  (entry, hold, exit), lane position at curve exits, torque smoothness and
+  driver overrides.
 - **More data:** engaged drives on ramps and winding roads, then retrain and
   add the model to `models/lateral_nn/` as the next version.
 

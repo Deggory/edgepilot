@@ -898,10 +898,10 @@ class LateralNnModelsTest(unittest.TestCase):
             self.assertEqual(read_choice(self.selection), (name, "") if ok else ("", "bad_name"), name)
 
     def test_lists_the_model_files_by_name(self):
-        self.assertEqual(self.models.models(), ["k7_hev_v3"])
+        self.assertEqual(self.models.models(), ["k7_hev_v3", "k7_hev_v4"])
         for name in ("k7_hev_v10.json", "k7_hev_v9.json", ".hidden.json", "notes.txt"):
             (self.models_dir / name).write_text("{}")
-        self.assertEqual(self.models.models(), ["k7_hev_v3", "k7_hev_v9", "k7_hev_v10"],
+        self.assertEqual(self.models.models(), ["k7_hev_v3", "k7_hev_v4", "k7_hev_v9", "k7_hev_v10"],
                          "숫자는 수로 정렬, 규칙 밖 이름은 뺀다")
 
     def test_select_writes_the_choice_and_refuses_unknown(self):

@@ -154,6 +154,10 @@ public:
     // 피드포워드를 이 모델이 낸다. nullptr이면 선형 피드포워드만 쓴다.
     void set_lateral_nn(std::shared_ptr<const LateralNnModel> model);
     bool lateral_nn_loaded() const { return lateral_nn_ != nullptr; }
+    // 지난 update에서 모델을 계산했으면 참이고, 그 입력(모델 파일의 features 순서). 계획 조건 학습 데이터를 만드는
+    // replay_controls --nn-inputs가 쓴다.
+    bool lateral_nn_evaluated() const { return nn_evaluated_; }
+    std::vector<float> lateral_nn_inputs() const { return nn_inputs_.last_inputs(); }
 
     // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
     LateralControlResult update(const LateralPath &path, const LateralTarget &target,
@@ -230,6 +234,7 @@ private:
     std::shared_ptr<const LateralNnModel> lateral_nn_;
     LateralNnInputs nn_inputs_;
     float nn_weight_ = 0.0f;  // 선형 ↔ 모델 피드포워드를 섞는 무게(0..1, 1초 램프)
+    bool nn_evaluated_ = false;
     LiveLateralParams live_{};
     bool live_vehicle_valid_ = true;
     bool live_calibrated_ = false;

@@ -56,7 +56,7 @@ branch keeps the earlier Kendryte K230 port.
   and a web parameter editor pushes changes the controller picks up within
   100 ms.
 - **Tested off the board.** The control and perception libraries build on
-  macOS or Linux, with a googletest suite (318 tests) that needs neither the
+  macOS or Linux, with a googletest suite (320 tests) that needs neither the
   board nor its SDK.
 
 ## How it works
