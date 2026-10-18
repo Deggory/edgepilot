@@ -11,17 +11,6 @@
 // 기본값은 params/steering.json(K7 YG HEV 실차 검증값)과 일치시킨다. 로드 실패는
 // controlsd가 throw하므로 이 값은 파일 폴백이 아니라, JSON에 키가 빠졌을 때와
 // 호스트 체크·리플레이 도구가 실제로 쓰는 값이다.
-// 경로 모드(steering.json path_mode, params/README.md "Path mode").
-enum class PathMode : int {
-    // 차선 확률이 높으면 supercombo 차선의 중심 경로를 섞고, 낮으면 모델 경로(Laneless 법칙)를 쓴다.
-    Lane = 0,
-    // openpilot 메인처럼 모델 경로만 쓴다(get_curvature_from_plan).
-    Laneless = 1,
-    // Lane 모드와 같되 차선을 차선선 플러그인(LD, LaneState)에서 얻는다. LD가 차선을 못 보면 모델 경로다
-    // (docs/lanebow.md).
-    Lanebow = 2,
-};
-
 struct SteeringParams {
     bool enabled = true;
 
@@ -102,13 +91,13 @@ struct SteeringParams {
     // laneless 모드에는 쓰지 않는다.
     float lane_path_weight = 3.0f;
     float min_steer_speed_mps = 1.0f;
-    // 경로 모드(PathMode 값). 고르는 값이라 0~2 밖이나 정수가 아니면 파일을 거부한다.
-    int path_mode = 0;
+    // 경로 모드. false면 Lane 모드로 차선 확률이 높으면 차선 중심 경로를 섞고 낮으면 모델 경로만 쓴다. true면
+    // Laneless 모드로 openpilot 메인처럼 모델 경로만 쓴다(get_curvature_from_plan).
+    bool laneless_mode = false;
     // 이 속도 미만에서는 깜빡이를 켜도 차선 변경을 시작하지 않는다(상류 LANE_CHANGE_SPEED_MIN은 20 mph).
     float lane_change_min_speed_kph = 30.0f;
 
     float center_to_front_m() const;
-    PathMode path() const { return static_cast<PathMode>(path_mode); }
 };
 
 // 제어 타이밍. 전부 파일에서 읽지 않는 고정값이다.

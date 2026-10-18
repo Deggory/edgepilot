@@ -42,9 +42,6 @@ void on_test_sound_signal(int) { ++g_test_sound_requests; }
 constexpr int kOutW = MaixDisplay::kWidth;
 constexpr int kOutH = MaixDisplay::kHeight;
 constexpr uint64_t kStateFreshNs = 2000000000ULL;
-// 마지막 유효한 차선선 플러그인 결과를 그리는 시한(프레임 몇 개). 넘으면 LD 선을 지우고, Lanebow 대체 중이면 NO LD로
-// 보인다.
-constexpr uint64_t kLaneFreshNs = 300000000ULL;
 // 오버레이(HUD 그림, CPU)는 상태가 바뀔 때 모델과 같은 20 Hz로 다시 그린다.
 // 상한을 50 ms가 아닌 45 ms로 두어 모델 출력 도착이 5 ms 루프만큼 흔들려도 프레임을
 // 건너뛰지 않는다. 영상은 하드웨어 레이어라 카메라 프레임마다 올린다.
@@ -87,14 +84,11 @@ public:
         if (!learner_state_.open(kLearnerStateTopic)) throw std::runtime_error("open learnerState ipc failed");
         if (!localization_state_.open(kLocalizationStateTopic))
             throw std::runtime_error("open localization ipc failed");
-        // 차선선 플러그인이 없으면 발행이 없다(만들며 열어 두면 플러그인이 늦게 떠도 이어 받는다)
-        if (!lane_state_.open(kLaneStateTopic)) throw std::runtime_error("open laneState ipc failed");
         if (!touch_.open()) std::fprintf(stderr, "overlayd: no touchscreen; tap toggles disabled\n");
 
         uint64_t window_start = monotonic_now_ns();
         while (!g_stop) {
             const uint64_t loop_start = monotonic_now_ns();
-            pending_redraw_ = update_lane() || pending_redraw_;
             pending_redraw_ = update_model() || pending_redraw_;
             pending_redraw_ = update_aux_state() || pending_redraw_;
             pending_redraw_ = turn_signal_clock_.update(loop_start, &hud_) || pending_redraw_;
@@ -179,8 +173,7 @@ private:
                                static_cast<uint32_t>(buffer.stride),
                                HudOrientation{true, buffer.flip_x, buffer.flip_y}};
         renderer_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
-                       have_model_state_ ? latest_projection_ : default_projection_, hud_,
-                       hud_.lanebow_mode && hud_.lane_fresh ? &lane_ : nullptr);
+                       have_model_state_ ? latest_projection_ : default_projection_, hud_);
         if (!display_.end_overlay(renderer_.last_damage().data(), renderer_.last_tile_shift())) ++errors_;
         if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
         ++overlay_frames_;
@@ -207,26 +200,10 @@ private:
         have_model_state_ = model.valid != 0 && fresh(model.model_timestamp_ns, monotonic_now_ns());
         latest_output_ = parsed_from_model_state(model);
         latest_projection_ = projection_from_model_state(model);
-        // Lanebow에서는 LD 차로 가운데(같은 거리 x = 0)
-        const float lane_center = !have_model_state_                     ? std::numeric_limits<float>::quiet_NaN()
-                                  : hud_.lanebow_mode && hud_.lane_fresh ? hud_lane_state_center_offset_m(lane_)
-                                                                         : lane_center_offset_m(latest_output_);
+        const float lane_center =
+            have_model_state_ ? lane_center_offset_m(latest_output_) : std::numeric_limits<float>::quiet_NaN();
         hud_.lane_center_offset_m = smooth_lane_center_offset(hud_.lane_center_offset_m, lane_center);
         return true;
-    }
-
-    // 새 차선선 플러그인 결과. 해석하지 못한 프레임(valid = 0)은 건너뛰고 마지막 유효한 것을 kLaneFreshNs 동안 그린다
-    // (한 프레임 실패로 LD 선과 무지개가 깜빡이지 않게). Lanebow 모드에서는 결과가 올 때 다시 그려 LD 선이 같은
-    // 프레임의 경로와 함께 나온다.
-    bool update_lane() {
-        const bool updated = lane_state_.poll() && lane_state_.latest().valid != 0;
-        if (updated) lane_ = lane_state_.latest();
-        // 시각은 읽은 뒤에 잰다: 루프 시작 시각은 그 뒤에 발행된 결과보다 앞서 결과를 미래의 것(낡음)으로 본다
-        const bool fresh =
-            lane_.valid != 0 && timestamp_fresh_ns(lane_.lane_timestamp_ns, monotonic_now_ns(), kLaneFreshNs);
-        const bool changed = fresh != hud_.lane_fresh;
-        hud_.lane_fresh = fresh;
-        return hud_.lanebow_mode && (updated || changed);
     }
 
     // 새 panda/control/manager/record/학습기/locationd 스냅샷이 있으면 true. 모델이 멈춰도
@@ -342,8 +319,6 @@ private:
     Subscription<RecordState> record_state_;
     Subscription<LearnerState> learner_state_;
     Subscription<LocalizationState> localization_state_;
-    Subscription<LaneState> lane_state_;
-    LaneState lane_;  // 마지막 유효한 차선선 플러그인 결과
     LatestChannel frame_sub_;
     MaixDisplay display_;
     MaixTouch touch_;

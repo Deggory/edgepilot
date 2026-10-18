@@ -59,7 +59,6 @@ flowchart TB
 | --- | --- |
 | [Runtime](runtime.md) | the processes, start-up and supervision, CPU and hardware engine load |
 | [Model pipeline](model-pipeline.md) | from the frame ring through the warp and the NPU to `ModelState` |
-| [Lane-line plugin](lane-line-plugin.md) | the optional plugin slot in modeld: loading, the per-frame stage, `LaneState` |
 | [HUD](hud.md) | what `overlayd` draws on the LCD and how |
 | [Recording](recording.md) | the route layout, the event log and its versions |
 | [Source layout](source-layout.md) | where the code lives and how the libraries depend on each other |
@@ -83,7 +82,6 @@ flowchart TB
 | [Flow calibration](flow-calibration.md) | the camera mount measured from optical flow |
 | [Lead flow](lead-flow.md) | the lead's closing speed from optical flow, the lead track, the vision cruise |
 | [Lane-line filter](lane-line-filter.md) | steadying the ego lane lines without lag |
-| [Lanebow](lanebow.md) | the path mode that keeps to the lane-line plugin's lines |
 | [Lateral NN](lateral-nn.md) | the learned torque feed-forward trained on the K7's own drives |
 
 ## Code and tools

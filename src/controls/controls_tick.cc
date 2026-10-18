@@ -138,7 +138,6 @@ ControlState make_control_state(const LateralControllerConfig &config, const Lat
                       (result.large_angle_hold ? kHudFlagSteerPaused : 0U) |
                       (result.large_angle_hold_by_driver ? kHudFlagSteerPausedByDriver : 0U) |
                       (result.vehicle_fresh && brake_lights_on(vehicle, now_s) ? kHudFlagBrakeLights : 0U) |
-                      (config.steering_params.path() == PathMode::Lanebow ? kHudFlagLanebow : 0U) |
                       (result.nn_feedforward_used ? kHudFlagNnFeedforward : 0U);
     state.seeds_ready = result.seeds_ready ? 1U : 0U;
     state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
@@ -181,7 +180,6 @@ ControlState make_control_state(const LateralControllerConfig &config, const Lat
     state.engage_reject_event_id = events.reject_id;
     std::memcpy(state.engage_reject_block, events.reject_block, sizeof(state.engage_reject_block));
     state.ego_speed_kph = ego_speed_kph;
-    state.lane_state_frame = static_cast<uint32_t>(target.lane_frame_id & 0xffffffffULL);  // Lanebow에서만 0이 아니다
     return state;
 }
 
@@ -380,9 +378,8 @@ void ControlsTick::on_model(const ModelState &model) {
     model_updated_ = true;
     // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다. 결과는 이번 틱 step이 쓴다.
     lateral_target_ =
-        planner_.update(model_, lane_states_.pick(model_.capture_timestamp_ns), vehicle_,
-                        std::max(0.0f, last_result_.control_speed_kph / 3.6f), last_result_.actual_curvature,
-                        last_result_.lat_active, last_result_.steering_pressed);
+        planner_.update(model_, vehicle_, std::max(0.0f, last_result_.control_speed_kph / 3.6f),
+                        last_result_.actual_curvature, last_result_.lat_active, last_result_.steering_pressed);
 }
 
 void ControlsTick::on_localization(const LocalizationRead &localization, uint64_t can_now_ns, double now_s) {

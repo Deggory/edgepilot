@@ -6,10 +6,8 @@
 // --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고(--flip-x/--flip-y는
 // 보드의 disp_flip/disp_mirror 축 뒤집기), 파일도 그 버퍼 그대로 쓴다. 리팩토링 전후 그림이
 // 바이트 단위로 같은지 비교할 때 쓴다.
-// lane.bin은 같은 프레임의 LaneState 원본 바이트(차선선 플러그인, hud_tools.py inputs가 있으면 만든다)로, Lanebow
-// 장면(lanebow, lanebow_fallback, lanebow_no_ld)에 쓴다. 없으면 합성 장면의 선을 쓴다.
-// 사용: hud_snapshot [--model model.bin] [--control control.bin] [--lane lane.bin] [--iterations N]
-//                    [--out PREFIX] [--portrait [--flip-x] [--flip-y]]
+// 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
+//                    [--portrait [--flip-x] [--flip-y]]
 #include "common/ipc_messages.h"
 #include "hud/hud_renderer.h"
 #include "hud/hud_state.h"
@@ -87,65 +85,10 @@ ParsedModelOutput synthetic_output() {
     return output;
 }
 
-// 합성 장면의 LD 결과: 노란 겹 실선(왼쪽)과 흰 점선(오른쪽), 오른쪽 가드레일. 1280x720 프레임에서 아래(570)부터
-// 위(400)까지 소실점(640, 380)으로 모인다. 도로면 블록도 채운다.
-LaneState synthetic_lane() {
-    LaneState lane;
-    lane.valid = 1;
-    lane.image_width = 1280;
-    lane.image_height = 720;
-    lane.vanishing_x = 640.0f;
-    lane.vanishing_y = 380.0f;
-    lane.vanishing_confidence = 0.9f;
-    lane.line_count = 2;
-    lane.boundary_count = 1;
-    const auto fill = [](LanePointState *points, uint32_t *count, float spread, float inner) {
-        for (int k = 0; k < 40; ++k) {
-            const float v = 570.0f - 4.25f * static_cast<float>(k);
-            const float u = 640.0f + spread * (v - 380.0f);
-            points[k] = {static_cast<int16_t>(u * 4), static_cast<int16_t>(v * 4),
-                         static_cast<int16_t>(0.06f * (v - 380.0f) * 4), static_cast<int16_t>((u + inner) * 4)};
-        }
-        *count = 40;
-    };
-    lane.lines[0].slot = 0;         // 자차 왼쪽
-    lane.lines[0].double_line = 1;  // 겹 실선
-    lane.lines[0].color = 1;        // 노랑
-    lane.lines[0].confidence = 0.92f;
-    fill(lane.lines[0].points, &lane.lines[0].point_count, -1.6f, 4.0f);
-    lane.lines[1].slot = 1;   // 자차 오른쪽
-    lane.lines[1].shape = 1;  // 점선
-    lane.lines[1].color = 0;  // 흰색
-    lane.lines[1].confidence = 0.85f;
-    fill(lane.lines[1].points, &lane.lines[1].point_count, 1.8f, -4.0f);
-    lane.boundaries[0].slot = 1;  // 가까운 오른쪽
-    lane.boundaries[0].type = 2;  // 가드레일
-    lane.boundaries[0].confidence = 0.7f;
-    fill(lane.boundaries[0].points, &lane.boundaries[0].point_count, 3.2f, 0.0f);
-    // 도로면 블록(무지개 경로가 쓴다): 합성 장면의 휘는 길(synthetic_output) 위에서 LD 차로 가운데가 0.15 m 오른쪽,
-    // 36 m까지
-    lane.road_count = 2;
-    for (int s = 0; s < 2; ++s) {
-        LaneRoadLine &road = lane.road[s];
-        road.kind = kLaneRoadKindLine;
-        road.index = static_cast<int8_t>(s);
-        road.slot = s == 0 ? kLaneSlotEgoLeft : kLaneSlotEgoRight;
-        road.confidence = lane.lines[s].confidence;
-        road.first = 0;
-        for (unsigned i = 0; i < kLaneRoadPoints && model_x_idx(static_cast<int>(i)) <= 36.0f; ++i) {
-            const float x = model_x_idx(static_cast<int>(i));
-            road.y[i] = (s == 0 ? -1.65f : 1.95f) + 0.0006f * x * x;
-            road.last = static_cast<int8_t>(i);
-        }
-    }
-    return lane;
-}
-
 struct Scenario {
     const char *name;
     const ParsedModelOutput *scene;  // nullptr = 모델 출력 없음
     HudState hud;
-    const LaneState *lane = nullptr;
 };
 
 void print_stats(const char *label, std::vector<double> values) {
@@ -161,7 +104,6 @@ void print_stats(const char *label, std::vector<double> values) {
 int main(int argc, char **argv) {
     std::string model_path;
     std::string control_path;
-    std::string lane_path;
     std::string out_prefix = "hud_snapshot";
     int iterations = 50;
     HudOrientation orientation;
@@ -172,8 +114,6 @@ int main(int argc, char **argv) {
             model_path = next();
         else if (arg == "--control")
             control_path = next();
-        else if (arg == "--lane")
-            lane_path = next();
         else if (arg == "--iterations")
             iterations = std::max(1, std::atoi(next()));
         else if (arg == "--out")
@@ -186,7 +126,7 @@ int main(int argc, char **argv) {
             orientation.flip_y = true;
         else {
             std::fprintf(stderr,
-                         "usage: %s [--model model.bin] [--control control.bin] [--lane lane.bin] [--iterations N] "
+                         "usage: %s [--model model.bin] [--control control.bin] [--iterations N] "
                          "[--out PREFIX] [--portrait [--flip-x] [--flip-y]]\n",
                          argv[0]);
             return 2;
@@ -203,11 +143,6 @@ int main(int argc, char **argv) {
     }
     if (!control_path.empty() && !have_control) {
         std::fprintf(stderr, "cannot read %s\n", control_path.c_str());
-        return 1;
-    }
-    LaneState lane_state = synthetic_lane();
-    if (!lane_path.empty() && !read_file(lane_path, &lane_state, sizeof(lane_state))) {
-        std::fprintf(stderr, "cannot read %s\n", lane_path.c_str());
         return 1;
     }
 
@@ -417,17 +352,6 @@ int main(int argc, char **argv) {
     ParsedModelOutput no_lead = output;
     no_lead.leads = {};
 
-    HudState lanebow = drive;  // Lanebow: LD 선으로 조향 중(무지개 경로, LD 선)
-    lanebow.laneless_mode = false;
-    lanebow.lanebow_mode = lanebow.lane_fresh = true;
-    const float ld_center = hud_lane_state_center_offset_m(lane_state);
-    if (std::isfinite(ld_center)) lanebow.lane_center_offset_m = ld_center;
-    HudState lanebow_fallback = lanebow;  // LD가 선을 못 잡아 모델 경로(Laneless 법칙)
-    lanebow_fallback.laneless_mode = true;
-    HudState lanebow_no_ld = lanebow_fallback;  // 플러그인이 없거나 결과가 낡았다: 차로 위치는 모델 차선으로
-    lanebow_no_ld.lane_fresh = false;
-    lanebow_no_ld.lane_center_offset_m = drive.lane_center_offset_m;
-
     const std::vector<Scenario> scenarios = {
         {"idle", nullptr, idle},
         {"standby", &output, standby},
@@ -456,9 +380,6 @@ int main(int argc, char **argv) {
         {"cal_invalid", &output, cal_invalid},
         {"engaged_blocked", &output, engaged_blocked},
         {"debug_stale", &output, debug_stale},
-        {"lanebow", &output, lanebow, &lane_state},
-        {"lanebow_fallback", &output, lanebow_fallback, &lane_state},
-        {"lanebow_no_ld", &output, lanebow_no_ld, nullptr},
     };
 
     constexpr uint32_t width = 640;
@@ -468,9 +389,9 @@ int main(int argc, char **argv) {
     const HudTarget target{storage.data(), width, height, stride, orientation};
 
     HudRenderer renderer;
-    std::printf("inputs: model=%s control=%s lane=%s target=%ux%u%s\n", have_model ? model_path.c_str() : "synthetic",
-                have_control ? control_path.c_str() : "synthetic", lane_path.empty() ? "synthetic" : lane_path.c_str(),
-                width, height, orientation.transpose ? " portrait" : "");
+    std::printf("inputs: model=%s control=%s target=%ux%u%s\n", have_model ? model_path.c_str() : "synthetic",
+                have_control ? control_path.c_str() : "synthetic", width, height,
+                orientation.transpose ? " portrait" : "");
 
     bool written = true;
     for (const Scenario &scenario : scenarios) {
@@ -478,7 +399,7 @@ int main(int argc, char **argv) {
         std::vector<double> draw_ms;
         for (int i = 0; i < iterations; ++i) {
             const uint64_t t0 = now_ns();
-            renderer.draw(target, scene, projection, scenario.hud, scenario.lane);
+            renderer.draw(target, scene, projection, scenario.hud);
             draw_ms.push_back((now_ns() - t0) / 1e6);
         }
         std::printf("scenario %s (%d iters)\n", scenario.name, iterations);

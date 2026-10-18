@@ -35,9 +35,6 @@ constexpr uint32_t kBlue = hud_argb(255, 64, 156, 255);
 constexpr uint32_t kGray = hud_argb(255, 150, 156, 165);
 constexpr uint32_t kAmber = hud_argb(255, 255, 176, 32);
 constexpr uint32_t kRed = hud_argb(255, 255, 69, 58);
-constexpr uint32_t kViolet = hud_argb(255, 191, 90, 242);  // Lanebow로 조향 중(테두리·모드 점)
-// Lanebow 경로 띠의 무지개(0xRRGGBB): 가까운 빨강 → 먼 보라
-constexpr uint32_t kRainbow[] = {0xff453a, 0xff9f0a, 0xffd60a, 0x30d158, 0x0a84ff, 0x5e5ce6, 0xbf5af2};
 
 constexpr int kMargin = 14;
 constexpr int kGap = 8;
@@ -64,7 +61,6 @@ constexpr int kStatusTouchW = 190;  // 상태 알약을 누른 것으로 보는 
 constexpr int kStatusTouchH = 76;
 constexpr int kLeftColumnTouchW = 250;  // 왼쪽 열을 누른 것으로 보는 폭(진단 카드 대부분)
 constexpr int kWeakWifiDbm = -75;
-constexpr int kLaneRulerIndex = 6;  // 차선 안 위치 눈금을 놓는 궤적 점(6.75 m, 보닛 바로 위). LD 도로면 격자도 같다
 
 // ---- 글자와 색 ----
 
@@ -108,14 +104,11 @@ inline int centered_line_top(const HudFont &font, int box_y, int box_h) {
 // 지금 조향하는가: 활성이고 85도 위에서 쉬는 중이 아니다.
 inline bool steering_now(const HudState &hud) { return hud.controller_active && !hud.steer_paused; }
 
-// Lanebow 모드에서 LD 선으로 경로를 낸다(모델 경로로 넘어가지 않았다).
-inline bool lanebow_steering(const HudState &hud) { return hud.lanebow_mode && !hud.laneless_mode; }
-
 // 화면 테두리와 모드 점의 색. 결합 전이면 0(테두리 없음). 결합했지만 조향을 쉬면 회색.
 inline uint32_t state_color(const HudState &hud) {
     if (hud.steering_fault || hud.panda_faults != 0 || hud.soft_disabling) return kRed;
     if (!hud.services_healthy) return kAmber;
-    if (steering_now(hud)) return hud.laneless_mode ? kBlue : hud.lanebow_mode ? kViolet : kGreen;
+    if (steering_now(hud)) return hud.laneless_mode ? kBlue : kGreen;
     return hud.controller_engaged ? kGray : 0;
 }
 
@@ -136,22 +129,10 @@ std::string lead_text(const LeadInfo &lead);
 
 // ---- 도로 장면(hud_scene.cc) ----
 
-// lane: Lanebow 모드에서 그릴 차선선 플러그인 결과(없으면 nullptr). 있으면 supercombo 차선·경계 대신 그린다.
 void draw_scene(HudCanvas &canvas, const ParsedModelOutput &output, const ProjectionState &projection,
-                const HudState &hud, const LeadInfo &lead, const LaneState *lane);
-// 차선 안 위치 눈금: l, r은 kLaneRulerIndex 거리의 자차 왼선·오른선 점
-void draw_lane_position(HudCanvas &canvas, const ModelPoint &l, const ModelPoint &r, const ProjectionState &projection,
+                const HudState &hud, const LeadInfo &lead);
+void draw_lane_position(HudCanvas &canvas, const ParsedModelOutput &output, const ProjectionState &projection,
                         float lane_center_offset_m, uint32_t car_color);
-
-// ---- Lanebow(hud_lanes.cc) ----
-
-// Lanebow 무지개 경로의 점: plan과 같은 점(앞 거리·높이)에서 가로 위치만 LD 차로 가운데(도로면 블록의 자차 두 선
-// 가운데)로 옮긴다. LD가 본 거리 밖은 가까운 끝·먼 끝의 차이를 그대로 쓴다. 그래서 경로 띠는 모드가 바뀌어도 크기가
-// 같고(화면 아래까지, plan 끝까지) 가로 위치와 색만 바뀐다. 자차 두 선이 없으면 false.
-bool lanebow_center_path(const LaneState &lane, const std::array<ModelPoint, kTrajectorySize> &plan,
-                         std::array<ModelPoint, kTrajectorySize> *out);
-// LD 선(실제 모양·색, 겹선은 한 줄)과 도로 경계.
-void draw_lanebow_lines(HudCanvas &canvas, const LaneState &lane);
 
 // ---- 카드(hud_cards.cc) ----
 

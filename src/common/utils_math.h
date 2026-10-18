@@ -37,29 +37,6 @@ inline float interp(float x, std::initializer_list<float> xp, std::initializer_l
     return fs[n - 1];
 }
 
-// 같은 보간을 배열로: 증가하는 xp[0..count)의 fp. 범위 밖은 끝값, 같은 x가 이어지면 뒤 값.
-template <typename T>
-T interp(T x, const T *xp, const T *fp, size_t count) {
-    if (count == 0) return T(0);
-    if (x <= xp[0]) return fp[0];
-    for (size_t i = 1; i < count; ++i) {
-        if (x <= xp[i]) {
-            const T span = xp[i] - xp[i - 1];
-            if (span <= T(0)) return fp[i];
-            const T p = (x - xp[i - 1]) / span;
-            return fp[i - 1] + p * (fp[i] - fp[i - 1]);
-        }
-    }
-    return fp[count - 1];
-}
-
-// interp의 xp로 쓰도록 뒤로 가는 점을 앞 점에 맞춰 평평하게 한다(양자화된 plan은 정차 부근에서 먼 점이 뒤로 뛴다).
-template <typename T>
-void make_monotonic(T *xp, size_t count) {
-    for (size_t i = 1; i < count; ++i)
-        if (xp[i] < xp[i - 1]) xp[i] = xp[i - 1];
-}
-
 // row-major 3x3 곱. 결합 순서는 k 내부 누적이다.
 inline void matmul3(const float *a, const float *b, float *out) {
     for (int r = 0; r < 3; ++r) {

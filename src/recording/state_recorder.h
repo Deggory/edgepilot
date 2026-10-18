@@ -1,6 +1,6 @@
 #pragma once
 
-// 녹화 중에 상태 스냅샷(모델, 제어, 판다, 학습기, IMU, locationd, 차선선 플러그인)을 이벤트 로그로 옮긴다. 생산자가
+// 녹화 중에 상태 스냅샷(모델, 제어, 판다, 학습기, IMU, locationd)을 이벤트 로그로 옮긴다. 생산자가
 // 늦게 뜨거나 없어도 되므로 채널은 생긴 뒤에 붙고, 새 스냅샷만 한 번씩 쓴다. IMU 묶음은 채운
 // 샘플까지만 남긴다(100 ms마다 약 10개, 초당 약 4 KB). recordd가 녹화를 켠 동안 루프마다 부른다.
 
@@ -18,13 +18,11 @@ public:
     void record(RecordingWriter &writer);
 
 private:
-    const std::string model_topic_, control_topic_, panda_topic_, learner_topic_, imu_topic_, localization_topic_,
-        lane_topic_;
+    const std::string model_topic_, control_topic_, panda_topic_, learner_topic_, imu_topic_, localization_topic_;
     Subscription<ModelState> model_;
     Subscription<ControlState> control_;
     Subscription<PandaState> panda_;
     Subscription<LearnerState> learner_;
     Subscription<ImuBatch> imu_;
     Subscription<LocalizationState> localization_;
-    Subscription<LaneState> lane_;
 };

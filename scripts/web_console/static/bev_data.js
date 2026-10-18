@@ -1,10 +1,9 @@
 // 보드의 모델과 controlsd가 발행하는 것을 BEV(bev.js)가 그리는 형태로 옮긴다. 보드는 복사만 한다:
-// /api/bev는 BEV가 읽는 필드가 ModelState, ControlState, LaneState(차선선 플러그인) 앞부분의 어디에 있는지 알려
-// 주고(src/common/ipc_messages.h; 맞는지는 check_web_console.py가 지킨다), /api/bev/stream은 세 페이로드를 발행된
-// 그대로, 새 모델 프레임마다 한 프레임씩 보낸다. 프레임은 20바이트 머리와 그 뒤의 페이로드다. 머리는 매직
-// "BEV2"(u32), ModelState·ControlState·LaneState 앞부분 바이트 수(각 u16, 그리고 빈 2바이트), 보드의
-// CLOCK_BOOTTIME ns(u64)다. 페이로드는 보드에 그것이 없거나, 모델이면 새것이 없을 때 0바이트다: 모델이 멈춰도
-// 프레임은 그대로 매초 온다. LaneState는 그때 나와 있는 가장 새 것이다(보통 같은 프레임이나 한 프레임 전).
+// /api/bev는 BEV가 읽는 필드가 ModelState와 ControlState의 어디에 있는지 알려 주고
+// (src/common/ipc_messages.h; 둘이 맞는지는 check_web_console.py가 지킨다), /api/bev/stream은 두 페이로드를
+// 발행된 그대로, 새 모델 프레임마다 한 프레임씩 보낸다. 프레임은 16바이트 머리와 그 뒤의 페이로드다. 머리는
+// 매직 "BEV1"(u32), ModelState와 ControlState 바이트 수(각 u16), 보드의 CLOCK_BOOTTIME ns(u64)다.
+// 페이로드는 보드에 그것이 없거나, 모델이면 새것이 없을 때 0바이트다: 모델이 멈춰도 프레임은 그대로 매초 온다.
 //
 // scene()은 bev.js가 그리는 것으로, 차량 좌표계다: 미터, x는 앞 범퍼에서 앞으로, y는 왼쪽. 모델의 점은
 // 카메라 기준이고 y가 오른쪽이다. 카메라는 controlsd와 HUD가 잡는 대로 범퍼에서 RADAR_TO_CAMERA 뒤에 있다.
@@ -16,15 +15,11 @@
 import {t} from "./i18n.js";
 import {LaneLineFilter} from "./lane_filter.js";
 
-const MAGIC = 0x32564542;
-const HEADER = 20;
+const MAGIC = 0x31564542;
+const HEADER = 16;
 const TRAJECTORY = 33;
 // openpilot T_IDXS: 차가 각 계획 점에 있게 되는 시각, s
 const T_IDXS = Array.from({length: TRAJECTORY}, (_, i) => 10 * (i / (TRAJECTORY - 1)) ** 2);
-// openpilot X_IDXS: 차선선 점의 앞 거리, m (LaneState 도로면 선도 같은 격자)
-const X_IDXS = Array.from({length: TRAJECTORY}, (_, i) => 192 * (i / (TRAJECTORY - 1)) ** 2);
-const LANE_MATCH_S = 0.15;              // 같이 그릴 LD 결과와 모델 프레임의 촬영 시각 차 한도
-const LD_SURE = 0.4;                    // hud_state.cc hud_lane_ego_y: LD 차로 폭을 재려면 두 자차 선이 이만큼 확실해야 한다
 const RADAR_TO_CAMERA = 1.52;           // model_output.h kRadarToCameraDistanceM (check_web_console.py)
 const LEAD_PROBABILITY = 0.5;           // model_output.h kLeadProbabilityThreshold (check_web_console.py)
 const LANE_SURE = 0.5;                  // 차로 폭을 재려면 두 자차 차선선 모두 이만큼 확실해야 한다
@@ -50,9 +45,7 @@ const NEEDS = {
   control: ["size", "timestamp_ns", "enabled", "engaged", "active", "left_blinker", "right_blinker", "gear",
             "desired_curvature", "actual_curvature",
             "normalized_output", "departure_alert_type", "green_light_alert_armed", "hud_flags", "ego_speed_kph"],
-  lane: ["size", "capture_timestamp_ns", "valid", "road_count", "road"],
-  lane_road: ["size", "points", "kind", "slot", "type", "double_line", "color", "confidence", "y"],
-  hud_flags: ["Laneless", "LaneChanging", "SteerPaused", "BrakeLights", "Lanebow"],
+  hud_flags: ["Laneless", "SteerPaused", "BrakeLights"],
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -128,35 +121,6 @@ function readModel(at, bytes) {
   };
 }
 
-// LaneState 앞부분(차선선 플러그인 결과의 헤더와 도로면 블록) 하나: 선과 도로 경계를 차량 좌표의 점으로.
-// 점은 측정이 덮은 거리까지(가까운 쪽은 늘린 값). kind 1은 도로 경계, type은 선이면 모양(0 실선, 1 점선,
-// 2 보츠)이고 경계면 종류다(lane_plugin_abi.h). left·right는 자차 선(slot마다 신뢰도가 높은 것, 플래너와 같다),
-// width는 그 사이의 LANE_WIDTH_INDEX 폭이다(둘 다 확실하지 않으면 NaN).
-function readLane(at, road, bytes) {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const count = Math.min(view.getUint32(at.road_count, true), Math.floor((bytes.byteLength - at.road) / road.size));
-  const lines = [];
-  for (let k = 0; k < count; k++) {
-    const base = at.road + road.size * k, i8 = (offset) => view.getInt8(base + offset);
-    const points = [];
-    for (let i = 0; i < road.points; i++) {
-      const y = view.getFloat32(base + road.y + 4 * i, true);
-      if (Number.isFinite(y)) points.push([X_IDXS[i] - RADAR_TO_CAMERA, -y]);
-      else if (points.length) break;
-    }
-    lines.push({boundary: i8(road.kind) === 1, slot: i8(road.slot), type: i8(road.type), double: i8(road.double_line),
-                color: i8(road.color), confidence: view.getFloat32(base + road.confidence, true), points,
-                widthY: view.getFloat32(base + road.y + 4 * LANE_WIDTH_INDEX, true)});
-  }
-  const ego = (slot) => lines.reduce((best, line) =>
-    !line.boundary && line.slot === slot && line.points.length >= 2 && (!best || line.confidence > best.confidence) ? line : best, null);
-  const left = ego(0), right = ego(1);
-  const sure = left && right && left.confidence >= LD_SURE && right.confidence >= LD_SURE;
-  return {captured: Number(view.getBigUint64(at.capture_timestamp_ns, true)) * 1e-9,
-          valid: view.getUint32(at.valid, true) !== 0, lines, left, right,
-          width: sure ? right.widthY - left.widthY : NaN};
-}
-
 // LANE_WIDTH_INDEX에서 두 자차 차선선 사이의 폭. 둘 다 확실하지 않으면 NaN.
 function laneWidth(lanes, left, right) {
   return lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE
@@ -172,7 +136,6 @@ function readControl(at, flags, bytes) {
     stamp: view.getBigUint64(at.timestamp_ns, true),
     enabled: u32(at.enabled) !== 0, engaged: u32(at.engaged) !== 0, active: u32(at.active) !== 0,
     laneless: (hud >>> flags.Laneless & 1) === 1, paused: (hud >>> flags.SteerPaused & 1) === 1,
-    lanebow: (hud >>> flags.Lanebow & 1) === 1, changing: (hud >>> flags.LaneChanging & 1) === 1,
     braking: (hud >>> flags.BrakeLights & 1) === 1,
     output: f32(at.normalized_output), speedKph: f32(at.ego_speed_kph),
     desired: f32(at.desired_curvature), actual: f32(at.actual_curvature),
@@ -194,8 +157,7 @@ const ageOf = (now, stamp) => stamp ? Number(now - stamp) / 1e9 : Infinity;
 //     것), flow {relative: -x · rate (m/s, 광류에서)} 또는 null} 또는 null
 //   leads [{t s, x, v (모델의 것), flow, fx, fv (앞차 추적의 것), trend, level, segment}, ...]: 앞차 카드의
 //     최근 LEAD_HISTORY_S, 거리는 자차 범퍼 기준. BevStream이 채운다(BevStream.addLead)
-//   state {enabled, engaged, active, steering, laneless, lanebow, changing (차선 변경 중), output}, speedKph
-//     (controlsd가 없으면 NaN)
+//   state {enabled, engaged, active, steering, laneless, output}, speedKph (controlsd가 없으면 NaN)
 //   curvature {desired, actual} (1/m, controlsd처럼 +가 오른쪽), controlsd가 없으면 null
 //   blinkers {left, right} (둘 다면 비상등), controlsd가 없으면 null. controlsd는 램프가 마지막으로 깜박인
 //   뒤 0.5 s 동안 각각을 켜 두므로, 램프가 깜박이는 동안 켜진 채로 있다
@@ -203,10 +165,7 @@ const ageOf = (now, stamp) => stamp ? Number(now - stamp) / 1e9 : Infinity;
 //   departure {drive (D 단), armed, alert (0 없음, 1 앞차 출발, 2 녹색 신호), gas [0, 2, … 10 s],
 //   plan10 (m, 10 s의 모델 x), history [[t s, gas 2 s, plan10]]}: departure_alert.cc가 판단에 쓰는 것
 //   modelAge, controlAge (s, 없으면 Infinity)
-//   ld: 모델 프레임과 LANE_MATCH_S 안의 마지막 유효한 차선선 플러그인 결과 {lines [{boundary, slot, type, double,
-//     color, confidence, points}], left, right (자차 선), width (m)} 또는 null(플러그인이 없거나 낡았다).
-//     state.lanebow는 경로 모드가 Lanebow인지
-export function scene(model, control, now, history = [], lane = null) {
+export function scene(model, control, now, history = []) {
   const modelAge = model ? ageOf(now, model.stamp) : Infinity;
   const controlAge = control ? ageOf(now, control.stamp) : Infinity;
   const live = control && controlAge <= CONTROL_STALE_S ? control : null;
@@ -229,9 +188,7 @@ export function scene(model, control, now, history = [], lane = null) {
                   tracked: !!track, raw, flow: flow ? {relative: -flow.x * flow.rate} : null} : null,
     leads: [],
     state: {enabled: !!live && live.enabled, engaged: !!live && live.engaged, active: !!live && live.active,
-            steering: !!live && live.active && !live.paused, laneless: !!live && live.laneless,
-            lanebow: !!live && live.lanebow, changing: !!live && live.changing, output: live ? live.output : 0},
-    ld: shown && lane && Math.abs(lane.captured - shown.captured) <= LANE_MATCH_S ? lane : null,
+            steering: !!live && live.active && !live.paused, laneless: !!live && live.laneless, output: live ? live.output : 0},
     speedKph: live ? live.speedKph : NaN,
     curvature: live && Number.isFinite(live.desired) && Number.isFinite(live.actual) ? {desired: live.desired, actual: live.actual} : null,
     blinkers: live ? {left: live.left, right: live.right} : null,
@@ -274,7 +231,7 @@ export class BevStream {
   constructor({onScene, onStatus, hz = 20}) {
     Object.assign(this, {onScene, onStatus, hz});
     this.layout = null;
-    this.model = this.control = this.lane = null;
+    this.model = this.control = null;
     this.run = 0;
     this.abort = null;
     this.arrivals = [];                 // 최근 1초 동안 모델 프레임이 온 시각, ms
@@ -341,11 +298,10 @@ export class BevStream {
       while (pending.length - at >= HEADER) {
         const head = new DataView(pending.buffer, pending.byteOffset + at, HEADER);
         if (head.getUint32(0, true) !== MAGIC) throw new Error(t("bev.bad_frame"));
-        const model = head.getUint16(4, true), control = head.getUint16(6, true), lane = head.getUint16(8, true);
-        const body = at + HEADER, end = body + model + control + lane;
+        const model = head.getUint16(4, true), control = head.getUint16(6, true), end = at + HEADER + model + control;
         if (end > pending.length) break;
-        this.frame(pending.subarray(body, body + model), pending.subarray(body + model, body + model + control),
-                   head.getBigUint64(12, true), pending.subarray(body + model + control, end));
+        this.frame(pending.subarray(at + HEADER, at + HEADER + model), pending.subarray(at + HEADER + model, end),
+                   head.getBigUint64(8, true));
         at = end;
       }
       pending = pending.subarray(at);
@@ -390,14 +346,8 @@ export class BevStream {
     model.laneWidth = laneWidth(model.lanes, filtered[0], filtered[1]);
   }
 
-  frame(model, control, now, lane) {
+  frame(model, control, now) {
     const layout = this.layout, fresh = model.length >= layout.model.size;
-    // LD 결과는 모델 프레임과 함께 온다. 해석하지 못한 결과(valid 0)와 모델 없는 프레임은 직전 것을 그대로 둔다
-    // (scene()이 모델 프레임과 LANE_MATCH_S 넘게 떨어진 것은 버린다)
-    if (fresh && lane.length >= layout.lane.size) {
-      const read = readLane(layout.lane, layout.lane_road, lane);
-      if (read.valid) this.lane = read;
-    }
     let stamp = 0;  // 모델 프레임 시각(s). t는 번역 함수라 쓰지 않는다
     this.control = control.length >= layout.control.size ? readControl(layout.control, layout.hud_flags, control) : null;
     if (fresh) {
@@ -410,7 +360,7 @@ export class BevStream {
       history.push([stamp, this.model.gas[GAS_PRESS_HORIZON], this.model.planEnd]);
       while (history.length && history[0][0] < stamp - HISTORY_S) history.shift();
     }
-    const shown = scene(this.model, this.control, now, this.history, this.lane);
+    const shown = scene(this.model, this.control, now, this.history);
     if (fresh) this.addLead(stamp, shown.lead);
     shown.leads = this.leads;
     this.onScene(shown);

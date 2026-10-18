@@ -66,7 +66,6 @@ axmodel rather than misreading it.
 | `EDGEPILOT_CALIB_AUTO=0` | on | Disables pose-based online calibration and keeps the restored or manually supplied projection. |
 | `EDGEPILOT_LOG_CALIB=1` | off | Prints the online calibrator status, accepted/rejected sample counts, valid block count, rpy, and spread. |
 | `EDGEPILOT_FLOW_CALIB=0` | on | Turns off the optical-flow calibrator (VPP/IVE). On, it is recorded in `ModelState.flow_calibration` and logged as `flowcal:` lines; the warp uses it only when the device setting `calibration_use_flow` is on ([Flow calibration](flow-calibration.md#using-the-estimate)). Off, nothing new is measured; a stored estimate (`params/flow_calibration.json`) is still recorded and can still be applied, and with none the recorded status stays 0. |
-| `EDGEPILOT_LANE_PLUGIN=<path>` | `/root/edgepilot-private/lane/liblane_plugin.so` | The optional [lane-line plugin](lane-line-plugin.md) `modeld` runs after supercombo. With no file there, the slot stays off and `modeld` runs as before. `0` turns it off. |
 
 ### Camera and input warp
 
@@ -276,7 +275,7 @@ press. A value is written as soon as it is changed.
 
 | Tab | Address | Holds |
 | --- | --- | --- |
-| Steering | `#steering` | the controller tuning, the learned torque model card, the path mode (Lane, Laneless, Lanebow) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
+| Steering | `#steering` | the controller tuning, the learned torque model card, the path mode (Laneless) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
 | Vehicle | `#vehicle` | the steering values that belong to the car rather than to the controller, the camera calibration, the learners' trend, the learner input source and the fixed specs |
 | Vision cruise | `#adaptive_cruise` | `adaptive_cruise.json` |
 | Recording | `#recording` | `recording.json` |
@@ -345,10 +344,8 @@ bootstub ([Panda firmware](../firmware/panda/README.md)).
 The BEV tab shows what the model sees from above: lane lines, road edges, the
 planned path and the lead, round the ego car, with the HUD's colours and limits
 (`hud_renderer.cc`). The browser does all the work. The board copies the
-`ModelState` and `ControlState` payloads, and with the lane-line plugin the
-head of the newest `LaneState`, unparsed, into one streamed response
-(`/api/bev/stream`, a frame per new model frame, 4.0 kB, or 4.8 kB with the
-plugin, at up to 20 Hz). It
+`ModelState` and `ControlState` payloads, unparsed, into one streamed response
+(`/api/bev/stream`, a frame per new model frame, 4.0 kB at up to 20 Hz). It
 sleeps until the next model frame is due, so a viewer costs about 3% of one
 core at nice 10, and nothing once the tab is closed or hidden. `/api/bev` says
 where the fields sit. `ipc_messages.h` pins those offsets, and
@@ -379,11 +376,6 @@ the bottom.
   the drawn lines tremble about 60% less from frame to frame, but still sway:
   the slower swing over a second drops only 13-26%. The `LANE W` chip measures
   the drawn lines. Without `controlsd` the model's lines are drawn as they are.
-- **LD lines.** The `LD lanes` layer draws the
-  [lane-line plugin](lane-line-plugin.md)'s lines in their painted colour and
-  pattern, and its road boundaries as thin lines. In Lanebow mode they replace
-  the model's lines and road edges, as on the LCD, and while LD steers the
-  path is drawn as a rainbow along the LD lane centre ([Lanebow](lanebow.md)).
 - **Planned slowdown.** The inside of the path turns amber, then red, where the
   model plans to slow down. The `PLAN` chip gives the slowest planned speed and
   where it is, or `STOP`, or the speed the plan reaches when moving off. The
@@ -449,7 +441,7 @@ The page talks to the server over these routes (`console_server.py`):
 | `GET /api/panda` | the Panda firmware and the installed image |
 | `POST /api/panda/flash` | ask for a Panda flash, `{"version": ...}` (parked only) |
 | `GET /api/bev` | where the fields the BEV reads sit |
-| `GET /api/bev/stream` | the BEV stream (`ModelState`, `ControlState` and `LaneState` head payloads) |
+| `GET /api/bev/stream` | the BEV stream (`ModelState` and `ControlState` payloads) |
 | `GET /static/{path}` | the page's files |
 
 ## Production defaults

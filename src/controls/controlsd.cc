@@ -87,35 +87,34 @@ struct TickStats {
         const float road_bank_lat_accel = tick.controller().road_bank_lat_accel();
         const AdaptiveCruiseOutput &adaptive_cruise = tick.adaptive_cruise();
         const AdaptiveCruiseInput &cruise_input = tick.cruise_input();  // 크루즈가 받은 앞차(추적이 있으면 그것)
-        std::fprintf(stderr,
-                     "controlsd: hz=%.3f work_avg_us=%.1f work_max_us=%.1f wake_max_us=%.1f "
-                     "misses=%u can=%u generated=%u errors=%u txFull=%u rxStale=%u "
-                     "queue=%llu/%llu params=%u "
-                     "engaged=%u active=%u "
-                     "panda=%u/%u plan=%u mpc=%u desire=%d "
-                     "torque=%d/%d driver=%d angle=%.2f "
-                     "curve=%.6f/%.6f curveVm=%.6f curveYaw=%.6f lat=%.2f bank=%.2f long=%.2f "
-                     "error=%.6f pathY=%.3f "
-                     "laneC=%.3f laneW=%.2f lane=%.2f/%.2f "
-                     "lprob=%.2f/%.2f/%.2f lstd=%.2f/%.2f ldAge=%.0f "
-                     "cluster=%.1f wheel=%.1f cruise=%u max=%.1f cmd=%.1f target=%.1f "
-                     "lead=%u/%.1f/%.1f button=%d pedal=%d/%d block=%s\n",
-                     ticks / window_s, work_sum_us / std::max(1U, ticks), work_max_us, wake_max_us, misses, can_frames,
-                     generated_frames, publish_errors, send_queue_full, stale_can_batches, tx_depth, rx_depth,
-                     param_generation, result.engaged ? 1 : 0, result.active ? 1 : 0, panda.ready ? 1 : 0,
-                     panda.controls_allowed ? 1 : 0, target.valid ? 1 : 0, target.mpc_solution_valid ? 1 : 0,
-                     target.desire, result.desired_torque, result.apply_torque, vehicle.driver_torque,
-                     vehicle.steering_angle_deg, result.desired_curvature, result.actual_curvature,
-                     result.actual_curvature_vm, result.actual_curvature_yaw, vehicle.lat_accel_mps2,
-                     road_bank_lat_accel, vehicle.long_accel_mps2, result.curvature_error, target.target_y_m,
-                     0.5 * (target.lane_left_y_m + target.lane_right_y_m), target.lane_width_m, target.lane_left_y_m,
-                     target.lane_right_y_m, target.lane_left_prob, target.lane_right_prob, target.lane_d_prob,
-                     target.lane_left_std, target.lane_right_std, target.lane_age_s * 1000.0f, result.cluster_speed_kph,
-                     result.control_speed_kph, adaptive_cruise.active ? 1U : 0U, adaptive_cruise.maximum_speed_kph,
-                     adaptive_cruise.commanded_speed_kph, adaptive_cruise.target_speed_kph,
-                     adaptive_cruise.lead_valid ? 1U : 0U, cruise_input.vision_lead_distance_m,
-                     cruise_input.vision_lead_relative_speed_mps, adaptive_cruise.command_button, vehicle.gas,
-                     vehicle.driver_override, block_reason_name(result.active_block));
+        std::fprintf(
+            stderr,
+            "controlsd: hz=%.3f work_avg_us=%.1f work_max_us=%.1f wake_max_us=%.1f "
+            "misses=%u can=%u generated=%u errors=%u txFull=%u rxStale=%u "
+            "queue=%llu/%llu params=%u "
+            "engaged=%u active=%u "
+            "panda=%u/%u plan=%u mpc=%u desire=%d "
+            "torque=%d/%d driver=%d angle=%.2f "
+            "curve=%.6f/%.6f curveVm=%.6f curveYaw=%.6f lat=%.2f bank=%.2f long=%.2f "
+            "error=%.6f pathY=%.3f "
+            "laneC=%.3f laneW=%.2f lane=%.2f/%.2f "
+            "lprob=%.2f/%.2f/%.2f lstd=%.2f/%.2f "
+            "cluster=%.1f wheel=%.1f cruise=%u max=%.1f cmd=%.1f target=%.1f "
+            "lead=%u/%.1f/%.1f button=%d pedal=%d/%d block=%s\n",
+            ticks / window_s, work_sum_us / std::max(1U, ticks), work_max_us, wake_max_us, misses, can_frames,
+            generated_frames, publish_errors, send_queue_full, stale_can_batches, tx_depth, rx_depth, param_generation,
+            result.engaged ? 1 : 0, result.active ? 1 : 0, panda.ready ? 1 : 0, panda.controls_allowed ? 1 : 0,
+            target.valid ? 1 : 0, target.mpc_solution_valid ? 1 : 0, target.desire, result.desired_torque,
+            result.apply_torque, vehicle.driver_torque, vehicle.steering_angle_deg, result.desired_curvature,
+            result.actual_curvature, result.actual_curvature_vm, result.actual_curvature_yaw, vehicle.lat_accel_mps2,
+            road_bank_lat_accel, vehicle.long_accel_mps2, result.curvature_error, target.target_y_m,
+            0.5 * (target.lane_left_y_m + target.lane_right_y_m), target.lane_width_m, target.lane_left_y_m,
+            target.lane_right_y_m, target.lane_left_prob, target.lane_right_prob, target.lane_d_prob,
+            target.lane_left_std, target.lane_right_std, result.cluster_speed_kph, result.control_speed_kph,
+            adaptive_cruise.active ? 1U : 0U, adaptive_cruise.maximum_speed_kph, adaptive_cruise.commanded_speed_kph,
+            adaptive_cruise.target_speed_kph, adaptive_cruise.lead_valid ? 1U : 0U, cruise_input.vision_lead_distance_m,
+            cruise_input.vision_lead_relative_speed_mps, adaptive_cruise.command_button, vehicle.gas,
+            vehicle.driver_override, block_reason_name(result.active_block));
         *this = TickStats{};
     }
 };
@@ -135,9 +134,6 @@ int main() {
         LatestChannel control_state_pub;
         LatestChannel learner_state_pub;
         LatestChannel localization_sub;
-        // 차선선 플러그인 결과(modeld, 플러그인이 있을 때만 발행). 만들며 열어 플러그인이 없어도 열리고, 크기가 다른
-        // 예전 채널이 남아 있으면 지금 크기로 고친다.
-        LatestChannel lane_state_sub;
         bool localization_open = false;
         double next_localization_open_s = 0.0;
         if (!open_when_ready(&can_sub, kCanTopic, true) ||
@@ -145,8 +141,7 @@ int main() {
             !open_when_ready(&panda_state_sub, kPandaStateTopic, sizeof(PandaState), true) ||
             !open_when_ready(&sendcan_pub, kSendCanTopic, true) ||
             !open_when_ready(&control_state_pub, kControlStateTopic, sizeof(ControlState), true) ||
-            !open_when_ready(&learner_state_pub, kLearnerStateTopic, sizeof(LearnerState), true) ||
-            !open_when_ready(&lane_state_sub, kLaneStateTopic, sizeof(LaneState), true)) {
+            !open_when_ready(&learner_state_pub, kLearnerStateTopic, sizeof(LearnerState), true)) {
             return 0;
         }
         sendcan_pub.reset();
@@ -195,7 +190,6 @@ int main() {
         }
         TickStats stats;
         uint64_t model_seq = 0;
-        uint64_t lane_state_seq = 0;
         uint64_t panda_state_seq = 0;
 
         using Clock = std::chrono::steady_clock;
@@ -203,8 +197,7 @@ int main() {
         auto next_tick = start;
         auto log_start = start;
         ControlParamsWatcher param_watcher(param_paths, start);
-        CanBatch can_batch;    // 틱마다 21.5 KB를 0으로 채우지 않게 루프 밖에 둔다(pop은 count까지 채운다)
-        LaneState lane_state;  // 같은 까닭으로 루프 밖에(새 발행일 때만 복사한다)
+        CanBatch can_batch;  // 틱마다 21.5 KB를 0으로 채우지 않게 루프 밖에 둔다(pop은 count까지 채운다)
 
         while (!g_stop) {
             const auto scheduled = next_tick;  // 이번 틱이 깨어나야 했던 시각
@@ -229,9 +222,6 @@ int main() {
                 }
                 stats.can_frames += std::min<uint32_t>(can_batch.count, kCanBatchMaxFrames);
             }
-            // LD는 같은 틱의 모델보다 먼저 받는다(그 프레임 계획에 쓸 수 있게)
-            if (lane_state_sub.read_new(&lane_state_seq, &lane_state, sizeof(lane_state), 0))
-                tick.on_lane_state(lane_state);
             ModelState model;
             uint64_t next_model_seq = model_seq;
             if (model_sub.read(&model, sizeof(model), &next_model_seq) && next_model_seq != model_seq) {

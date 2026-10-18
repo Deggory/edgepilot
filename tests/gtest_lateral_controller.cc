@@ -939,36 +939,6 @@ TEST(LateralController, SteeringJsonMatchesDefaults) {
     ASSERT_NE(error.find("torque_kf_raw"), std::string::npos);
 }
 
-// 경로 모드는 0·1·2만 받는다. 2026-10-15 전 파일의 laneless_mode는 path_mode로 읽고, 둘이 같이 있으면 거부한다.
-TEST(LateralController, PathModeIsAChoice) {
-    const std::string path = "/tmp/gtest_lateral_controller_path_mode.json";
-    auto load = [&](const char *json, SteeringParams *params, std::string *error) {
-        std::FILE *f = std::fopen(path.c_str(), "w");
-        if (!f) return false;
-        std::fputs(json, f);
-        std::fclose(f);
-        const bool loaded = load_steering_params_json(path, params, error);
-        std::remove(path.c_str());
-        return loaded;
-    };
-    std::string error;
-    SteeringParams params;
-    ASSERT_TRUE(load("{\"path_mode\": 2}\n", &params, &error)) << error;
-    EXPECT_EQ(params.path(), PathMode::Lanebow);
-    SteeringParams legacy;
-    ASSERT_TRUE(load("{\"laneless_mode\": true}\n", &legacy, &error)) << error;
-    EXPECT_EQ(legacy.path(), PathMode::Laneless) << "예전 키를 이어 읽는다";
-    ASSERT_TRUE(load("{\"laneless_mode\": false}\n", &legacy, &error)) << error;
-    EXPECT_EQ(legacy.path(), PathMode::Lane);
-    for (const char *bad : {"{\"path_mode\": 3}\n", "{\"path_mode\": 1.5}\n", "{\"path_mode\": -1}\n",
-                            "{\"path_mode\": 1, \"laneless_mode\": true}\n"}) {
-        SteeringParams rejected;
-        rejected.path_mode = static_cast<int>(PathMode::Laneless);
-        EXPECT_FALSE(load(bad, &rejected, &error)) << bad;
-        EXPECT_NE(error.find("path_mode"), std::string::npos) << bad;
-    }
-}
-
 // 편경사 추정은 직선에서만 갱신하고 커브에서는 유지하며, 30초 넘게 갱신이 없으면 0으로 줄인다. 호출 간격(dt)이
 // 달라도(데이터셋 도구는 ControlState 간격) 같은 시정수와 시간 규칙을 따른다.
 TEST(RoadBankEstimator, HoldsInCurvesAndFadesWhenStale) {

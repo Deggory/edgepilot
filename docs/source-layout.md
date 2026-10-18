@@ -399,17 +399,12 @@ released after that short hold if they persist.
 Library `planning`.
 
 - `lateral_planner.*`: applies openpilot lane probability/width logic and the
-  lateral MPC (Lane and Lanebow modes), or the plan yaw (Laneless mode and the
-  model-path stretches of the other two), to produce curvature targets. This is
-  the only producer of `LateralTarget`.
+  lateral MPC (Lane mode), or the plan yaw (Laneless mode and Lane mode's
+  model-path stretches), to produce curvature targets. This is the only
+  producer of `LateralTarget`.
 - `lane_line_filter.*`: smooths the two ego lane lines over time for the
   planner: the last filtered lines moved by the car's own motion, blended with
   the new frame. See [Lane-line filter](lane-line-filter.md).
-- `lane_measurement.h`, `lanebow_source.*`, `lane_state_selector.h`: the
-  [Lanebow](lanebow.md) lane source. The selector picks the plugin result for a
-  model frame, and the source checks, filters, moves and extends its ego lines
-  into the measurement the planner's lane core takes (supercombo's lines go
-  through the same core).
 - `desire_helper.*`: the openpilot desire_helper port the planner runs each
   model frame: lane change states (`LaneChangeState`), the
   blinker/torque/blind-spot/road-edge gates, the lane-line fade, one lane
@@ -503,15 +498,6 @@ Libraries `model` and (board) `replay`, process `modeld`.
   LK call (the lead points also backward), and `FlowWorker` (a `FlowSource`)
   runs it on its own thread in `modeld`. The model loop only hands over ring
   slots, gate inputs and the previous frame's lead.
-- `lane_plugin_abi.h`, `lane_plugin.*`, `lane_state_fill.*`: the optional
-  [lane-line plugin](lane-line-plugin.md)'s C ABI, its loader (`dlopen`, ABI
-  and result checks, crash guard) and the packing of its result into
-  `LaneState`, with every line projected onto supercombo's road surface.
-  Host-tested by `gtest_lane_plugin` (with two fake plugins) and
-  `gtest_lane_state_fill`.
-- `lane_runner.*`: board only. The plugin model's NPU session, VPP input
-  straight from a ring slot, and the decode call. `modeld` runs it after
-  publishing `ModelState`.
 - `lead_flow.*`: the hardware-free part of the lead expansion: the lead box
   projection, the full-resolution corner pick, the similarity fit and
   `LeadFlowTracker` (forward-backward check, top-up, template refinement, the
@@ -709,10 +695,6 @@ only in the board build, against `deps/ax630` from
   - The IVE computes the Shi-Tomasi response and the pyramidal LK, wrapped
     around its undocumented behaviour (start points in top-level pixels, the
     ±8 px clip with the +16 px wrap, re-polled queries).
-- `maix_vpp.*`: an NV12 crop-resize on `modeld`'s VPP queue into another
-  physical buffer, for the [lane-line plugin](lane-line-plugin.md)'s input.
-  It and the flow pyramid share one lock, because they run on different
-  threads.
 - `maix_venc.*`, `maix_vdec.*`: the hardware H.264 encoder and decoder.
   `recordd` copies a ring slot into the encoder's own pool block with IVPS
   before encoding; `replayd` decodes a recorded frame into a ring slot. Both

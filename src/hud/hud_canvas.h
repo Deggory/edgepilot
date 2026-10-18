@@ -18,15 +18,6 @@ struct HudPoint {
     float y;
 };
 
-// 화면 높이를 따라 바뀌는 색(무지개 띠): 화면 near_y 높이에서 stops[0], far_y 높이에서 stops[count - 1]까지 고르게
-// 놓인 색(0xRRGGBB)을 잇는다.
-struct HudColorRamp {
-    const uint32_t *stops;
-    int count;
-    float near_y;
-    float far_y;
-};
-
 // 0xAARRGGBB(스트레이트 알파)
 constexpr uint32_t hud_argb(uint32_t a, uint32_t r, uint32_t g, uint32_t b) { return a << 24 | r << 16 | g << 8 | b; }
 
@@ -65,12 +56,11 @@ public:
     // 모서리만 다각형으로 칠한다. 좌표가 모두 정수면 모서리 사이 곧은 행은 fill_rect로 바로
     // 칠한다(카드·칩 대부분).
     void fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color);
-    // 다각형(짝홀 규칙)을 칠한다. 도로 띠처럼 먼 쪽을 흐리게 하려면 fill_polygon_faded를 쓰는데, 화면
-    // near_y 높이에서 원래 알파, far_y 높이에서 far_alpha배가 되도록 줄인다(near_y == far_y면 줄이지 않는다).
-    // ramp가 있으면 색도 화면 높이를 따라 ramp의 색이다(알파는 color의 알파).
+    // 다각형(짝홀 규칙)을 칠한다. 도로 띠처럼 먼 쪽을 흐리게 하려면 fade_far를 쓰는데, 화면
+    // near_y 높이에서 원래 알파, far_y 높이에서 far_alpha배가 되도록 줄인다.
     void fill_polygon(const HudPoint *points, int count, uint32_t color);
     void fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y, float far_y,
-                            float far_alpha, const HudColorRamp *ramp = nullptr);
+                            float far_alpha);
     // 글자 상자의 왼쪽 위(정렬 기준점 x, 줄 위 y)에 쓴다. 카드 없이 영상 위에 쓰는 글은
     // shadow로 1 px 아래 오른쪽에 그림자를 깐다. 쓴 폭을 돌려준다.
     int text(int x, int y, std::string_view text, const HudFont &font, uint32_t color, HudAlign align = HudAlign::left,
@@ -82,6 +72,7 @@ private:
     HudPoint to_buffer(HudPoint p) const;  // 화면 점 → 버퍼 점(연속 좌표)
     void mark(int y, int x0, int x1);      // y행 [x0, x1)을 그렸다
     void fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color);
+    void fill_rows(const HudPoint *points, int count, uint32_t color, float near_y, float far_y, float far_alpha);
     void glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color);
 
     uint8_t *base_;

@@ -15,7 +15,7 @@ __pycache__/
 *.mp4
 /recordings/
 models/*.onnx
-# 모델 파일은 supercombo만 추적한다(차선선 플러그인의 모델은 이 저장소 밖에 둔다, docs/lane-line-plugin.md)
+# 모델 파일은 supercombo만 추적한다(다른 회사 모델이 실수로 들어가지 않게)
 *.axmodel
 !/models/supercombo.axmodel
 # 모델 파이프라인 중간·실험 산출물 (수 GB)

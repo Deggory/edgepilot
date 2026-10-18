@@ -8,7 +8,6 @@ add_edgepilot_library(hud
   hud_canvas.cc
   hud_cards.cc
   hud_font.cc
-  hud_lanes.cc
   hud_policy.cc
   hud_renderer.cc
   hud_scene.cc

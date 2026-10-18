@@ -14,8 +14,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
-#include <type_traits>
 #include <vector>
 
 // ---- 채널 매직·버전 ----
@@ -42,8 +40,6 @@ constexpr char kLearnerStateTopic[] = "/edgepilot_learner_state";
 constexpr char kImuTopic[] = "/edgepilot_imu";
 constexpr char kLocalizationStateTopic[] = "/edgepilot_localization";
 constexpr char kRecordStateTopic[] = "/edgepilot_record_state";
-// LaneState 레이아웃이 바뀌면 끝의 번호를 올린다: 다른 빌드의 modeld가 발행해도 다른 채널이라 섞여 읽히지 않는다.
-constexpr char kLaneStateTopic[] = "/edgepilot_lane_state2";
 
 // ---- 크기 ----
 constexpr unsigned kFrameSlots = 8;
@@ -300,134 +296,6 @@ static_assert(offsetof(LeadTrackState, valid) == 0 && offsetof(LeadTrackState, d
                   offsetof(LeadTrackState, relative_speed_mps) == 12,
               "web BEV reads LeadTrackState by position");
 
-// 차선선 플러그인(modeld 안, 플러그인이 있을 때만; docs/lane-line-plugin.md). 프레임마다 supercombo 뒤에 돈 결과다.
-// 녹화에는 LaneState 레코드(9)로 그대로 남는다. 열거값(slot·shape·double_line·color·type)은
-// model/lane_plugin_abi.h의 Ep* 값이다.
-constexpr unsigned kLaneMaxLines = 6;
-constexpr unsigned kLaneMaxBoundaries = 4;
-constexpr unsigned kLaneMaxPoints = 72;
-constexpr unsigned kLaneMaxRoadLines = kLaneMaxLines + kLaneMaxBoundaries;
-// 도로면으로 옮긴 선의 점: ModelState 차선과 같은 거리 격자 X_IDXS의 앞쪽 17개(0~48 m).
-constexpr unsigned kLaneRoadPoints = 17;
-constexpr int8_t kLaneRoadKindLine = 0;      // LaneRoadLine.kind: 차선선(lines[index])
-constexpr int8_t kLaneRoadKindBoundary = 1;  // 도로 경계(boundaries[index])
-constexpr int8_t kLaneSlotEgoLeft = 0;       // 차선선 slot의 자차 왼쪽·오른쪽 선(EP_LANE_EGO_LEFT·RIGHT)
-constexpr int8_t kLaneSlotEgoRight = 1;
-
-// 점 하나. 원본 프레임 화소의 4배를 정수로 둔다(1/4 화소 단위).
-struct LanePointState {
-    int16_t x4 = 0;  // 차선선은 도색 가운데
-    int16_t y4 = 0;
-    int16_t width4 = 0;   // 도색 폭(가로). 도로 경계는 0
-    int16_t edge_x4 = 0;  // 차로 쪽 안쪽 경계. 도로 경계는 x4와 같다
-};
-static_assert(sizeof(LanePointState) == 8, "LanePointState is recorded as-is");
-
-struct LaneLineState {
-    int8_t slot = 0;  // EpLaneSlot
-    int8_t shape = 0;
-    int8_t double_line = 0;
-    int8_t color = 0;
-    float confidence = 0.0f;
-    uint32_t point_count = 0;
-    LanePointState points[kLaneMaxPoints] = {};  // 가까운 쪽(영상 아래)부터
-};
-static_assert(sizeof(LaneLineState) == 588, "LaneLineState is recorded as-is");
-
-struct LaneBoundaryState {
-    int8_t slot = 0;  // EpBoundarySlot
-    int8_t type = 0;  // EpBoundaryType
-    int8_t reserved[2] = {};
-    float confidence = 0.0f;
-    uint32_t point_count = 0;
-    LanePointState points[kLaneMaxPoints] = {};
-};
-static_assert(sizeof(LaneBoundaryState) == 588, "LaneBoundaryState is recorded as-is");
-
-// 차선선 하나 또는 도로 경계 하나를 도로면으로 옮긴 것. 같은 프레임 supercombo가 낸 노면 높이에 투영하고(못 쓰면
-// 평평한 도로면), 거리 X_IDXS[0..kLaneRoadPoints)에서 읽은 가로 위치(m, 오른쪽 +, ModelState 차선과 같은 가상 카메라
-// 기준)다. 차선선은 차로 쪽 안쪽 경계, 도로 경계는 그 점이다. 측정은 first..last 격자를 덮고, 가장 가까운 측정이 8 m
-// 안이면 그보다 가까운 격자(x = 0까지)는 4~20 m 점에 맞춘 2차식으로 늘린 값이다. 덮지 않는 점은 NaN이다.
-struct LaneRoadLine {
-    int8_t kind = kLaneRoadKindLine;
-    int8_t index = 0;        // lines 또는 boundaries 안의 번호
-    int8_t slot = 0;         // EpLaneSlot 또는 EpBoundarySlot
-    int8_t type = 0;         // 차선선은 EpLaneShape, 도로 경계는 EpBoundaryType
-    int8_t double_line = 0;  // 차선선만(EpLaneDouble)
-    int8_t color = 0;        // 차선선만(EpLaneColor)
-    int8_t first = -1;       // 측정이 덮은 첫·마지막 격자 번호. 측정이 없으면 -1
-    int8_t last = -1;
-    float confidence = 0.0f;
-    float y[kLaneRoadPoints];
-    LaneRoadLine() {
-        for (float &v : y) v = std::numeric_limits<float>::quiet_NaN();
-    }
-};
-static_assert(sizeof(LaneRoadLine) == 80, "LaneRoadLine is recorded as-is");
-
-struct LaneState {
-    uint64_t frame_id = 0;
-    uint64_t capture_timestamp_ns = 0;  // ModelState와 같은 센서 캡처 시각
-    uint64_t lane_timestamp_ns = 0;     // 결과를 낸 시각
-    float execution_ms = 0.0f;          // VPP + NPU + 해석
-    uint32_t valid = 0;                 // 1이면 이 프레임을 해석했다(0이면 아래 값이 없다)
-    uint16_t image_width = 0;
-    uint16_t image_height = 0;
-    uint32_t line_count = 0;
-    uint32_t boundary_count = 0;
-    // 도로면 블록(헤더 바로 뒤라 웹 BEV는 앞쪽 kLaneStateRoadPrefixBytes만 보낸다). 선이 앞, 경계가 뒤다.
-    uint32_t road_count = 0;
-    LaneRoadLine road[kLaneMaxRoadLines];
-    LaneLineState lines[kLaneMaxLines] = {};
-    LaneBoundaryState boundaries[kLaneMaxBoundaries] = {};
-    float vanishing_x = 0.0f;  // 원본 프레임 화소
-    float vanishing_y = 0.0f;
-    float vanishing_confidence = 0.0f;
-    char plugin_name[32] = {};  // 플러그인이 알린 이름(모델·버전)
-    uint32_t reserved = 0;      // 끝 맞춤(바이트가 늘 같도록 0)
-};
-// 녹화 LaneState 레코드의 페이로드다. tools/model/recording_reader.py LANE_STATE가 같은 배치를 읽는다.
-static_assert(sizeof(LaneState) == 6776 && offsetof(LaneState, road_count) == 44 && offsetof(LaneState, road) == 48 &&
-                  offsetof(LaneState, lines) == 848 && offsetof(LaneState, boundaries) == 4376 &&
-                  offsetof(LaneState, vanishing_x) == 6728 && offsetof(LaneState, plugin_name) == 6740,
-              "LaneState layout is shared with the recording reader");
-// 웹 BEV가 받는 앞부분: 헤더와 도로면 블록
-constexpr unsigned kLaneStateRoadPrefixBytes = offsetof(LaneState, lines);
-// 웹 BEV(scripts/web_console/state_layout.py LANE_STATE_AT·LANE_ROAD_AT, LANE_STATE_PREFIX_SIZE)가 위치로 읽는
-// 필드(check_web_console.py가 대조)
-#define EDGEPILOT_LANE_STATE_AT(field, expected) \
-    static_assert(offsetof(LaneState, field) == (expected), "LaneState." #field " moved: web BEV")
-EDGEPILOT_LANE_STATE_AT(frame_id, 0);
-EDGEPILOT_LANE_STATE_AT(capture_timestamp_ns, 8);
-EDGEPILOT_LANE_STATE_AT(valid, 28);
-EDGEPILOT_LANE_STATE_AT(road_count, 44);
-EDGEPILOT_LANE_STATE_AT(road, 48);
-#undef EDGEPILOT_LANE_STATE_AT
-#define EDGEPILOT_LANE_ROAD_AT(field, expected) \
-    static_assert(offsetof(LaneRoadLine, field) == (expected), "LaneRoadLine." #field " moved: web BEV")
-EDGEPILOT_LANE_ROAD_AT(kind, 0);
-EDGEPILOT_LANE_ROAD_AT(slot, 2);
-EDGEPILOT_LANE_ROAD_AT(type, 3);
-EDGEPILOT_LANE_ROAD_AT(double_line, 4);
-EDGEPILOT_LANE_ROAD_AT(color, 5);
-EDGEPILOT_LANE_ROAD_AT(confidence, 8);
-EDGEPILOT_LANE_ROAD_AT(y, 12);
-#undef EDGEPILOT_LANE_ROAD_AT
-static_assert(kLaneStateRoadPrefixBytes == 848, "web BEV LANE_STATE_PREFIX_SIZE");
-
-// 도로면 블록에서 slot 자차 선(같은 slot이 여럿이면 신뢰도가 높은 것), 없으면 nullptr. 플래너, HUD, 재생 도구가 같은
-// 선을 고르도록 모두 이것을 쓴다(웹 BEV의 bev.js도 같은 규칙).
-inline const LaneRoadLine *lane_ego_road_line(const LaneState &lane, int8_t slot) {
-    const LaneRoadLine *best = nullptr;
-    for (uint32_t i = 0; i < std::min<uint32_t>(lane.road_count, kLaneMaxRoadLines); ++i) {
-        const LaneRoadLine &road = lane.road[i];
-        if (road.kind == kLaneRoadKindLine && road.slot == slot && (!best || road.confidence > best->confidence))
-            best = &road;
-    }
-    return best;
-}
-static_assert(std::is_trivially_copyable<LaneState>::value, "LaneState goes through shared memory as bytes");
-
 struct ProcessState {
     char name[16] = {};
     uint32_t running = 0;
@@ -532,7 +400,7 @@ constexpr uint32_t kHudFlagLaneChangeRight = 1U << 6;      // 차선 변경 방�
 constexpr uint32_t kHudFlagSteerPaused = 1U << 7;          // 85도 위에서 조향 요청을 끄고 쉰다
 constexpr uint32_t kHudFlagSteerPausedByDriver = 1U << 8;  // 운전자가 넘겨받음: 15도 아래 손 뗌 또는 계획 커브 1초
 constexpr uint32_t kHudFlagBrakeLights = 1U << 9;  // 자차 브레이크등(페달 스트로크 또는 AUTO HOLD, brake_lights_on)
-constexpr uint32_t kHudFlagLanebow = 1U << 10;     // 경로 모드가 Lanebow(LD로 조향 중인지는 Laneless 비트가 꺼졌는지)
+// 비트 10은 2026-10-16~18 녹화에서 Lanebow 경로 모드였다(그 모드는 없어졌다).
 // 피드포워드에 학습한 토크 모델이 섞임(docs/lateral-nn.md). 비트 11은 2026-10-09 전 녹화에서 브레이크등이었다.
 constexpr uint32_t kHudFlagNnFeedforward = 1U << 12;
 
@@ -581,9 +449,7 @@ struct ControlState {
     uint32_t engage_reject_event_id = 0;
     char engage_reject_block[32] = {};
     float ego_speed_kph = 0.0f;
-    // 이번 횡 계획이 쓴 차선선 플러그인 결과(LaneState)의 frame_id 아래 32비트. Lanebow 모드가 아니거나 쓴 것이
-    // 없으면 0. 녹화의 LaneState 레코드와 맞춰 보는 데 쓴다(2026-10-15 전 녹화는 정렬 꼬리라 0).
-    uint32_t lane_state_frame = 0;
+    uint32_t reserved = 0;  // 정렬 꼬리를 0으로 채워 발행·기록 바이트가 매번 같다
 };
 
 // paramsd·torqued 출력(상류 vehicleParameters·lateralTorqueParameters). controlsd가
@@ -775,7 +641,6 @@ EDGEPILOT_CONTROL_STATE_AT(disengage_event_id, 192);
 EDGEPILOT_CONTROL_STATE_AT(engage_reject_event_id, 196);
 EDGEPILOT_CONTROL_STATE_AT(engage_reject_block, 200);
 EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
-EDGEPILOT_CONTROL_STATE_AT(lane_state_frame, 236);
 #undef EDGEPILOT_CONTROL_STATE_AT
 static_assert(sizeof(ControlState) == 240, "ControlState layout is shared by controlsd, overlayd and the recording");
 // recordd가 RecordType::PandaState로 그대로 저장한다.

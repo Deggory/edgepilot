@@ -5,7 +5,6 @@
 #include "common/projection.h"
 #include "hud/hud_state.h"
 
-#include <array>
 #include <cmath>
 #include <cstdlib>
 
@@ -77,29 +76,6 @@ TEST(Projection, ModelStateCarriesCameraOffset) {
     ModelState ms;
     ms.camera_offset_m = 0.25f;
     EXPECT_FLOAT_EQ(projection_from_model_state(ms).lateral_offset_m, 0.25f);
-}
-
-// 차선선 플러그인 점처럼 이미 프레임 화소인 것은 frame_pixel_to_screen으로 놓는다. 도로 점을 카메라로 찍은 화소가
-// HUD 투영(뒤집힌 화면을 다시 뒤집은 것)과 같은 자리에 와야 영상 위에서 어긋나지 않는다.
-TEST(Projection, FramePixelsLandWhereTheProjectionDrawsThem) {
-    projection_set_camera_intrinsics(kCameraFx, kCameraFy, kCameraCx, kCameraCy);
-    const ProjectionState p = make_projection_state(0.0f, 0.0f, 0.0f);
-    const int w = 640, h = 480;
-    for (const auto &pt : {std::array<float, 3>{20.0f, -1.7f, 1.22f}, std::array<float, 3>{8.0f, 1.8f, 1.22f},
-                           std::array<float, 3>{35.0f, 0.0f, 1.22f}}) {
-        // 보정이 0이면 기기 좌표가 곧 보정 좌표다: 1080p 화소 → 링 슬롯(1280x720) 화소
-        const float u = (kCameraFx * pt[1] / pt[0] + kCameraCx) * 1280.0f / 1920.0f;
-        const float v = (kCameraFy * pt[2] / pt[0] + kCameraCy) * 720.0f / 1080.0f;
-        float sx = 0.0f, sy = 0.0f, px = 0.0f, py = 0.0f;
-        frame_pixel_to_screen(u, v, 1280, 720, w, h, &sx, &sy);
-        ASSERT_TRUE(project_point_subpixel(p, pt[0], pt[1], pt[2], w, h, &px, &py));
-        EXPECT_NEAR(sx, static_cast<float>(w - 1) - px, 1.5f) << pt[0];
-        EXPECT_NEAR(sy, static_cast<float>(h - 1) - py, 1.5f) << pt[0];
-    }
-    float x = 0.0f, y = 0.0f;
-    frame_pixel_to_screen(160.0f, 720.0f, 1280, 720, w, h, &x, &y);
-    EXPECT_NEAR(x, 0.0f, 1e-3f) << "1280x720의 가운데 4:3(960 폭)이 화면이다";
-    EXPECT_NEAR(y, 480.0f, 1e-3f);
 }
 
 }  // namespace

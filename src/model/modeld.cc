@@ -9,9 +9,6 @@
 #include "maixcam2/maix_cmm.h"
 #include "model/calibration_service.h"
 #include "model/flow_worker.h"
-#include "model/lane_plugin.h"
-#include "model/lane_runner.h"
-#include "model/lane_state_fill.h"
 #include "model/lead_tracker.h"
 #include "model/model_state_fill.h"
 #include "model/replay_source.h"
@@ -26,8 +23,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <functional>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -335,141 +330,6 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 
-// 차선선 플러그인 단계(선택, docs/lane-line-plugin.md). 플러그인 파일이 없거나 못 쓰면 꺼진 채로 둔다. supercombo 결과를
-// 발행한 뒤 같은 프레임 슬롯으로 돈다: 경로 발행을 늦추지 않고, NPU는 이 스레드에서만 차례로 쓴다. 프레임을 받은 뒤
-// kStartBudgetNs가 지났으면 건너뛴다(다음 프레임의 supercombo를 밀지 않게).
-class LanePluginStage {
-public:
-    static constexpr uint64_t kStartBudgetNs = 25'000'000ULL;
-    static constexpr unsigned kHealthyRuns = 200;             // 이만큼 돌면 크래시 가드 기록을 지운다(약 10초)
-    static constexpr unsigned kMaxConsecutiveFailures = 100;  // 이만큼 잇달아 실패하면 끈다
-    static constexpr uint64_t kLogPeriodNs = 10'000'000'000ULL;
-
-    explicit LanePluginStage(const std::string &path) : guard_(guard_path()) {
-        if (path.empty()) {
-            std::fprintf(stderr, "modeld: lane plugin off (EDGEPILOT_LANE_PLUGIN)\n");
-            return;
-        }
-        if (access(path.c_str(), F_OK) != 0) {
-            std::fprintf(stderr, "modeld: lane plugin off (no %s)\n", path.c_str());
-            return;
-        }
-        if (!guard_.begin()) {
-            std::fprintf(stderr, "modeld: lane plugin off: modeld stopped %d times without finishing with it (%s)\n",
-                         guard_.starts(), guard_path().c_str());
-            return;
-        }
-        std::string why;
-        std::unique_ptr<LanePlugin> plugin = LanePlugin::open(path, &why);
-        if (!plugin) {
-            std::fprintf(stderr, "modeld: lane plugin off: %s\n", why.c_str());
-            guard_.healthy();
-            return;
-        }
-        try {
-            runner_ = std::make_unique<LaneRunner>(std::move(plugin));
-        } catch (const std::exception &e) {
-            std::fprintf(stderr, "modeld: lane plugin off: %s\n", e.what());
-            guard_.healthy();
-            return;
-        }
-        if (!pub_.open(kLaneStateTopic, sizeof(LaneState), true)) {
-            std::fprintf(stderr, "modeld: lane plugin off: open laneState ipc failed\n");
-            runner_.reset();
-            guard_.healthy();
-            return;
-        }
-        std::snprintf(name_, sizeof(name_), "%s", runner_->name());
-        std::fprintf(stderr, "modeld: lane plugin on: %s (input %dx%d NV12 by VPP)\n", name_, runner_->net_width(),
-                     runner_->net_height());
-    }
-
-    bool enabled() const { return runner_ != nullptr; }
-
-    void run(const RoadAiFrame &meta, uint64_t slot_phys, const std::function<bool()> &still_valid,
-             const LaneCamera &camera, const LaneRoadProfile &profile, uint64_t frame_start_ns) {
-        if (!runner_) return;
-        const uint64_t t0 = monotonic_now_ns();
-        if (t0 - frame_start_ns > kStartBudgetNs) {
-            ++skipped_;
-            return;
-        }
-        LaneState state;
-        state.frame_id = meta.frame_id;
-        state.capture_timestamp_ns = meta.timestamp_ns;
-        std::memcpy(state.plugin_name, name_, sizeof(state.plugin_name));
-        std::string why;
-        const bool ok = runner_->run(slot_phys, static_cast<int>(meta.width), static_cast<int>(meta.height),
-                                     meta.format == V4L2_PIX_FMT_NV21, still_valid, camera, profile, &state, &why);
-        const uint64_t t1 = monotonic_now_ns();
-        state.lane_timestamp_ns = t1;
-        state.execution_ms = static_cast<float>((t1 - t0) / 1e6);
-        pub_.publish(&state, sizeof(state));  // 실패한 프레임도 valid = 0으로 알린다
-        if (ok) {
-            ++runs_;
-            consecutive_failures_ = 0;
-            ms_.push_back(state.execution_ms);
-            if (runs_ == kHealthyRuns) guard_.healthy();
-            return;
-        }
-        ++failed_;
-        last_error_ = why;
-        if (++consecutive_failures_ >= kMaxConsecutiveFailures) {
-            std::fprintf(stderr, "\nmodeld: lane plugin off after %u failures in a row: %s\n", consecutive_failures_,
-                         why.c_str());
-            runner_.reset();
-        }
-    }
-
-    // kLogPeriodNs마다 한 줄: 돈 횟수, 실패, 건너뜀, 실행 시간 분포. 꺼진 단계는 쓰지 않는다(끌 때 한 번 썼다).
-    void log_if_due() {
-        if (!runner_) return;
-        const uint64_t now = monotonic_now_ns();
-        if (now - log_start_ns_ < kLogPeriodNs) return;
-        log_start_ns_ = now;
-        auto pct = [this](double q) {
-            if (ms_.empty()) return 0.0f;
-            std::vector<float> v = ms_;
-            const size_t k = std::min(v.size() - 1, static_cast<size_t>(q * v.size()));
-            std::nth_element(v.begin(), v.begin() + static_cast<long>(k), v.end());
-            return v[k];
-        };
-        std::fprintf(stderr, "\nmodeld: lane plugin runs=%u failed=%u skipped=%u ms p50 %.1f p95 %.1f%s%s\n", runs_,
-                     failed_, skipped_, pct(0.5), pct(0.95),
-                     last_error_.empty() ? "" : " last error: ", last_error_.c_str());
-        ms_.clear();
-    }
-
-private:
-    // 크래시 가드 기록: 부팅 서비스의 로그 디렉터리(tmpfs /run/edgepilot), 없으면 /tmp
-    static std::string guard_path() { return env_string("EDGEPILOT_LOG_DIR", "/tmp") + "/lane_plugin_starts"; }
-
-    LanePluginGuard guard_;
-    std::unique_ptr<LaneRunner> runner_;
-    LatestChannel pub_;
-    char name_[32] = {};
-    unsigned runs_ = 0, failed_ = 0, skipped_ = 0, consecutive_failures_ = 0;
-    std::vector<float> ms_;
-    uint64_t log_start_ns_ = monotonic_now_ns();
-    std::string last_error_;
-};
-
-// 프레임 화소의 카메라(워프와 같은 input_warp_*)와 이 프레임 워프의 보정(warp_rpy)·장착(차선선 플러그인 결과를
-// 노면으로 옮길 때).
-LaneCamera lane_camera(const AppConfig &config, const float warp_rpy[3], const CameraMount &mount) {
-    LaneCamera camera;
-    camera.fx = config.input_warp_fx;
-    camera.fy = config.input_warp_fy;
-    camera.cx = config.input_warp_cx;
-    camera.cy = config.input_warp_cy;
-    camera.roll = warp_rpy[0];
-    camera.pitch = warp_rpy[1];
-    camera.yaw = warp_rpy[2];
-    camera.height_m = mount.height_m();
-    camera.offset_m = mount.offset_m();
-    return camera;
-}
-
 // CPU 워프 대체 경로용: CMM 링 슬롯을 캐시 없이 매핑해 링에 붙인다. camerad가
 // 다시 떠서 물리 주소가 바뀌면 다시 매핑한다.
 struct RingSlotMaps {
@@ -534,8 +394,6 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             std::fprintf(stderr, "modeld: flow calibration and lead flow off: %s\n", e.what());
         }
     }
-    // 차선선 플러그인(선택). model보다 늦게 선언해 먼저 없앤다(VPP를 여는 GdcWarp가 model 안에 있다).
-    LanePluginStage lane(config.lane_plugin_path);
     std::vector<float> raw;
     uint64_t last_frame_seq = 0;
     unsigned processed = 0;
@@ -556,7 +414,6 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             std::fprintf(stderr, "modeld: waiting for roadAiFrame\n");
             continue;
         }
-        const uint64_t frame_start_ns = monotonic_now_ns();
         if (meta.slot >= frame_ring.slot_count()) {
             ++errors;
             continue;
@@ -627,24 +484,15 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             lead.next = &last_lead;
             lead.tracker = &lead_tracker;
             if (ego.vehicle_fresh()) lead.ego_mps = ego.v_ego();
-            // 이 프레임 워프가 쓴 보정. publish_output이 보정을 갱신해 다음 프레임 값으로 바꾸기 전에 잡는다.
-            float warp_rpy[3] = {};
-            calibration.input_rpy(warp_rpy);
             if (!publish_output(model_pub, model, parsed, calibration, mount, meta.frame_id, meta.timestamp_ns,
                                 model_ms, ego.v_ego(), ego.engaged(), settings.get().calibration_use_flow, lead)) {
                 std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
                 ++errors;
             }
             ++processed;
-            // 경로를 낸 뒤 같은 슬롯으로 차선선 플러그인(VPP가 슬롯을 직접 읽으므로 zero_copy일 때만)
-            if (lane.enabled() && zero_copy)
-                lane.run(
-                    meta, slot_phys, [&] { return frame_ring.read_still_valid(meta.slot, meta.frame_id, slot_seq); },
-                    lane_camera(config, warp_rpy, mount), lane_road_profile(parsed), frame_start_ns);
         } else {
             ++errors;
         }
-        lane.log_if_due();
 
         if (config.max_frames > 0 && processed >= config.max_frames) break;
 

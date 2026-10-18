@@ -16,8 +16,6 @@
 //   --camera-shift D           카메라 장착 오프셋을 녹화보다 D m 바꾼 것처럼 모델 출력을 옮긴다
 //                              (예: 0.08로 달린 녹화로 0을 보려면 -0.08).
 //   --lane-filter W            차선선 시간 필터의 새 측정 가중(planning/lane_line_filter, 1이면 끈다).
-//   --lanebow                  Lanebow 모드로 돈다. 녹화의 LaneState(차선선 플러그인) 도로면 선도 supercombo 차선처럼
-//                              시뮬 차의 차체 좌표로 옮겨 넘긴다.
 //   --lateral-nn m.json        학습한 토크 모델(docs/lateral-nn.md). --steering의 nn_feedforward가 켜져 있을 때 쓴다.
 #include "car/hyundai_can.h"
 #include "car/vehicle_can.h"
@@ -27,7 +25,6 @@
 #include "controls/lateral_controller.h"
 #include "controls/lateral_path.h"
 #include "controls/lateral_torque.h"
-#include "planning/lane_state_selector.h"
 #include "planning/lateral_planner.h"
 #include "recording/event_log_reader.h"
 #include "recording/recorded_model_state.h"
@@ -38,7 +35,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,7 +56,6 @@ struct Options {
     const char *torque = nullptr;
     const char *lateral_nn = nullptr;
     std::optional<double> lane_filter;
-    bool lanebow = false;
     float camera_shift = 0.0f;
     float wn = 10.0f, zeta = 4.0f;
     int delay = 0, driver_high = 150, driver_low = 60, driver_release = 50;
@@ -72,7 +67,7 @@ struct Options {
                  "usage: %s [--open-loop] [--wn W] [--zeta Z] [--delay N] [--gain G | --gain-pts a,b,c,d]\n"
                  "       [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T] [--driver-low T]\n"
                  "       [--driver-release N] [--steering steering.json] [--camera-shift D]\n"
-                 "       [--torque factor,offset,friction] [--lane-filter W] [--lanebow] [--lateral-nn m.json]\n"
+                 "       [--torque factor,offset,friction] [--lane-filter W] [--lateral-nn m.json]\n"
                  "       <out.csv|-> <events.bin...>\n",
                  argv0);
     std::exit(2);
@@ -120,8 +115,6 @@ Options parse_options(int argc, char **argv) {
             o.camera_shift = static_cast<float>(std::atof(value()));
         else if (arg == "--lane-filter")
             o.lane_filter = std::atof(value());
-        else if (arg == "--lanebow")
-            o.lanebow = true;
         else if (arg == "--lateral-nn")
             o.lateral_nn = value();
         else if (arg.rfind("--", 0) == 0)
@@ -204,45 +197,6 @@ void transform_model(ModelState &ms, float dy, float dpsi) {
         for (int i = 1; i < kTrajectorySize; ++i) lane[i].x = std::max(lane[i].x, lane[i - 1].x);
 }
 
-// LaneState 도로면 선(거리 격자 X_IDXS의 가로 위치)을 시뮬 차의 차체 좌표로 옮기고 다시 격자에서 읽는다. LanebowSource가
-// 읽는 것처럼 0 m부터 이어진 유한한 점만 옮긴다(가운데 빈 곳을 잇거나 앞이 빈 선을 0 m까지 늘리면 controlsd가 버리는
-// 선을 재생이 쓴다).
-void transform_lane_state(LaneState &lane, float dy, float dpsi) {
-    const float c = std::cos(dpsi);
-    const float s = std::sin(dpsi);
-    for (uint32_t r = 0; r < std::min<uint32_t>(lane.road_count, kLaneMaxRoadLines); ++r) {
-        LaneRoadLine &road = lane.road[r];
-        float px[kLaneRoadPoints], py[kLaneRoadPoints];
-        int n = 0;
-        for (unsigned i = 0; i < kLaneRoadPoints; ++i) {
-            if (!std::isfinite(road.y[i])) break;
-            const float x = model_x_idx(static_cast<int>(i));
-            const float y = road.y[i] - dy;
-            px[n] = c * x + s * y;
-            py[n] = -s * x + c * y;
-            if (n > 0) px[n] = std::max(px[n], px[n - 1]);
-            ++n;
-        }
-        for (unsigned i = 0; i < kLaneRoadPoints; ++i) {
-            const float x = model_x_idx(static_cast<int>(i));
-            road.y[i] = std::numeric_limits<float>::quiet_NaN();
-            for (int j = 1; j < n; ++j) {
-                if (px[j - 1] <= x && x <= px[j]) {
-                    const float span = px[j] - px[j - 1];
-                    road.y[i] = span > 0.0f ? py[j - 1] + (py[j] - py[j - 1]) * (x - px[j - 1]) / span : py[j];
-                    break;
-                }
-            }
-        }
-        // 회전으로 가장 가까운 점이 0 m 앞으로 밀리면 그 앞 격자는 가장 가까운 두 점으로 늘린다
-        if (n >= 2 && !std::isfinite(road.y[0]) && px[0] > 0.0f) {
-            const float slope = (py[1] - py[0]) / std::max(px[1] - px[0], 1e-3f);
-            for (unsigned i = 0; i < kLaneRoadPoints && model_x_idx(static_cast<int>(i)) < px[0]; ++i)
-                road.y[i] = py[0] + slope * (model_x_idx(static_cast<int>(i)) - px[0]);
-        }
-    }
-}
-
 // 녹화에서 그대로 가져오는 외생 입력. 시뮬이 바꿀 수 없는 것들이다.
 struct Exogenous {
     float v_kph = 0.0f;
@@ -287,9 +241,7 @@ int main(int argc, char **argv) {
     }
     Plant plant(opt.wn, opt.zeta, gain_curve, opt.delay);
 
-    if (opt.lanebow) steering.path_mode = static_cast<int>(PathMode::Lanebow);
     LateralPlanner planner(steering);
-    LaneStateSelector lane_states;
     if (opt.lane_filter) {
         if (!(*opt.lane_filter > 0.0 && *opt.lane_filter <= 1.0)) usage(argv[0]);
         planner.set_lane_filter_weight(*opt.lane_filter);
@@ -323,14 +275,11 @@ int main(int argc, char **argv) {
         return 1;
     }
     // lane_y는 시뮬 차체 기준 차선 중앙 오프셋이다. dy와 달리 녹화 주행을
-    // 기준으로 삼지 않아 설정 간 A/B에 편향이 없다. ld_lane_y는 같은 것을 차선선 플러그인(LD) 자차 선으로
-    // 잰 것이다(녹화에 LaneState가 있을 때). 두 인지 중 어느 쪽에 맞추는지가 갈리므로 Lanebow A/B는 둘 다 본다.
+    // 기준으로 삼지 않아 설정 간 A/B에 편향이 없다.
     std::fprintf(out,
                  "t,seg,v_kph,active,block,k_des,k_sim,k_rec,a_cmd,a_act,"
                  "angle_sim,angle_rec,t_des,t_apply,t_rec,driver,active_rec,dy,dpsi,"
-                 "lane_y,lane_ok,clamped,ld_lane_y,ld_ok\n");
-    float ld_lane_y = 0.0f;
-    bool ld_ok = false;
+                 "lane_y,lane_ok,clamped\n");
 
     Exogenous ex;
     ModelState ms_sim{};
@@ -474,12 +423,11 @@ int main(int argc, char **argv) {
         const float lane_y = lane_ok ? 0.5f * (ms_sim.lanes[1][0].y + ms_sim.lanes[2][0].y) : 0.0f;
         std::fprintf(out,
                      "%.3f,%d,%.2f,%d,%s,%.6f,%.6f,%.6f,%.4f,%.4f,%.3f,%.3f,"
-                     "%d,%d,%d,%d,%d,%.4f,%.5f,%.4f,%d,%d,%.4f,%d\n",
+                     "%d,%d,%d,%d,%d,%.4f,%.5f,%.4f,%d,%d\n",
                      sim_t - route_t0, resync ? 0 : segment, ex.v_kph, r.active ? 1 : 0,
                      block_reason_name(r.active_block), r.desired_curvature, k_sim, ex.k_rec, a_cmd, a_act, angle_sim,
                      ex.angle_rec, r.desired_torque, r.apply_torque, ex.apply_rec, ex.driver_torque,
-                     static_cast<int>(ex.active_rec), dy, dpsi, lane_y, lane_ok ? 1 : 0, clamped,
-                     ld_ok ? ld_lane_y : 0.0f, ld_ok ? 1 : 0);
+                     static_cast<int>(ex.active_rec), dy, dpsi, lane_y, lane_ok ? 1 : 0, clamped);
         clamped = 0;
     };
 
@@ -524,12 +472,6 @@ int main(int argc, char **argv) {
                 controller.set_live_params(live, (ls.flags & kLearnerVehicleValid) != 0, calibrated);
                 live_now = live;
             }
-            if (rh.type == static_cast<uint16_t>(RecordType::LaneState) && rh.payload_size == sizeof(LaneState)) {
-                LaneState lane;
-                std::memcpy(&lane, buf.data(), sizeof(lane));
-                transform_lane_state(lane, dy + opt.camera_shift, dpsi);
-                lane_states.offer(lane);
-            }
             if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && rh.payload_size >= sizeof(ControlState)) {
                 ControlState cs{};
                 std::memcpy(&cs, buf.data(), sizeof(cs));
@@ -552,13 +494,7 @@ int main(int argc, char **argv) {
                 transform_model(ms_sim, dy + opt.camera_shift, dpsi);
                 have_model = true;
                 VehicleCanState planner_vehicle{};
-                const LaneState *lane = lane_states.pick(ms.capture_timestamp_ns);
-                target = planner.update(ms_sim, lane, planner_vehicle, ex.v_kph / 3.6f, k_sim, active_prev, false);
-                // LD 차로 중앙(옮긴 자차 선의 x = 0 가운데)
-                const LaneRoadLine *ld_left = lane ? lane_ego_road_line(*lane, kLaneSlotEgoLeft) : nullptr;
-                const LaneRoadLine *ld_right = lane ? lane_ego_road_line(*lane, kLaneSlotEgoRight) : nullptr;
-                ld_ok = ld_left && ld_right && std::isfinite(ld_left->y[0]) && std::isfinite(ld_right->y[0]);
-                ld_lane_y = ld_ok ? 0.5f * (ld_left->y[0] + ld_right->y[0]) : 0.0f;
+                target = planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim, active_prev, false);
             }
         }
     }

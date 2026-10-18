@@ -79,14 +79,6 @@ moves. The filter only slows down the model changing its own estimate. It runs
 in Laneless mode too, so it is warm on a switch, but nothing there reads the
 lines' positions.
 
-[Lanebow](lanebow.md) mode filters the lane-line plugin's ego lines the same
-way, with two more calls:
-
-- `update_prefix` takes a line that covers only its first points (the plugin's
-  lines end at about 30 m); the rest of the output is NaN.
-- `predict` moves the last filtered line to a later time without blending, so
-  a plugin result one frame older than the model frame lines up with it.
-
 What did not work:
 
 - **Blending points at the same distance**, without the motion, lags the car's

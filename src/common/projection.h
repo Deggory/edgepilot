@@ -27,11 +27,6 @@ bool project_point_subpixel(const ProjectionState &projection, float x_forward, 
 // (다른 카메라 영상을 재생할 때 차선이 영상과 맞게).
 void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy);
 
-// 카메라 프레임(image_w x image_h, 예: 링 슬롯 1280x720)의 화소를 HUD 화면(가로 screen_w x screen_h)으로.
-// 화면은 영상 가운데 kPreviewAspect 영역을 담는다(overlayd가 IVPS로 같은 영역을 자른다). 차선선 플러그인의
-// 점처럼 이미 화소인 것을 그릴 때 쓴다(project_point_subpixel처럼 보정·투영을 거치지 않는다).
-void frame_pixel_to_screen(float u, float v, int image_w, int image_h, int screen_w, int screen_h, float *x, float *y);
-
 // RPY(rad) -> 3x3 회전행렬(row-major), Rz*Ry*Rx.
 void rotation_from_rpy(float roll, float pitch, float yaw, float *rot);
 

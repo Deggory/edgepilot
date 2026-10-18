@@ -17,7 +17,7 @@ flowchart TB
     modeld["modeld<br>frame it used"] --> venc
     venc --> writer["recordd writer thread"]
     can["pandad<br>CAN log queues"] --> writer
-    states["state topics<br>model, control, panda,<br>learner, IMU,<br>localization, lane"] --> writer
+    states["state topics<br>model, control, panda,<br>learner, IMU,<br>localization"] --> writer
     writer --> staging["tmpfs staging<br>/tmp/record_staging"]
     staging -- "mover, 3 MiB/s" --> sd["recordings/<br>on the SD card"]
     sd --> readers["host tools, replayd"]
@@ -172,9 +172,13 @@ Record header (16 B):
 | 6 | `LearnerState` | 128 B |
 | 7 | `Imu` | 16 B + 40 B per sample (about 10 samples every 100 ms) |
 | 8 | `Localization` | 128 B |
-| 9 | `LaneState` | 6776 B, only with a [lane-line plugin](lane-line-plugin.md) |
+| 9 | `RetiredLaneState` | 6776 B, only in routes of 2026-10-15 to 10-18 |
 
 - State payloads are the structs of `src/common/ipc_messages.h` as they are.
+- Type 9 was the lane-line plugin's result (`LaneState`), a feature since
+  removed. Nothing writes it any more and readers skip it; the type keeps its
+  number so that `EventLogReader`, which ends a file at an unknown type, reads
+  those routes to the end.
 - A CAN batch is an 8-byte header (`count`, `dropped`) and `count` frames of
   84 B (`src/recording/recorded_can.h`). `CanRx` comes from `pandad`'s receive
   log. `CanTx` holds the batches `controlsd` generated, as `pandad` took them,
@@ -245,15 +249,6 @@ Notes on the changes:
   the status, block count and spread of that source
   ([Flow calibration](flow-calibration.md)).
 - **Versions 12 and 13.** See [Lead flow](lead-flow.md).
-- **Record type 9.** `LaneState` came in version 13 without a version bump,
-  like `Imu` and `Localization` before it. The Python reader skips record
-  types it does not know; a C++ reader built before it stops reading that chunk
-  at the first `LaneState` record. Before it was released, its layout gained
-  the road block (6016 to 6776 B); the readers take only the 6776 B form.
-- **`ControlState.lane_state_frame`.** The frame of the `LaneState` the
-  Lanebow plan used (low 32 bits, 0 otherwise) took the 4 padding bytes at the
-  end of `ControlState` without a version bump; older recordings have 0
-  there.
 
 ### Older recordings
 

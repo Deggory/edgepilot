@@ -25,9 +25,8 @@ struct HudTarget {
 // 받으면 그 칸만 지우고 처음 보는 버퍼는 전부 지운다(버퍼에는 이 렌더러만 쓴다고 본다).
 class HudRenderer {
 public:
-    // lane: 차선선 플러그인 결과(Lanebow 모드에서 그린다, 없으면 nullptr)
     void draw(const HudTarget &target, const ParsedModelOutput &output, const ProjectionState &projection,
-              const HudState &hud = HudState{}, const LaneState *lane = nullptr);
+              const HudState &hud = HudState{});
     // 마지막 draw가 그린 칸: 버퍼 행마다 (1 << last_tile_shift()) 폭 칸의 비트. 화면 쪽이 바뀐
     // 칸만 옮길 때 지난번 것과 합쳐 쓴다.
     const std::vector<uint16_t> &last_damage() const { return *last_damage_; }

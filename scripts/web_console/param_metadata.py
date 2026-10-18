@@ -1,9 +1,8 @@
 """파라미터 탭의 구성: 그룹(탭)마다 파일, 바뀌면 다시 읽으라고 알릴 프로세스, 섹션 순서와, 항목마다 섹션·단위·범위.
 숫자 항목의 min/max는 런타임의 클램프 표와 같아야 한다(check_web_console.py가 대조). 화면 글자(그룹 이름과 안내, 섹션
 이름, 항목의 이름·설명·효과)는 언어마다 페이지의 문구 묶음 static/i18n/<언어>.json에 있다: group.<그룹>.label·note,
-section.<섹션>, param.<그룹>.<키>.label·description·increase·decrease·learned_role(고르는 항목은 increase·decrease
-대신 option.<선택지>.label·description), unit.<단위>, caution.<주의>, 그리고 다른 항목 때문에 쓰이지 않거나 쓰임이
-바뀔 때의 안내 unused.<이름>·role.<이름>(아래 when).
+section.<섹션>, param.<그룹>.<키>.label·description·increase·decrease·learned_role, unit.<단위>, caution.<주의>, 그리고
+다른 항목 때문에 쓰이지 않거나 쓰임이 바뀔 때의 안내 unused.<이름>·role.<이름>(아래 when).
 check_web_console.py가 두 언어 모두 빠짐없는지 본다. 차량마다 다른 값(MDPS 위조 속도 등)은 설명에 적지 않는다.
 페이지가 기본값(params.defaults)을 옆에 보여 준다."""
 from __future__ import annotations
@@ -53,14 +52,6 @@ def toggle(section: str, *, tab: str = "", learned: bool = False, card: str = ""
     return _with({"section": section}, tab=tab, learned=learned, card=card, unused=list(unused))
 
 
-def choice(section: str, options: Tuple[str, ...]) -> Dict[str, Any]:
-    """몇 개 중 하나를 고르는 항목. 값은 options 안의 순서 번호(0부터)이고 min/max가 그 범위다(런타임은 범위 밖과
-    정수가 아닌 값을 거부한다). 선택지마다 param.<그룹>.<키>.option.<이름>.label·description 문구가 있고,
-    increase/decrease 문구는 없다."""
-    return {"section": section, "control": "choice", "options": list(options), "step": 1, "min": 0,
-            "max": len(options) - 1}
-
-
 PARAM_GROUPS: Dict[str, Dict[str, Any]] = {
     "steering": {
         "file": "steering.json", "notify": "controlsd",
@@ -98,7 +89,7 @@ VEHICLE_TAB: Dict[str, Any] = {
 STEERING_OFF = when("enabled", False, "steering_off")
 NN_LOADED = when("lateral_nn_loaded", True, group="runtime")
 NN_ON = when("nn_feedforward", True, "nn_feedforward", also=NN_LOADED)
-LANELESS = when("path_mode", 1, "laneless")
+LANELESS = when("laneless_mode", True, "laneless")
 CRUISE_OFF = (when("enabled", False, "cruise_off"), when("enabled", False, "steering_off_cruise", group="steering"))
 
 PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -140,7 +131,7 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         "path_offset_m": number("lane_position", "m", 0.01, -1, 1, unused=(STEERING_OFF, LANELESS)),
         "lane_path_weight": number("lane_position", "weight", 0.1, 0.5, 10, unused=(STEERING_OFF, LANELESS)),
         "min_steer_speed_mps": number("basics", "m/s", 0.1, 0, 5, unused=(STEERING_OFF,)),
-        "path_mode": choice("path_mode", ("lane", "laneless", "lanebow")),
+        "laneless_mode": toggle("path_mode"),
         "lane_change_min_speed_kph": number("driver", "km/h", 1, 0, 80, unused=(STEERING_OFF,)),
     },
     "adaptive_cruise": {

@@ -79,12 +79,6 @@ It is checked against the C++ asserts by `tests/check_recording_reader.py`.
 shows, checked by `tests/check_web_console.py`. ControlState's field at offset
 56 is `cluster_speed_kph`, the cluster's display speed; `ego_speed_kph` is the
 wheel speed the controller uses.
-`read_route_lane_state` returns the `LaneState` records of the
-[lane-line plugin](../../docs/lane-line-plugin.md), or `None` for a route
-recorded without one. Each record's `road` field holds every line and boundary
-on the road: `y` at the first 17 points of the distance grid, `first` and
-`last` for the measured part (`LANE_ROAD_LINE`). Records from before the road
-block (6016 B) are skipped.
 
 ### `make_replay.py`
 

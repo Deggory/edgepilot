@@ -59,7 +59,7 @@ size_t AxEngineSession::Tensor::count() const {
     return std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>());
 }
 
-AxEngineSession::AxEngineSession(const std::string &model_path, const char *cmm_tag) : cmm_tag_(cmm_tag) {
+AxEngineSession::AxEngineSession(const std::string &model_path) {
     // 모델 파일(34 MB)은 힙에 읽어 두지 않고 읽기 전용으로 매핑한다. 엔진은 핸들을 만들며 가중치를 CMM에 옮기므로,
     // 그 뒤에는 페이지를 놓아 준다(MADV_DONTNEED). 엔진이 포인터를 다시 읽어도 파일에서 다시 올라온다.
     const int fd = ::open(model_path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -138,7 +138,7 @@ void AxEngineSession::allocate(Block &block, std::vector<Tensor> &tensors, const
     void *virt = nullptr;
     AX_U64 phys = 0;
     if (AX_SYS_MemAllocCached(&phys, &virt, static_cast<AX_U32>(total), 128,
-                              reinterpret_cast<const AX_S8 *>(cmm_tag_)) != 0)
+                              reinterpret_cast<const AX_S8 *>("supercombo")) != 0)
         throw std::runtime_error("AX_SYS_MemAllocCached failed for " + std::to_string(count) + " tensors");
     block.phys = phys;
     block.virt = virt;

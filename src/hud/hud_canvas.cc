@@ -194,16 +194,21 @@ void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius
 }
 
 void HudCanvas::fill_polygon(const HudPoint *points, int count, uint32_t color) {
-    fill_polygon_faded(points, count, color, 0.0f, 0.0f, 1.0f);
+    fill_rows(points, count, color, 0.0f, 0.0f, 1.0f);
+}
+
+void HudCanvas::fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y, float far_y,
+                                   float far_alpha) {
+    fill_rows(points, count, color, near_y, far_y, far_alpha);
 }
 
 // 버퍼 행마다 부표본 행 4개가 변과 만나는 x로 짝홀 구간을 구한다. 변은 위 끝 순으로 정렬해 지금
 // 걸친 변만 본다(띠는 66변 중 둘). 네 부표본 행이 모두 구간 하나면(이 HUD의 도형은 거의 다)
 // 넷 다 덮는 안쪽은 바로 합성하고 양쪽 가장자리 띠만 커버리지로 쌓는다. 아니면 구간 전부를
-// 쌓는다. 흐림과 색 띠는 화면 높이를 따른다: 가로 버퍼에서는 행마다, 세로 패널 버퍼에서는 화면
-// 높이가 버퍼 열이라 열마다 알파와 색을 미리 센다.
-void HudCanvas::fill_polygon_faded(const HudPoint *screen_points, int count, uint32_t color, float near_y, float far_y,
-                                   float far_alpha, const HudColorRamp *ramp) {
+// 쌓는다. 흐림은 화면 높이(near_y → far_y)를 따른다: 가로 버퍼에서는 행마다, 세로 패널 버퍼
+// 에서는 화면 높이가 버퍼 열이라 열마다 알파를 미리 센다. near_y == far_y면 줄이지 않는다.
+void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t color, float near_y, float far_y,
+                          float far_alpha) {
     if (count < 3 || count > kMaxEdges) return;
     HudPoint points[kMaxEdges];
     for (int i = 0; i < count; ++i) points[i] = to_buffer(screen_points[i]);
@@ -224,38 +229,18 @@ void HudCanvas::fill_polygon_faded(const HudPoint *screen_points, int count, uin
     const int y1 = std::min(buffer_h_ - 1, static_cast<int>(std::ceil(max_y)));
     const uint32_t rgb = color & 0x00ffffffu;
     const float alpha = static_cast<float>(color >> 24);
-    const uint32_t full_alpha = static_cast<uint32_t>(alpha + 0.5f);
-    // 화면 높이 screen_y가 from에서 to 사이 어디인지(0..1)
-    auto along = [](float screen_y, float from, float to) {
-        return std::clamp((from - screen_y) / (from - to), 0.0f, 1.0f);
-    };
     const bool faded = near_y != far_y;
     auto fade = [&](float screen_y) {  // 화면 높이 screen_y에서의 알파
-        return static_cast<uint32_t>(alpha * (1.0f - along(screen_y, near_y, far_y) * (1.0f - far_alpha)) + 0.5f);
+        const float t = std::clamp((near_y - screen_y) / (near_y - far_y), 0.0f, 1.0f);
+        return static_cast<uint32_t>(alpha * (1.0f - t * (1.0f - far_alpha)) + 0.5f);
     };
-    const bool ramped = ramp != nullptr && ramp->stops != nullptr && ramp->count > 0 && ramp->near_y != ramp->far_y;
-    auto ramp_rgb = [&](float screen_y) {  // 화면 높이 screen_y에서의 띠 색
-        const float t = along(screen_y, ramp->near_y, ramp->far_y) * static_cast<float>(ramp->count - 1);
-        const int i = std::min(static_cast<int>(t), ramp->count - 1);
-        if (i + 1 >= ramp->count) return ramp->stops[ramp->count - 1] & 0x00ffffffu;
-        const float f = t - static_cast<float>(i);
-        uint32_t out = 0;
-        for (int shift = 0; shift < 24; shift += 8) {
-            const float a = static_cast<float>((ramp->stops[i] >> shift) & 0xff);
-            const float b = static_cast<float>((ramp->stops[i + 1] >> shift) & 0xff);
-            out |= static_cast<uint32_t>(a + (b - a) * f + 0.5f) << shift;
-        }
-        return out;
-    };
-    const bool by_column = (faded || ramped) && orientation_.transpose && buffer_w_ <= kMaxFadeColumns;
+    const bool fade_columns = faded && orientation_.transpose && buffer_w_ <= kMaxFadeColumns;
     std::array<uint8_t, kMaxFadeColumns> column_alpha;
-    std::array<uint32_t, kMaxFadeColumns> column_rgb;
-    if (by_column) {
+    if (fade_columns) {
         for (int bx = 0; bx < buffer_w_; ++bx) {
             const float center = static_cast<float>(bx) + 0.5f;
-            const float screen_y = orientation_.flip_x ? static_cast<float>(buffer_w_) - center : center;
-            column_alpha[bx] = static_cast<uint8_t>(faded ? fade(screen_y) : full_alpha);
-            column_rgb[bx] = ramped ? ramp_rgb(screen_y) : rgb;
+            column_alpha[bx] =
+                static_cast<uint8_t>(fade(orientation_.flip_x ? static_cast<float>(buffer_w_) - center : center));
         }
     }
 
@@ -314,21 +299,21 @@ void HudCanvas::fill_polygon_faded(const HudPoint *screen_points, int count, uin
         if (inner_l >= inner_r && cover.max < cover.min) continue;
 
         const float row_center = static_cast<float>(y) + 0.5f;
-        const float row_screen_y = orientation_.flip_y ? static_cast<float>(buffer_h_) - row_center : row_center;
-        const uint32_t row_a = faded && !by_column ? fade(row_screen_y) : full_alpha;
-        const uint32_t row_rgb = ramped && !by_column ? ramp_rgb(row_screen_y) : rgb;
-        auto a = [&](int x) { return by_column ? column_alpha[x] : row_a; };
-        auto c = [&](int x) { return by_column ? column_rgb[x] : row_rgb; };
+        const uint32_t row_a =
+            !faded || fade_columns
+                ? static_cast<uint32_t>(alpha + 0.5f)
+                : fade(orientation_.flip_y ? static_cast<float>(buffer_h_) - row_center : row_center);
+        auto a = [&](int x) { return fade_columns ? column_alpha[x] : row_a; };
         uint32_t *pixels = row(y);
         auto blend_covered = [&](int from, int to) {
             for (int x = from; x <= to; ++x) {
-                blend(pixels[x], c(x), div255(a(x) * std::min<uint32_t>(cover.cells[x], 255)));
+                blend(pixels[x], rgb, div255(a(x) * std::min<uint32_t>(cover.cells[x], 255)));
                 cover.cells[x] = 0;
             }
         };
         if (inner_l < inner_r) {
             blend_covered(cover.min, std::min(cover.max, inner_l - 1));
-            for (int x = inner_l; x < inner_r; ++x) blend(pixels[x], c(x), a(x));
+            for (int x = inner_l; x < inner_r; ++x) blend(pixels[x], rgb, a(x));
             blend_covered(std::max(cover.min, inner_r), cover.max);
             mark(y, std::min(cover.min, inner_l), std::max(cover.max + 1, inner_r));
         } else {

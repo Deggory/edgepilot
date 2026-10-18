@@ -22,7 +22,6 @@
 #include "controls/departure_alert.h"
 #include "controls/lateral_controller.h"
 #include "learners/lateral_learners.h"
-#include "planning/lane_state_selector.h"
 #include "planning/lateral_planner.h"
 
 #include <chrono>
@@ -112,10 +111,7 @@ public:
     void set_lateral_nn(std::shared_ptr<const LateralNnModel> model) { controller_.set_lateral_nn(std::move(model)); }
     // 수신 CAN 묶음. 100 ms보다 오래된 묶음은 버리고 false다.
     bool on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s);
-    // 새로 읽은 차선선 플러그인 결과(LaneState). 같은 틱의 on_model보다 먼저 부른다.
-    void on_lane_state(const LaneState &lane) { lane_states_.offer(lane); }
-    // 새 모델 상태. 이번 틱 차량 상태와 직전 틱 결과(vEgo·실제 곡률·active)로 플래너를 돌린다. Lanebow 차선은
-    // 그 프레임에 고른 LaneState(planning/lane_state_selector)에서 얻는다.
+    // 새 모델 상태. 이번 틱 차량 상태와 직전 틱 결과(vEgo·실제 곡률·active)로 플래너를 돌린다.
     void on_model(const ModelState &model);
     void on_panda(const PandaState &panda_state) { panda_state_ = panda_state; }
     // lagd 지연과 paramsd·torqued의 locationd 입력.
@@ -159,7 +155,6 @@ private:
     ModelState model_;
     PandaState panda_state_;
     LateralTarget lateral_target_;
-    LaneStateSelector lane_states_;
     AdaptiveCruiseOutput adaptive_cruise_;
     LateralControlResult last_result_;
     PandaGateOutput panda_;

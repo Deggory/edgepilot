@@ -26,8 +26,7 @@ public:
         size_t count() const;
     };
 
-    // cmm_tag는 CMM 할당 이름표(보드의 CMM 사용 목록에서 블록을 알아보는 이름).
-    explicit AxEngineSession(const std::string &model_path, const char *cmm_tag = "supercombo");
+    explicit AxEngineSession(const std::string &model_path);
     ~AxEngineSession();
     AxEngineSession(const AxEngineSession &) = delete;
     AxEngineSession &operator=(const AxEngineSession &) = delete;
@@ -71,7 +70,6 @@ private:
     std::vector<Tensor> outputs_;
     std::vector<uint8_t> io_storage_;  // AX_ENGINE_IO_T와 버퍼 배열
     std::string tools_version_;
-    const char *cmm_tag_ = "supercombo";
 };
 
 #endif

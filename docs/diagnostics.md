@@ -269,7 +269,7 @@ flowchart TB
     class route,inputs,pair,camera,snap,frames,compose,png proc
 ```
 
-Without input, `hud_snapshot` draws 30 scenarios at the HUD's 640x480 landscape
+Without input, `hud_snapshot` draws 27 scenarios at the HUD's 640x480 landscape
 size: driving, alerts, cards, warnings and the less common branches (soft
 disable, panda fault, radar-only lead, bar TPMS, engaged but blocked, ...). It
 writes each frame as an `EDGEARGB` file and prints the draw timings:
@@ -292,13 +292,10 @@ To draw a recorded moment instead of the synthetic scenes:
 
 1. `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts a
    `ModelState` / `ControlState` pair (the current v13 layout; older records
-   are zero-filled), the same frame's `LaneState` as `lane.bin` when the route
-   was recorded with the [lane-line plugin](lane-line-plugin.md), plus the
-   matching camera frame when the route copy has its `segments/`.
+   are zero-filled), plus the matching camera frame when the route copy has its
+   `segments/`.
 2. `hud_snapshot --model model.bin --control control.bin --out /tmp/hud` draws
-   that pair. With `--lane lane.bin`, the `lanebow` and `lanebow_fallback`
-   scenarios draw the recorded LD lines instead of synthetic ones;
-   `lanebow_no_ld` and the other scenarios draw no LD lines.
+   that pair.
 3. `python3 tools/ui/hud_tools.py compose /tmp/hud [camera.png]` turns the
    frames into PNGs and composites them over the centre 4:3 of the camera
    frame, as the screen shows it.

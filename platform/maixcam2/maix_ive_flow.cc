@@ -1,5 +1,4 @@
 #include "maixcam2/maix_ive_flow.h"
-#include "maixcam2/maix_vpp.h"
 
 #include "ax_ive_api.h"
 #include "ax_ivps_api.h"
@@ -9,7 +8,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -145,8 +143,6 @@ struct IveFlow::Impl {
         attr.eSclType = AX_IVPS_SCL_TYPE_AUTO;
         attr.eSclInput = AX_IVPS_SCL_INPUT_SHARE;
         attr.tAspectRatio.eMode = AX_IVPS_ASPECT_RATIO_STRETCH;
-        // 차선선 플러그인(주 스레드)도 같은 VPP 작업 큐를 쓴다(maix_vpp.h)
-        std::lock_guard<std::mutex> lock(vpp_mutex());
         return AX_IVPS_CropResizeV2Vpp(&src, kLevels - 1, box, dst, &attr);
     }
 
