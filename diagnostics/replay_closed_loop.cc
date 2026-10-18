@@ -2,13 +2,19 @@
 // 개루프 재생(replay_planner)은 차 응답이 녹화에 고정돼 토크를 바꿔도 오차가
 // 안 움직인다. 여기서는 시뮬 차가 녹화 차와 벌어진 만큼(dy, dpsi) 차선 기하를
 // 차체 좌표로 다시 돌려, 제어 변경이 거동에 반영된다.
+// 플랜트는 토크를 조향각 곡률(컨트롤러가 재는 값)로 내고, 차의 진행 곡률은 그것을 조향각 → 진행 지연만큼 늦춘
+// 것이다(실차 0.10~0.11 s). 자세 차이는 진행 곡률로 쌓는다. 녹화 쪽 진행도 녹화 조향각 곡률을 같은 만큼 늦춘다.
+// controlsd가 쓰는 입력 가운데 ESP12(요레이트·횡가속·종가속)는 녹화 CAN에서 시뮬 차가 벌어진 만큼 고쳐 넣고
+// (편경사 추정이 녹화와 같다), lagd 지연은 녹화 locationd 상태에서 넣는다.
 // 운전자가 개입했거나 비활성인 틱은 실측 상태로 재동기화한다. 시뮬은 hands-off
 // 구간만 자유 주행하고 각 구간은 실제 자세에서 출발한다(seg 열이 구간 번호).
 // 사용: replay_closed_loop [옵션] <out.csv|-> <events.bin...>   (-는 CSV 없이 점수만)
 //   --open-loop                자세 보정을 고정해 플랜트 재현도만 본다
 //   --wn/--zeta/--delay N      플랜트 고유진동수·감쇠·지연 틱
 //   --gain G, --gain-pts a,b,c,d  플랜트 이득(속도 노드 전부 G, 또는 노드별)
-//   --sad S, --kp, --ki, --laf  컨트롤러 steer_actuator_delay·토크 이득
+//   --path-lag S               조향각 → 진행 지연(초, 기본 0.11, 0이면 조향각 곡률로 진행한다)
+//   --sad S, --kp, --ki, --laf  컨트롤러 steer_actuator_delay·토크 이득. lagd 지연을 쓰는 설정(use_live_delay)이면
+//                              녹화의 lagd 추정이 유효한 동안 그것이 경로 지연이다.
 //   --driver-high/--driver-low T, --driver-release N  운전자 개입 히스테리시스
 //   --steering route/params/steering.json  녹화 당시 튜닝(없으면 코드 기본값). 녹화의 LearnerState
 //                              학습값(paramsd·torqued)은 controlsd처럼 매번 컨트롤러에 넣는다.
@@ -25,12 +31,15 @@
 #include "controls/lateral_controller.h"
 #include "controls/lateral_path.h"
 #include "controls/lateral_torque.h"
+#include "localization/lateral_lag.h"
 #include "planning/lateral_planner.h"
 #include "recording/event_log_reader.h"
+#include "recording/recorded_can.h"
 #include "recording/recorded_model_state.h"
 #include "recording/recording_format.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +55,13 @@ constexpr double kDtCtrl = 0.01;
 // 녹화가 본 차선 범위 밖은 외삽이라 신뢰 구간을 벗어난다.
 constexpr float kMaxDeviationY = 2.0f;
 constexpr float kMaxDeviationPsi = 0.15f;
+// 조향각(차량 모델) 곡률 → 요레이트 곡률 지연. 2026-10-12~10-16 주행 다섯(선형·학습 FF, 30~90 km/h)의 상관 최대가
+// 0.10~0.11 s(IMU, ESP12는 0~8 ms 더 늦다)이고, 순수 지연·1차 지연·둘을 합친 모양의 재현도가 같다(R² 0.94~0.98).
+constexpr float kDefaultPathLagS = 0.11f;
+// 녹화 ESP12가 이보다 낡으면 시뮬 차의 ESP12 값을 무효로 둔다(50 Hz 메시지)
+constexpr double kEsp12MaxAgeS = 0.1;
+// controlsd처럼 lagd 추정은 이 안의 것만 쓴다(ControlsTick::on_localization)
+constexpr double kLocalizationMaxAgeS = 2.0;
 
 // 비워 둔 값은 코드 기본값을 쓴다.
 struct Options {
@@ -57,7 +73,8 @@ struct Options {
     const char *lateral_nn = nullptr;
     std::optional<double> lane_filter;
     float camera_shift = 0.0f;
-    float wn = 10.0f, zeta = 4.0f;
+    float wn = 16.0f, zeta = 3.0f;
+    float path_lag = kDefaultPathLagS;
     int delay = 0, driver_high = 150, driver_low = 60, driver_release = 50;
     std::vector<const char *> positional;
 };
@@ -65,8 +82,8 @@ struct Options {
 [[noreturn]] void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s [--open-loop] [--wn W] [--zeta Z] [--delay N] [--gain G | --gain-pts a,b,c,d]\n"
-                 "       [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T] [--driver-low T]\n"
-                 "       [--driver-release N] [--steering steering.json] [--camera-shift D]\n"
+                 "       [--path-lag S] [--sad S] [--kp KP] [--ki KI] [--laf LAF] [--driver-high T]\n"
+                 "       [--driver-low T] [--driver-release N] [--steering steering.json] [--camera-shift D]\n"
                  "       [--torque factor,offset,friction] [--lane-filter W] [--lateral-nn m.json]\n"
                  "       <out.csv|-> <events.bin...>\n",
                  argv0);
@@ -117,14 +134,31 @@ Options parse_options(int argc, char **argv) {
             o.lane_filter = std::atof(value());
         else if (arg == "--lateral-nn")
             o.lateral_nn = value();
+        else if (arg == "--path-lag")
+            o.path_lag = static_cast<float>(std::atof(value()));
         else if (arg.rfind("--", 0) == 0)
             usage(argv[0]);
         else
             o.positional.push_back(argv[i]);
     }
-    if (o.positional.size() < 2) usage(argv[0]);
+    if (o.positional.size() < 2 || !(o.path_lag >= 0.0f && o.path_lag <= 1.0f)) usage(argv[0]);
     return o;
 }
+
+// 고정 틱 수만큼 늦춘 값을 내는 지연선. 넣은 값이 delay틱 뒤에 나온다(0이면 그대로).
+class DelayLine {
+public:
+    explicit DelayLine(int delay_frames) : buffer_(static_cast<size_t>(std::max(0, delay_frames)) + 1, 0.0f) {}
+    float push(float value) {
+        buffer_[head_] = value;
+        head_ = (head_ + 1) % buffer_.size();
+        return buffer_[head_];
+    }
+
+private:
+    std::vector<float> buffer_;
+    size_t head_ = 0;
+};
 
 // 이득 곡선의 속도 노드(m/s). 일정한 kf 가정이 저속에서 깨져 노드가 필요하다.
 constexpr float kGainSpeedsMps[] = {3.0f, 8.0f, 15.0f, 25.0f};
@@ -225,15 +259,14 @@ int main(int argc, char **argv) {
     steering.torque_kp = opt.kp.value_or(steering.torque_kp);
     steering.torque_ki = opt.ki.value_or(steering.torque_ki);
     steering.torque_lat_accel_factor = opt.laf.value_or(steering.torque_lat_accel_factor);
-    // 편경사 추정은 ESP12 실측이 필요한데 ControlState에 없다. 꺼서 0으로 고정하고
-    // 그만큼을 플랜트 이득이 아니라 미모델 외란으로 남긴다.
-    steering.live_bank_compensation = false;
 
-    // MaixCAM2 차선 주행(2026-10-03 00-05-56, 10-04 02-29-44)에서 개루프 재현 R2가 가장 높았던
-    // 곡선(이전 식별 곡선 0.70/0.35/0.70/1.20의 1.5배: R2 0.960/0.956 → 0.971/0.976). 이전 값은
-    // 차의 토크 응답을 작게 잡아, 횡가속 계수를 올리면(torqued 3.15) 곡선 바깥으로 12 cm 밀린다는
-    // 잘못된 결론을 냈다. docs/closed-loop-replay.md
-    const float default_gain[kGainNodes] = {1.05f, 0.525f, 1.05f, 1.80f};
+    // 2026-10-17 다시 식별(docs/closed-loop-replay.md). 녹화 토크 → 조향각 횡가속의 개루프 맞춤은 지연 0~60 ms,
+    // wn 6~16의 여러 모양이 R² 0.83으로 같아 시간을 정하지 못한다. 그래서 자세를 고정한 재생에서 녹화 당시
+    // 컨트롤러(선형 주행 셋은 선형, 10-16 둘은 학습 토크 모델)의 요구 → 시뮬 조향각 지연이 실차와 맞는 것을 골랐다:
+    // 선형 0.444 s(실차 0.444), 학습 FF 0.551 s(0.563), 재현 R² 0.973(이전 wn 10·zeta 4는 0.548/0.640 s로 0.1 s
+    // 느렸다). 이득은 같은 맞춤의 노드별 최소제곱(3 m/s는 데이터가 없어 이전 값). 이전 곡선(1.05/0.525/1.05/1.80,
+    // 10-03·10-04 차선 주행의 R²로 고른 것)과 8 m/s 아래만 다르다.
+    const float default_gain[kGainNodes] = {1.05f, 0.385f, 1.04f, 1.74f};
     float gain_curve[kGainNodes];
     for (int i = 0; i < kGainNodes; ++i) gain_curve[i] = opt.gain.value_or(default_gain[i]);
     if (opt.gain_pts != nullptr) {
@@ -275,11 +308,22 @@ int main(int argc, char **argv) {
         return 1;
     }
     // lane_y는 시뮬 차체 기준 차선 중앙 오프셋이다. dy와 달리 녹화 주행을
-    // 기준으로 삼지 않아 설정 간 A/B에 편향이 없다.
+    // 기준으로 삼지 않아 설정 간 A/B에 편향이 없다. k_path는 시뮬 차의 진행 곡률(k_sim을 조향각 → 진행 지연만큼 늦춘
+    // 것), delay는 컨트롤러가 쓴 경로 지연, nn과 ff는 학습한 토크 모델을 섞었는지와 피드포워드(횡가속 공간), bank는
+    // 컨트롤러의 편경사 추정이다.
     std::fprintf(out,
                  "t,seg,v_kph,active,block,k_des,k_sim,k_rec,a_cmd,a_act,"
                  "angle_sim,angle_rec,t_des,t_apply,t_rec,driver,active_rec,dy,dpsi,"
-                 "lane_y,lane_ok,clamped\n");
+                 "lane_y,lane_ok,clamped,k_path,delay,nn,ff,bank\n");
+    // 진행 곡률: 시뮬과 녹화의 조향각 곡률을 같은 지연선에 지나게 해, 시뮬이 녹화와 같으면 자세 차이도 0이다
+    const int path_lag_frames = static_cast<int>(std::lround(opt.path_lag / kDtCtrl));
+    DelayLine sim_path(path_lag_frames), rec_path(path_lag_frames);
+    float path_deviation = 0.0f;  // 직전 틱의 시뮬 진행 곡률 - 녹화 진행 곡률(ESP12 보정에 쓴다)
+    float k_path = 0.0f;
+    // controlsd 입력 중 녹화에서 가져오는 것: CAN이 만든 차량 상태(ESP12만 쓴다)와 locationd 상태(lagd 지연)
+    VehicleCanState recorded_vehicle{};
+    LocalizationState localization{};
+    bool have_localization = false;
 
     Exogenous ex;
     ModelState ms_sim{};
@@ -320,8 +364,9 @@ int main(int argc, char **argv) {
     const auto tick = [&]() {
         const float v_mps = ex.v_kph / 3.6f;
         const float v_clamped = std::max(v_mps, 1.0f);
+        // 계획 나이는 controlsd처럼 근거 프레임의 촬영 시각부터 잰다(모델 출력 시각보다 modeld 지연 약 64 ms 이르다)
         const double age_s =
-            have_model ? std::max(0.0, sim_t - static_cast<double>(ms_sim.model_timestamp_ns) * 1e-9) : 0.0;
+            have_model ? std::max(0.0, sim_t - static_cast<double>(ms_sim.capture_timestamp_ns) * 1e-9) : 0.0;
 
         VehicleCanState vehicle{};
         vehicle.has_lkas11_seed = vehicle.has_clu11_seed = vehicle.has_mdps12_seed = true;
@@ -338,13 +383,30 @@ int main(int argc, char **argv) {
         vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = ex.v_kph;
         vehicle.steering_angle_deg = angle_sim;
         vehicle.driver_torque = ex.driver_torque;
-        vehicle.yaw_rate_valid = false;
+        // ESP12: 녹화 값에 시뮬 차가 녹화 차보다 더 도는 만큼(직전 틱의 진행 곡률 차이)을 더한다. 편경사 추정(횡가속 +
+        // 요레이트·v)에서는 그 몫이 지워져 녹화와 같은 편경사가 나온다. 속도가 녹화 그대로라 종가속도 그대로 쓴다.
+        const bool esp12_fresh =
+            recorded_vehicle.esp12_time_s > 0.0 && sim_t - recorded_vehicle.esp12_time_s <= kEsp12MaxAgeS;
+        vehicle.yaw_rate_valid = esp12_fresh && recorded_vehicle.yaw_rate_valid;
+        vehicle.lat_accel_valid = esp12_fresh && recorded_vehicle.lat_accel_valid;
+        if (esp12_fresh) {
+            // 요레이트는 ESP12 관례(왼쪽 +), 곡률과 횡가속은 제어 관례(오른쪽 +)다
+            vehicle.yaw_rate_rad_s = recorded_vehicle.yaw_rate_rad_s - path_deviation * v_mps;
+            vehicle.lat_accel_mps2 = recorded_vehicle.lat_accel_mps2 + path_deviation * v_mps * v_mps;
+            vehicle.long_accel_mps2 = recorded_vehicle.long_accel_mps2;
+        }
+        // lagd 지연: controlsd처럼 확정이고 2초 안의 추정만 쓴다(ControlsTick::on_localization)
+        const bool delay_fresh =
+            have_localization &&
+            sim_t - static_cast<double>(localization.timestamp_ns) * 1e-9 <= kLocalizationMaxAgeS &&
+            localization.lag_status == static_cast<uint32_t>(LateralLagStatus::Estimated);
+        controller.set_live_delay(localization.lateral_delay_s, delay_fresh);
 
         // plan 나이는 컨트롤러가 자기 시계로 잰다. 그 시계를 고정해 두고 캡처 시각을 나이만큼
         // 앞당겨, 호스트 시간과 무관하게 결정론적으로 만든다.
         LateralTarget t = target;
         if (t.valid) t.capture_timestamp_ns = kControllerNowNs - static_cast<uint64_t>(age_s * 1e9);
-        const uint64_t path_now_ns = ms_sim.model_timestamp_ns + static_cast<uint64_t>(age_s * 1e9);
+        const uint64_t path_now_ns = ms_sim.capture_timestamp_ns + static_cast<uint64_t>(age_s * 1e9);
         LateralPath path = have_model ? path_from_model_state(ms_sim, path_now_ns) : LateralPath{};
 
         const LateralControlResult r = controller.update(path, t, vehicle, sim_t, frame++, true, true);
@@ -381,6 +443,12 @@ int main(int argc, char **argv) {
             plant.resync(ex.k_rec * v_clamped * v_clamped);
             k_sim = ex.k_rec;
             angle_sim = ex.angle_rec;
+        }
+        // 진행 곡률. 재동기화 틱에는 k_sim이 녹화와 같아 두 지연선에 같은 값이 들어간다.
+        k_path = sim_path.push(k_sim);
+        const float k_path_rec = rec_path.push(ex.k_rec);
+        path_deviation = resync ? 0.0f : k_path - k_path_rec;
+        if (resync) {
             dy = 0.0f;
             dpsi = 0.0f;
         } else {
@@ -405,7 +473,7 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-            dpsi += static_cast<float>(kDtCtrl) * v_mps * (k_sim - ex.k_rec);
+            dpsi += static_cast<float>(kDtCtrl) * v_mps * path_deviation;
             dy += static_cast<float>(kDtCtrl) * v_mps * dpsi;
             const float dy_c = std::clamp(dy, -kMaxDeviationY, kMaxDeviationY);
             const float dpsi_c = std::clamp(dpsi, -kMaxDeviationPsi, kMaxDeviationPsi);
@@ -423,11 +491,13 @@ int main(int argc, char **argv) {
         const float lane_y = lane_ok ? 0.5f * (ms_sim.lanes[1][0].y + ms_sim.lanes[2][0].y) : 0.0f;
         std::fprintf(out,
                      "%.3f,%d,%.2f,%d,%s,%.6f,%.6f,%.6f,%.4f,%.4f,%.3f,%.3f,"
-                     "%d,%d,%d,%d,%d,%.4f,%.5f,%.4f,%d,%d\n",
+                     "%d,%d,%d,%d,%d,%.4f,%.5f,%.4f,%d,%d,%.6f,%.3f,%d,%.4f,%.4f\n",
                      sim_t - route_t0, resync ? 0 : segment, ex.v_kph, r.active ? 1 : 0,
                      block_reason_name(r.active_block), r.desired_curvature, k_sim, ex.k_rec, a_cmd, a_act, angle_sim,
                      ex.angle_rec, r.desired_torque, r.apply_torque, ex.apply_rec, ex.driver_torque,
-                     static_cast<int>(ex.active_rec), dy, dpsi, lane_y, lane_ok ? 1 : 0, clamped);
+                     static_cast<int>(ex.active_rec), dy, dpsi, lane_y, lane_ok ? 1 : 0, clamped, k_path,
+                     controller.plan_delay_s(), r.nn_feedforward_used ? 1 : 0, r.feedforward,
+                     controller.road_bank_lat_accel());
         clamped = 0;
     };
 
@@ -471,6 +541,21 @@ int main(int argc, char **argv) {
                 }
                 controller.set_live_params(live, (ls.flags & kLearnerVehicleValid) != 0, calibrated);
                 live_now = live;
+            }
+            if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
+                // controlsd와 같은 거름과 파서(apply_can_batch). 시뮬 차는 이 상태에서 ESP12만 가져간다.
+                for_each_recorded_can_frame(buf.data(), buf.size(), [&](const RecordedCanFrame &f) {
+                    if (!is_vehicle_rx_frame(f.flags, f.data_len, f.src)) return;
+                    std::array<uint8_t, 8> data = {};
+                    std::copy_n(f.data, f.data_len, data.begin());
+                    update_vehicle_can_state(&recorded_vehicle, f.address, data, static_cast<uint8_t>(f.data_len),
+                                             static_cast<uint8_t>(f.src), rec_t);
+                });
+            }
+            if (rh.type == static_cast<uint16_t>(RecordType::Localization) &&
+                rh.payload_size >= sizeof(LocalizationState)) {
+                std::memcpy(&localization, buf.data(), sizeof(localization));
+                have_localization = true;
             }
             if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && rh.payload_size >= sizeof(ControlState)) {
                 ControlState cs{};

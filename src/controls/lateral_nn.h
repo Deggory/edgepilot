@@ -29,6 +29,9 @@ struct LateralNnSpec {
     std::vector<double> roll_offsets;
     std::vector<Extra> extra;
     std::vector<double> angle_offsets;  // 조향각 창(파일의 창을 순서대로 이어 붙인 것)
+    // 학습 목표에서 운용이 곡선에 더하는 마찰 몫을 뺐다(nnlc Spec.friction_free, 파일에 없으면 거짓). 이 모델에만 곡선
+    // 마찰을 더한다: 보낸 토크를 그대로 배운 모델에 더하면 마찰이 두 번 들어간다.
+    bool friction_free = false;
 
     // 학습 쪽 Spec.names()와 같은 입력 이름(예: "la-0.5", "roll+1.5", "angle+0.30").
     std::vector<std::string> names() const;

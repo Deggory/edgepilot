@@ -50,9 +50,11 @@ the separate [edgepilot-nnlc][nnlc] repository's `models/`:
 
 | File | Trained |
 | --- | --- |
-| `k7_hev_v1.json` | the first K7 HEV model |
-| `k7_hev_v2.json` | time-ordered data, three nets |
-| `k7_hev_v3.json` | as v2, without the friction share the controller adds in curves; the default |
+| `k7_hev_v3.json` | time-ordered data, three nets, without the friction share the controller adds in curves; the default |
+
+The earlier `k7_hev_v1` and `v2` learned the torque that was sent, friction
+included, and were removed on 2026-10-17, here and in nnlc. Git history keeps
+them, and every route keeps the model it ran as `models/lateral_nn.json`.
 
 `params/lateral_nn.json` names the one `controlsd` uses, and the web console's
 Steering tab changes it. `recordd` copies the chosen file into every route.

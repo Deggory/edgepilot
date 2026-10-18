@@ -108,6 +108,10 @@ bool LateralNnModel::load_text(const std::string &text, std::string *error) {
             return fail(error, "spec: unsupported window (only angle)");
         s.angle_offsets.insert(s.angle_offsets.end(), offsets.begin(), offsets.end());
     }
+    // 마찰 몫은 v3에서 더한 항목이라 없으면 거짓이다(그 전 모델은 보낸 토크를 배웠다)
+    const JsonValue *friction_free = spec->find("friction_free");
+    if (friction_free && !friction_free->is_bool()) return fail(error, "spec: friction_free");
+    s.friction_free = friction_free && friction_free->boolean();
     // 입력이 읽는 시각(지금부터): la와 조향각은 응답 시각 + 오프셋, 저크는 응답 시각 ±0.05 s. 롤은 지금 값이라 상관없다.
     std::vector<double> times = {s.lag_s - 0.05, s.lag_s + 0.05};
     for (double o : s.la_offsets) times.push_back(s.lag_s + o);

@@ -84,7 +84,8 @@ std::pair<float, float> scale_tire_stiffness(float mass, float wheelbase, float 
 int TorqueController::update(bool active, float speed_mps, float desired_curvature, float steering_angle_deg,
                              bool steering_pressed, bool steer_limited_by_safety, const SteeringParams &params,
                              float lat_delay_s, float yaw_rate_rad_s, bool yaw_rate_valid, float road_bank_lat_accel,
-                             const LiveLateralParams &live, float nn_feedforward_torque, float nn_weight) {
+                             const LiveLateralParams &live, float nn_feedforward_torque, float nn_weight,
+                             bool nn_curve_friction) {
     nn_feedforward_used_ = false;
     const float actual_curvature =
         estimate_actual_curvature(speed_mps, steering_angle_deg, params, yaw_rate_rad_s, yaw_rate_valid, live);
@@ -162,8 +163,10 @@ int TorqueController::update(bool active, float speed_mps, float desired_curvatu
         // 마찰 보상은 곡선에서 남긴다: 모델은 추종 오차를 모르므로 차가 늦을 때 붙는 오차 방향 토크를 내지 못한다
         // (2026-10-16 주행에서 곡선 진입 횡가속이 요구의 92~93 %, 선형은 100~109 %). 직선에서는 모델만 쓴다(오차
         // 잡음에 토크가 흔들려 모델의 매끄러움을 잃는다). sunnypilot NNLC의 friction_override와 같은 항이다.
-        const float curve =
+        // 보낸 토크를 그대로 배운 모델은 그 마찰까지 배웠으므로 더하지 않는다(nn_curve_friction).
+        const float ramp =
             interp(std::fabs(desired_lat_accel), {kNnFrictionStartLatAccel, kNnFrictionFullLatAccel}, {0.0f, 1.0f});
+        const float curve = nn_curve_friction ? ramp : 0.0f;
         feedforward += w * (nn_feedforward_torque * tuning.lat_accel_factor + curve * friction_term - feedforward);
         nn_feedforward_used_ = true;
     }

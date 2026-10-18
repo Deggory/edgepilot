@@ -7,7 +7,8 @@ small neural network, trained on the K7's own recorded drives, that gives the
 steering torque a target trajectory needs. With `nn_feedforward` on and a
 model chosen from `models/lateral_nn/`, it replaces the linear feed-forward's
 lateral-acceleration, offset and bank terms. In curves the friction
-compensation stays on top of it, and the PID stays as it is.
+compensation stays on top of a model trained without it, and the PID stays as
+it is.
 
 This diagram shows where the model comes from and where it enters the
 controller:
@@ -133,14 +134,50 @@ and undo the model's smoothness. sunnypilot's NNLC has the same term as a
 model option (`friction_override`) for models with a weak friction response,
 and blends in its error response only at high lateral acceleration.
 
+Only a model trained without that share gets it: the file's
+`spec.friction_free` (nnlc `Spec.friction_free`; false when absent). That is
+`k7_hev_v3`. A model that learned the torque that was sent, friction included,
+as `k7_hev_v1` and `v2` did, runs alone: adding the term would count the
+friction twice.
+
 On the 2026-10-16 drive, the first with the model, the car reached 92–93 % of
 the desired lateral acceleration at curve entries, against 100–109 % with
 the linear feed-forward on earlier drives, and the PID added torque in every
 curve phase. Replayed on the same inputs (four drives), the friction raises
 the feed-forward at curve entries from 0.63–0.83 to 0.72–0.94 of the desired
 lateral acceleration, and in held curves from 0.57–0.66 to 0.63–0.71. The
-straight-line torque steps stay at half of the linear feed-forward's. The
-replay cannot show the closed loop, so the road decides.
+straight-line torque steps stay at half of the linear feed-forward's.
+
+On that drive (`k7_hev_v2`) the steering angle also followed the request
+0.11–0.12 s later than with the linear feed-forward (0.56 s against
+0.42–0.46 s), and the car's yaw 0.10–0.11 s after the angle in both cases.
+The model reads the plan from its own response time (0.3 s), while the linear
+feed-forward reads it at the lagd delay (0.55 s); but that is not the cause.
+On the same recorded plans, the model's feed-forward is in phase with the
+linear one. Reading the plan 0.11–0.4 s further ahead moves the model's output
+little, because each new plan starts from the car's current state, and it makes
+the closed loop worse. The model's torque is smaller: in held curves `v2`
+gives 0.87–0.97 of the torque the car was sent and the linear feed-forward
+1.0–1.2, while `v3` with the friction gives 0.94–1.04.
+
+The [closed-loop replay](closed-loop-replay.md) with the angle-to-path lag and
+the 2026-10-17 plant, which reproduces both controllers' timing, gives, over
+58 free-running minutes of six drives (2026-10-12 to 10-18; curve phases as the
+simulated path's lateral acceleration over the desired one at the lagd delay,
+lane-centre offset by the model's lane lines):
+
+| Feed-forward | Request to angle | Entry | Held | Exit | Lane RMS, straight | In curves | Torque step RMS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Linear | 0.48 s | 0.93 | 0.94 | 0.97 | 11.7 cm | 25.8 cm | 2.66 |
+| `v3` | 0.55 s | 0.89 | 0.92 | 0.95 | 12.8 cm | 27.9 cm | 2.28 |
+
+All rows use the curve friction. The three drives of 10-16 and 10-18 are not in
+`v3`'s training. On them alone (21 minutes) `v3` gives 0.89/0.91/0.95 and
+27.8 cm in curves, the linear feed-forward 0.90/0.92/0.97 and 34.6 cm. `v3`
+steers 14 % more smoothly than the linear feed-forward but reaches less of the
+desired lateral acceleration in every curve phase. Earlier runs of the same
+replay rejected `k7_hev_v2` (entry 0.85) and reading the plan 0.11–0.4 s
+further ahead (worse in every phase). The road decides.
 
 The weight ramps over 1 s toward 1 while all of these hold, and toward 0
 otherwise:
@@ -166,7 +203,7 @@ models and one choice, and the web console picks from the library.
 
 | Item | Value |
 | --- | --- |
-| Library | `models/lateral_nn/<car>_v<version>.json`; the repository ships `k7_hev_v1` to `k7_hev_v3`, and `upload_to_board.sh` sends them all |
+| Library | `models/lateral_nn/<car>_v<version>.json`; the repository ships `k7_hev_v3`. `v1` and `v2` were removed on 2026-10-17, also from nnlc. `upload_to_board.sh` sends the folder and leaves files that exist only on the board |
 | Choice | `params/lateral_nn.json`, `{"model": "k7_hev_v3"}`; the default sits in `params.defaults/` |
 | Web console | Steering tab, learned torque model card: the files in `models/lateral_nn/`, the choice and the model controlsd uses |
 | Override | `EDGEPILOT_LATERAL_NN_MODEL`, a file path, replaces the choice |

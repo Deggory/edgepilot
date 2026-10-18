@@ -56,7 +56,7 @@ The replay tools read `recordd` recordings (`events/*.bin`).
 
 | Tool | Usage | What it does |
 | --- | --- | --- |
-| `replay_closed_loop` | `[options] <out.csv\|-> <events.bin...>` | Replays the lateral control loop in closed loop, with the car's response simulated. `--lane-filter W` is the lane-line time filter's weight for the new measurement (1 turns it off, [Lane-line filter](../docs/lane-line-filter.md)). `--lateral-nn m.json` loads the learned torque model for a `--steering` file with `nn_feedforward` on. |
+| `replay_closed_loop` | `[options] <out.csv\|-> <events.bin...>` | Replays the lateral control loop in closed loop, with the car's response simulated. The recorded ESP12 (corrected by the simulated car's drift) and lagd delay go in as controlsd gets them. `--lane-filter W` is the lane-line time filter's weight for the new measurement (1 turns it off, [Lane-line filter](../docs/lane-line-filter.md)). `--lateral-nn m.json` loads the learned torque model for a `--steering` file with `nn_feedforward` on. |
 | `replay_planner` | `[--laneless\|--lane] [--exact] [--vehicle] [--steering s.json] [--lane-filter W] <out.csv> <events.bin...>` | Runs `LateralPlanner` again on the recorded `ModelState`/`ControlState` and writes the desired curvature to a CSV. `--laneless` or `--lane` forces that mode whatever the parameter file says. `--steering` loads a parameter file, such as the route's `params/steering.json` snapshot (the code defaults without it). `--vehicle` feeds the recorded blinkers, driver torque and blind spot (from the CAN, skipping the Panda's echoes as controlsd does) and the recorded active flag; without it the planner sees no blinker and no driver, so lane changes never run. `--exact` writes every `LateralTarget` field and the lag-adjusted curvature bit for bit (`%a`), for comparing before and after a refactor. `--lane-filter` is the lane-line time filter's weight for the new measurement (1 turns it off) |
 | `replay_controls` | `[--steering s.json] [--cruise c.json] [--vehicle-json j] [--force-engaged] [--lead-track track.txt] [--lane-filter W] [--lateral-nn m.json] [--dump out.txt] <events.bin...>` | Feeds a recording through the logic of one controlsd tick (`ControlsTick`) at 10 ms ticks, writes a digest of the CAN to send, the `ControlState` and the learner outputs, and compares them with the recorded `ControlState`. The same code gives bit-identical output, so it is used to compare before and after a controlsd refactor. `--lead-track` fills `ModelState.lead_track` by frame number for routes recorded before v13 (a lead track made off-line, one line per frame: `frame_id valid flags distance relative_speed distance_std speed_std`). The cruise state is estimated from the driver's SET/RES, so to look at the cruise, start the replay before that session begins. `--lane-filter` is the lane-line time filter's weight for the new measurement (1 turns it off). `--lateral-nn` loads the learned torque model (a route keeps its own as `models/lateral_nn.json`), which takes effect only when the `--steering` file turns `nn_feedforward` on; with the switch on and no model, the tool warns. |
 | `replay_lateral_learners` | `[options] <events.bin...>` | Runs the paramsd and torqued learners on a recording and prints the learned values |
@@ -86,8 +86,12 @@ inactive ticks, resynchronise to the recorded state, so every free-running
 stretch starts from the real pose.
 
 - Plant: `--wn`, `--zeta`, `--delay`, `--gain G` (all speed nodes) or
-  `--gain-pts a,b,c,d`.
-- Controller: `--sad` (steer_actuator_delay), `--kp`, `--ki`, `--laf`.
+  `--gain-pts a,b,c,d`. `--path-lag S` is the steering-angle-to-path lag in
+  seconds (0.11 by default; 0 makes the car travel along the steering angle's
+  curvature, as before 2026-10-17).
+- Controller: `--sad` (steer_actuator_delay), `--kp`, `--ki`, `--laf`. With
+  `use_live_delay` on, the recording's lagd estimate is the path delay
+  while it is valid, as on the board.
 - Driver intervention hysteresis: `--driver-high`, `--driver-low`,
   `--driver-release`.
 - `--open-loop`: stops the pose correction, to see only how well the plant
@@ -104,7 +108,11 @@ stretch starts from the real pose.
   (2 m clamp). Use it only in Lane mode.
 
 It prints the reproduction score (overall and per speed band) on standard
-output. Give `-` as the output path when no CSV is needed. Plant identification
+output. Give `-` as the output path when no CSV is needed. Besides the earlier
+columns, the CSV has `k_path` (the simulated path curvature), `delay` (the
+path delay the controller used), `nn` and `ff` (whether the learned torque
+model was blended in, and the feed-forward in lateral-acceleration units) and
+`bank` (the controller's road-bank estimate). Plant identification
 and how to read the score are in
 [Closed-loop replay](../docs/closed-loop-replay.md).
 

@@ -69,8 +69,8 @@ TEST(LateralNnPath, ChoiceFromTheSelectionFile) {
 
 TEST(LateralNnPath, EnvironmentOverridesTheSelection) {
     ScratchDir dir;
-    write(dir.root + "/lateral_nn.json", R"({"model": "k7_hev_v2"})");
-    EXPECT_EQ(lateral_nn_choice(dir.root).path, "models/lateral_nn/k7_hev_v2.json");
+    write(dir.root + "/lateral_nn.json", R"({"model": "other_car_v1"})");
+    EXPECT_EQ(lateral_nn_choice(dir.root).path, "models/lateral_nn/other_car_v1.json");
     setenv("EDGEPILOT_LATERAL_NN_MODEL", "/elsewhere/model.json", 1);
     EXPECT_EQ(lateral_nn_choice(dir.root).path, "/elsewhere/model.json");
     unsetenv("EDGEPILOT_LATERAL_NN_MODEL");
@@ -91,26 +91,29 @@ TEST(LateralNnSelector, SwitchesKeepsAndReports) {
     std::shared_ptr<const LateralNnModel> next;
     EXPECT_FALSE(poll_until_done(selector, &now, &next)) << "그대로면 다시 읽지 않는다";
 
-    choice = {"k7_hev_v2", "models/lateral_nn/k7_hev_v2.json", ""};
+    // 다른 모델: 같은 내용을 다른 이름의 파일로 둔다
+    const std::string second = dir.root + "/second.json";
+    write(second, read_text_file("models/lateral_nn/k7_hev_v3.json"));
+    choice = {"second", second, ""};
     ASSERT_TRUE(poll_until_done(selector, &now, &next)) << "고르기가 바뀌면 읽어서 넘긴다";
     EXPECT_NE(next, first);
-    EXPECT_EQ(selector.loaded_name(), "k7_hev_v2");
+    EXPECT_EQ(selector.loaded_name(), "second");
 
     // 깨진 모델 파일: 거부하고 지금 모델을 둔다. 실패 이유가 상태에 남는다.
     const std::string broken = dir.root + "/broken.json";
     write(broken, "{\"format\": \"edgepilot-lateral-nn\"}");
     choice = {"broken", broken, ""};
     EXPECT_FALSE(poll_until_done(selector, &now, &next));
-    EXPECT_EQ(selector.loaded_name(), "k7_hev_v2");
+    EXPECT_EQ(selector.loaded_name(), "second");
     EXPECT_FALSE(selector.last_error().empty());
     const std::string text = read_text_file(status);
     EXPECT_NE(text.find(R"("selected": "broken")"), std::string::npos) << text;
-    EXPECT_NE(text.find(R"("loaded": "k7_hev_v2")"), std::string::npos) << text;
+    EXPECT_NE(text.find(R"("loaded": "second")"), std::string::npos) << text;
     EXPECT_FALSE(poll_until_done(selector, &now, &next)) << "같은 깨진 파일은 다시 시도하지 않는다";
 
     // 그 파일을 고치면(파일 시각이 바뀌면) 다시 읽는다
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    write(broken, read_text_file("models/lateral_nn/k7_hev_v1.json"));
+    write(broken, read_text_file("models/lateral_nn/k7_hev_v3.json"));
     ASSERT_TRUE(poll_until_done(selector, &now, &next));
     EXPECT_EQ(selector.loaded_name(), "broken");
     EXPECT_TRUE(selector.last_error().empty());

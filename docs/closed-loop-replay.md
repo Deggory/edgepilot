@@ -16,14 +16,16 @@ flowchart TB
     shift --> planner["planner"]
     planner --> controller["controller<br>100 Hz"]
     recorded["recorded<br>ControlState"] -- "speed,<br>driver torque" --> controller
-    controller --> plant["plant<br>torque to<br>lateral accel"]
-    plant --> sim["simulated<br>curvature<br>and angle"]
-    sim --> pose["pose difference<br>dy, dpsi"]
-    recorded -- "curvature" --> pose
+    can["recorded CAN<br>and locationd"] -- "ESP12, corrected<br>by the drift;<br>lagd delay" --> controller
+    controller --> plant["plant<br>torque to<br>steering-angle<br>curvature"]
+    plant --> sim["simulated<br>angle"]
+    sim --> lag["angle-to-path<br>lag 0.11 s"]
+    lag --> pose["pose difference<br>dy, dpsi"]
+    recorded -- "curvature,<br>same lag" --> pose
     classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
-    class shift,planner,controller,plant,sim,pose compute
-    class model,recorded proc
+    class shift,planner,controller,plant,sim,lag,pose compute
+    class model,recorded,can proc
 ```
 
 The loop closes in two places: the simulated steering angle goes back into the
@@ -48,9 +50,41 @@ The recorded perception is reused, not re-rendered. The simulated car
 accumulates a pose difference against the recorded car,
 
 ```text
-dpsi' = v * (k_sim - k_rec)
+dpsi' = v * (k_path_sim - k_path_rec)
 dy'   = v * dpsi
 ```
+
+`k_path` is the path the car travels: the steering angle's curvature delayed
+by the angle-to-path lag (`--path-lag`, 0.11 s). The recorded side goes
+through the same delay, so a simulation that matches the recording does not
+drift. On the road the car's yaw follows the steering angle's curvature
+0.10–0.11 s later (cross-correlation with the IMU yaw rate on five drives
+from 2026-10-12 to 10-16, linear and learned feed-forward, 30–90 km/h; the
+ESP12 yaw rate is 0–8 ms later than the IMU). A pure delay, a first-order lag
+and the two combined reproduce it equally well (R² 0.94–0.98), so the replay
+uses the delay. Before 2026-10-17 the car travelled along the angle's
+curvature itself.
+
+### Inputs from the recording
+
+The controller gets what controlsd gets, apart from the steering angle:
+
+- **ESP12** (yaw rate, lateral and longitudinal acceleration): decoded from the
+  recorded CAN with controlsd's filter and parser, plus the extra turning of
+  the simulated car (the path-curvature difference times `v` for the yaw rate,
+  times `v²` for the lateral acceleration). The road-bank estimate
+  (`lat_accel + yaw_rate * v`) therefore comes out as recorded, and with it
+  the learned torque model's roll inputs and `live_bank_compensation`.
+- **lagd delay:** from the recorded `LocalizationState`, used while it is
+  estimated and under 2 s old (`ControlsTick::on_localization`).
+- **Plan age:** from the frame's capture time, as controlsd measures it. The
+  model output is about 64 ms later than the capture.
+
+Before 2026-10-17 the replay had no ESP12 (the bank estimate was 0, so the
+learned model's roll inputs were 0; on the training samples that shifts its
+torque by +10.7 raw, RMS 15.9), forced `live_bank_compensation` off, used
+`steer_actuator_delay` (0.42 s) instead of the lagd estimate (0.55 s), and
+measured the plan age from the model output.
 
 and every model frame (the plan, the lane lines and the road edges) is rotated
 and translated into the simulated car's frame before the planner sees it. Real
@@ -83,21 +117,23 @@ stateDiagram-v2
 
 ### Plant
 
-Torque to lateral acceleration, as a pure delay and a second-order lag. The DC
+Torque to the steering angle's lateral acceleration (the curvature the
+controller measures, times v²), as a pure delay and a second-order lag. The DC
 gain is `1/kf`, the assumption the feedforward is already built on, times a
 speed-scheduled correction for the error in that assumption.
 
-The default plant is `wn = 10 rad/s`, `zeta = 4`, `delay = 0`, with this gain,
-identified on MaixCAM2 lane drives (2026-10-04, [Evidence](#evidence)):
+The default plant is `wn = 16 rad/s`, `zeta = 3`, `delay = 0`, with this gain
+(2026-10-17, [Evidence](#evidence)):
 
 | Speed | 3 m/s | 8 m/s | 15 m/s | 25 m/s |
 | --- | --- | --- | --- | --- |
-| Gain | 1.05 | 0.525 | 1.05 | 1.80 |
+| Gain | 1.05 | 0.385 | 1.04 | 1.74 |
 
 The plant is accepted on **closed-loop reproduction**, not on an open-loop fit.
 Run with `--open-loop`, the perception is exactly what the car saw and the
 controller feeds back the simulated angle. If the plant is right, the
-simulated lateral acceleration tracks the recorded one.
+simulated lateral acceleration tracks the recorded one, and the simulated
+angle follows the controller's request as late as the car's did.
 
 ### Metrics
 
@@ -119,17 +155,38 @@ a 6-minute drive takes about 30 s at 8-way parallelism.
 
 ## Evidence
 
-**Identification.** An earlier attempt to identify the plant by fitting
-recorded torque against recorded angle gave `tau = 2210 ms` at 14% explained,
-and was not usable. The default came from scaling an earlier gain curve and
-reading the open-loop R²:
+**Identification (2026-10-17).** Fitting the recorded torque to the recorded
+angle (output error, resynchronised like the replay, gains by least squares)
+on five drives from 2026-10-12 to 10-16 explains the same 83% for delays of
+0–60 ms and `wn` 6–16, so the fit cannot pin the timing down. The plant was
+therefore chosen on timing: with the pose held (`--open-loop`) and the
+controller each drive actually ran (linear on the three drives up to 10-15,
+the learned model `k7_hev_v2` on the two of 10-16, as the routes carry it in
+`models/lateral_nn.json`), how late the simulated
+angle follows the controller's request, against the car:
+
+| Plant | Linear | Learned model | Mean error | R² |
+| --- | ---: | ---: | ---: | ---: |
+| Car | 0.444 s | 0.563 s | | |
+| `wn` 10, `zeta` 4 (before) | 0.548 s | 0.640 s | +0.093 s | 0.973 |
+| `wn` 13, `zeta` 4 | 0.506 s | 0.601 s | +0.052 s | 0.975 |
+| **`wn` 16, `zeta` 3** | **0.444 s** | **0.551 s** | **0.014 s** | **0.973** |
+| `wn` 20, `zeta` 2 | 0.401 s | 0.510 s | 0.047 s | 0.968 |
+
+The gains are the least-squares ones of the same fit; the 3 m/s node has no
+data and keeps its value.
+
+**Identification (2026-10-04).** An earlier attempt to identify the plant by
+fitting recorded torque against recorded angle gave `tau = 2210 ms` at 14%
+explained, and was not usable. The previous default came from scaling an
+earlier gain curve and reading the open-loop R²:
 
 | Lane route | R² peaks at | R² |
 | --- | --- | --- |
 | 2026-10-04 | 1.5× | 0.960 → 0.971 |
 | 2026-10-03 | 1.7-2.0× | 0.956 → 0.977 |
 
-So the default is the 1.5× curve.
+So that default was the 1.5× curve.
 
 **Feedforward factor.** With the earlier curve, raising the controller's
 `lat_accel_factor` to the torqued estimate (3.15) looked like a 12 cm push to
@@ -151,16 +208,16 @@ scale before trusting such a comparison.
 - Rank configurations with this tool; do not read absolute numbers off it.
   Across plausible plants the absolute gap between two configurations moves,
   while their order holds.
-- The optimum `SAD` is not one of the things it can find. The identification
-  puts the transport delay at 0 and carries the lag in an over-damped pole,
-  and lookahead compensation is worth less against a pure lag than against a
-  transport delay. The sweep therefore improves monotonically towards
-  `SAD = 0`, which the road does not support.
+- Replays before 2026-10-17 ran the earlier plant without the angle-to-path
+  lag, the ESP12 and the lagd delay. Numbers quoted from them elsewhere (the
+  lane-line filter weight) are not directly comparable with newer runs.
+- The optimum `SAD` could not be found with the earlier plant: the sweep
+  improved monotonically towards `SAD = 0`, which the road does not support.
+  The angle-to-path lag makes lookahead matter again; this has not been
+  re-checked.
 
 **Structural.**
 
-- `live_bank_compensation` is off because `ControlState` carries no ESP12
-  lateral acceleration, so road camber lands in the residual.
 - Driver torque up to 150 counts is left in free segments as an unmodelled
   disturbance.
 - The pose correction moves the plan's positions but not its yaw, which is

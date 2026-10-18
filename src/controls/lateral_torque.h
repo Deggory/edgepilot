@@ -36,13 +36,14 @@ public:
     // 아니면 steer_actuator_delay)을 넘긴다.
     // nn_feedforward_torque: 학습한 토크 모델(LateralNnModel)의 피드포워드(제어 부호, steer_max로 나눈 토크).
     // nn_weight(0..1)만큼 선형 피드포워드(목표 횡가속, 편향, 롤·편경사, 마찰)와 섞는다: 1이면 모델에 곡선(|목표 횡가속|
-    // 0.2→0.6 m/s²)에서만 선형의 마찰 보상을 더한 값. NaN이거나 무게가 0이면 선형만. 켜고 끌 때 피드포워드가 건너뛰지
-    // 않게 호출자가 무게를 천천히 바꾼다. PID는 그대로 횡가속 공간에서 돈다.
+    // 0.2→0.6 m/s²)에서만 선형의 마찰 보상을 더한 값(nn_curve_friction이 거짓이면 모델만: 마찰 몫을 빼지 않고 배운
+    // 모델). NaN이거나 무게가 0이면 선형만. 켜고 끌 때 피드포워드가 건너뛰지 않게 호출자가 무게를 천천히 바꾼다. PID는
+    // 그대로 횡가속 공간에서 돈다.
     int update(bool active, float speed_mps, float desired_curvature, float steering_angle_deg, bool steering_pressed,
                bool steer_limited_by_safety, const SteeringParams &params, float lat_delay_s,
                float yaw_rate_rad_s = 0.0f, bool yaw_rate_valid = false, float road_bank_lat_accel = 0.0f,
                const LiveLateralParams &live = LiveLateralParams{}, float nn_feedforward_torque = NAN,
-               float nn_weight = 1.0f);
+               float nn_weight = 1.0f, bool nn_curve_friction = true);
 
     // 조향각이 만드는 곡률(차량 모델: 학습 SR·강성·오프셋·롤 포함, 제어 부호). estimate_actual_curvature의
     // 각도 경로와 같은 식이고 로그용 값을 건드리지 않는다. 컨트롤러의 조향각 상한이 쓴다.

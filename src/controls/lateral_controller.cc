@@ -423,10 +423,11 @@ void LateralController::steer(const VehicleCanState &vehicle_state, float speed_
             std::min(torque_cap, control_params.steer_delta_down *
                                      std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
     }
-    const int raw_torque = torque_controller_.update(
-        true, speed_mps, result->desired_curvature, vehicle_state.steering_angle_deg, steering_pressed,
-        steer_limited_by_safety_ || above_fault_angle, control_params, plan_delay_s(), vehicle_state.yaw_rate_rad_s,
-        yaw_rate_valid, road_bank_.lat_accel(), live, nn_feedforward, nn_weight_);
+    const int raw_torque =
+        torque_controller_.update(true, speed_mps, result->desired_curvature, vehicle_state.steering_angle_deg,
+                                  steering_pressed, steer_limited_by_safety_ || above_fault_angle, control_params,
+                                  plan_delay_s(), vehicle_state.yaw_rate_rad_s, yaw_rate_valid, road_bank_.lat_accel(),
+                                  live, nn_feedforward, nn_weight_, lateral_nn_ && lateral_nn_->spec().friction_free);
     result->desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
     copy_torque_state(result);
     result->apply_torque = apply_hyundai_steer_torque_limits(

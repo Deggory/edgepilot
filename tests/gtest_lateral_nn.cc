@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -39,6 +40,19 @@ std::shared_ptr<LateralNnModel> repository_model() {
     auto model = std::make_shared<LateralNnModel>();
     std::string error;
     EXPECT_TRUE(model->load(kModelPath, &error)) << error;
+    return model;
+}
+
+// 레포 모델에서 friction_free만 거짓으로 바꾼 것: 보낸 토크를 그대로 배운 모델 자리(예전 k7_hev_v1, v2)
+std::shared_ptr<LateralNnModel> model_with_friction_in_target() {
+    std::string text = read_text_file(kModelPath);
+    const std::string from = "\"friction_free\": true";
+    const size_t at = text.find(from);
+    EXPECT_NE(at, std::string::npos);
+    if (at != std::string::npos) text.replace(at, from.size(), "\"friction_free\": false");
+    auto model = std::make_shared<LateralNnModel>();
+    std::string error;
+    EXPECT_TRUE(model->load_text(text, &error)) << error;
     return model;
 }
 
@@ -111,11 +125,15 @@ TEST(LateralNnModel, RepositoryModelLoadsWithItsTestVectors) {
 
 TEST(LateralNnModel, EveryLibraryModelLoads) {
     // 웹 콘솔에서 고를 수 있는 모델(models/lateral_nn/<차종>_v<버전>.json)은 모두 제 시험 벡터대로 읽힌다
-    for (const char *name : {"k7_hev_v1", "k7_hev_v2", "k7_hev_v3"}) {
+    int count = 0;
+    for (const auto &entry : std::filesystem::directory_iterator("models/lateral_nn")) {
+        if (entry.path().extension() != ".json") continue;
+        ++count;
         LateralNnModel model;
         std::string error;
-        EXPECT_TRUE(model.load(std::string("models/lateral_nn/") + name + ".json", &error)) << name << ": " << error;
+        EXPECT_TRUE(model.load(entry.path().string(), &error)) << entry.path() << ": " << error;
     }
+    EXPECT_GT(count, 0);
 }
 
 TEST(LateralNnModel, NamesMatchTheTrainingSide) {
@@ -425,15 +443,15 @@ TEST(LateralController, SwitchingBlendsOverOneSecond) {
 TEST(LateralController, SwappingModelsKeepsTheBlend) {
     // 주행 중 고르기를 바꾸면 새 모델이 바로 이어받는다: 선형으로 떨어졌다가 1초에 걸쳐 오르지 않고, 처음부터 새
     // 모델로 달린 제어기와 같은 피드포워드를 낸다(이력은 모델과 상관없는 목표 궤적)
-    auto v2 = std::make_shared<LateralNnModel>();
+    auto other = std::make_shared<LateralNnModel>();
     std::string error;
-    ASSERT_TRUE(v2->load("models/lateral_nn/k7_hev_v2.json", &error)) << error;
+    ASSERT_TRUE(other->load_text(tiny_model(2.0f), &error)) << error;
     LateralControllerConfig config;
     config.force_engaged = true;
     config.steering_params.nn_feedforward = true;
     LateralController swapped(config), reference(config);
     swapped.set_lateral_nn(repository_model());
-    reference.set_lateral_nn(v2);
+    reference.set_lateral_nn(other);
     const auto tick = [](LateralController &controller, int i) {
         const double t = 1.0 + 0.01 * i;
         return controller.update(usable_path(), curve_target(0.003f), ready_vehicle(t), t, i);
@@ -443,11 +461,70 @@ TEST(LateralController, SwappingModelsKeepsTheBlend) {
         tick(swapped, i);
         tick(reference, i);
     }
-    swapped.set_lateral_nn(v2);
+    swapped.set_lateral_nn(other);
     const LateralControlResult after = tick(swapped, i);
     const LateralControlResult expected = tick(reference, i);
     ASSERT_TRUE(after.nn_feedforward_used);
     EXPECT_NEAR(after.feedforward, expected.feedforward, 1e-6f);
     swapped.set_lateral_nn(nullptr);
     EXPECT_FALSE(tick(swapped, ++i).nn_feedforward_used) << "모델을 빼면 바로 선형";
+}
+
+TEST(LateralNnModel, ReadsWhetherTheTargetIsFrictionFree) {
+    // friction_free는 v3에서 더한 항목이라 없으면 거짓이다(그 전 모델은 보낸 토크를 그대로 배웠다)
+    EXPECT_TRUE(repository_model()->spec().friction_free);
+    EXPECT_FALSE(model_with_friction_in_target()->spec().friction_free);
+    LateralNnModel tiny;
+    std::string error;
+    ASSERT_TRUE(tiny.load_text(tiny_model(1.0f), &error)) << error;
+    EXPECT_FALSE(tiny.spec().friction_free) << "항목이 없으면 거짓";
+    std::string text = read_text_file(kModelPath);
+    const size_t at = text.find("\"friction_free\": true");
+    ASSERT_NE(at, std::string::npos);
+    text.replace(at, 21, "\"friction_free\": 1");
+    LateralNnModel model;
+    EXPECT_FALSE(model.load_text(text, &error));
+    EXPECT_NE(error.find("friction_free"), std::string::npos) << error;
+}
+
+TEST(TorqueController, CurveFrictionOnlyForFrictionFreeModels) {
+    // 곡선(20 m/s, 곡률 0.002 = 0.8 m/s²)에서 마찰 계수가 바꾸는 피드포워드 몫: 마찰을 빼고 배운 모델에만 더한다
+    const auto share = [](bool curve_friction) {
+        const auto ff = [&](float friction) {
+            SteeringParams params;
+            params.torque_friction = friction;
+            TorqueController controller;
+            for (int i = 0; i < 50; ++i)
+                controller.update(true, 20.0f, 0.002f, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
+                                  LiveLateralParams{}, 0.2f, 1.0f, curve_friction);
+            return controller.feedforward();
+        };
+        return ff(0.2f) - ff(0.0f);
+    };
+    EXPECT_NE(share(true), 0.0f);
+    EXPECT_FLOAT_EQ(share(false), 0.0f);
+}
+
+TEST(LateralController, AddsCurveFrictionByTheModelsTarget) {
+    // 마찰 몫을 빼고 배운 모델(v3)에는 곡선 마찰을 더하고, 보낸 토크를 그대로 배운 모델에는 더하지 않는다
+    const auto ff = [](const std::shared_ptr<LateralNnModel> &model, float friction) {
+        LateralControllerConfig config;
+        config.force_engaged = true;
+        config.steering_params.nn_feedforward = true;
+        config.steering_params.torque_friction = friction;
+        config.steering_params.use_live_torque_params = false;
+        LateralController controller(config);
+        controller.set_lateral_nn(model);
+        LateralControlResult result;
+        for (int i = 0; i < 150; ++i) {
+            const double t = 1.0 + 0.01 * i;
+            result = controller.update(usable_path(), curve_target(0.003f), ready_vehicle(t), t, i);
+        }
+        EXPECT_TRUE(result.nn_feedforward_used);
+        return result.feedforward;
+    };
+    const auto friction_free = repository_model();
+    const auto sent_torque = model_with_friction_in_target();
+    EXPECT_GT(std::fabs(ff(friction_free, 0.2f) - ff(friction_free, 0.0f)), 1e-3f);
+    EXPECT_FLOAT_EQ(ff(sent_torque, 0.2f), ff(sent_torque, 0.0f));
 }
