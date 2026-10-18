@@ -135,6 +135,25 @@ card (`EDGEPILOT_RECORD_ROOT`); the rest of the route follows when it closes.
 - Writes wait in a queue of up to 1024 entries; when it is full, a write is
   dropped and counted in `recordd`'s log line (`write_queue_drops`).
 
+### Sizes and deleting routes
+
+The web console's Recording tab has a recording files card
+([Web console](runtime-options.md#web-console)). It lists the routes in
+`recordings/`, newest first, with the start time, the video length
+(`video_frames / fps` of a closed route; a route that was never closed shows
+its segment count instead) and the size in allocated blocks, which is what
+deleting it frees. It also shows the free space, the reserve below which
+`recordd` stops, and whether a route is being written. Deleting the selected
+routes asks first and cannot be undone.
+
+- Only directories named like a route are listed or deleted; other files,
+  directories and links in `recordings/` are left alone.
+- A route with a directory in the staging area is being written or still
+  moving to the SD card. It is shown as such and cannot be deleted, since the
+  mover would write into it. The staging directory goes away once its last
+  file has moved.
+- If one of the selected routes cannot be deleted, none is.
+
 ## Event log
 
 The event log is written as 60 s chunks in `events/NNN.bin`. Each chunk starts

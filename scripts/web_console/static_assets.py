@@ -32,7 +32,10 @@ class StaticAssets:
 
     def get(self, name: str) -> StaticFile | None:
         """파일 하나(ETag, gzip한 내용, 형식). 없거나 내줄 수 없으면 None."""
-        path = (self.root / name).resolve()
+        try:
+            path = (self.root / name).resolve()
+        except (OSError, ValueError):  # 이름에 NUL 같은 글자(인증 없는 포트)
+            return None
         media_type = MEDIA_TYPES.get(path.suffix)
         if media_type is None or self.root not in path.parents or any(part.startswith(".") for part in Path(name).parts):
             return None

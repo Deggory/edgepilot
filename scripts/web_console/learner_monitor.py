@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import collections
 import math
+import sys
 import threading
 from typing import Any, Dict
 
-from .shm_channel import IpcReader, age_s, flag_names, struct_layout, topic_path, unpack_fields
+from .shm_channel import IpcReader, flag_names, freshness, struct_layout, topic_path, unpack_fields
 
 LEARNER_TOPIC = "/edgepilot_learner_state"
 LEARNER_FIELDS = (
@@ -32,6 +33,7 @@ LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "localizer_inputs", "torque_partly_restored", "lateral_nn_loaded",
 )
 LEARNER_HISTORY_S = 600
+LEARNER_MAX_AGE_S = 2.0  # controlsd는 약 20 Hz로 낸다
 GRAVITY = 9.81
 
 LOCALIZATION_TOPIC = "/edgepilot_localization"
@@ -48,6 +50,7 @@ LOCALIZATION_FLAGS = (  # ipc_messages.h kLocalization* 비트 순서
     "filter_valid", "inputs_ok", "sensors_ok", "posenet_ok", "calib_valid", "lag_restored",
 )
 LOCALIZATION_INPUT_FLAGS = ("accel_invalid", "gyro_invalid", "camera_invalid", "camera_guarded")
+LOCALIZATION_MAX_AGE_S = 2.0  # locationd는 약 10 Hz로 낸다
 
 
 def decode_learner_state(payload: bytes) -> Dict[str, Any]:
@@ -119,8 +122,14 @@ class LearnerMonitor:
 
     def start(self) -> None:
         def run() -> None:
+            reported = ""
             while not self._stop.wait(1.0):
-                self.sample()
+                try:
+                    self.sample()
+                except Exception as exc:  # 한 번 못 읽었다고 추이를 멈추지 않는다
+                    if str(exc) != reported:
+                        reported = str(exc)
+                        print(f"web_console: learner monitor: {exc!r}", file=sys.stderr)
 
         threading.Thread(target=run, name="learner-monitor", daemon=True).start()
 
@@ -129,17 +138,20 @@ class LearnerMonitor:
 
     def status(self) -> Dict[str, Any]:
         latest = self.sample()
-        result: Dict[str, Any] = {"available": latest is not None}
+        result: Dict[str, Any] = freshness(latest[1] if latest else None, LEARNER_MAX_AGE_S)
         if latest is not None:
-            _, stamp, state = latest
-            result.update(age_s=age_s(stamp), state=state, trend_row=learner_trend_row(state))
+            result.update(state=latest[2], trend_row=learner_trend_row(latest[2]))
         return result
 
-    def runtime_facts(self, max_age_s: float = 3.0) -> Dict[str, Any]:
-        """파라미터 안내가 보는 런타임 사실(param_metadata.RUNTIME_FACTS). controlsd 상태가 없거나 낡으면 None이다."""
+    def fresh_state(self) -> Dict[str, Any] | None:
+        """LEARNER_MAX_AGE_S 안의 학습 상태. controlsd가 없거나 멈췄으면 None."""
         latest = self.sample()
-        fresh = latest is not None and age_s(latest[1]) <= max_age_s
-        return {"lateral_nn_loaded": bool(latest[2]["flags"]["lateral_nn_loaded"]) if fresh else None}
+        return latest[2] if latest is not None and not freshness(latest[1], LEARNER_MAX_AGE_S)["stale"] else None
+
+    def runtime_facts(self) -> Dict[str, Any]:
+        """파라미터 안내가 보는 런타임 사실(param_metadata.RUNTIME_FACTS). controlsd 상태가 없거나 낡으면 None이다."""
+        state = self.fresh_state()
+        return {"lateral_nn_loaded": bool(state["flags"]["lateral_nn_loaded"]) if state else None}
 
 
 class LocalizationReader(IpcReader):
@@ -149,9 +161,8 @@ class LocalizationReader(IpcReader):
         super().__init__(path, LOCALIZATION_STATE.size)
 
     def status(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {"available": False}
         latest = self.read_payload()
+        result: Dict[str, Any] = freshness(latest[1] if latest else None, LOCALIZATION_MAX_AGE_S)
         if latest is not None:
-            _, stamp, payload = latest
-            result.update(available=True, age_s=age_s(stamp), state=decode_localization_state(payload))
+            result["state"] = decode_localization_state(latest[2])
         return result

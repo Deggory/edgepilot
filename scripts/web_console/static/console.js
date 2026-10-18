@@ -7,12 +7,14 @@ import {createLateralNnCard} from "./lateral_nn_card.js";
 import {createPandaCard} from "./panda_card.js";
 import {loadParams, params} from "./param_state.js";
 import {createParamView} from "./param_view.js";
-import {api, el, poller, toast} from "./ui.js";
+import {createRecordingsCard} from "./recordings_card.js";
+import {el, pollJson, toast} from "./ui.js";
 import {createVehicleView} from "./vehicle_view.js";
 
 const STATUS_INTERVAL_MS = 2000;
 // 파라미터 탭에 붙는 카드
-const PARAM_EXTRAS = {steering: () => [createLateralNnCard()], display: () => [createPandaCard()]};
+const PARAM_EXTRAS = {steering: () => [createLateralNnCard()], recording: () => [createRecordingsCard()],
+                      display: () => [createPandaCard()]};
 
 const main = document.getElementById("main");
 const nav = document.getElementById("tabs");
@@ -117,6 +119,7 @@ function versionNote(process, common) {
 }
 
 // 머리 줄의 상태: 매니저가 내는 프로세스 실행 여부(누르면 목록)와 백라이트. failure는 웹 콘솔에 닿지 못했을 때.
+// 빌드 버전은 목록을 펼쳤을 때만 받는다(서버가 /proc 전체를 훑는다).
 function showRuntime(status, failure = "") {
   if (failure) {
     runtime.dataset.state = "bad";
@@ -126,9 +129,9 @@ function showRuntime(status, failure = "") {
   }
   const processes = status.processes;
   const running = processes.filter(process => process.running).length;
-  runtime.dataset.state = !status.available ? "bad" : running === processes.length ? "good" : "warn";
-  runtimeText.textContent = !status.available
-    ? (processes.length ? t("app.manager_stale", {seconds: Math.round(status.age_s)}) : t("app.manager_missing"))
+  runtime.dataset.state = status.stale ? "bad" : running === processes.length ? "good" : "warn";
+  runtimeText.textContent = !status.available ? t("app.manager_missing")
+    : status.stale ? t("app.manager_stale", {seconds: Math.round(status.age_s)})
     : t("app.processes", {running, total: processes.length});
   const backlight = status.backlight;
   const build = commonBuild(processes);
@@ -142,7 +145,7 @@ function showRuntime(status, failure = "") {
           note && el("span.process-version", {text: note}));
       }))
       : el("p.runtime-note", {text: t("app.no_process_state")}),
-    !status.available && processes.length ? el("p.runtime-note", {text: t("app.last_known")}) : null,
+    status.stale && processes.length ? el("p.runtime-note", {text: t("app.last_known")}) : null,
     build.common && el("p.runtime-note", {text: t(build.mixed ? "app.build_mixed" : "app.build", {version: build.common})}),
     el("p.runtime-note", {
       text: backlight.error ? t("app.backlight_error", {error: backlight.error})
@@ -152,17 +155,18 @@ function showRuntime(status, failure = "") {
   ].filter(Boolean));
 }
 
-const statusPolling = poller(async isCurrent => {
-  try {
-    const status = await api.get("/api/status");
-    if (isCurrent()) showRuntime(status);
-  } catch (error) {
-    if (isCurrent()) showRuntime(null, error.message);
-  }
-}, STATUS_INTERVAL_MS);
+const statusPolling = pollJson(() => (runtime.open ? "/api/status?versions=1" : "/api/status"), STATUS_INTERVAL_MS,
+                               status => showRuntime(status), error => showRuntime(null, error.message));
 
 document.addEventListener("click", event => {
   if (runtime.open && !runtime.contains(event.target)) runtime.open = false;
+});
+// 목록을 펼치면 버전까지 곧바로 다시 읽는다
+runtime.addEventListener("toggle", () => {
+  if (runtime.open && !document.hidden) {
+    statusPolling.stop();
+    statusPolling.start();
+  }
 });
 document.addEventListener("visibilitychange", () => {
   const shown = current ? view(current) : null;

@@ -1,13 +1,13 @@
 // 차량 특성 탭: 차의 성질인 조향 값들(steering.json의 tab="vehicle" 항목). 학습기(paramsd·torqued·lagd)마다 한 묶음이고,
 // 묶음 머리에서 제어에 학습값을 쓸지(자동 학습) 수동값을 쓸지(수동) 고른다. 값마다 카드 하나에 지금 제어에 쓰는 값과
-// 그 출처, 학습값, 수동값(바로 고친다)과 자동 학습 중 그 쓰임을 함께 둔다. 그 아래 카메라 보정, 최근 10분 추이, 학습
-// 입력, 고정 제원. 1초마다 /api/learners를 읽는다.
-import {locale, t} from "./i18n.js";
-import {clampToMeta, defaultOf, metaFor, onParamsChanged, params, saveParam, sectionName, valueOf} from "./param_state.js";
+// 그 출처, 학습값, 수동값(바로 고친다)과 자동 학습 중 그 쓰임을 함께 둔다. 그 아래 학습 입력, 최근 10분 추이, 카메라
+// 보정, 고정 제원(VEHICLE_TAB 섹션 순서에 추이와 보정을 끼운다). 1초마다 /api/learners를 읽는다.
+import {codeText, locale, t} from "./i18n.js";
+import {clampToMeta, defaultOf, metaFor, onParamsChanged, params, sectionName, valueOf} from "./param_state.js";
 import {conditionNoteList, effectsDetails, formatValue, paramCard, paramEditor} from "./param_editor.js";
 import {
-  actionButton, api, badges, clock, confirmAction, deg, el, infoTable, liveCard, ms, note, num, poller, section, sgn, svg,
-  toast,
+  actionButton, api, badges, confirmAction, DASH, deg, el, fitRange, helpText, infoTable, liveCard, ms, note, num, poller,
+  runAction, section, segmented, setBadge, sgn, sparkline, staleBadge,
 } from "./ui.js";
 
 const GRAVITY = 9.81;
@@ -22,7 +22,7 @@ const torqueCalculable = s => s.bucket_points.every(n => n > 0) && s.lat_accel_f
 function torqueDetail(s, raw, prior, width, digits) {
   const calculable = torqueCalculable(s);
   const outside = calculable && (raw < prior * (1 - width) || raw > prior * (1 + width));
-  return [t("vehicle.torque_detail", {raw: calculable ? num(raw, digits) : "–", low: num(prior * (1 - width), digits),
+  return [t("vehicle.torque_detail", {raw: calculable ? num(raw, digits) : DASH, low: num(prior * (1 - width), digits),
                                        high: num(prior * (1 + width), digits)}),
           outside ? "warn" : ""];
 }
@@ -93,12 +93,12 @@ const LIVE = {
     signed: true,
     learned: ({learner: s}) => s.lat_accel_offset,
     valid: ({learner: s}) => s.flags.torque_valid,
-    detail: ({learner: s}) => t("vehicle.raw_detail", {raw: torqueCalculable(s) ? sgn(s.lat_accel_offset_raw, 3) : "–"}),
+    detail: ({learner: s}) => t("vehicle.raw_detail", {raw: torqueCalculable(s) ? sgn(s.lat_accel_offset_raw, 3) : DASH}),
   },
   steer_actuator_delay: {
     digits: 3,
     learned: ({localization}) => (lagConfirmed(localization) ? localization.state.lateral_delay_s : NaN),
-    learnedText: (value, {localization}) => (Number.isFinite(value) ? num(value, 3) : localization ? t("vehicle.lag_pending") : "–"),
+    learnedText: (value, {localization}) => (Number.isFinite(value) ? num(value, 3) : localization ? t("vehicle.lag_pending") : DASH),
     valid: ({localization}) => lagConfirmed(localization),
     detail: ({localization}) => (!localization ? t("vehicle.no_locationd_state")
       : t("vehicle.lag_detail", {estimate: num(localization.state.lag_estimate_s, 3), std: ms(localization.state.lag_estimate_std_s),
@@ -151,7 +151,7 @@ const LEARNERS = {
         inputs.gyro_invalid ? [t("vehicle.gyro_rejected"), "warn"] : null,
         inputs.camera_invalid ? [t("vehicle.camera_rejected"), "warn"] : null,
         inputs.camera_guarded ? [t("vehicle.camera_guarded"), "muted"] : null,
-        localization.age_s > 2 ? [t("vehicle.ago", {seconds: Math.round(localization.age_s)}), "bad"] : null,
+        staleBadge(localization),
       ];
     },
     summary: ({localization}) => {
@@ -166,37 +166,7 @@ const LEARNERS = {
 };
 
 // ------------------------------------------------------------ 학습기 묶음
-// 묶음 머리의 출처 선택: 자동 학습(학습 스위치 켬) | 수동(끔). 고르면 곧바로 저장하고 onChange를 부른다.
-function sourceControl(switchKey, label, onChange) {
-  const auto = el("button", {type: "button", text: t("vehicle.auto")});
-  const manual = el("button", {type: "button", text: t("vehicle.manual")});
-  const element = el("div.segmented", {role: "group", "aria-label": t("vehicle.source_of", {label})}, auto, manual);
-  const sync = () => {
-    const on = steering()[switchKey] === true;
-    auto.setAttribute("aria-pressed", String(on));
-    manual.setAttribute("aria-pressed", String(!on));
-  };
-  const choose = async on => {
-    if ((steering()[switchKey] === true) === on) return;
-    auto.disabled = manual.disabled = true;
-    try {
-      await saveParam("steering", switchKey, on);
-      toast(`${label}: ${on ? t("vehicle.auto") : t("vehicle.manual")} · ${clock()}`);
-    } catch (error) {
-      toast(`${label}: ${error.message}`, {failed: true});
-    } finally {
-      auto.disabled = manual.disabled = false;
-      sync();
-      onChange();
-    }
-  };
-  auto.addEventListener("click", () => choose(true));
-  manual.addEventListener("click", () => choose(false));
-  sync();
-  return {element, sync};
-}
-
-// 값 카드: 지금 쓰는 값과 출처, 학습값, 수동값(편집기)과 자동 학습 중 그 쓰임, 학습값을 수동값으로 저장, 설명.
+// 값 카드: 지금 쓰는 값과 출처, 설명, 학습값, 수동값(편집기)과 자동 학습 중 그 쓰임, 학습값을 수동값으로 저장, 바꾸면.
 function quantityCard(key, switchKey, learner) {
   const meta = metaFor("steering", key);
   const spec = LIVE[key];
@@ -208,11 +178,12 @@ function quantityCard(key, switchKey, learner) {
   const now = el("span.quantity-now");
   const learnedValue = el("span.quantity-value");
   const learnedDetail = el("span.quantity-detail");
-  const learnedRow = el("div.quantity-row", {}, el("span.quantity-label", {text: t("vehicle.learned")}), learnedValue, learnedDetail);
+  const label = text => el("span.quantity-label", {text, dataset: {inUse: t("common.in_use")}});
+  const learnedRow = el("div.quantity-row", {}, label(t("vehicle.learned")), learnedValue, learnedDetail);
   const fallback = defaultOf("steering", key);
   const manualRow = el("div.quantity-row.manual",
     {},
-    el("span.quantity-label", {text: t("vehicle.manual_value")}),
+    label(t("vehicle.manual_value")),
     el("span.quantity-foot",
       {},
       fallback === undefined ? null : el("span", {text: t("params.default", {value: formatValue(fallback, meta)})}),
@@ -220,8 +191,9 @@ function quantityCard(key, switchKey, learner) {
     editor.control.element);
   const role = el("p.card-note.prior");
   const conditions = conditionNoteList("steering", key, card);
-  const adopt = spec.adopt === false ? null : el("button.adopt-button", {type: "button", onclick: () => adoptLearned()});
+  const adopt = spec.adopt === false ? null : actionButton({icon: "↓", onclick: () => adoptLearned()});
   const adoptValue = () => (typeof spec.adopt === "function" ? spec.adopt(live) : spec.learned(live));
+  const adoptTarget = () => (live ? clampToMeta(adoptValue(), meta, spec.digits) : NaN);
   const showNow = (text, unit = "") => now.replaceChildren(text, unit ? el("small", {text: ` ${unit}`}) : "");
   // 수동값을 쓰는 중일 때의 큰 글씨: manualText가 있으면 그것, 켜고 끄는 값이면 켜짐·꺼짐, 숫자면 단위와 함께
   const showManual = manual => {
@@ -233,31 +205,30 @@ function quantityCard(key, switchKey, learner) {
   const updateAdopt = valid => {
     if (!adopt) return;
     const current = valueOf("steering", key);
-    const target = live ? clampToMeta(adoptValue(), meta, spec.digits) : NaN;
+    const target = adoptTarget();
     const same = Number(current) === Number(target);
-    adopt.replaceChildren(
-      el("span", {text: spec.adoptLabel ? t("vehicle.adopt_named", {name: spec.adoptLabel()}) : t("vehicle.adopt")}),
-      el("small", {text: !live || !valid || !Number.isFinite(target) ? t("vehicle.adopt_when_valid")
-        : same ? t("vehicle.adopt_same") : `${current} → ${target}`}));
+    adopt.setContent(spec.adoptLabel ? t("vehicle.adopt_named", {name: spec.adoptLabel()}) : t("vehicle.adopt"),
+                     !live || !valid || !Number.isFinite(target) ? t("vehicle.adopt_when_valid")
+                       : same ? t("vehicle.adopt_same") : `${current} → ${target}`);
     adopt.disabled = !live || !valid || same || !Number.isFinite(target);
   };
 
-  const adoptLearned = async () => {
+  // 학습값을 수동값으로: 무엇이 어떻게 바뀌는지와 그 쓰임(학습을 버리는 항목이면 그 주의)을 묻고 저장한다
+  const adoptLearned = () => {
     if (!live) return;
-    const current = valueOf("steering", key);
-    const target = clampToMeta(adoptValue(), meta, spec.digits);
+    const current = valueOf("steering", key), target = adoptTarget();
     const auto = steering()[switchKey] === true;
-    if (!confirmAction([`${meta.label} (${key})`, `${current} → ${target}`, "",
+    if (!confirmAction([t("vehicle.adopt_confirm", {label: meta.label}),
+                        `${formatValue(current, meta)} → ${formatValue(target, meta)}`, "",
                         auto ? t("vehicle.role", {role: meta.learned_role}) : t("vehicle.adopt_manual_now"),
                         meta.caution || null])) return;
-    await editor.save(target);
+    editor.save(target);
   };
 
   // 다른 항목 때문에 이 값을 쓰지 않으면 지금 쓰는 값이 없고, 학습값·수동값 어느 줄도 사용 중이 아니다
   const showUnused = () => {
-    source.className = "badge muted";
-    source.textContent = t("params.unused");
-    showNow("–");
+    setBadge(source, [t("params.unused"), "muted"]);
+    showNow(DASH);
     learnedRow.classList.remove("in-use");
     manualRow.classList.remove("in-use");
   };
@@ -269,11 +240,10 @@ function quantityCard(key, switchKey, learner) {
     role.textContent = auto && meta.learned_role ? t("vehicle.role", {role: meta.learned_role}) : "";
     role.hidden = !role.textContent;
     if (!live) {
-      source.className = "badge muted";
-      source.textContent = auto ? t("vehicle.no_state") : t("vehicle.manual_value");
-      if (auto) showNow("–");
+      setBadge(source, auto ? [t("vehicle.no_state"), "bad"] : [t("vehicle.manual_value"), "muted"]);
+      if (auto) showNow(DASH);
       else showManual(manual);
-      learnedValue.textContent = "–";
+      learnedValue.textContent = DASH;
       learnedValue.className = "quantity-value";
       learnedDetail.textContent = t("vehicle.no_controlsd_state");
       learnedRow.classList.remove("in-use");
@@ -295,12 +265,10 @@ function quantityCard(key, switchKey, learner) {
       const value = spec.using ? spec.using(live, manual) : learned;
       if (spec.learnedText && !spec.using) showNow(spec.learnedText(value, live));
       else showNow(format(value), meta.unit);
-      source.className = "badge good";
-      source.textContent = spec.both ? t("vehicle.manual_times_learned") : t("vehicle.learned");
+      setBadge(source, [spec.both ? t("vehicle.manual_times_learned") : t("vehicle.learned"), "good"]);
     } else {
       showManual(manual);
-      source.className = `badge ${auto ? "warn" : "muted"}`;
-      source.textContent = auto ? learner.waiting() : t("vehicle.manual_value");
+      setBadge(source, auto ? [learner.waiting(), "warn"] : [t("vehicle.manual_value"), "muted"]);
     }
     learnedRow.classList.toggle("in-use", inUse);
     manualRow.classList.toggle("in-use", !inUse || Boolean(spec.both));
@@ -310,6 +278,7 @@ function quantityCard(key, switchKey, learner) {
 
   card.append(...[
     el("header.card-head", {}, el("h3.card-title", {text: spec.title ? spec.title() : meta.label}), source),
+    helpText(meta.description),
     el("div.quantity-now-row", {}, now, el("span.quantity-caption", {text: t("vehicle.now")})),
     learnedRow,
     manualRow,
@@ -317,8 +286,7 @@ function quantityCard(key, switchKey, learner) {
     conditions.element,
     meta.caution ? note(meta.caution, "warn") : null,
     adopt,
-    effectsDetails(meta, typeof valueOf("steering", key) === "boolean",
-                   {summary: t("vehicle.description"), lead: el("p.param-description", {text: meta.description})}),
+    el("footer.param-foot", {}, effectsDetails(meta, typeof valueOf("steering", key) === "boolean")),
   ].filter(Boolean));
   render();
   const refresh = () => {
@@ -337,43 +305,34 @@ function quantityCard(key, switchKey, learner) {
   };
 }
 
-// 학습기 묶음 하나: 이름·학습기·설명, 출처 선택, 상태 배지, 값 카드들, 한 줄 요약.
+// 학습기 묶음 하나: 이름·학습기·설명과 출처 선택(자동 학습·수동, 그 스위치의 편집기), 상태 배지, 값 카드들, 한 줄 요약.
 function learnerGroup(id, spec, keys) {
-  const name = sectionName(id);
   const learner = LEARNERS[spec.learner];
   const cards = keys.map(key => quantityCard(key, spec.switch, learner));
-  const statusRow = el("div.badge-row");
+  const statusRow = el("div.badge-row.group-status");
   const summary = el("p.group-summary");
   let live = null;
   const update = next => {
     live = next;
     const auto = steering()[spec.switch] === true;
     statusRow.replaceChildren(...badges([
-      !live ? [t("vehicle.no_state"), "muted"]
+      !live ? [t("vehicle.no_state"), "bad"]
         : !auto ? [t("vehicle.using_manual"), "muted"]
-        : learner.inUse(live) ? [t("vehicle.using_learned"), "accent"] : [learner.waiting(), "warn"],
+        : learner.inUse(live) ? [t("vehicle.using_learned"), "good"] : [learner.waiting(), "warn"],
       ...(live ? learner.status(live) : []),
     ]));
     summary.textContent = live ? learner.summary(live) : t("vehicle.no_learner_state");
     cards.forEach(card => card.update(live));
   };
-  const source = sourceControl(spec.switch, name, () => update(live));
+  const source = paramEditor("steering", spec.switch, {onSaved: () => update(live)});
   return {
-    element: el("section.section.learner-group",
-      {},
-      el("div.group-head",
-        {},
-        el("div.group-title",
-          {},
-          el("h2.section-title", {}, name, el("span", {text: spec.learner})),
-          el("p.group-description", {text: metaFor("steering", spec.switch).description})),
-        source.element),
-      el("div.group-status", {}, statusRow),
-      el("div.card-grid", {}, cards.map(card => card.element)),
-      summary),
+    element: section([sectionName(id), el("span", {text: spec.learner})],
+                     [statusRow, el("div.card-grid", {}, cards.map(card => card.element)), summary],
+                     {grid: false, description: metaFor("steering", spec.switch).description,
+                      aside: el("div.section-aside", {}, source.control.element, source.status)}),
     update,
     refresh() {
-      source.sync();
+      source.refresh();
       cards.forEach(card => card.refresh());
       update(live);
     },
@@ -381,14 +340,9 @@ function learnerGroup(id, spec, keys) {
 }
 
 // ------------------------------------------------------------ 카메라 보정
-// 보정 상태마다 [배지 문구 키, 톤]. 포즈 보정기의 상태는 표에 calibration.pose.<상태>로 쓴다.
-const CALIBRATION_STATUS = {
-  calibrated: ["calibration.status.calibrated", "good"], uncalibrated: ["calibration.status.uncalibrated", "warn"],
-  invalid: ["calibration.status.invalid", "bad"], recalibrating: ["calibration.status.recalibrating", "warn"],
-};
-const statusBadge = status => (CALIBRATION_STATUS[status] ? [t(CALIBRATION_STATUS[status][0]), CALIBRATION_STATUS[status][1]]
-  : [status, "muted"]);
-const poseStatus = status => (status in CALIBRATION_STATUS ? t(`calibration.pose.${status}`) : status);
+// 보정 상태의 톤. 문구는 calibration.status.<상태>(배지), 포즈 보정기의 상태는 표에 calibration.pose.<상태>.
+const CALIBRATION_TONE = {calibrated: "good", uncalibrated: "warn", invalid: "bad", recalibrating: "warn"};
+const statusBadge = status => [codeText("calibration.status", status), CALIBRATION_TONE[status] || "muted"];
 const sourceText = source => (source === "flow" ? t("calibration.flow") : t("calibration.pose_source"));
 
 // 워프 보정(modeld calibration)과 그 출처. 출처 버튼은 display.json의 calibration_use_flow를 바꾼다(결합 중에는 서버가
@@ -398,79 +352,74 @@ function calibrationCard() {
   let latest = null;
   let saving = false;
   const button = actionButton({icon: "↺", danger: true, onclick: () => reset()});
-  const flowButton = el("button", {type: "button", text: t("calibration.use_flow")});
-  const poseButton = el("button", {type: "button", text: t("calibration.use_pose")});
-  const sourceControl = el("div.segmented", {role: "group", "aria-label": t("calibration.source")}, flowButton, poseButton);
-  const card = liveCard(t("calibration.card"), {control: sourceControl, actions: [button]});
+  button.setContent(t("calibration.reset"));  // 첫 상태가 오기 전(막혀 있다)
+  const source = segmented(t("calibration.source"), [{value: true, label: t("calibration.use_flow")},
+                                                      {value: false, label: t("calibration.use_pose")}], useFlow => choose(useFlow));
+  const card = liveCard(t("calibration.card"), {control: source.element, actions: [button]});
+  const how = helpText(t("calibration.how"), "card-note");  // 한 번 만들어 펼친 상태가 1초마다 접히지 않게
 
   const choose = async useFlow => {
-    const c = latest;
-    if (!c || !c.available || saving || Boolean(c.use_flow) === useFlow) return;
-    saving = true;
-    update(c);
-    try {
-      latest = await api.post("/api/calibration/source", {use_flow: useFlow});
-      toast(`${t("calibration.source")}: ${useFlow ? t("calibration.use_flow") : t("calibration.use_pose")} · ${clock()}`);
-    } catch (error) {
-      toast(`${t("calibration.source")}: ${error.message}`, {failed: true});
-    } finally {
-      saving = false;
-      update(latest);
-    }
+    if (!latest || !latest.available || saving) return;
+    const result = await runAction({
+      busy: on => {
+        saving = on;
+        if (latest) update(latest);
+      },
+      call: () => api.post("/api/calibration/source", {use_flow: useFlow}),
+      done: () => t("calibration.source_changed", {source: useFlow ? t("calibration.use_flow") : t("calibration.use_pose")}),
+      failed: error => t("calibration.source_failed", {error}),
+    });
+    if (result) update(result);
   };
-  flowButton.addEventListener("click", () => choose(true));
-  poseButton.addEventListener("click", () => choose(false));
 
   const reset = async () => {
     const c = latest;
-    if (!confirmAction([t("calibration.confirm"),
-                        c && c.available
-                          ? t("calibration.confirm_now", {pitch: sgn(c.rpy_deg[1], 2), yaw: sgn(c.rpy_deg[2], 2), source: sourceText(c.source)})
-                          : t("calibration.confirm_no_state"),
-                        "", t("calibration.confirm_effect"), t("calibration.confirm_after")])) return;
-    button.disabled = true;
-    try {
-      update(await api.post("/api/calibration/reset"));
-      toast(t("calibration.reset_requested"));
-    } catch (error) {
-      toast(t("calibration.reset_failed", {error: error.message}), {failed: true});
-      button.disabled = false;
-    }
+    const result = await runAction({
+      confirm: [t("calibration.confirm"),
+                c && c.available
+                  ? t("calibration.confirm_now", {pitch: sgn(c.rpy_deg[1], 2), yaw: sgn(c.rpy_deg[2], 2), source: sourceText(c.source)})
+                  : t("calibration.confirm_no_state"),
+                "", t("calibration.confirm_effect"), t("calibration.confirm_after")],
+      busy: on => {
+        button.disabled = on;
+      },
+      call: () => api.post("/api/calibration/reset"),
+      done: () => t("calibration.reset_requested"),
+      failed: error => t("calibration.reset_failed", {error}),
+    });
+    if (result) update(result);
   };
 
   const update = c => {
     latest = c;
     const blocked = Boolean(c && c.engaged);
-    flowButton.setAttribute("aria-pressed", String(Boolean(c && c.available && c.use_flow)));
-    poseButton.setAttribute("aria-pressed", String(Boolean(c && c.available && !c.use_flow)));
-    flowButton.disabled = poseButton.disabled = saving || blocked || !(c && c.available);
-    sourceControl.title = blocked ? t("calibration.blocked_source") : "";
+    source.show(c && c.available ? Boolean(c.use_flow) : null);
+    source.setDisabled(saving || blocked || !(c && c.available));
+    source.element.title = blocked ? t("calibration.blocked_source") : "";
     if (!c || !c.available) {
-      card.update([[t("vehicle.no_state"), "muted"]], [note(t("calibration.no_state"))]);
+      card.update([[t("vehicle.no_state"), "bad"]], [note(t("calibration.no_state"))]);
     } else {
       const [r, p, y] = c.rpy_deg;
-      const flow = c.flow || {status: "off", sd_deg: [0, 0], window: {}};
-      const pose = c.pose || {status: c.status, valid_blocks: c.valid_blocks, rpy_deg: c.rpy_deg};
+      const flow = c.flow, pose = c.pose, w = flow.window;
       const hasFlow = flow.estimate_blocks > 0;
       const estimate = flow.status === "estimate";
       const dp = pose.rpy_deg[1] - flow.pitch_deg, dy = pose.rpy_deg[2] - flow.yaw_deg;
-      const w = flow.window;
       card.update([statusBadge(c.status),
                    c.source === "flow" ? [t("calibration.flow_applied"), "accent"] : [t("calibration.pose_applied"), "muted"],
                    c.switch_pending ? [t("calibration.switch_pending"), "warn"] : null,
                    c.ramping ? [t("calibration.ramping"), "accent"] : null,
                    flow.status === "collecting" ? [t("calibration.flow_collecting", {blocks: flow.estimate_blocks}), "warn"]
                      : estimate ? [t("calibration.flow_blocks", {blocks: flow.estimate_blocks}), "muted"] : null,
-                   c.age_s > 2 ? [t("vehicle.ago", {seconds: Math.round(c.age_s)}), "bad"] : null], [
+                   staleBadge(c)], [
         infoTable(["", "pitch (°)", "yaw (°)", ""], [
           [t("calibration.row_warp"), sgn(p, 2), sgn(y, 2), t("calibration.row_warp_note", {roll: sgn(r, 2), source: sourceText(c.source)})],
-          [t("calibration.row_flow"), hasFlow ? sgn(flow.pitch_deg, 2) : "—", hasFlow ? sgn(flow.yaw_deg, 2) : "—",
+          [t("calibration.row_flow"), hasFlow ? sgn(flow.pitch_deg, 2) : DASH, hasFlow ? sgn(flow.yaw_deg, 2) : DASH,
            hasFlow ? t("calibration.row_flow_note", {blocks: flow.estimate_blocks, pitch_sd: num(flow.sd_deg[0], 2), yaw_sd: num(flow.sd_deg[1], 2)})
                    : flow.status === "off" ? t("calibration.flow_off") : t("calibration.collecting")],
           [t("calibration.row_pose"), sgn(pose.rpy_deg[1], 2), sgn(pose.rpy_deg[2], 2),
            t("calibration.row_pose_note", {blocks: pose.valid_blocks,
-                                           status: c.source === "flow" || c.ramping ? t("calibration.paused") : poseStatus(pose.status)})],
-          [t("calibration.row_bias"), estimate ? sgn(dp, 2) : "—", estimate ? [sgn(dy, 2), Math.abs(dy) > 0.2 ? "warn" : ""] : "—",
+                                           status: c.source === "flow" || c.ramping ? t("calibration.paused") : codeText("calibration.pose", pose.status)})],
+          [t("calibration.row_bias"), estimate ? sgn(dp, 2) : DASH, estimate ? [sgn(dy, 2), Math.abs(dy) > 0.2 ? "warn" : ""] : DASH,
            t("calibration.row_bias_note")],
         ]),
         c.use_flow && !c.flow_usable ? note(t("calibration.flow_not_usable"), "warn") : null,
@@ -478,68 +427,61 @@ function calibrationCard() {
           ? note(t("calibration.windows", {windows: flow.windows, rejected: flow.rejected_windows, tracks: w.tracks, inliers: w.inliers,
                                            rotation: num(w.rotation_deg, 3), parallax: num(w.parallax_px, 1),
                                            changes: flow.mount_changes})) : null,
-        note(t("calibration.how")),
+        how,
       ]);
     }
     button.setContent(c && c.reset_pending ? t("calibration.reset_pending") : t("calibration.reset"),
                       blocked ? t("calibration.blocked_reset") : t("calibration.reset_note"));
-    button.disabled = blocked;
+    button.disabled = blocked || !(c && c.available);
   };
-  return {element: card.element, update};
+  // 읽지 못하면 옛 상태를 버린다: 출처 버튼도 막고, 고르는 동안의 다시 그리기가 옛 상태로 덮지 않게
+  const fail = error => {
+    latest = null;
+    source.setDisabled(true);
+    card.fail(error);
+  };
+  return {element: card.element, update, fail};
 }
 
 // ------------------------------------------------------------ 추이
-// title은 문구 키
+// title·dashed는 문구 키. series는 [추이 행의 열, 선 이름(console.css .trend .<이름>)]이고, levels는 기준선: ref는 점선
+// (dashed가 무엇인지 말한다: 수동값 또는 학습의 사전값), low·high는 그 허용 폭이다. span은 y 범위의 최소 폭.
 const TREND_CHARTS = [
-  {title: "vehicle.trend_ratio", series: [[1, "main"]], ref: m => [m.steer_ratio], span: 0.2, digits: 2},
-  {title: "vehicle.trend_offset", series: [[2, "main"], [3, "thin"]], ref: m => [m.angle_offset_deg], span: 0.2, digits: 2},
-  {title: "vehicle.trend_roll", series: [[4, "main"], [5, "dash"]], ref: () => [], span: 0.5, digits: 2},
+  {title: "vehicle.trend_ratio", series: [[1, "main"]], levels: m => ({ref: m.steer_ratio}),
+   dashed: "vehicle.trend_dashed_manual", span: 0.2, digits: 2},
+  {title: "vehicle.trend_offset", series: [[2, "main"], [3, "thin"]], levels: m => ({ref: m.angle_offset_deg}),
+   dashed: "vehicle.trend_dashed_manual", span: 0.2, digits: 2},
+  {title: "vehicle.trend_roll", series: [[4, "main"], [5, "dash"]], levels: () => ({}), span: 0.5, digits: 2},
   {title: "vehicle.trend_torque", series: [[7, "main"], [6, "raw"]],
-   ref: (m, s) => [s.prior_lat_accel_factor, s.prior_lat_accel_factor * 0.7, s.prior_lat_accel_factor * 1.3], span: 0.2, digits: 2},
+   levels: (m, s) => ({ref: s.prior_lat_accel_factor, low: s.prior_lat_accel_factor * 0.7, high: s.prior_lat_accel_factor * 1.3}),
+   dashed: "vehicle.trend_dashed_prior", span: 0.2, digits: 2},
 ];
 
-function trendChart(chart, rows, windowS, manual, state) {
-  const end = rows.length ? rows[rows.length - 1][0] : 0;
-  const shown = rows.filter(row => row[0] >= end - windowS);
-  const valid = (row, index, style) => Number.isFinite(row[index]) && !(style === "raw" && row[index] === 0);
-  const refs = chart.ref(manual, state).filter(Number.isFinite);
-  const values = [...refs];
-  for (const [index, style] of chart.series) for (const row of shown) if (valid(row, index, style)) values.push(row[index]);
-  let lo = values.length ? Math.min(...values) : 0, hi = values.length ? Math.max(...values) : 1;
-  if (hi - lo < chart.span) {
-    const mid = (hi + lo) / 2;
-    lo = mid - chart.span / 2;
-    hi = mid + chart.span / 2;
-  }
-  const pad = (hi - lo) * 0.08;
-  lo -= pad;
-  hi += pad;
-  const W = 300, H = 90;
-  const x = time => ((time - (end - windowS)) / windowS) * W;
-  const y = v => H - ((v - lo) / (hi - lo)) * H;
+// 추이 카드 하나: 제목과 지금 값, 차트(ui.js sparkline), 그린 범위와 점선의 뜻. 한 번 만들고 1초마다 update로 그린다.
+function trendCard(chart) {
   const title = t(chart.title);
-  const plot = svg("svg", {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": title});
-  refs.forEach((value, i) => plot.append(svg("line", {
-    x1: 0, x2: W, y1: y(value), y2: y(value), stroke: i === 0 ? "#8a949b" : "#5b646b", "stroke-dasharray": i === 0 ? "5 4" : "2 4",
-    "vector-effect": "non-scaling-stroke",
-  })));
-  const stroke = {main: "#58a6e7", thin: "#a5adb4", dash: "#a5adb4", raw: "#efb85b"};
-  for (const [index, style] of chart.series) {
-    const points = shown.filter(row => valid(row, index, style)).map(row => `${x(row[0]).toFixed(1)},${y(row[index]).toFixed(1)}`);
-    if (points.length < 2) continue;
-    plot.append(svg("polyline", {
-      points: points.join(" "), fill: "none", stroke: stroke[style], "stroke-width": style === "main" ? 2 : 1.2,
-      "vector-effect": "non-scaling-stroke", ...(style === "dash" ? {"stroke-dasharray": "4 3"} : {}),
-    }));
-  }
-  const last = shown.length ? shown[shown.length - 1] : null;
-  return el("article.card.trend",
-    {},
-    el("div.trend-head", {}, el("span", {text: title}),
-       el("span.trend-now", {text: last ? chart.series.map(([index, style]) => (valid(last, index, style) ? num(last[index], chart.digits) : "–")).join(" / ") : "–"})),
-    plot,
-    el("div.trend-range", {}, el("span", {text: `${num(lo, chart.digits)} ~ ${num(hi, chart.digits)}`}),
-       el("span", {text: refs.length ? t("vehicle.trend_dashed", {value: num(refs[0], chart.digits)}) : t("vehicle.trend_window")})));
+  const now = el("span.trend-now", {text: DASH});
+  const range = el("span"), dashed = el("span");
+  const plot = sparkline({height: 30, series: chart.series.map(([, name]) => name), levels: ["ref", "low", "high"], label: title});
+  const element = el("article.card.trend", {}, el("div.trend-head", {}, el("span", {text: title}), now), plot.element,
+                     el("div.trend-range", {}, range, dashed));
+  // 원시 torqued 배율의 0은 아직 계산하지 못한 값이다
+  const value = (row, index, name) => (Number.isFinite(row[index]) && !(name === "raw" && row[index] === 0) ? row[index] : NaN);
+  return {
+    element,
+    update(rows, windowS, manual, state) {
+      const end = rows.length ? rows[rows.length - 1][0] : 0;
+      const shown = rows.filter(row => row[0] >= end - windowS);
+      const at = chart.levels(manual, state || {});  // 학습 상태가 없으면 사전값 기준선은 숨는다(NaN)
+      const data = Object.fromEntries(chart.series.map(([index, name]) => [name, shown.map(row => [row[0], value(row, index, name)])]));
+      const y = fitRange([...Object.values(at), ...Object.values(data).flat().map(([, v]) => v)], {minSpan: chart.span, pad: 0.08});
+      plot.draw({x: [end - windowS, end], y, data, at});
+      const last = shown[shown.length - 1];
+      now.textContent = last ? chart.series.map(([index, name]) => num(value(last, index, name), chart.digits)).join(" / ") : DASH;
+      range.textContent = `${num(y[0], chart.digits)} ~ ${num(y[1], chart.digits)}`;
+      dashed.textContent = Number.isFinite(at.ref) ? t(chart.dashed, {value: num(at.ref, chart.digits)}) : t("vehicle.trend_window");
+    },
+  };
 }
 
 // ------------------------------------------------------------ 탭
@@ -553,10 +495,11 @@ export function createVehicleView() {
     const spec = tab.learners[id];
     return learnerGroup(id, spec, keysOf(id).filter(key => key !== spec.switch));
   });
-  const plain = tab.sections.filter(id => !tab.learners[id]).map(id => ({id, cards: keysOf(id).map(key => paramCard("steering", key))}));
+  const plain = new Map(tab.sections.filter(id => !tab.learners[id]).map(id => [id, keysOf(id).map(key => paramCard("steering", key))]));
+  const plainSection = id => (plain.get(id)?.length ? section(sectionName(id), plain.get(id), {count: plain.get(id).length}) : null);
   const calibration = calibrationCard();
   const notice = el("div");
-  const trends = el("div.card-grid");
+  const trends = TREND_CHARTS.map(trendCard);
   let rows = [];
   let windowS = 600;
   let trendLoaded = false;
@@ -568,7 +511,7 @@ export function createVehicleView() {
       groups.forEach(group => group.update(null));
       return;
     }
-    notice.replaceChildren(data.age_s > 2
+    notice.replaceChildren(data.stale
       ? el("p.group-note.warn", {text: t("vehicle.learners_stale", {seconds: Math.round(data.age_s)})}) : "");
     const live = {learner: data.state, localization: data.localization && data.localization.available ? data.localization : null};
     groups.forEach(group => group.update(live));
@@ -578,9 +521,16 @@ export function createVehicleView() {
       rows.push(row);
       while (rows.length && rows[0][0] < row[0] - windowS) rows.shift();
     }
-    trends.replaceChildren(...TREND_CHARTS.map(chart => trendChart(chart, rows, windowS, steering(), data.state)));
+    trends.forEach(trend => trend.update(rows, windowS, steering(), data.state));
   };
 
+  // 읽지 못하면 위의 알림과 함께 값과 보정 카드도 "상태 없음"으로 돌린다(옛 값이 살아 있는 것처럼 보이지 않게)
+  const failed = error => {
+    notice.replaceChildren(el("p.group-note.warn", {text: t("vehicle.learners_failed", {error: error.message})}));
+    groups.forEach(group => group.update(null));
+    calibration.fail(error);
+  };
+  // 처음(그리고 탭을 다시 열 때) 한 번은 서버가 모아 둔 10분 추이부터 받는다
   const polling = poller(async isCurrent => {
     try {
       if (!trendLoaded) {
@@ -592,7 +542,7 @@ export function createVehicleView() {
       const data = await api.get("/api/learners");
       if (isCurrent()) update(data);
     } catch (error) {
-      if (isCurrent()) notice.replaceChildren(el("p.group-note.warn", {text: t("vehicle.learners_failed", {error: error.message})}));
+      if (isCurrent()) failed(error);
     }
   }, 1000);
 
@@ -602,15 +552,16 @@ export function createVehicleView() {
       el("p.group-note", {text: tab.note}),
       notice,
       groups.map(group => group.element),
+      plainSection("learner_inputs"),
+      section(t("vehicle.trends"), trends.map(trend => trend.element)),
       section(t("calibration.section"), [calibration.element]),
-      el("section.section", {}, el("h2.section-title", {text: t("vehicle.trends")}), trends),
-      plain.map(({id, cards}) => section(sectionName(id), cards, {count: cards.length})),
+      [...plain.keys()].filter(id => id !== "learner_inputs").map(plainSection),
       el("p.file-path", {text: t("params.file", {path: params().paths.steering})})),
     start() {
       // 가려져 있던 동안의 추이는 서버에서 다시 받는다
       trendLoaded = false;
       groups.forEach(group => group.refresh());
-      plain.forEach(({cards}) => cards.forEach(card => card.refresh()));
+      plain.forEach(cards => cards.forEach(card => card.refresh()));
       polling.start();
     },
     stop: polling.stop,

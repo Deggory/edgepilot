@@ -9,14 +9,13 @@ import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .shm_channel import IpcReader, age_s, topic_path
+from .shm_channel import IpcReader, freshness, topic_path
 
 MANAGER_STATE_TOPIC = "/edgepilot_manager_state"
 MANAGER_STATE_HEAD = struct.Struct("<QII")  # timestamp_ns, process_count, reserved
 PROCESS_STATE = struct.Struct("<16sI")      # ProcessState 필드: name, running
 MAX_PROCESSES = 12
-MANAGER_STALE_S = 3.0
-INSTALL_DIR = Path(__file__).resolve().parents[1]  # 보드 /root/edgepilot. 실행 파일이 여기 있다
+MANAGER_MAX_AGE_S = 3.0  # 매니저는 1초마다 낸다
 VERSION_MARKER = b"EDGEPILOT_VERSION="  # build_version.h EDGEPILOT_VERSION_MARKER_PREFIX
 VERSION_MAX = 64                        # cmake/build_version.cmake가 자르는 길이
 VERSION_SCAN_LIMIT = 64 << 20           # 실행 파일은 1 MB도 안 된다. 엉뚱한 큰 파일을 다 읽지 않는다
@@ -41,18 +40,23 @@ def read_binary_version(path) -> Optional[str]:
 
 
 def process_table(proc: Path = Path("/proc")) -> Dict[str, List[int]]:
-    """argv[0]의 파일 이름 -> 그 프로세스들의 pid(오름차순)."""
+    """argv[0]의 파일 이름 -> 그 프로세스들의 pid(오름차순). 머리 줄이 2초마다 부르므로 Path 대신 os로 읽는다(보드에서
+    프로세스 125개에 83 ms → 19 ms). cmdline이 빈 커널 스레드는 뺀다."""
     table: Dict[str, List[int]] = {}
-    if not proc.is_dir():
+    try:
+        entries = os.listdir(proc)
+    except OSError:
         return table
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
+    for entry in entries:
+        if not entry.isdigit():
             continue
         try:
-            argv0 = (entry / "cmdline").read_bytes().split(b"\0", 1)[0]
-            table.setdefault(Path(os.fsdecode(argv0)).name, []).append(int(entry.name))
-        except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
+            with open(os.path.join(proc, entry, "cmdline"), "rb") as file:
+                argv0 = file.read(4096).split(b"\0", 1)[0]
+        except OSError:
             continue
+        if argv0:
+            table.setdefault(os.path.basename(os.fsdecode(argv0)), []).append(int(entry))
     return {name: sorted(pids) for name, pids in table.items()}
 
 
@@ -74,7 +78,9 @@ def signal_process(name: str, signum: int = signal.SIGHUP) -> List[int]:
 
 
 class ProcessStatus:
-    def __init__(self, path: str = topic_path(MANAGER_STATE_TOPIC), install_dir: Path = INSTALL_DIR,
+    """install_dir은 실행 파일이 있는 곳이다: 매니저가 설치 디렉터리(보드 /root/edgepilot)에서 띄우므로 작업 디렉터리."""
+
+    def __init__(self, path: str = topic_path(MANAGER_STATE_TOPIC), install_dir: Path = Path("."),
                  proc: Path = Path("/proc")):
         self.reader = IpcReader(path, MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES)
         self.install_dir = install_dir
@@ -105,20 +111,21 @@ class ProcessStatus:
                 return self.binary_version(self.proc / str(pids[0]) / "exe"), self.binary_version(self.install_dir / binary)
         return None, self.binary_version(self.install_dir / binaries[0])
 
-    def status(self) -> Dict[str, Any]:
-        """{"available", "age_s", "processes": [{"name", "running", "version", "installed_version"}]}. 매니저가
-        없으면(또는 3초 넘게 멈췄으면) available이 False다."""
+    def status(self, versions: bool = False) -> Dict[str, Any]:
+        """{"available", "stale", "age_s", "processes": [{"name", "running", "version", "installed_version"}]}.
+        매니저가 없거나 3초 넘게 멈췄으면 stale이다. 빌드 버전은 versions일 때만 읽는다(/proc 전체를 훑으므로 머리 줄의
+        목록을 펼쳤을 때만, 보드에서 약 19 ms). 아니면 버전 칸은 None이다."""
         latest = self.reader.read_payload()
+        result: Dict[str, Any] = {**freshness(latest[1] if latest else None, MANAGER_MAX_AGE_S), "processes": []}
         if latest is None:
-            return {"available": False, "age_s": 0.0, "processes": []}
-        _, stamp, payload = latest
+            return result
+        payload = latest[2]
         _, count, _ = MANAGER_STATE_HEAD.unpack_from(payload)
-        table = process_table(self.proc)
-        processes = []
+        table = process_table(self.proc) if versions else None
         for index in range(min(count, MAX_PROCESSES)):
             raw_name, running = PROCESS_STATE.unpack_from(payload, MANAGER_STATE_HEAD.size + index * PROCESS_STATE.size)
             name = raw_name.split(b"\0", 1)[0].decode("ascii", "replace")
-            version, installed = self.versions(name, table)
-            processes.append({"name": name, "running": bool(running), "version": version, "installed_version": installed})
-        age = age_s(stamp)
-        return {"available": age <= MANAGER_STALE_S, "age_s": age, "processes": processes}
+            version, installed = self.versions(name, table) if table is not None else (None, None)
+            result["processes"].append({"name": name, "running": bool(running), "version": version,
+                                        "installed_version": installed})
+        return result

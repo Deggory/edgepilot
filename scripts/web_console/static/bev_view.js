@@ -2,18 +2,19 @@
 // 그리기는 이 브라우저가 한다. three.js는 이 탭을 처음 열 때 불러오고, 패널과 WebGL은 한 번만 만들어 탭을
 // 오가도 다시 쓴다. 스트림은 start()부터 stop()까지만 연다(탭이 보이고 페이지가 가려지지 않은 동안).
 import {t} from "./i18n.js";
-import {el} from "./ui.js";
+import {el, helpText} from "./ui.js";
 
 export function createBevView() {
   const statusText = el("span", {text: t("app.loading")});
-  const status = el("p.stream-status", {}, el("span.dot"), statusText);
+  const status = el("p.stream-status", {dataset: {state: "wait"}}, el("span.dot"), statusText);
   const body = el("div.bev-body");
   let bev = null;
   let loading = null;
   let shown = false;
 
-  const showStatus = ({live, text}) => {
-    status.classList.toggle("online", live);
+  // state: good(모델과 controlsd), warn(모델만), bad(끊김, 모델 없음·멈춤), wait(연결 중)
+  const showStatus = ({state, text}) => {
+    status.dataset.state = state;
     statusText.textContent = text;
   };
   const follow = () => {
@@ -30,7 +31,7 @@ export function createBevView() {
       follow();
     } catch (error) {
       // 브라우저는 실패한 모듈을 기억해 다시 import해도 다시 받지 않는다: 페이지를 새로 고쳐야 한다
-      showStatus({live: false, text: t("bev.load_failed")});
+      showStatus({state: "bad", text: t("bev.load_failed")});
       body.replaceChildren(el("div.empty",
         {},
         el("p", {text: t("bev.load_failed_detail", {error: error.message})}),
@@ -39,7 +40,7 @@ export function createBevView() {
   };
 
   return {
-    element: el("div.view", {}, el("p.group-note", {text: t("bev.note")}), status, body),
+    element: el("div.view", {}, helpText(t("bev.note"), "group-note"), status, body),
     start() {
       shown = true;
       if (bev) follow();

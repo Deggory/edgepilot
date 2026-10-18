@@ -3,28 +3,22 @@
 // 인스턴스를 제 크기로 늘인다. 바퀴는 따로 인스턴스라 어떻게 늘여도 둥글다. sv_recorder_bev의
 // static/bev_models.js에서 차만 옮겨 왔다: 모델은 다른 클래스를 보지 않는다.
 //
-// carModel()은 {body, lamps, brake, turn, wheels, size}다:
+// carModel()은 {body, lamps, brake, wheels, size}다:
 //   body    position, color(부품마다 제 색)와 paint(인스턴스 색이 물들이는 곳은 1)
 //   lamps   position과 color, 조명 없이 그린다: 헤드라이트와 어둡게 켠 테일라이트
 //   brake   켜진 테일라이트, 어두운 것보다 살짝 바깥에 있다: 제동 중에 그 위에 그린다
-//   turn    [왼쪽, 오른쪽] 방향지시등, 호박색, 깜빡이는 동안 조명 없이 그린다: 헤드라이트 아래 앞
-//           모서리, 미러 리피터, 테일라이트 아래 뒤 모서리
 //   wheels  모델 크기에서 바퀴마다 [x, y, z, 반지름, 폭], wheel()의 인스턴스용
 //   size    모델을 만든 크기 [길이, 폭, 높이]
 
 import * as THREE from "three";
+import {archBottom, archMarks, clamp, cross, dot, stations, sub} from "./bev_math.js";
 
 const linear = (hex) => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
 const PAINT = [1, 1, 1];
 const GLASS = linear("#141a22"), DARK = linear("#1d2026"), TYRE = linear("#111214"), RIM = linear("#a3aab4");
 const WHITE = linear("#f4f4f4"), HEAD = linear("#fff4dc"), TAIL = linear("#a8160c"), BRAKE = linear("#ff5a46");
-const AMBER = linear("#ffa31a");
 
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const PLATE_HALF = 0.26;                // 번호판 폭의 절반(한국 번호판은 520 x 110 mm)
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const mean = (points) => [0, 1, 2].map((k) => points.reduce((sum, p) => sum + p[k], 0) / points.length);
 
 // -- 모델 만들기: 정점마다 색과 paint 플래그를 단 삼각형 -----------------------------------------
@@ -121,46 +115,18 @@ function loft(builder, stations, shape, pick, splits = []) {
   }
 }
 
-// x0부터 x1까지의 스테이션: 안쪽에 든 marks의 모든 점에, 그리고 적어도 step마다.
-function stations(x0, x1, step, marks = []) {
-  const xs = [x0, x1, ...marks.filter((x) => x > x0 && x < x1)];
-  for (let x = x0 + step; x < x1; x += step) xs.push(x);
-  xs.sort((a, b) => a - b);
-  return xs.filter((x, i) => i === 0 || x - xs[i - 1] > 2e-3);
-}
-
-// 반지름 ra인 휠 아치 둘레의 스테이션: 각 아치 발 바로 바깥과 아치를 따라.
-function archMarks(centres, ra, steps = 6) {
-  const xs = [];
-  for (const c of centres) {
-    xs.push(c - ra - 0.01, c + ra + 0.01);
-    for (let i = 0; i <= steps; i++) xs.push(c - ra * Math.cos(Math.PI * i / steps));
-  }
-  return xs;
-}
-
-// 밑면: bottom을 높이 zc를 중심으로 한 반지름 ra의 휠 아치마다 그 둘레에서 들어 올린다.
-function archBottom(x, centres, ra, zc, bottom) {
-  let z = bottom;
-  for (const c of centres) {
-    const dx = Math.abs(x - c);
-    if (dx <= ra + 1e-6) z = Math.max(z, zc + Math.sqrt(Math.max(0, ra * ra - dx * dx)));
-  }
-  return z;
-}
-
 const underside = (paint) => ({segment}) => segment === "bottom" || segment === "chamferB" ? [DARK, 0] : paint;
 
-// 차 한 대: 휠 아치가 있는 아래 몸체, 그 위의 글라스하우스(사방이 유리, 지붕과 필러는 도장), 등화, 그릴,
-// 번호판과 미러. 1.6 m보다 높으면 SUV다.
+// 세단 한 대: 휠 아치가 있는 아래 몸체, 그 위의 글라스하우스(사방이 유리, 지붕과 필러는 도장), 등화, 그릴,
+// 번호판과 미러.
 function car(l, w, h) {
-  const body = new Builder(), lamps = new Builder(), brake = new Builder(), turn = [new Builder(), new Builder()];
-  const X = l / 2, half = w / 2, suv = h > 1.6;
-  const r = suv ? 0.37 : 0.33, ra = r + 0.06, clearance = suv ? 0.2 : 0.15;
+  const body = new Builder(), lamps = new Builder(), brake = new Builder();
+  const X = l / 2, half = w / 2;
+  const r = 0.33, ra = r + 0.06, clearance = 0.15;
   const axles = [X - l * 0.2, -X + l * 0.21];
-  const belt = h * (suv ? 0.58 : 0.6), nose = belt - (suv ? 0.08 : 0.15);
-  const shield = X - l * (suv ? 0.29 : 0.31), roofFront = X - l * (suv ? 0.43 : 0.47);
-  const roofRear = -X + l * (suv ? 0.08 : 0.24), rearFoot = -X + l * (suv ? 0.035 : 0.13);
+  const belt = h * 0.6, nose = belt - 0.15;
+  const shield = X - l * 0.31, roofFront = X - l * 0.47;
+  const roofRear = -X + l * 0.24, rearFoot = -X + l * 0.13;
   const plan = (x) => half * (1 - 0.09 * clamp((x - (X - 0.7)) / 0.7, 0, 1) ** 2 - 0.06 * clamp((-X + 0.5 - x) / 0.5, 0, 1) ** 2);
   const top = (x) => {
     let z = belt;
@@ -210,11 +176,6 @@ function car(l, w, h) {
   for (const side of [1, -1]) {
     lamps.add(box(X - 0.12, X + 0.004, side * 0.2 * w, side * (plan(nx) - 0.07), nose - 0.15, nose - 0.1), HEAD);
     body.add(box(shield - 0.18, shield - 0.06, side * (plan(shield) - 0.02), side * (plan(shield) + 0.11), belt + 0.01, belt + 0.1), PAINT, 1);
-    // 방향지시등: 헤드라이트 아래로 앞 모서리를 돌아, 그리고 미러 밑동을 따라
-    const signal = turn[side > 0 ? 0 : 1];
-    signal.add(box(X - 0.1, X + 0.008, side * (plan(nx) - 0.28), side * (plan(nx) - 0.02), nose - 0.24, nose - 0.17), AMBER);
-    wrap(X - 0.42, X - 0.1, nose - 0.24, nose - 0.17, side, AMBER, signal, 0.008);
-    signal.add(box(shield - 0.17, shield - 0.07, side * (plan(shield) + 0.09), side * (plan(shield) + 0.118), belt + 0.006, belt + 0.035), AMBER);
   }
   body.add(box(X - 0.05, X + 0.005, -0.3 * w, 0.3 * w, clearance + 0.1, clearance + 0.28), DARK);         // 아래 흡기구
   body.add(box(X - 0.03, X + 0.016, -PLATE_HALF, PLATE_HALF, clearance + 0.16, clearance + 0.27), WHITE);
@@ -225,20 +186,15 @@ function car(l, w, h) {
     wrap(-X + 0.06, -X + 0.34, lampBottom + 0.02, lampTop, side, TAIL, lamps);
     brake.add(box(-X - 0.014, -X + 0.07, side * 0.26 * w, side * (rear + 0.006), lampBottom - 0.006, lampTop + 0.006), BRAKE);
     wrap(-X + 0.06, -X + 0.34, lampBottom + 0.014, lampTop + 0.006, side, BRAKE, brake, 0.01);
-    // 그리고 테일라이트 아래, 뒤 모서리를 도는 띠
-    const signal = turn[side > 0 ? 0 : 1];
-    signal.add(box(-X - 0.012, -X + 0.06, side * 0.36 * w, side * (rear + 0.004), lampBottom - 0.075, lampBottom - 0.015), AMBER);
-    wrap(-X + 0.06, -X + 0.3, lampBottom - 0.075, lampBottom - 0.015, side, AMBER, signal, 0.008);
   }
   body.add(box(-X - 0.012, -X + 0.02, -PLATE_HALF, PLATE_HALF, lampBottom - 0.01, lampBottom + 0.1), WHITE);
   body.add(box(-X - 0.004, -X + 0.05, -0.34 * w, 0.34 * w, clearance + 0.07, clearance + 0.17), DARK);    // 범퍼
-  // 보조 제동등, 뒷유리 위쪽(SUV는 테일게이트)에
+  // 보조 제동등, 뒷유리 위쪽에
   const stop = roofRear - 0.04, stopZ = roofLine(stop) - 0.035;
   lamps.add(box(stop - 0.03, stop + 0.03, -0.17 * w, 0.17 * w, stopZ - 0.02, stopZ + 0.012), TAIL);
   brake.add(box(stop - 0.036, stop + 0.036, -0.175 * w, 0.175 * w, stopZ - 0.026, stopZ + 0.018), BRAKE);
   const outer = plan(axles[0]) - 0.012;
-  return {body: body.geometry(), lamps: lamps.geometry(false), brake: brake.geometry(false),
-          turn: turn.map((signal) => signal.geometry(false)), size: [l, w, h],
+  return {body: body.geometry(), lamps: lamps.geometry(false), brake: brake.geometry(false), size: [l, w, h],
           wheels: axles.flatMap((x) => [1, -1].map((side) => [x, side * (outer - 0.11), r, r, 0.22]))};
 }
 

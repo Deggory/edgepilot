@@ -1,4 +1,7 @@
 // 웹 콘솔 공용 도구: DOM 만들기, 카드·배지·표, 토스트, 확인 창, API 호출, 주기 폴링, 숫자 표기.
+//
+// 톤(배지·안내·상태 글자의 색)은 어느 카드에서나 같은 뜻이다: good 동작·사용 중, warn 기다림·주의, bad 없음·실패·
+// 낡음, accent 진행 중·고름, muted 그 밖(정보).
 import {locale, t} from "./i18n.js";
 
 // el("div.card.live", {title: "..."}, child, "text", ...): 태그 이름 뒤 .클래스, 속성(on<event>는 리스너),
@@ -25,14 +28,84 @@ export function svg(tag, attributes = {}) {
   return node;
 }
 
+// ------------------------------------------------------------ 작은 시간 차트
+// 차량 특성 탭의 추이와 BEV의 출발 알림·앞차 카드가 같이 쓴다. sparkline()은 이름 붙인 선(series)과 가로 기준선
+// (levels)이 있는 SVG 하나이고, 이름이 곧 CSS 클래스라 색·굵기·점선은 스타일 시트가 정한다(굵기는 차트 크기와 상관없이
+// vector-effect: non-scaling-stroke). 한 번 만들고 draw()로 다시 그린다:
+//   x, y      [처음, 끝] 범위(데이터 단위). y 범위 밖의 값은 끝에 붙인다
+//   data      {선 이름: [[x, y], ...]}. 값이 없는 점(NaN)에서 선을 끊는다
+//   at        {기준선 이름: y}. 없거나 NaN이면 그 선을 숨긴다
+//   inset     위아래 여백(차트 높이에 대한 비율)
+export function sparkline({className = "", height = 60, series = [], levels = [], label = ""}) {
+  const element = svg("svg", {class: className, viewBox: `0 0 100 ${height}`, preserveAspectRatio: "none", role: "img",
+                              "aria-label": label});
+  const lines = new Map(levels.map(name => [name, element.appendChild(svg("line", {class: name, x1: 0, x2: 100}))]));
+  const paths = new Map(series.map(name => [name, element.appendChild(svg("path", {class: name}))]));
+  return {
+    element,
+    draw({x: [x0, x1], y: [lo, hi], data = {}, at = {}, inset = 0}) {
+      const px = v => ((v - x0) / (x1 - x0 || 1)) * 100;
+      const py = v => height * (inset + (1 - 2 * inset) * (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo || 1)));
+      for (const [name, path] of paths) {
+        path.setAttribute("d", gapPath((data[name] || []).map(([u, v]) => [px(u), Number.isFinite(v) ? py(v) : NaN])));
+      }
+      for (const [name, line] of lines) {
+        const v = at[name];
+        line.style.display = Number.isFinite(v) ? "" : "none";
+        if (Number.isFinite(v)) for (const end of ["y1", "y2"]) line.setAttribute(end, py(v).toFixed(1));
+      }
+    },
+  };
+}
+
+// 차트의 y 범위 [lo, hi]. 보이는 값(NaN은 뺀다)의 최저에서 최고까지를 적어도 minSpan으로 가운데에서 넓히고, 위아래로
+// 그 폭의 pad배씩 더 둔다. symmetric이면 0이 가운데인 [-p, p]이고 p는 minSpan/2 이상에서 step의 배수로 올린다(상대
+// 속도처럼 부호가 뜻을 가질 때). 값이 하나도 없으면 fallback을 같은 방식으로 넓힌다.
+export function fitRange(values, {minSpan = 0, pad = 0, symmetric = false, step = 0, fallback = [0, 1]} = {}) {
+  const finite = values.filter(Number.isFinite);
+  if (symmetric) {
+    const peak = Math.max(minSpan / 2, ...finite.map(Math.abs));
+    const rounded = step ? Math.ceil(peak / step) * step : peak;
+    return [-rounded, rounded];
+  }
+  let [lo, hi] = finite.length ? [Math.min(...finite), Math.max(...finite)] : fallback;
+  if (hi - lo < minSpan) {
+    const middle = (lo + hi) / 2;
+    [lo, hi] = [middle - minSpan / 2, middle + minSpan / 2];
+  }
+  const margin = (hi - lo) * pad;
+  return [lo - margin, hi + margin];
+}
+
+// 값이 없는 곳(y가 NaN)에서 끊기는 SVG path의 d. points는 그림 좌표의 [[x, y], ...]다.
+function gapPath(points) {
+  let d = "", gap = true;
+  for (const [x, y] of points) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      gap = true;
+      continue;
+    }
+    d += `${gap ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    gap = false;
+  }
+  return d;
+}
+
 // ------------------------------------------------------------ 숫자 표기
+export const DASH = "–";  // 값이 없을 때
+
 export function num(value, digits) {
-  return Number.isFinite(value) ? value.toFixed(digits) : "–";
+  return Number.isFinite(value) ? value.toFixed(digits) : DASH;
 }
 
 export function sgn(value, digits) {
-  if (!Number.isFinite(value)) return "–";
+  if (!Number.isFinite(value)) return DASH;
   return `${value < 0 ? "−" : "+"}${Math.abs(value).toFixed(digits)}`;
+}
+
+// 값과 단위: 언제나 한 칸 띄운다(50 %, 1.8 s)
+export function withUnit(value, unit) {
+  return unit ? `${value} ${unit}` : String(value);
 }
 
 export function deg(rad) {
@@ -48,9 +121,20 @@ export function clock(date = new Date()) {
 }
 
 // ------------------------------------------------------------ 배지·표·카드
-// [텍스트, 톤] 목록. 톤: good, warn, bad, accent, muted
+// [텍스트, 톤] 목록(맨 위의 톤 규칙). null은 건너뛴다.
 export function badges(list) {
   return list.filter(Boolean).map(([text, tone]) => el(`span.badge.${tone || "muted"}`, {text}));
+}
+
+// 이미 있는 배지 하나를 [텍스트, 톤]으로 바꾼다
+export function setBadge(node, [text, tone]) {
+  node.className = `badge ${tone || "muted"}`;
+  node.textContent = text;
+}
+
+// 낡은 상태(서버 freshness의 stale)이면 "N초 전" 배지, 상태가 없거나 신선하면 null
+export function staleBadge(state) {
+  return state && state.available && state.stale ? [t("common.ago", {seconds: Math.round(state.age_s)}), "bad"] : null;
 }
 
 // 머리 줄과 행들. 셀은 문자열이나 [문자열, 톤]. 둘째 열은 값(굵게), 넷째 열은 설명(흐리게).
@@ -67,20 +151,95 @@ export function infoTable(head, rows) {
 }
 
 // 상태 카드: 제목·배지·(머리의 컨트롤)·본문·버튼 줄. 머리와 버튼은 한 번 만들고 본문과 배지만 바꾼다
-// (누르는 중인 스위치를 매초 갈아엎지 않게).
+// (누르는 중인 스위치를 매초 갈아엎지 않게). 버튼은 첫 상태가 오기 전과 읽지 못한 동안(fail) 막아 둔다: 버튼을 다시
+// 여는 것은 그 카드가 상태를 보고 한다.
 export function liveCard(title, {control = null, actions = []} = {}) {
   const badgeRow = el("span.badge-row");
   const body = el("div.card-body");
+  for (const action of actions) action.disabled = true;
   const element = el("article.card",
     {},
     el("header.card-head", {}, el("h3.card-title", {text: title}), badgeRow, control),
     body,
     actions.length ? el("div.action-row", {}, actions) : null);
+  const update = (badgeList, children) => {
+    badgeRow.replaceChildren(...badges(badgeList));
+    body.replaceChildren(...children.flat().filter(Boolean));
+  };
   return {
     element,
-    update(badgeList, children) {
-      badgeRow.replaceChildren(...badges(badgeList));
-      body.replaceChildren(...children.flat().filter(Boolean));
+    update,
+    fail(error) {
+      for (const action of actions) action.disabled = true;
+      update([[t("common.read_failed"), "bad"]], [note(error.message, "warn")]);
+    },
+  };
+}
+
+// url(또는 url을 돌려주는 함수)을 intervalMs마다 읽어 onData(응답)를, 읽지 못하면 onError(오류)를 부른다. start()와
+// stop()은 poller와 같다.
+export function pollJson(url, intervalMs, onData, onError) {
+  return poller(async isCurrent => {
+    try {
+      const data = await api.get(typeof url === "function" ? url() : url);
+      if (isCurrent()) onData(data);
+    } catch (error) {
+      if (isCurrent()) onError(error);
+    }
+  }, intervalMs);
+}
+
+// 서버 상태 하나를 intervalMs마다 읽어 그리는 상태 카드(Panda 펌웨어, 학습 토크 모델). render(data)가 {badges,
+// children}을 돌려준다. 읽지 못하면 어느 카드나 같은 모양(liveCard.fail)이다. show(data)는 요청의 응답을 곧바로 그릴
+// 때, redraw()는 다른 항목이 바뀌어 마지막 상태를 다시 그릴 때 쓴다(읽지 못한 뒤에는 옛 상태로 덮지 않는다).
+export function pollingCard(title, {url, intervalMs, render, control = null, actions = []}) {
+  const card = liveCard(title, {control, actions});
+  let latest = null;
+  const show = data => {
+    latest = data;
+    const {badges: badgeList, children} = render(data);
+    card.update(badgeList, children);
+  };
+  const polling = pollJson(url, intervalMs, show, error => {
+    latest = null;
+    card.fail(error);
+  });
+  return {element: card.element, show, redraw: () => latest && show(latest), start: polling.start, stop: polling.stop};
+}
+
+// 버튼 하나의 요청. confirm(확인 창 줄 목록, 첫 줄이 질문)이 있으면 먼저 묻는다. 도는 동안 busy(true), 끝나면
+// busy(false)를 부르고, 성공하면 done(응답)의 문구를, 실패하면 failed(이유)의 문구를 토스트로 알린다. 응답을
+// 돌려주고, 취소하거나 실패하면 null이다.
+export async function runAction({confirm = null, busy = () => {}, call, done = null, failed}) {
+  if (confirm && !confirmAction(confirm)) return null;
+  busy(true);
+  try {
+    const result = await call();
+    if (done) toast(done(result));
+    return result;
+  } catch (error) {
+    toast(failed(error.message), {failed: true});
+    return null;
+  } finally {
+    busy(false);
+  }
+}
+
+// 몇 개 중 하나를 고르는 버튼 묶음(학습기의 자동 학습·수동, 보정 출처). options는 [{value, label,
+// title}]이고, 지금 값이 아닌 것을 누르면 onChoose(value)를 부른다. show(value)가 누른 것을 칠한다(없는 값이면 아무
+// 것도 칠하지 않는다).
+export function segmented(label, options, onChoose) {
+  let current;
+  const buttons = options.map(option => el("button",
+    {type: "button", text: option.label, title: option.title, onclick: () => option.value !== current && onChoose(option.value)}));
+  return {
+    element: el("div.segmented", {role: "group", "aria-label": label}, buttons),
+    show(value) {
+      current = value;
+      buttons.forEach((button, index) => button.setAttribute("aria-pressed", String(options[index].value === value)));
+    },
+    setDisabled(disabled) {
+      for (const button of buttons) button.disabled = disabled;
     },
   };
 }
@@ -99,11 +258,34 @@ export function note(text, tone = "") {
   return el(`p.card-note${tone ? `.${tone}` : ""}`, {text});
 }
 
-export function section(title, children, {count = null, grid = true} = {}) {
-  return el("section.section",
-    {},
-    el("h2.section-title", {}, title, count === null ? null : el("span", {text: t("common.count", {count})})),
-    el(grid ? "div.card-grid" : "div", {}, children));
+// 긴 설명(항목 설명, 카드의 긴 안내): 처음에는 세 줄까지 보이고, 넘치면 "더 보기"로 펼친다. 넘치지 않으면 버튼이
+// 없다(화면에 붙은 뒤 크기가 정해질 때마다 잰다). className은 글자 모양(param-description, card-note, group-note).
+// 줄 자르기는 안쪽 글자에 건다: 안쪽 여백이 있는 상자(group-note)에 걸면 넷째 줄이 여백에 반쯤 보인다.
+export function helpText(text, className = "param-description") {
+  const body = el("span.help-body.clamped", {text});
+  const more = el("button.link-button.help-more", {type: "button", hidden: true, "aria-expanded": "false",
+                                                   text: t("common.more")});
+  const toggle = () => {
+    const open = body.classList.toggle("clamped") === false;
+    more.textContent = open ? t("common.less") : t("common.more");
+    more.setAttribute("aria-expanded", String(open));
+  };
+  more.addEventListener("click", toggle);
+  body.addEventListener("click", () => more.hidden || toggle());
+  new ResizeObserver(() => {
+    if (body.classList.contains("clamped")) more.hidden = body.scrollHeight <= body.clientHeight + 1;
+  }).observe(body);
+  return el("div.help", {}, el(`p.${className}`, {}, body), more);
+}
+
+// 섹션: 제목(count가 있으면 항목 수), 설명 한 줄과 오른쪽의 컨트롤(aside, 예: 학습기의 자동 학습·수동), 본문.
+// grid면 본문을 카드 격자로 놓는다.
+export function section(title, children, {count = null, grid = true, description = "", aside = null} = {}) {
+  const heading = el("h2.section-title", {}, title, count === null ? null : el("span", {text: t("common.count", {count})}));
+  const head = description || aside
+    ? el("div.section-head", {}, el("div.section-heading", {}, heading, description ? el("p.section-description", {text: description}) : null), aside)
+    : heading;
+  return el("section.section", {}, head, el(grid ? "div.card-grid" : "div", {}, children));
 }
 
 // ------------------------------------------------------------ 토스트·확인
@@ -123,9 +305,10 @@ export function confirmAction(lines) {
 }
 
 // ------------------------------------------------------------ API
-async function request(method, url, body) {
+async function request(method, url, body, signal) {
   const response = await fetch(url, {
     method,
+    signal,
     cache: "no-store",
     headers: body === undefined ? {} : {"Content-Type": "application/json"},
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -143,7 +326,7 @@ function errorText(detail) {
 }
 
 export const api = {
-  get: url => request("GET", url),
+  get: (url, {signal} = {}) => request("GET", url, undefined, signal),
   post: (url, body = {}) => request("POST", url, body),
   patch: (url, body) => request("PATCH", url, body),
 };

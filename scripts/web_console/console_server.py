@@ -1,11 +1,11 @@
-"""웹 콘솔 서버(FastAPI): 파라미터 편집, 런타임 상태, 학습 상태·카메라 보정, Panda 펌웨어, BEV 스트림을 내고
-페이지(static/)를 서빙한다. 매니저가 함께 띄운다.
+"""웹 콘솔 서버(FastAPI): 파라미터 편집, 런타임 상태, 학습 상태·카메라 보정, Panda 펌웨어, 주행 기록, BEV 스트림을
+내고 페이지(static/)를 서빙한다. 매니저가 함께 띄운다.
 
 사용: python3 -m web_console [--host 주소] [--port 포트]   (기본 0.0.0.0:8080,
 EDGEPILOT_WEB_CONSOLE_HOST·EDGEPILOT_WEB_CONSOLE_PORT로도 바꿀 수 있다)
 
-API
-  GET   /api/status              매니저의 프로세스 상태와 백라이트
+API(받지 않는 요청은 상태 코드와 {"detail": {"code": 문구 키, 자리 값...}}, refusal.py)
+  GET   /api/status              매니저의 프로세스 상태와 백라이트(?versions=1이면 실행 파일의 빌드 버전도)
   GET   /api/params              파라미터 그룹·현재값·기본값·설명, 안내가 보는 런타임 사실(runtime)
   PATCH /api/params/{group}      값 바꾸기 {"values": {...}}
   GET   /api/learners            paramsd·torqued 학습값, 카메라 보정, locationd 조향 지연
@@ -16,6 +16,8 @@ API
   POST  /api/lateral_nn          학습 토크 모델 고르기 {"model": ...}(controlsd가 재시작 없이 바꾼다)
   GET   /api/panda               Panda 펌웨어와 설치된 이미지
   POST  /api/panda/flash         Panda 플래싱 요청 {"version": ...}(주차 중에만)
+  GET   /api/recordings          SD의 주행 기록(route)마다 크기·길이, 남은 공간, recordd의 녹화 상태
+  POST  /api/recordings/delete   주행 기록 지우기 {"names": [...]}(쓰는 중이거나 옮기는 중인 것은 받지 않는다)
   GET   /api/bev                 BEV가 읽는 필드 위치
   GET   /api/bev/stream          BEV 스트림(ModelState·ControlState 페이로드)
   GET   /static/{path}           페이지 파일
@@ -26,7 +28,7 @@ import argparse
 import contextlib
 import gzip
 import os
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 
 # fastapi/uvicorn은 서버를 띄울 때만 import한다. tests/check_web_console.py가 stdlib만으로 나머지 모듈을 쓴다.
 # 요청 모델만은 이 모듈 전역에 있어야 한다: `from __future__ import annotations` 때문에 FastAPI가 라우트의
@@ -44,6 +46,7 @@ from .learner_monitor import LearnerMonitor, LocalizationReader
 from .panda_update import PandaUpdate
 from .param_store import ParamStore
 from .process_status import ProcessStatus
+from .recordings import Recordings
 from .refusal import Refusal
 from .static_assets import StaticAssets
 
@@ -64,13 +67,18 @@ class LateralNnRequest(BaseModel):  # type: ignore[misc,valid-type]
     model: str
 
 
+class RecordingDeleteRequest(BaseModel):  # type: ignore[misc,valid-type]
+    names: List[str]
+
+
 def create_app(store: ParamStore | None = None, processes: ProcessStatus | None = None,
                learners: LearnerMonitor | None = None, localization: LocalizationReader | None = None,
                calibration: CalibrationControl | None = None, panda: PandaUpdate | None = None,
                assets: StaticAssets | None = None, backlight: DisplayBacklight | None = None,
-               lateral_nn: LateralNnModels | None = None, stopping: Callable[[], bool] = lambda: False) -> "FastAPI":
+               lateral_nn: LateralNnModels | None = None, recordings: Recordings | None = None,
+               stopping: Callable[[], bool] = lambda: False) -> "FastAPI":
     from fastapi import FastAPI, Header, HTTPException, Query
-    from fastapi.responses import Response, StreamingResponse
+    from fastapi.responses import JSONResponse, Response, StreamingResponse
 
     backlight = backlight or DisplayBacklight()
     store = store or ParamStore(backlight=backlight)
@@ -80,7 +88,8 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
     calibration = calibration or CalibrationControl(store)
     panda = panda or PandaUpdate()
     assets = assets or StaticAssets()
-    lateral_nn = lateral_nn or LateralNnModels()
+    lateral_nn = lateral_nn or LateralNnModels(controlsd_running=lambda: learners.fresh_state() is not None)
+    recordings = recordings or Recordings()
 
     @contextlib.asynccontextmanager
     async def lifespan(_application):
@@ -90,16 +99,14 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
 
     application = FastAPI(title="edgepilot web console", docs_url="/docs", lifespan=lifespan)
 
-    def refuse(call: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-        """요청을 받지 않을 상태면 409(Refusal이면 페이지가 문구로 바꾸는 {"code", 자리 값...}), 파일 오류면 500."""
-        try:
-            return call()
-        except Refusal as exc:
-            raise HTTPException(status_code=409, detail=exc.detail()) from exc
-        except PermissionError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except OSError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # 모든 라우트가 같은 꼴로 거부한다: Refusal은 그 상태 코드와 문구 키, 파일 오류는 500과 error.io(이유 글자)
+    @application.exception_handler(Refusal)
+    async def refused(_request, exc: Refusal):
+        return JSONResponse(status_code=exc.status, content={"detail": exc.detail()})
+
+    @application.exception_handler(OSError)
+    async def file_failed(_request, exc: OSError):
+        return JSONResponse(status_code=500, content={"detail": Refusal("error.io", status=500, error=str(exc)).detail()})
 
     def static_response(name: str, if_none_match: str | None, accept_encoding: str) -> Response:
         asset = assets.get(name)
@@ -124,26 +131,16 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
         return static_response(name, if_none_match, accept_encoding)
 
     @application.get("/api/status")
-    def get_status() -> Dict[str, Any]:
-        return {**processes.status(), "backlight": backlight.status()}
+    def get_status(versions: bool = Query(False)) -> Dict[str, Any]:
+        return {**processes.status(versions=versions), "backlight": backlight.status()}
 
     @application.get("/api/params")
     def get_params() -> Dict[str, Any]:
-        try:
-            return {**store.snapshot(), "runtime": learners.runtime_facts()}
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {**store.snapshot(), "runtime": learners.runtime_facts()}
 
     @application.patch("/api/params/{group}")
     def patch_params(group: str, patch: ParamPatch) -> Dict[str, Any]:
-        try:
-            return store.update(group, patch.values)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"unknown parameter: {exc}") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return store.update(group, patch.values)
 
     @application.get("/api/learners")
     def get_learners() -> Dict[str, Any]:
@@ -155,11 +152,11 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
 
     @application.post("/api/calibration/reset")
     def reset_calibration() -> Dict[str, Any]:
-        return refuse(calibration.request_reset)
+        return calibration.request_reset()
 
     @application.post("/api/calibration/source")
     def set_calibration_source(request: CalibrationSourceRequest) -> Dict[str, Any]:
-        return refuse(lambda: calibration.set_source(request.use_flow))
+        return calibration.set_source(request.use_flow)
 
     @application.get("/api/lateral_nn")
     def get_lateral_nn() -> Dict[str, Any]:
@@ -167,7 +164,7 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
 
     @application.post("/api/lateral_nn")
     def set_lateral_nn(request: LateralNnRequest) -> Dict[str, Any]:
-        return refuse(lambda: lateral_nn.select(request.model))
+        return lateral_nn.select(request.model)
 
     @application.get("/api/panda")
     def get_panda() -> Dict[str, Any]:
@@ -175,7 +172,15 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
 
     @application.post("/api/panda/flash")
     def flash_panda(request: PandaFlashRequest) -> Dict[str, Any]:
-        return refuse(lambda: panda.request(request.version))
+        return panda.request(request.version)
+
+    @application.get("/api/recordings")
+    def get_recordings() -> Dict[str, Any]:
+        return recordings.status()
+
+    @application.post("/api/recordings/delete")
+    def delete_recordings(request: RecordingDeleteRequest) -> Dict[str, Any]:
+        return recordings.delete(request.names)
 
     @application.get("/api/bev")
     def get_bev_layout() -> Dict[str, Any]:

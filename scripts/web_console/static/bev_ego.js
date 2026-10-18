@@ -21,6 +21,7 @@
 // setLamps()가 방향지시등을 깜박이고 브레이크등을 켠다.
 
 import * as THREE from "three";
+import {archBottom, archMarks, clamp, cross, dot, smoothstep as ease, stations, sub} from "./bev_math.js";
 
 export const EGO_SIZE = {length: 4.97, width: 1.87, height: 1.47};
 const X = EGO_SIZE.length / 2, W = EGO_SIZE.width / 2;
@@ -33,12 +34,7 @@ const ARCH = 0.385;
 const COWL = 1.08, ROOF_FRONT = 0.15, ROOF_TOP = -0.45, ROOF_REAR = -1.25, DECK = -2.1;
 const DLO = {front: 1.0, sail: 0.64, pillar: [-0.157, -0.075], divider: -1.0, tip: -1.365};
 
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const lerp = (a, b, t) => a + (b - a) * t;
-const ease = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const unit = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
 const vec = (a) => new THREE.Vector3(...a);
 
@@ -87,14 +83,8 @@ const top = (x) => (x >= COWL ? [hood(x), fender(x)] : x > DECK ? [belt(x), belt
 const shoulder = curve([[-X, 0.94], [-1.875, 0.93], [-1.0, 0.895], [0.07, 0.885], [1.5, 0.86], [2.1, 0.84], [X, 0.80]]);
 
 // 밑면: 사이드실보다 높은 범퍼 립과 휠 아치.
-function bottom(x) {
-  let z = 0.165 + 0.095 * clamp((x - (X - 0.45)) / 0.45, 0, 1) ** 2 + 0.14 * clamp((-X + 0.6 - x) / 0.6, 0, 1) ** 2;
-  for (const c of AXLES) {
-    const dx = Math.abs(x - c);
-    if (dx <= ARCH) z = Math.max(z, TYRE.radius + Math.sqrt(ARCH * ARCH - dx * dx));
-  }
-  return z;
-}
+const bottom = (x) => archBottom(x, AXLES, ARCH, TYRE.radius,
+                                 0.165 + 0.095 * clamp((x - (X - 0.45)) / 0.45, 0, 1) ** 2 + 0.14 * clamp((-X + 0.6 - x) / 0.6, 0, 1) ** 2);
 
 // x에서 하부 차체의 단면, 위 중앙에서 돌아 아래 중앙까지의 절반: [y, z]. 후드의 두 능선(1), 숄더(5),
 // 아래 모서리(9)는 꺾임선이다. 숄더 아래에서 문은 안으로 들어갔다가 크롬 띠가 지나는 곳에서 다시 부푼다.
@@ -204,16 +194,6 @@ function glassPart(band, x) {
   return "paint";
 }
 
-// x0에서 x1까지의 스테이션: 안쪽의 marks마다, 그리고 적어도 step마다 하나씩.
-function stations(x0, x1, step, marks = []) {
-  const xs = [x0, x1, ...marks.filter((x) => x > x0 && x < x1)];
-  for (let x = x0 + step; x < x1; x += step) xs.push(x);
-  xs.sort((a, b) => a - b);
-  return xs.filter((x, i) => i === 0 || x - xs[i - 1] > 2e-3);
-}
-
-const archMarks = (steps) => AXLES.flatMap((c) => Array.from({length: steps + 1}, (_, i) => c - ARCH * Math.cos(Math.PI * i / steps))
-                                                    .concat([c - ARCH - 0.01, c + ARCH + 0.01]));
 
 // -- 재질별 삼각형 모으기 ------------------------------------------------------------------------------
 class Parts {
@@ -310,7 +290,7 @@ class Parts {
 function body(parts) {
   // 하부 차체: 스테이션마다 고리 하나, 왼쪽 절반 다음 오른쪽
   const ring = (x, half) => [...half.map(([y, z]) => [x, y, z]), ...half.slice(1, -1).reverse().map(([y, z]) => [x, -y, z])];
-  const xs = stations(-X, X, 0.05, [...archMarks(10), X - 0.15, X - 0.08, X - 0.04, X - 0.015, -X + 0.15, -X + 0.08, -X + 0.04, -X + 0.015,
+  const xs = stations(-X, X, 0.05, [...archMarks(AXLES, ARCH, 10), X - 0.15, X - 0.08, X - 0.04, X - 0.015, -X + 0.15, -X + 0.08, -X + 0.04, -X + 0.015,
                                     -2.38, COWL, DECK]);
   const rows = xs.map((x) => ring(x, lowerHalf(x)).map(bend));
   const middle = (row) => [row[0][0], 0, (row[0][2] + row[10][2]) / 2];
@@ -621,7 +601,7 @@ function materials([dark, light]) {
     rimDark: new THREE.MeshStandardMaterial({color: "#22252a", metalness: 0.6, roughness: 0.45, ...shine}),
     disc: new THREE.MeshStandardMaterial({color: "#55595f", metalness: 0.7, roughness: 0.5}),
     plate: new THREE.MeshStandardMaterial({color: "#f1f1ee", roughness: 0.5}),
-    drl: unlit("#f2f6ff"), headlight: unlit("#fff4dc"), fog: unlit("#c8cfd9"), amber: unlit("#ff9a1f"),
+    drl: unlit("#f2f6ff"), headlight: unlit("#fff4dc"), fog: unlit("#c8cfd9"),
     tailLens: unlit(BRAKE_LAMPS.tailLens[0]), tail: unlit(BRAKE_LAMPS.tail[0]), stop: unlit(BRAKE_LAMPS.stop[0]),
     reflector: unlit("#7c0f0e"), turnLeft: turn, turnRight: turn,
   };
@@ -681,7 +661,6 @@ function studio(renderer) {
 
 // 이 차를 그릴 renderer용으로 재질마다 메시 하나씩 묶은 그룹. 램프는 group.setLamps({left, right, brake})로
 // 바꾼다: 방향지시등이 켜진 동안 그 켜진 렌즈가 보이고, 제동은 테일램프를 밝히고 보조 브레이크등을 켠다.
-// setLamps()는 바뀐 것이 있는지를 돌려준다.
 export function makeEgo(renderer) {
   const parts = new Parts();
   body(parts);
@@ -695,12 +674,11 @@ export function makeEgo(renderer) {
   let now = null;
   group.setLamps = ({left = false, right = false, brake = false} = {}) => {
     const state = `${+left}${+right}${+brake}`;
-    if (state === now) return false;
+    if (state === now) return;
     now = state;
     turns[0].visible = left;
     turns[1].visible = right;
     for (const [name, colors] of Object.entries(BRAKE_LAMPS)) lit[name].color.set(colors[brake ? 1 : 0]);
-    return true;
   };
   group.setLamps();
   return group;

@@ -49,6 +49,8 @@ export function createParamView(group, {extras = []} = {}) {
         visible += match ? 1 : 0;
       }
       element.hidden = visible === 0;
+      element.querySelector(".section-title span").textContent = visible === cards.length
+        ? t("common.count", {count: cards.length}) : t("common.count_shown", {shown: visible, count: cards.length});
       shown += visible;
     }
     count.textContent = shown === total ? t("params.items", {count: total}) : t("params.items_shown", {shown, count: total});

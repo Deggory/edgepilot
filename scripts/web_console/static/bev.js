@@ -20,9 +20,12 @@ import * as THREE from "three";
 import {OrbitControls} from "./three/OrbitControls.js";
 import {CSS2DRenderer, CSS2DObject} from "./three/CSS2DRenderer.js";
 import {carModel, fit, wheel} from "./bev_car.js";
-import {BevStream, LEAD_HISTORY_S} from "./bev_data.js";
+import {BevStream, GAS_PRESS_HORIZON, HISTORY_S, LANE_SURE, LEAD_HISTORY_S} from "./bev_data.js";
 import {EGO_SIZE, makeEgo} from "./bev_ego.js";
+import {clamp, smoothstep} from "./bev_math.js";
 import {t} from "./i18n.js";
+import {recall, remember} from "./storage.js";
+import {DASH, el, fitRange, sparkline} from "./ui.js";
 
 // 바닥: 5 m와 20 m 격자선, 앞으로 GRID.ahead, 양옆으로 GRID.side.
 const GRID = {ahead: 160, behind: 8, side: 25, major: 20};
@@ -50,16 +53,17 @@ const BLINK = {period: 0.7, duty: 0.5};
 const ARC = {seconds: 2.5, min: 10, max: 70, width: 0.16, tick: 0.7, speed: 3};
 // departure_alert.cc: 0.1 m/s 이하면 정차로 보고 0.5를 넘어야 움직인 것으로 본다. 2 s 가속 페달 확률은
 // 0.3에서 알림을 내고, 10 s 시점의 계획은 ±5 m 안에서 대기(arm)하고 10 m를 넘으면 알림을 낸다
-const DEPART = {stopped: 0.1, moving: 0.5, gas: 0.3, open: 10, arm: 5, planMax: 20, history: 10};
+const DEPART = {stopped: 0.1, moving: 0.5, gas: 0.3, open: 10, arm: 5, planMax: 20};
 // 앞차 카드: 최근 LEAD_HISTORY_S 동안의 앞차 거리와 상대 속도(bev_data.js가 보관한다). 속도 차트는 적어도
 // ±minScale km/h, 거리 차트는 적어도 minSpan m 높이다. 충돌까지 시간은 ttc s 아래에서 보이고, warn 아래는
 // 호박색, alarm 아래는 빨간색이다. 비전 크루즈는 앞차 트랙을 쓰고(controls_tick observe_cruise_lead) 출발
 // 알림은 모델의 앞차를 그대로 쓴다.
-const LEAD_CARD = {minScale: 10, minSpan: 10, ttc: 10, warn: 6, alarm: 3};
+const LEAD_CARD = {minScale: 10, minSpan: 10, ttc: 10, warn: 6, alarm: 3, inset: 2 / 60};  // inset: 차트 위아래 여백
 // 차트별 선: 선 이름(CSS 클래스) -> 앞차 카드 행 필드
 const LEAD_CHARTS = {distance: {model: "x", trend: "level", fused: "fx"}, speed: {model: "v", flow: "flow", trend: "trend", fused: "fv"}};
-// 앞차 카드의 접힘 상태, 이 브라우저에만 기억한다
-const LEAD_FOLD_KEY = "edgepilot.bev.leadCardFolded"
+// 이 브라우저에만 기억하는 것: 앞차 카드의 접힘, 숨긴 레이어
+const LEAD_FOLD_KEY = "edgepilot.bev.leadCardFolded";
+const HIDDEN_LAYERS_KEY = "edgepilot.bev.hiddenLayers";
 const MAX_PIXEL_RATIO = 1.5;
 const THEME = {
   background: "#0a0d12", ground: "#0e1217", road: "#131820", gridLine: "#c8d2e0", axis: "#3f74e0",
@@ -70,24 +74,16 @@ const THEME = {
 const HUD = {white: "#ffffff", green: "#30d158", blue: "#409cff", gray: "#969ca5", amber: "#ffb020", red: "#ff453a",
              cyan: "#5ac8fa"};
 
-// 도구 막대의 레이어 버튼(이름은 bev.layer.<이름> 문구)과, 버튼마다 보이거나 숨기는 그룹.
+// 도구 막대의 레이어 버튼(이름은 bev.layer.<이름> 문구). 버튼마다 같은 이름의 그룹을 보이거나 숨기고, labels만 두
+// 그룹(앞차와 경로의 라벨)이다.
 const LAYERS = ["path", "lanes", "rawLanes", "edges", "lead", "curvature", "labels"];
-const LAYER_GROUPS = {path: ["path"], lanes: ["lanes"], rawLanes: ["rawLanes"], edges: ["edges"], lead: ["lead"],
-                      curvature: ["curvature"], labels: ["lead_labels", "path_labels"]};
+const LAYER_GROUPS = {labels: ["lead_labels", "path_labels"]};
 const VIEWS = ["behind", "top"];   // 시점 버튼, bev.view.<이름> 문구
 
 // -- 색 --------------------------------------------------------------------------------------------
 const BLACK = new THREE.Color(0, 0, 0);
 const inks = new Map();
 const ink = (hex) => inks.get(hex) || inks.set(hex, new THREE.Color(hex)).get(hex);
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const smoothstep = (a, b, x) => { const u = clamp((x - a) / (b - a), 0, 1); return u * u * (3 - 2 * u); };
-const el = (tag, className = "", text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 
 // -- 매 프레임 다시 쓰는 지오메트리 ---------------------------------------------------------------------
 // 프레임 사이에 유지하는 버퍼 속 삼각형: position과 값 size개짜리 속성 하나 더(알파가 있는 색, uv, ...).
@@ -250,8 +246,10 @@ function modelMaterial() {
 }
 
 // 조명 없음, 알파가 있는 정점 색: 차선선, 자차 차로, 간격과 화살표.
-const overlayMaterial = () => new THREE.MeshBasicMaterial({vertexColors: true, transparent: true, depthWrite: false,
-                                                           side: THREE.DoubleSide, toneMapped: false});
+// 도로 위에 겹쳐 그리는 띠(차선, 곡률 호, 앞차 선)가 같이 쓰는 재질. 그리는 순서는 메시마다
+// 정한다(Batch의 order).
+const OVERLAY = new THREE.MeshBasicMaterial({vertexColors: true, transparent: true, depthWrite: false,
+                                            side: THREE.DoubleSide, toneMapped: false});
 
 // 도로 위 풋프린트, 모서리가 둥근 길이 x 폭 직사각형 둘레를 미터로: iStyle은 채움, 윤곽선,
 // 모서리 괄호만(1)과 글로, iSize는 길이, 폭과 글로가 사라지는 여백이다. 검은색이면 부드러운 접지 그림자다.
@@ -351,100 +349,12 @@ const GROUND = [`
     #include <colorspace_fragment>
   }`];
 
-const STYLE_SHEET = `
-.bev-layout { display: grid; grid-template-columns: minmax(0, 1fr) 252px; gap: 10px; align-items: start; }
-.bev-side { display: flex; flex-direction: column; gap: 10px; max-height: calc(100dvh - 230px); min-height: 340px;
-  overflow-y: auto; }
-.bev-side-empty { padding: 12px; border: 1px dashed var(--line, #353b40); border-radius: 7px; color: #6c7684;
-  font: 500 12px/1.5 system-ui, sans-serif; }
-.bev-panel { position: relative; height: calc(100dvh - 230px); min-height: 340px; overflow: hidden;
-  border: 1px solid var(--line, #353b40); border-radius: 7px; background: ${THEME.background}; touch-action: none; }
-.bev-panel.stale canvas { filter: grayscale(1) brightness(0.6); }
-.bev-labels { position: absolute; top: 0; left: 0; pointer-events: none; }
-.bev-labels .bev-tag { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 5px; border-radius: 9px;
-  font: 600 10px/13px ui-monospace, Consolas, monospace; color: #dde3ea; white-space: nowrap;
-  background: rgba(10, 13, 18, 0.78); border: 1px solid rgba(255, 255, 255, 0.07); }
-.bev-labels .bev-tag i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
-.bev-labels .bev-tag em { font-style: normal; color: #8f9aa8; }
-.bev-labels.far .bev-tag em { display: none; }
-.bev-labels.far .bev-tag { padding: 1px 5px 1px 4px; font-size: 9px; line-height: 11px; }
-.bev-labels .bev-tag.gap, .bev-labels .bev-tag.speed { font-weight: 700; border-radius: 4px; }
-.bev-labels .bev-dist { font: 500 10px ui-monospace, Consolas, monospace; color: #566170; }
-.bev-hud { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
-.bev-hud span { display: flex; align-items: center; gap: 6px; font: 600 11px/1 ui-monospace, Consolas, monospace; color: #c9d1db;
-  padding: 6px 8px; border-radius: 5px; background: rgba(10, 13, 18, 0.8); border: 1px solid rgba(255, 255, 255, 0.07); }
-.bev-hud span b { color: #6c7684; font-weight: 600; }
-.bev-hud span em { font-style: normal; }
-.bev-hud span i { width: 8px; height: 8px; border-radius: 50%; }
-.bev-hud span.warn { color: ${HUD.amber}; }
-.bev-hud span:empty { display: none; }
-.bev-tools { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap;
-  justify-content: space-between; gap: 6px; pointer-events: none; }
-.bev-tools div { display: flex; flex-wrap: wrap; gap: 6px; pointer-events: auto; }
-.bev-tools button { height: 32px; padding: 0 11px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px;
-  background: rgba(10, 13, 18, 0.82); color: #dde3ea; font: 650 12px system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
-.bev-tools button:hover { background: rgba(38, 43, 47, 0.92); }
-.bev-tools button[aria-pressed="false"] { color: #6c7684; border-style: dashed; }
-.bev-card { padding: 9px 11px 10px; border-radius: 7px;
-  background: ${THEME.background}; border: 1px solid var(--line, #353b40);
-  font: 600 11px/1.2 ui-monospace, Consolas, monospace; color: #c9d1db; }
-.bev-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
-.bev-card-head b { color: #8f9aa8; font-weight: 650; letter-spacing: 0.04em; }
-.bev-card-head button { padding: 0; border: 0; background: none; color: #8f9aa8; letter-spacing: 0.04em; cursor: pointer; }
-.bev-card-head button::before { content: "▾ "; }
-.bev-card.collapsed .bev-card-head button::before { content: "▸ "; }
-.bev-card.collapsed .bev-chart, .bev-card.collapsed .bev-card-foot { display: none; }
-.bev-badge { padding: 2px 7px; border-radius: 9px; font-weight: 700; color: #0a0d12; background: #566170; }
-.bev-badge.armed, .bev-badge.go { background: ${HUD.green}; }
-.bev-row { display: grid; grid-template-columns: 62px 1fr 44px; align-items: center; gap: 7px; margin-top: 6px; }
-.bev-row span { color: #8f9aa8; }
-.bev-row em { font-style: normal; text-align: right; color: #fff; }
-.bev-meter { position: relative; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
-.bev-meter i { position: absolute; top: 0; bottom: 0; left: 0; }
-.bev-meter .zone { background: rgba(255, 176, 32, 0.22); }
-.bev-meter .fill { border-radius: 4px; background: #c9d1db; }
-.bev-meter .fill.go { background: ${HUD.green}; }
-.bev-meter .mark { width: 2px; margin-left: -1px; background: #fff; }
-.bev-spark { display: block; width: 100%; height: 34px; margin-top: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.04); }
-.bev-spark .limit { stroke: rgba(255, 255, 255, 0.45); stroke-dasharray: 3 3; }
-.bev-spark .gas { stroke: ${HUD.green}; fill: none; stroke-width: 1.6; }
-.bev-spark .plan { stroke: #8f9aa8; fill: none; stroke-width: 1; stroke-dasharray: 2 2; }
-.bev-spark line, .bev-spark polyline, .bev-spark.tall { height: 56px; }
-.bev-spark .zero { stroke: rgba(255, 255, 255, 0.3); }
-.bev-spark .model { stroke: ${HUD.gray}; fill: none; stroke-width: 1.1; }
-.bev-spark .flow { stroke: ${HUD.cyan}; fill: none; stroke-width: 1; opacity: 0.8; }
-.bev-spark .fused { stroke: ${HUD.green}; fill: none; stroke-width: 1.9; }
-.bev-spark .trend { stroke: ${HUD.amber}; fill: none; stroke-width: 1.2; stroke-dasharray: 3 2; }
-.bev-chart-title { margin-top: 7px; color: #6c7684; font-size: 10px; }
-.bev-value { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 6px; margin-top: 4px; }
-.bev-value i { width: 8px; height: 8px; border-radius: 50%; }
-.bev-value span { color: #8f9aa8; }
-.bev-value em { font-style: normal; color: #fff; }
-.bev-badge.alarm { background: ${HUD.red}; color: #fff; }
-.bev-card-foot { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: #6c7684; font-size: 10px; }
-.bev-card-foot i { display: inline-block; width: 10px; height: 2px; margin-right: 4px; vertical-align: middle; }
-@media (max-width: 900px) {
-  .bev-layout { grid-template-columns: minmax(0, 1fr); }
-  .bev-side { max-height: none; min-height: 0; flex-direction: row; flex-wrap: wrap; overflow: visible; }
-  .bev-side > * { flex: 1 1 260px; }
-}
-@media (max-width: 460px) {
-  .bev-panel { height: calc(100dvh - 250px); }
-  .bev-tools { gap: 4px; }
-  .bev-tools div { gap: 4px; }
-  .bev-tools button { height: 28px; padding: 0 6px; font-size: 11px; }
-  .bev-hud span { padding: 5px 6px; font-size: 10px; }
-  .bev-card { padding: 7px 8px 8px; }
-  .bev-row { grid-template-columns: 56px 1fr 38px; gap: 5px; }
-}`;
+// 이 탭의 스타일은 console.css의 BEV 부분이다. HUD 색은 createBev가 CSS 변수(--hud-<이름>, --bev-bg)로 넘긴다.
 
-export class BevView {
+class BevView {
   // container: 3D 패널, side: 그 옆(또는 아래)의 카드용 열, 카드가 화면을 가리지 않도록
   constructor(container, side) {
     this.container = container;
-    if (!document.getElementById("bev-style")) {
-      document.head.appendChild(Object.assign(document.createElement("style"), {id: "bev-style", textContent: STYLE_SHEET}));
-    }
     this.renderer = new THREE.WebGLRenderer({antialias: true});
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
     SHARED.uPixel.value = this.renderer.getPixelRatio();
@@ -454,12 +364,12 @@ export class BevView {
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = "bev-labels";
     container.appendChild(this.labels.domElement);
-    this.hud = container.appendChild(el("div", "bev-hud"));
+    this.hud = container.appendChild(el("div.bev-hud"));
     this.chips = {};
     for (const name of ["mode", "speed", "plan", "lane", "lat", "lead", "model"]) this.chips[name] = this.hud.appendChild(el("span"));
     // 화면 위의 도구 막대, 옆 열의 카드
-    this.tools(container.appendChild(el("div", "bev-tools")));
-    this.sideEmpty = side.appendChild(el("div", "bev-side-empty", t("bev.side_empty")));
+    this.tools(container.appendChild(el("div.bev-tools")));
+    this.sideEmpty = side.appendChild(el("div.bev-side-empty", {text: t("bev.side_empty", {seconds: LEAD_HISTORY_S})}));
     this.leadCard(side);
     this.departureCard(side);
 
@@ -483,6 +393,7 @@ export class BevView {
     this.layers.lead.add(this.layers.lead_labels = new THREE.Group());
     this.layers.path.add(this.layers.path_labels = new THREE.Group());
     this.layers.lanes.add(this.layers.rawLanes = new THREE.Group());
+    for (const name of this.hidden) this.showLayer(name, false);   // 도구 막대가 읽어 둔 숨긴 레이어
     this.tags = [];
     this.makeParts();
     this.scene.add(this.staticParts());
@@ -495,19 +406,24 @@ export class BevView {
   tools(bar) {
     const views = bar.appendChild(el("div")), layers = bar.appendChild(el("div"));
     for (const name of VIEWS) {
-      const button = views.appendChild(el("button", "", t(`bev.view.${name}`)));
+      const button = views.appendChild(el("button", {text: t(`bev.view.${name}`)}));
       button.type = "button";
       button.addEventListener("click", () => this.view(name));
     }
+    // 숨긴 레이어는 이 브라우저에 기억한다. 바꾸면 마지막 장면을 다시 그린다: 그리기가 레이어를 보고 고르는 것이
+    // 있다(앞차 카드).
+    const hidden = this.hidden = hiddenLayers();
     for (const name of LAYERS) {
-      const button = layers.appendChild(el("button", "", t(`bev.layer.${name}`)));
-      button.type = "button";
-      button.setAttribute("aria-pressed", "true");
+      const button = layers.appendChild(el("button", {type: "button", text: t(`bev.layer.${name}`),
+                                                      "aria-pressed": String(!hidden.has(name))}));
       button.addEventListener("click", () => {
         const on = button.getAttribute("aria-pressed") !== "true";
         button.setAttribute("aria-pressed", String(on));
-        for (const group of LAYER_GROUPS[name]) this.layers[group].visible = on;
-        this.requestRender();
+        this.showLayer(name, on);
+        if (on) hidden.delete(name);
+        else hidden.add(name);
+        remember(HIDDEN_LAYERS_KEY, JSON.stringify([...hidden]));
+        this.redraw();
       });
     }
   }
@@ -516,8 +432,8 @@ export class BevView {
   makeParts() {
     const plane = new THREE.PlaneGeometry(1, 1), print = {iSize: 3, iStyle: 4};
     const put = (layer, part) => { this.layers[layer].add(part.object || part.mesh); return part; };
-    this.lanes = put("lanes", new Batch("color", 4, overlayMaterial(), 2));
-    this.rawLanes = put("rawLanes", new Batch("color", 4, overlayMaterial(), 1));
+    this.lanes = put("lanes", new Batch("color", 4, OVERLAY, 2));
+    this.rawLanes = put("rawLanes", new Batch("color", 4, OVERLAY, 1));
     this.curbs = put("edges", new Batch("color", 4, new THREE.MeshStandardMaterial({
       vertexColors: true, flatShading: true, roughness: 0.8, side: THREE.DoubleSide, transparent: true, depthWrite: false}), 1));
     this.corridorMaterial = shader(...CORRIDOR, {uColor: {value: new THREE.Color()}, uSlow: {value: ink(HUD.amber)},
@@ -526,7 +442,7 @@ export class BevView {
     this.path = put("path", new Batch("corridor", 3, this.corridorMaterial, 3));
     this.speedTag = this.tag("path_labels", "speed");
     this.speedTag.center.set(0, 0);             // 점의 오른쪽 아래에 매단다: 앞차 라벨을 피한다
-    this.arcs = put("curvature", new Batch("color", 4, overlayMaterial(), 6));
+    this.arcs = put("curvature", new Batch("color", 4, OVERLAY, 6));
 
     this.modelMaterial = modelMaterial();
     this.lampMaterial = new THREE.MeshBasicMaterial({vertexColors: true, toneMapped: false});
@@ -538,7 +454,7 @@ export class BevView {
       brake: put("lead", new Instances(model.brake, this.lampMaterial, {colors: false})),
       wheels: put("lead", new Instances(wheel(), this.wheelMaterial, {colors: false})),
       prints: put("lead", new Instances(plane, shader(...FOOTPRINT), {order: 4, extra: print})),
-      lines: put("lead", new Batch("color", 4, overlayMaterial(), 5)),
+      lines: put("lead", new Batch("color", 4, OVERLAY, 5)),
       tag: this.tag("lead_labels", "", true),
       gap: this.tag("lead_labels", "gap"),
       ttc: this.tag("lead_labels", "ttc"),
@@ -548,7 +464,7 @@ export class BevView {
 
   // group 안의 라벨, place()할 때까지 숨긴다: 점과 종류가 있는 알약 모양(dotted) 또는 일반 텍스트.
   tag(group, variant = "", dotted = false) {
-    const element = el("div", `bev-tag ${variant}`.trim());
+    const element = el(`div.bev-tag${variant ? `.${variant}` : ""}`);
     if (dotted) element.append(el("i"), el("em"));
     element.appendChild(el("span"));
     const label = new CSS2DObject(element);
@@ -584,7 +500,7 @@ export class BevView {
     group.add(ground);
     this.distances = [];
     for (let x = GRID.major; x <= GRID.ahead; x += GRID.major) {
-      const label = new CSS2DObject(el("div", "bev-dist", x + " m"));
+      const label = new CSS2DObject(el("div.bev-dist", {text: x + " m"}));
       label.position.set(x, -GRID.side - 1.5, 0);
       group.add(label);
       this.distances.push(label);
@@ -635,6 +551,16 @@ export class BevView {
     this.requestRender();
   }
 
+  showLayer(name, on) {
+    for (const group of LAYER_GROUPS[name] || [name]) this.layers[group].visible = on;
+  }
+
+  // 마지막 장면을 다시 그린다(레이어를 바꿨을 때, 스트림이 끊겨 새 프레임이 오지 않아도)
+  redraw() {
+    if (this.last) this.update(this.last);
+    else this.requestRender();
+  }
+
   requestRender() {
     if (this.pending) return;
     this.pending = true;
@@ -667,6 +593,7 @@ export class BevView {
 
   // -- 한 프레임 ------------------------------------------------------------------------------------
   draw(scene) {
+    this.last = scene;
     this.plan = planSummary(scene.path, scene.planNow);
     this.container.classList.toggle("stale", scene.stale);
     this.drawLanes(scene.lanes);
@@ -689,7 +616,7 @@ export class BevView {
     const b = this.lanes, raw = this.rawLanes, color = ink(THEME.lane), gray = ink(HUD.gray);
     b.begin();
     raw.begin();
-    if (lanes.length === 4 && lanes[1].probability >= 0.5 && lanes[2].probability >= 0.5) egoLane(b, lanes[1].points, lanes[2].points);
+    if (lanes.length === 4 && lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE) egoLane(b, lanes[1].points, lanes[2].points);
     for (const lane of lanes) {
       if (lane.probability < LANE_MIN_PROBABILITY) continue;
       band(b, lane.points, LANE_WIDTH, 0.03, color, 0.25 + 0.65 * lane.probability);
@@ -849,32 +776,31 @@ export class BevView {
 
   // -- 정차: 출발 알림의 판단 근거 --------------------------------------------------------------------
   // D에서 정차해 있는 동안과 알림이 떠 있는 동안 보이는 카드: 2 s 가속 페달 확률과 알림을 내는 0.3, 최근
-  // DEPART.history s 동안의 두 입력, 그리고 10 s 시점 계획의 x와 녹색 신호 알림을 대기시키는 구간(1.5 s
+  // HISTORY_S 동안의 두 입력, 그리고 10 s 시점 계획의 x와 녹색 신호 알림을 대기시키는 구간(1.5 s
   // 동안 ±5 m), 알림을 내는 10 m.
   departureCard(parent) {
-    const card = this.card = parent.appendChild(el("div", "bev-card"));
+    const card = this.card = parent.appendChild(el("div.bev-card"));
     card.hidden = true;
-    const head = card.appendChild(el("div", "bev-card-head"));
-    head.appendChild(el("b", "", "DEPART"));
-    this.badge = head.appendChild(el("span", "bev-badge"));
+    const head = card.appendChild(el("div.bev-card-head"));
+    head.appendChild(el("b", {text: "DEPART"}));
+    this.badge = head.appendChild(el("span.bev-badge"));
     const row = (title, mark, zone = 0) => {
-      const line = card.appendChild(el("div", "bev-row")), meter = el("div", "bev-meter");
-      if (zone) meter.appendChild(el("i", "zone")).style.width = `${zone}%`;
-      const fill = meter.appendChild(el("i", "fill"));
-      meter.appendChild(el("i", "mark")).style.left = `${mark}%`;
+      const line = card.appendChild(el("div.bev-row")), meter = el("div.bev-meter");
+      if (zone) meter.appendChild(el("i.zone")).style.width = `${zone}%`;
+      const fill = meter.appendChild(el("i.fill"));
+      meter.appendChild(el("i.mark")).style.left = `${mark}%`;
       const value = el("em");
-      line.append(el("span", "", title), meter, value);
+      line.append(el("span", {text: title}), meter, value);
       return {fill, value};
     };
     this.gasRow = row("GAS 2s", DEPART.gas * 100);
-    const spark = card.appendChild(svg("svg", {class: "bev-spark", viewBox: "0 0 100 30", preserveAspectRatio: "none"}));
-    spark.appendChild(svg("line", {class: "limit", x1: 0, x2: 100, y1: 30 * (1 - DEPART.gas), y2: 30 * (1 - DEPART.gas)}));
-    this.planLine = spark.appendChild(svg("polyline", {class: "plan"}));
-    this.gasLine = spark.appendChild(svg("polyline", {class: "gas"}));
+    // 두 입력을 제 끝값(확률 1, DEPART.planMax m)에 대한 비율로 한 차트에, 알림을 내는 가속 페달 확률을 기준선으로
+    this.departureChart = sparkline({className: "bev-spark", height: 30, series: ["plan", "gas"], levels: ["limit"]});
+    card.appendChild(this.departureChart.element);
     this.planRow = row("PLAN 10s", DEPART.open / DEPART.planMax * 100, DEPART.arm / DEPART.planMax * 100);
-    const foot = card.appendChild(el("div", "bev-card-foot"));
-    for (const [title, color] of [["gas 2s", HUD.green], ["plan 10s", "#8f9aa8"], [`${DEPART.history} s`, null]]) {
-      const item = foot.appendChild(el("span", "", title));
+    const foot = card.appendChild(el("div.bev-card-foot"));
+    for (const [title, color] of [["gas 2s", HUD.green], ["plan 10s", "var(--muted)"], [`${HISTORY_S} s`, null]]) {
+      const item = foot.appendChild(el("span", {text: title}));
       if (color) item.insertBefore(el("i"), item.firstChild).style.background = color;
     }
   }
@@ -890,14 +816,15 @@ export class BevView {
       this.badge.textContent = text;
       this.badge.className = `bev-badge ${tone}`.trim();
     }
-    const gas = departure.gas.length > 1 ? departure.gas[1] : NaN, plan = departure.plan10;
-    meter(this.gasRow, gas, 1, gas >= DEPART.gas, Number.isFinite(gas) ? gas.toFixed(2) : "–");
-    meter(this.planRow, plan, DEPART.planMax, plan > DEPART.open, Number.isFinite(plan) ? `${plan.toFixed(1)} m` : "–");
+    const gas = departure.gas.length > GAS_PRESS_HORIZON ? departure.gas[GAS_PRESS_HORIZON] : NaN, plan = departure.plan10;
+    meter(this.gasRow, gas, 1, gas >= DEPART.gas, Number.isFinite(gas) ? gas.toFixed(2) : DASH);
+    meter(this.planRow, plan, DEPART.planMax, plan > DEPART.open, Number.isFinite(plan) ? `${plan.toFixed(1)} m` : DASH);
+    // 모델이 값을 못 낸 프레임(NaN)에서는 선을 끊는다(history 행: [시각 s, 2 s 가속 페달 확률, 10 s 계획 거리 m])
     const history = departure.history, end = history.length ? history[history.length - 1][0] : 0;
-    const line = (k, scale) => history.map((row) => `${((row[0] - end) / DEPART.history * 100 + 100).toFixed(1)},`
-                                               + `${(30 * (1 - clamp(row[k] / scale, 0, 1))).toFixed(1)}`).join(" ");
-    this.gasLine.setAttribute("points", line(1, 1));
-    this.planLine.setAttribute("points", line(2, DEPART.planMax));
+    this.departureChart.draw({x: [end - HISTORY_S, end], y: [0, 1], at: {limit: DEPART.gas}, data: {
+      gas: history.map(([time, gas]) => [time, gas]),
+      plan: history.map(([time, , plan10]) => [time, plan10 / DEPART.planMax]),
+    }});
   }
 
   // -- 앞차가 있을 때: 거리와 상대 속도의 시간 변화 --------------------------------------------------------
@@ -905,117 +832,97 @@ export class BevView {
   // 모델 거리와 광류를 융합), 모델 자체 거리와 상대 속도(회색), 광류 상대 속도(청록)와 모델 거리의 추세(호박색
   // 점선: ±2 s에 걸친 직선이라 2 s 전에서 끝난다)를 값과 시간 변화로 보인다. 배지는 충돌까지 시간이다.
   leadCard(parent) {
-    const card = this.leadPanel = parent.appendChild(el("div", "bev-card"));
+    const card = this.leadPanel = parent.appendChild(el("div.bev-card"));
     card.hidden = true;
-    const head = card.appendChild(el("div", "bev-card-head"));
+    const head = card.appendChild(el("div.bev-card-head"));
     // 머리를 누르면 차트를 접는다. 선택은 이 브라우저에 기억한다
-    const fold = head.appendChild(el("button", "", "LEAD"));
+    const fold = head.appendChild(el("button", {text: "LEAD"}));
     fold.type = "button";
     const setFolded = (folded) => {
       card.classList.toggle("collapsed", folded);
       fold.setAttribute("aria-expanded", String(!folded));
     };
-    setFolded(readFlag(LEAD_FOLD_KEY));
+    setFolded(recall(LEAD_FOLD_KEY) === "1");
     fold.addEventListener("click", () => {
       const folded = !card.classList.contains("collapsed");
       setFolded(folded);
-      writeFlag(LEAD_FOLD_KEY, folded);
+      remember(LEAD_FOLD_KEY, folded ? "1" : "0");
     });
-    this.ttcBadge = head.appendChild(el("span", "bev-badge"));
+    this.ttcBadge = head.appendChild(el("span.bev-badge"));
     const value = (title, color) => {
-      const line = card.appendChild(el("div", "bev-value"));
+      const line = card.appendChild(el("div.bev-value"));
       line.appendChild(el("i")).style.background = color;
-      line.appendChild(el("span", "", title));
+      line.appendChild(el("span", {text: title}));
       return line.appendChild(el("em"));
     };
     this.leadValues = {fused: value(t("bev.lead_track"), HUD.green), model: value(t("bev.lead_model"), HUD.gray),
                        flow: value(t("bev.lead_flow"), HUD.cyan), trend: value(t("bev.lead_trend"), HUD.amber)};
     // 위의 값들이 색의 이름을 알려 주므로 차트에는 범례가 필요 없다
-    const chart = (title, lines, zero) => {
-      const box = card.appendChild(el("div", "bev-chart"));
-      box.appendChild(el("div", "bev-chart-title", title));
-      const spark = box.appendChild(svg("svg", {class: "bev-spark tall", viewBox: "0 0 100 60", preserveAspectRatio: "none"}));
-      if (zero) spark.appendChild(svg("line", {class: "zero", x1: 0, x2: 100, y1: 30, y2: 30}));
-      return Object.fromEntries(Object.keys(lines).map((name) => [name, spark.appendChild(svg("path", {class: name}))]));
+    const chart = (title, lines, levels) => {
+      const box = card.appendChild(el("div.bev-chart"));
+      box.appendChild(el("div.bev-chart-title", {text: title}));
+      const plot = sparkline({className: "bev-spark tall", height: 60, series: Object.keys(lines), levels, label: title});
+      box.appendChild(plot.element);
+      return plot;
     };
-    this.distanceLines = chart(t("bev.distance"), LEAD_CHARTS.distance, false);
-    this.speedLines = chart(t("bev.relative_speed"), LEAD_CHARTS.speed, true);
-    this.leadScale = card.appendChild(el("div", "bev-card-foot")).appendChild(el("span"));
+    this.distanceChart = chart(t("bev.distance"), LEAD_CHARTS.distance, []);
+    this.speedChart = chart(t("bev.relative_speed"), LEAD_CHARTS.speed, ["zero"]);
+    this.leadScale = card.appendChild(el("div.bev-card-foot")).appendChild(el("span"));
   }
 
   drawLeadCard(scene) {
     const card = this.leadPanel, rows = scene.leads, lead = scene.lead;   // rows: 최근 LEAD_HISTORY_S
     card.hidden = !(this.layers.lead.visible && rows.some((row) => row.segment >= 0));
     if (card.hidden) return;
-    const start = rows[rows.length - 1].t - LEAD_HISTORY_S;
     // 가장 최근에 맞춘 추세(그 행에 앞차가 없으면 NaN)
     let fitted = rows.length - 1;
     while (fitted >= 0 && rows[fitted].trend === undefined) fitted--;
-    const show = (em, v) => { const text = Number.isFinite(v) ? kph(v) : "–"; if (em.textContent !== text) em.textContent = text; };
+    const show = (em, v) => { const text = Number.isFinite(v) ? kph(v) : DASH; if (em.textContent !== text) em.textContent = text; };
     show(this.leadValues.fused, lead && lead.tracked ? lead.relative : NaN);
     show(this.leadValues.model, lead ? lead.raw.relative : NaN);
     show(this.leadValues.flow, lead && lead.flow ? lead.flow.relative : NaN);
     show(this.leadValues.trend, fitted >= 0 ? rows[fitted].trend : NaN);
     const ttc = lead ? lead.ttc : Infinity, tone = ttcTone(ttc);
-    const text = ttc < LEAD_CARD.ttc ? ttcText(ttc) : "TTC –";
+    const text = ttc < LEAD_CARD.ttc ? ttcText(ttc) : `TTC ${DASH}`;
     if (this.ttcBadge.textContent !== text) this.ttcBadge.textContent = text;
     if (this.ttcBadge.className !== `bev-badge ${tone}`.trim()) this.ttcBadge.className = `bev-badge ${tone}`.trim();
-    // 계열마다 값이 없는 곳에서 끊긴 path로, 값은 차트 높이에 맞춘다
-    const draw = (lines, fields, y) => {
-      for (const [name, key] of Object.entries(fields)) {
-        let d = "", gap = true;
-        for (const row of rows) {
-          const v = row[key];
-          if (!Number.isFinite(v)) { gap = true; continue; }
-          d += `${gap ? "M" : "L"}${((row.t - start) / LEAD_HISTORY_S * 100).toFixed(1)},${y(v).toFixed(1)}`;
-          gap = false;
-        }
-        lines[name].setAttribute("d", d);
-      }
-    };
-    // 거리: 보이는 값(어떤 행에 앞차가 있음)의 최저에서 최고까지, 적어도 LEAD_CARD.minSpan m
-    let lo = Infinity, hi = -Infinity;
-    for (const row of rows) {
-      for (const key of Object.values(LEAD_CHARTS.distance)) {
-        if (Number.isFinite(row[key])) { lo = Math.min(lo, row[key]); hi = Math.max(hi, row[key]); }
-      }
-    }
-    const middle = (lo + hi) / 2, span = Math.max(LEAD_CARD.minSpan, hi - lo) * 1.1;
-    draw(this.distanceLines, LEAD_CHARTS.distance, (v) => 30 - clamp((v - middle) / span, -0.5, 0.5) * 56);
-    // 상대 속도: 대칭, 적어도 LEAD_CARD.minScale km/h, 10 단위
-    let peak = LEAD_CARD.minScale;
-    for (const row of rows) {
-      for (const key of Object.values(LEAD_CHARTS.speed)) if (Number.isFinite(row[key])) peak = Math.max(peak, Math.abs(row[key]) * 3.6);
-    }
-    const scale = Math.ceil(peak / 10) * 10;
-    draw(this.speedLines, LEAD_CHARTS.speed, (v) => 30 - clamp(v * 3.6 / scale, -1, 1) * 28);
-    const note = t("bev.lead_scale", {low: (middle - span / 2).toFixed(0), high: (middle + span / 2).toFixed(0), scale,
+    // 차트마다 선 이름 -> 행 필드의 [[시각, 값 × unit]]. 값이 없는 행(NaN)에서 선이 끊긴다.
+    const end = rows[rows.length - 1].t, x = [end - LEAD_HISTORY_S, end];
+    const columns = (fields, unit = 1) => Object.fromEntries(Object.entries(fields).map(([name, key]) =>
+      [name, rows.map((row) => [row.t, row[key] * unit])]));
+    const values = (data) => Object.values(data).flat().map(([, v]) => v);
+    // 거리: 보이는 값의 최저에서 최고까지, 적어도 LEAD_CARD.minSpan m(위아래로 5%씩 더)
+    const distance = columns(LEAD_CHARTS.distance);
+    const near = fitRange(values(distance), {minSpan: LEAD_CARD.minSpan, pad: 0.05});
+    this.distanceChart.draw({x, y: near, data: distance, inset: LEAD_CARD.inset});
+    // 상대 속도(km/h): 0이 가운데, 적어도 ±LEAD_CARD.minScale, 10 단위로
+    const speed = columns(LEAD_CHARTS.speed, 3.6);
+    const scale = fitRange(values(speed), {symmetric: true, minSpan: 2 * LEAD_CARD.minScale, step: 10});
+    this.speedChart.draw({x, y: scale, data: speed, at: {zero: 0}, inset: LEAD_CARD.inset});
+    const note = t("bev.lead_scale", {low: near[0].toFixed(0), high: near[1].toFixed(0), scale: scale[1],
                                       seconds: LEAD_HISTORY_S});
     if (this.leadScale.textContent !== note) this.leadScale.textContent = note;
   }
 
+  // 화면 아래의 작은 칸 하나. HUD처럼 영어 약어(PLAN, LANE W, LAT, LEAD, MODEL)를 쓴다(LCD HUD와 같은 말).
   chip(name, html, warn = false) {
     const span = this.chips[name];
-    if (span.dataset.html === html) return;
-    span.dataset.html = html;
+    if (span.shown === html) return;
+    span.shown = html;
     span.innerHTML = html;
     span.classList.toggle("warn", warn);
   }
 }
 
-// 이 브라우저에만 기억하는 플래그(저장소가 없거나 거부할 수 있다).
-function readFlag(key) {
-  try { return window.localStorage.getItem(key) === "1"; } catch { return false; }
-}
-function writeFlag(key, on) {
-  try { window.localStorage.setItem(key, on ? "1" : "0"); } catch { /* 기억하지 않는다 */ }
-}
 
-// 속성을 단 SVG 요소.
-function svg(tag, attributes) {
-  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
-  return node;
+// 이 브라우저에 기억한 숨긴 레이어(LAYERS의 이름만, 저장값이 깨졌으면 없다)
+function hiddenLayers() {
+  try {
+    const names = JSON.parse(recall(HIDDEN_LAYERS_KEY) || "[]");
+    return new Set(Array.isArray(names) ? names.filter((name) => LAYERS.includes(name)) : []);
+  } catch {
+    return new Set();
+  }
 }
 
 // 상대 속도(m/s)를 LEAD 칩과 카드가 보여 주는 대로 부호 있는 km/h로.
@@ -1087,15 +994,7 @@ function meter(row, value, full, go, text) {
 // -- 지오메트리 쓰기 --------------------------------------------------------------------------------------
 // points [[x, y], ...]를 따라 높이 z에 놓는 폭 width의 띠.
 function band(b, points, width, z, color, alpha) {
-  const n = points.length, h = width / 2;
-  if (n < 2) return;
-  const base = b.reserve(2 * n, 6 * (n - 1));
-  for (let i = 0; i < n; i++) {
-    const [px, py] = points[i], [nx, ny] = normalAt(points, i);
-    b.put(px + nx * h, py + ny * h, z, color.r, color.g, color.b, alpha);
-    b.put(px - nx * h, py - ny * h, z, color.r, color.g, color.b, alpha);
-    if (i) { const k = base + 2 * i; b.tri(k - 2, k - 1, k); b.tri(k - 1, k + 1, k); }
-  }
+  ribbon(b, points, width / 2, (i, side, x, y) => b.put(x, y, z, color.r, color.g, color.b, alpha));
 }
 
 // left와 right 사이 차로를 옅게 채우고, 앞으로 갈수록 흐려진다.
@@ -1131,16 +1030,9 @@ function arrow(b, x0, y0, x1, y1, color) {
 
 // 경로용으로 points를 따르는 띠: 폭 방향 위치, 진행 거리와 slow[i](계획 감속). 그 길이를 돌려준다.
 function corridor(b, points, width, z, slow) {
-  const n = points.length, h = width / 2, base = b.reserve(2 * n, 6 * (n - 1));
-  let along = 0;
-  for (let i = 0; i < n; i++) {
-    const [px, py] = points[i], [nx, ny] = normalAt(points, i);
-    if (i) along += Math.hypot(px - points[i - 1][0], py - points[i - 1][1]);
-    b.put(px + nx * h, py + ny * h, z, 0, along, slow[i]);
-    b.put(px - nx * h, py - ny * h, z, 1, along, slow[i]);
-    if (i) { const k = base + 2 * i; b.tri(k - 2, k - 1, k); b.tri(k - 1, k + 1, k); }
-  }
-  return along;
+  const along = arcLengths(points);
+  ribbon(b, points, width / 2, (i, side, x, y) => b.put(x, y, z, side, along[i], slow[i]));
+  return along.length ? along[along.length - 1] : 0;
 }
 
 // 원점에서 x 방향으로 출발해 곡률 k(1/m, 왼쪽이 +)로 length m만큼 가는 원호의 [[x, y], ...].
@@ -1186,6 +1078,29 @@ function headingAt(points, x) {
   return Math.atan2(points[i][1] - points[i - 1][1], points[i][0] - points[i - 1][0]);
 }
 
+// 폴리라인을 따라 반폭 h의 띠: 점마다 왼쪽(side 0)·오른쪽(1) 정점을 vertex(i, side, x, y)가 넣고, 이웃한 두 점
+// 사이를 삼각형 둘로 잇는다(band, corridor). 점이 둘보다 적으면 넣지 않는다.
+function ribbon(b, points, h, vertex) {
+  const n = points.length;
+  if (n < 2) return;
+  const base = b.reserve(2 * n, 6 * (n - 1));
+  for (let i = 0; i < n; i++) {
+    const [px, py] = points[i], [nx, ny] = normalAt(points, i);
+    vertex(i, 0, px + nx * h, py + ny * h);
+    vertex(i, 1, px - nx * h, py - ny * h);
+    if (i) { const k = base + 2 * i; b.tri(k - 2, k - 1, k); b.tri(k - 1, k + 1, k); }
+  }
+}
+
+// 폴리라인 점마다 첫 점부터의 길이(m)
+function arcLengths(points) {
+  const along = points.length ? [0] : [];
+  for (let i = 1; i < points.length; i++) {
+    along.push(along[i - 1] + Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+  }
+  return along;
+}
+
 // 폴리라인의 점 i에서 왼쪽을 향하는 단위 법선.
 function normalAt(points, i) {
   const [ax, ay] = points[Math.max(0, i - 1)], [bx, by] = points[Math.min(points.length - 1, i + 1)];
@@ -1194,10 +1109,19 @@ function normalAt(points, i) {
 }
 
 // BEV 탭: 뷰와 그 스트림을 한 번 만든다. start()와 stop()은 탭과 페이지가 보이는지를 따른다.
-// onStatus({live, text})가 스트림 상태를 알린다.
+// onStatus({state, text})가 스트림 상태를 알린다(BevStream.status).
 export function createBev(onStatus) {
-  const element = el("div", "bev-layout");
-  const view = new BevView(element.appendChild(el("div", "bev-panel")), element.appendChild(el("div", "bev-side")));
-  const stream = new BevStream({onScene: (scene) => view.update(scene), onStatus});
+  const element = el("div.bev-layout");
+  element.style.setProperty("--bev-bg", THEME.background);
+  for (const [name, color] of Object.entries(HUD)) element.style.setProperty(`--hud-${name}`, color);
+  const view = new BevView(element.appendChild(el("div.bev-panel")), element.appendChild(el("div.bev-side")));
+  // 끊기거나 모델이 멈추면 장면·칸·카드를 흐리게 한다: 새 프레임이 오지 않아 그리기는 마지막 모습에 머문다
+  const stream = new BevStream({
+    onScene: (scene) => view.update(scene),
+    onStatus: (status) => {
+      element.classList.toggle("offline", status.state === "bad" || status.state === "wait");
+      onStatus(status);
+    },
+  });
   return {element, start: () => stream.start(), stop: () => stream.stop()};
 }

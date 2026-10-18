@@ -253,7 +253,13 @@ reasons and steps, and a catalogue key when it refuses a request (for example
 a calibration reset while engaged). `check_web_console.py` checks that the two
 files have the same keys and placeholders, that every key the page or the
 server uses exists and none goes unused, and that no screen text is left in
-the code.
+the code or the stylesheet.
+
+The server checks every value before it writes a parameter file, because the
+runtime loaders reject a whole file over one bad value and `controlsd` then
+fails to start: a switch takes only `true` or `false`, a number only a finite
+number within the item's range, and an item whose step is whole only a whole
+number.
 
 > [!WARNING]
 > The web console has no authentication and writes steering parameters that
@@ -276,9 +282,9 @@ press. A value is written as soon as it is changed.
 | Tab | Address | Holds |
 | --- | --- | --- |
 | Steering | `#steering` | the controller tuning, the learned torque model card, the path mode (Laneless) and the lane-change minimum speed; searching it for a moved value links to Vehicle |
-| Vehicle | `#vehicle` | the steering values that belong to the car rather than to the controller, the camera calibration, the learners' trend, the learner input source and the fixed specs |
+| Vehicle | `#vehicle` | the steering values that belong to the car rather than to the controller, the learner input source, the learners' trend, the camera calibration and the fixed specs |
 | Vision cruise | `#adaptive_cruise` | `adaptive_cruise.json` |
-| Recording | `#recording` | `recording.json` |
+| Recording | `#recording` | `recording.json`, and the recording files card: the routes on the SD card with their length and size, the free space, and deleting the selected routes |
 | Device settings | `#display` | backlight, sound and camera mount from `display.json`, and the Panda firmware card |
 | BEV | `#bev` | the model's view from above, drawn in the browser |
 
@@ -317,9 +323,9 @@ control uses now and where it comes from (controlsd's LearnerState says
 whether the learned values are in use), the learned value, the manual value
 with what it does while learning is on, and a button that copies the learned
 value into the manual one (tyre stiffness and road roll have none: their
-learned value is a factor and a roll). Below are the camera calibration, the
-learners' last ten minutes, the learner input source and the fixed specs
-(mass, wheelbase, centre of gravity).
+learned value is a factor and a roll). Below are the learner input source
+(locationd or ESP12), the learners' last ten minutes, the camera calibration
+and the fixed specs (mass, wheelbase, centre of gravity).
 
 The manual values reach the learners as priors when `controlsd` starts
 (`locationd` for the steering delay), so a prior changed while auto-learning
@@ -425,11 +431,16 @@ the bottom.
 
 ### API
 
-The page talks to the server over these routes (`console_server.py`):
+The page talks to the server over these routes (`console_server.py`). A
+refused request answers with its status code (400 a bad value, 404 an unknown
+item, 409 not now, for example while engaged, 500 a file error, 503 no
+hardware) and `{"detail": {"code": <catalogue key>, ...}}`, which the page
+shows in its language. Each live state carries `available` (there is one),
+`stale` (missing, or older than that state's limit) and `age_s`.
 
 | Route | What it does |
 | --- | --- |
-| `GET /api/status` | the manager's process states and the backlight |
+| `GET /api/status` | the manager's process states and the backlight; `?versions=1` adds each binary's build, which the header asks for only while its process list is open |
 | `GET /api/params` | parameter groups, current values, defaults and descriptions |
 | `PATCH /api/params/{group}` | change values, `{"values": {...}}` |
 | `GET /api/learners` | paramsd and torqued learned values, the camera calibration, the locationd steering delay |
@@ -440,6 +451,8 @@ The page talks to the server over these routes (`console_server.py`):
 | `POST /api/lateral_nn` | choose a learned torque model, `{"model": ...}`; `controlsd` switches without a restart |
 | `GET /api/panda` | the Panda firmware and the installed image |
 | `POST /api/panda/flash` | ask for a Panda flash, `{"version": ...}` (parked only) |
+| `GET /api/recordings` | the routes on the SD card (size, video length, segments, whether one is being written or closed), the free space and the reserve, and `recordd`'s state |
+| `POST /api/recordings/delete` | delete routes, `{"names": [...]}`; nothing is deleted if one name is not a route (400), unknown (404) or still being written or moved (409) |
 | `GET /api/bev` | where the fields the BEV reads sit |
 | `GET /api/bev/stream` | the BEV stream (`ModelState` and `ControlState` payloads) |
 | `GET /static/{path}` | the page's files |

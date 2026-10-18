@@ -1,7 +1,8 @@
 // 파라미터 상태: /api/params 스냅샷(그룹·차량 특성 탭 구성, 현재값, 기본값, 항목 메타데이터, 안내가 보는 런타임
 // 사실)과 값 바꾸기. 파라미터 탭과 차량 특성 탭이 같이 쓴다. 서버는 구조(섹션 id, 단위, 범위)만 내고, 이름·안내·설명은
-// 읽을 때 고른 언어의 문구로 채운다(group.*, vehicle.*, param.<그룹>.<키>.*, unit.*, caution.*, unused.*, role.*).
-import {has, t} from "./i18n.js";
+// 읽을 때 고른 언어의 문구로 채운다(group.*, vehicle.*, param.<그룹>.<키>.*, unit.*, caution.*, unused.*, role.*,
+// toggle.*).
+import {codeText, has, t} from "./i18n.js";
 import {api} from "./ui.js";
 
 let snapshot = null;
@@ -12,11 +13,13 @@ let changeListeners = new Set();
 const optional = key => (has(key) ? t(key) : "");
 
 // 단위: 언어마다 다르게 쓰는 것만 문구가 있다(unit.s = 초/s). 나머지는 기호 그대로.
-export const unitText = unit => (unit && has(`unit.${unit}`) ? t(`unit.${unit}`) : unit);
+export const unitText = unit => (unit ? codeText("unit", unit) : "");
 
 export const sectionName = id => t(`section.${id}`);
 
-// 항목 하나의 글자: 이름, 설명, 줄이거나 끄면·키우거나 켜면, 자동 학습 중의 쓰임(learned), 주의(caution)
+// 항목 하나의 글자: 이름, 설명, 줄이거나 끄면·키우거나 켜면, 자동 학습 중의 쓰임(learned), 주의(caution). 이름을
+// 붙인 켜고 끄기(labels = [켜면, 끄면], 예: 자동 학습·수동)는 버튼 묶음으로 고르고, choices = [{value, label}]가
+// true·false마다 있다(toggle.<이름>).
 function describe(group, key, meta) {
   const base = `param.${group}.${key}`;
   return {
@@ -26,6 +29,7 @@ function describe(group, key, meta) {
     description: t(`${base}.description`),
     increase: t(`${base}.increase`),
     decrease: t(`${base}.decrease`),
+    choices: meta.labels ? meta.labels.map((name, index) => ({value: index === 0, label: t(`toggle.${name}`)})) : undefined,
     learned_role: meta.learned ? t(`${base}.learned_role`) : "",
     caution: meta.caution ? t(`caution.${meta.caution}`) : "",
     unused: (meta.unused || []).map(condition => ({...condition, text: t(`unused.${condition.text}`)})),

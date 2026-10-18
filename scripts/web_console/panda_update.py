@@ -4,23 +4,22 @@
 src/panda/panda_firmware.cc와 같다."""
 from __future__ import annotations
 
-import json
-import os
 import re
 import struct
 from pathlib import Path
 from typing import Any, Dict
 
+from .files import env_path, read_json_or_none, write_text_atomic
 from .refusal import Refusal
-from .shm_channel import IpcReader, age_s, topic_path
-from .state_layout import CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, GEAR_PARK, control_value
+from .shm_channel import IpcReader, freshness, topic_path
+from .state_layout import (CONTROL_MAX_AGE_S, CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, GEAR_PARK, control_engaged,
+                           control_value)
 
 PANDA_STATUS_PATH = "/dev/shm/edgepilot_panda_status.json"
 PANDA_FLASH_REQUEST_PATH = "/dev/shm/edgepilot_panda_flash"
-# pandad와 같이 EDGEPILOT_PANDA_FIRMWARE, 없으면 설치 디렉터리의 firmware/panda.bin.signed
-INSTALL_DIR = Path(__file__).resolve().parents[1]
-PANDA_FIRMWARE_PATH = str(INSTALL_DIR / (os.environ.get("EDGEPILOT_PANDA_FIRMWARE") or "firmware/panda.bin.signed"))
-PANDA_STATUS_STALE_S = 3.0
+# pandad와 같이 EDGEPILOT_PANDA_FIRMWARE, 없으면 작업(설치) 디렉터리의 firmware/panda.bin.signed
+PANDA_FIRMWARE_PATH = "firmware/panda.bin.signed"
+PANDA_STATUS_MAX_AGE_S = 3.0  # pandad는 1초마다 쓴다
 # panda_protocol.h와 같은 값: 서명 128바이트, 앱 영역(섹터 1~3) 48 KB, F413 보드(black, uno, dos)
 PANDA_SIGNATURE_BYTES = 128
 PANDA_APP_MAX_BYTES = 3 * 16 * 1024
@@ -64,7 +63,7 @@ def panda_image_info(path: str) -> Dict[str, Any]:
         error = "no_tail"
     else:
         error = ""
-    match = next((found for found in (pattern.search(data) for pattern in PANDA_VERSION_PATTERNS) if found), None)
+    match = next(filter(None, (pattern.search(data) for pattern in PANDA_VERSION_PATTERNS)), None)
     if not error and not match:
         error = "no_version"
     info.update(present=True, size=size, valid=not error, error=error,
@@ -76,21 +75,19 @@ def flash_blocker(control: IpcReader, bootstub: bool = False) -> str:
     """panda_firmware.cc의 panda_flash_allowed와 같은 조건. 막는 이유 코드, 없으면 빈 문자열. 판다가 bootstub에
     머물러 있으면 차 상태는 보지 않고(CAN이 없어 알 수 없다, 상류 pandad도 같다), 살아 있는 제어 상태가 결합
     중이라고 할 때만 막는다."""
-    latest = control.read_payload()
-    fresh = latest is not None and age_s(latest[1]) <= CONTROL_MAX_AGE_S
+    latest = control.read_fresh(CONTROL_MAX_AGE_S)
     if bootstub:
-        engaged = fresh and (control_value(latest[2], "engaged") or control_value(latest[2], "active"))
-        return "engaged" if engaged else ""
-    if not fresh:
+        return "engaged" if latest is not None and control_engaged(latest[2]) else ""
+    if latest is None:
         return "control_stale"
     payload = latest[2]
     if not control_value(payload, "vehicle_fresh"):
         return "vehicle_stale"
-    if control_value(payload, "engaged") or control_value(payload, "active"):
+    if control_engaged(payload):
         return "engaged"
-    if control_value(payload, "gear", "<i") != GEAR_PARK:
+    if control_value(payload, "gear") != GEAR_PARK:
         return "not_park"
-    speed = max(control_value(payload, "ego_speed_kph", "<f"), control_value(payload, "cluster_speed_kph", "<f"))
+    speed = max(control_value(payload, "ego_speed_kph"), control_value(payload, "cluster_speed_kph"))
     if speed >= PARKED_MAX_SPEED_KPH:
         return "moving"
     return ""
@@ -98,31 +95,24 @@ def flash_blocker(control: IpcReader, bootstub: bool = False) -> str:
 
 class PandaUpdate:
     def __init__(self, status_path: str = PANDA_STATUS_PATH, request_path: str = PANDA_FLASH_REQUEST_PATH,
-                 image_path: str = PANDA_FIRMWARE_PATH, control_path: str = topic_path(CONTROL_STATE_TOPIC)):
+                 image_path: str | None = None, control_path: str = topic_path(CONTROL_STATE_TOPIC)):
         self.status_path = Path(status_path)
         self.request_path = Path(request_path)
-        self.image_path = image_path
+        self.image_path = image_path or str(env_path("EDGEPILOT_PANDA_FIRMWARE", PANDA_FIRMWARE_PATH))
         self.control = IpcReader(control_path, CONTROL_STATE_SIZE)
 
-    def _pandad(self) -> tuple[Dict[str, Any] | None, float]:
-        """pandad의 상태 파일과 그 나이. 없거나 오래됐으면 (None, 나이)."""
-        try:
-            document = json.loads(self.status_path.read_text(encoding="utf-8"))
-            age = age_s(int(document["stamp_ns"]))
-        except (OSError, ValueError, KeyError, TypeError):
-            return None, 0.0
-        return (document if age <= PANDA_STATUS_STALE_S else None), age
-
     def status(self) -> Dict[str, Any]:
-        pandad, age = self._pandad()
-        link = pandad or {}
+        """pandad 상태 파일(stamp_ns가 CLOCK_BOOTTIME)의 신선도와, 신선할 때만 그 내용."""
+        document = read_json_or_none(self.status_path)
+        stamp = document.get("stamp_ns") if document else None
+        fresh = freshness(stamp if isinstance(stamp, int) else None, PANDA_STATUS_MAX_AGE_S)
+        link = document if not fresh["stale"] else {}
         flash = link.get("flash") or {}
         image = panda_image_info(self.image_path)
         blocker = flash_blocker(self.control, bootstub=link.get("mode") == "bootstub")
         version = link.get("firmware_version", "")
         return {
-            "available": pandad is not None,
-            "age_s": age,
+            **fresh,
             "mode": link.get("mode", "none"),
             "serial": link.get("serial", ""),
             "hw_type": link.get("hw_type", 0),
@@ -139,7 +129,7 @@ class PandaUpdate:
     def request(self, version: str) -> Dict[str, Any]:
         status = self.status()
         image = status["image"]
-        if not status["available"]:
+        if status["stale"]:
             raise Refusal("error.pandad_missing")
         if status["request_pending"] or status["flash"].get("state") == "flashing":
             raise Refusal("error.panda_flashing")
@@ -153,7 +143,5 @@ class PandaUpdate:
             raise Refusal("panda.reason.hw_unsupported")
         if status["blocker"]:
             raise Refusal(f"panda.reason.{status['blocker']}")
-        temporary = self.request_path.with_name(self.request_path.name + ".tmp")
-        temporary.write_text(version + "\n", encoding="utf-8")
-        os.replace(temporary, self.request_path)
+        write_text_atomic(self.request_path, version + "\n")
         return self.status()

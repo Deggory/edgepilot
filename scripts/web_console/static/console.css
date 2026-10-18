@@ -1,4 +1,4 @@
-/* 웹 콘솔 페이지. 어두운 화면 하나(차 안에서 폰으로 본다). BEV 패널의 스타일은 bev.js가 따로 넣는다. */
+/* 웹 콘솔 페이지. 어두운 화면 하나(차 안에서 폰으로 본다). BEV 탭의 스타일도 여기 있다(아래 BEV 부분). */
 :root {
   color-scheme: dark;
   --bg: #101214;
@@ -68,7 +68,7 @@ code { font-family: var(--mono); }
 .runtime[data-state="warn"] summary { border-color: #6a5630; color: var(--warn); }
 .runtime[data-state="bad"] summary { border-color: #743f3f; color: var(--bad); }
 .dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--faint); }
-.runtime[data-state="good"] summary .dot, .stream-status.online .dot { background: var(--good); }
+.runtime[data-state="good"] summary .dot { background: var(--good); }
 .runtime[data-state="warn"] summary .dot { background: var(--warn); }
 .runtime[data-state="bad"] summary .dot { background: var(--bad); }
 .runtime-panel {
@@ -143,6 +143,13 @@ main {
 }
 .section-title span { color: var(--faint); font-size: 12px; font-weight: 600; }
 .card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.card-grid > :only-child { grid-column: 1 / -1; }  /* 카드 하나뿐인 섹션은 반쪽에 두지 않는다 */
+/* 설명과 오른쪽 컨트롤이 있는 섹션 머리(학습기 묶음의 자동 학습·수동) */
+.section-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; margin-bottom: 10px; }
+.section-heading { flex: 1 1 320px; min-width: 0; }
+.section-heading .section-title { margin-bottom: 4px; }
+.section-description { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
+.section-aside { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .empty {
   padding: 28px; border: 1px dashed var(--line); border-radius: var(--radius);
   color: var(--muted); text-align: center; font-size: 14px;
@@ -171,10 +178,14 @@ main {
 .badge.accent { background: var(--accent-bg); color: var(--accent); }
 .badge.muted { background: var(--muted-bg); color: var(--muted); }
 .card-note { margin: 9px 0 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
-.card-note.ignored, .card-note.prior, .card-note.reset, .card-note.warn { padding: 6px 9px; border-radius: 5px; }
+.card-note.ignored, .card-note.prior, .card-note.warn { padding: 6px 9px; border-radius: 5px; }
 .card-note.ignored { background: var(--muted-bg); color: var(--muted); }
 .card-note.prior { background: var(--accent-bg); color: #9cc8f0; }
-.card-note.reset, .card-note.warn { background: var(--warn-bg); color: var(--warn); }
+.card-note.warn { background: var(--warn-bg); color: var(--warn); }
+/* 긴 설명(ui.js helpText): 세 줄까지, 넘치면 더 보기 */
+.help-body { display: block; }
+.help-body.clamped { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.help-more { margin-top: 2px; }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .action {
   display: flex; align-items: center; gap: 10px; flex: 1 1 170px;
@@ -211,6 +222,25 @@ main {
 .nn-model[aria-pressed="true"] { border-color: #2b4d73; background: var(--accent-bg); cursor: default; }
 .nn-model-name { margin-right: 4px; color: var(--text); font: 600 13px var(--mono); overflow-wrap: anywhere; }
 
+/* 주행 기록 카드: 줄마다 고르기, 시작 시각, 길이, 크기, 배지(둘째 줄) */
+.recordings-all { display: flex; align-items: center; gap: 8px; width: max-content; margin-top: 12px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.recordings { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.recordings input, .recordings-all input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.recording {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 4px 12px;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken);
+  font-size: 13px; cursor: pointer;
+}
+.recording:hover:not(.busy) { background: var(--btn-bg); }
+.recording:has(input:checked) { border-color: #6b3a3a; background: var(--bad-bg); }
+.recording.busy, .recording.busy input { cursor: default; }
+.recording-start { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; color: var(--text-soft); }
+.recording-start code { color: var(--text); font: 600 13px var(--mono); }
+.recording-length, .recording-size { color: var(--text-soft); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.recording-size { min-width: 4.5em; color: var(--text); font-weight: 650; }
+.recording .badge-row { grid-column: 2 / -1; }
+.recording .badge-row:empty { display: none; }
+
 .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; margin: 0; font-size: 13px; }
 .facts dt { color: var(--faint); }
 .facts dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; min-width: 0; }
@@ -218,25 +248,24 @@ main {
 .facts small { color: var(--faint); font-size: 11px; }
 
 /* ------------------------------------------------------------ 파라미터 카드 */
-.card.param.busy { opacity: 0.66; }
-.card.param.saved { border-color: #397659; }
+.card.busy { opacity: 0.66; }
+.card.saved { border-color: #397659; }
 .param-head { display: flex; align-items: flex-start; gap: 10px; }
 .param-name { flex: 1; min-width: 0; }
 .param-key { margin-top: 3px; color: #737e86; font: 11px var(--mono); overflow-wrap: anywhere; }
 .param-key span { font-family: system-ui, sans-serif; }
-.param-unit { padding-top: 3px; color: var(--warn); font-size: 12px; white-space: nowrap; }
+.param-unit { padding-top: 3px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .param-head .badge { margin-top: 1px; }
-.param-description { margin: 10px 0 0; color: var(--text-soft); font-size: 13px; line-height: 1.5; cursor: pointer; }
-.param-description.clamped {
-  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
+.param-description { margin: 10px 0 0; color: var(--text-soft); font-size: 13px; line-height: 1.5; }
 .param-notes:empty { display: none; }
-.card.param > .switch-control, .card.param > .stepper, .card.param > .slider-control { margin-top: 12px; }
+.card.param > .switch-control, .card.param > .stepper, .card.param > .slider-control,
+.card.param > .segmented { margin-top: 12px; }
+.card.param > .segmented { display: flex; width: max-content; max-width: 100%; }
 /* 다른 항목 때문에 쓰이지 않는 항목: 제목을 흐린 색으로, 설명과 컨트롤을 반투명으로 한다(고칠 수는 있다). 이유는
    card-note.ignored */
 .card.ignored .card-title { color: var(--muted); }
 .card.param.ignored .param-description, .card.param.ignored .stepper, .card.param.ignored .switch-control,
-.card.param.ignored .slider-control { opacity: 0.5; }
+.card.param.ignored .slider-control, .card.param.ignored .segmented { opacity: 0.5; }
 .param-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; min-height: 26px; }
 .param-effects { flex: 1 1 auto; color: var(--faint); font-size: 12px; }
 .param-effects[open] { flex-basis: 100%; order: 1; }
@@ -256,9 +285,9 @@ main {
 }
 .link-button:hover { text-decoration: underline; }
 .param-status { margin-left: auto; color: var(--faint); font-size: 11px; white-space: nowrap; }
-.param-status.ok { color: var(--good); }
+.param-status.good { color: var(--good); }
 .param-status.warn { color: var(--warn); }
-.param-status.fail { color: var(--bad); }
+.param-status.bad { color: var(--bad); }
 
 /* 켜고 끄기 */
 .switch-control {
@@ -268,7 +297,6 @@ main {
   color: #d7dce0; font-weight: 750; cursor: pointer;
 }
 .switch-control:hover:not(:disabled) { background: var(--btn-bg-hover); }
-.switch-control.mini { width: auto; height: 34px; gap: 10px; padding: 0 10px; font-size: 13px; }
 .switch {
   position: relative; flex: 0 0 auto; width: 48px; height: 26px;
   border-radius: 13px; background: #555e65; transition: background 120ms ease;
@@ -277,11 +305,8 @@ main {
   content: ""; position: absolute; top: 3px; left: 3px;
   width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform 120ms ease;
 }
-.switch-control.mini .switch { width: 40px; height: 22px; }
-.switch-control.mini .switch::after { width: 16px; height: 16px; }
 [aria-checked="true"] > .switch { background: var(--good); }
 [aria-checked="true"] > .switch::after { transform: translateX(22px); }
-.switch-control.mini[aria-checked="true"] > .switch::after { transform: translateX(18px); }
 
 /* 숫자: − [값] + */
 .stepper { display: grid; grid-template-columns: 52px minmax(0, 1fr) 52px; gap: 8px; height: 50px; }
@@ -315,11 +340,7 @@ main {
 }
 
 /* ------------------------------------------------------------ 차량 특성: 학습기 묶음과 값 카드 */
-.learner-group .group-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; }
-.group-title { flex: 1 1 320px; min-width: 0; }
-.group-title .section-title { margin-bottom: 4px; }
-.group-description { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
-.group-status { margin: 10px 0; }
+.group-status { margin: 0 0 10px; }
 .group-summary { margin: 8px 0 0; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .segmented { display: inline-flex; flex: 0 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-sunken); }
 .segmented button {
@@ -328,8 +349,6 @@ main {
 }
 .segmented button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); box-shadow: inset 0 0 0 1px #2b4d73; }
 .segmented button:hover:not([aria-pressed="true"]):not(:disabled) { color: var(--text); }
-.card.quantity.busy { opacity: 0.66; }
-.card.quantity.saved { border-color: #397659; }
 .card.quantity .card-head { justify-content: space-between; margin-bottom: 4px; }
 .quantity-now-row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
 .quantity-now { font-size: 28px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.2; }
@@ -342,7 +361,7 @@ main {
 .quantity-row.in-use { box-shadow: inset 3px 0 0 var(--accent); }
 .quantity-label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .quantity-row.in-use .quantity-label { color: var(--accent); }
-.quantity-row.in-use .quantity-label::after { content: " · 사용 중"; font-weight: 600; }
+.quantity-row.in-use .quantity-label::after { content: " · " attr(data-in-use); font-weight: 600; }
 .quantity-value { color: #fff; font-weight: 750; font-variant-numeric: tabular-nums; }
 .quantity-row:not(.in-use) .quantity-value { color: var(--text-soft); }
 .quantity-value.bad, .quantity-row:not(.in-use) .quantity-value.bad { color: var(--bad); }
@@ -353,24 +372,123 @@ main {
 .quantity-foot .param-status { margin-left: 0; }
 .card.quantity .card-note.prior { margin-top: 8px; }
 .card.quantity.ignored .quantity-now-row, .card.quantity.ignored .quantity-row { opacity: 0.5; }
-.adopt-button {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; margin-top: 10px; padding: 8px 12px;
-  border: 1px solid var(--btn-border); border-radius: var(--radius); background: var(--btn-bg);
-  color: #e5e9ec; text-align: left; font-size: 13px; font-weight: 700; cursor: pointer;
-}
-.adopt-button:hover:not(:disabled) { background: var(--btn-bg-hover); }
-.adopt-button small { color: #8f99a1; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.card.quantity .param-effects { margin-top: 10px; }
-.card.quantity .param-effects .param-description { margin: 0 0 8px; cursor: default; }
+.card.quantity > .help { margin-bottom: 8px; }
+.card.quantity > .help .param-description { margin-top: 0; }
+.card.quantity > .action { width: 100%; margin-top: 10px; }
+.card.quantity .action small { font-variant-numeric: tabular-nums; }
 .group-note a { color: var(--accent); }
+/* 접히는 머리 안내(BEV 탭): 더 보기 버튼까지가 한 덩어리 */
+.help > .group-note { margin-bottom: 0; }
+.help:has(> .group-note) { margin-bottom: 14px; }
 
 /* ------------------------------------------------------------ 추이, BEV */
 .trend-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; }
 .trend-now { color: #fff; font-weight: 750; font-variant-numeric: tabular-nums; text-align: right; }
 .trend svg { display: block; width: 100%; height: 90px; border-radius: 5px; background: var(--surface-sunken); }
+.trend line, .trend path { fill: none; vector-effect: non-scaling-stroke; }
+.trend .ref { stroke: #8a949b; stroke-dasharray: 5 4; }
+.trend .low, .trend .high { stroke: #5b646b; stroke-dasharray: 2 4; }
+.trend .main { stroke: var(--accent); stroke-width: 2; }
+.trend .thin, .trend .dash { stroke: var(--muted); stroke-width: 1.2; }
+.trend .dash { stroke-dasharray: 4 3; }
+.trend .raw { stroke: var(--warn); stroke-width: 1.2; }
 .trend-range { display: flex; justify-content: space-between; margin-top: 3px; color: var(--faint); font-size: 10px; }
 .stream-status { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; color: var(--muted); font-size: 13px; }
-.stream-status .dot { background: var(--bad); }
+.stream-status .dot { background: var(--faint); }
+.stream-status[data-state="good"] .dot { background: var(--good); }
+.stream-status[data-state="warn"] .dot { background: var(--warn); }
+.stream-status[data-state="bad"] .dot { background: var(--bad); }
+
+/* BEV 탭(bev.js). HUD 색은 bev.js의 HUD·THEME이 --hud-<이름>, --bev-bg로 넘긴다(createBev). */
+.bev-layout { display: grid; grid-template-columns: minmax(0, 1fr) 252px; gap: 10px; align-items: start; }
+.bev-side { display: flex; flex-direction: column; gap: 10px; max-height: calc(100dvh - 230px); min-height: 340px;
+  overflow-y: auto; }
+.bev-side-empty { padding: 12px; border: 1px dashed var(--line); border-radius: 7px; color: var(--faint);
+  font: 500 12px/1.5 system-ui, sans-serif; }
+.bev-panel { position: relative; height: calc(100dvh - 230px); min-height: 340px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bev-bg); touch-action: none; }
+.bev-panel.stale canvas, .bev-layout.offline canvas { filter: grayscale(1) brightness(0.6); }
+.bev-layout.offline .bev-hud, .bev-layout.offline .bev-labels, .bev-layout.offline .bev-side { opacity: 0.55; }
+.bev-labels { position: absolute; top: 0; left: 0; pointer-events: none; }
+.bev-labels .bev-tag { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 5px; border-radius: 9px;
+  font: 600 10px/13px ui-monospace, Consolas, monospace; color: #dde3ea; white-space: nowrap;
+  background: rgba(10, 13, 18, 0.78); border: 1px solid rgba(255, 255, 255, 0.07); }
+.bev-labels .bev-tag i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.bev-labels .bev-tag em { font-style: normal; color: var(--muted); }
+.bev-labels.far .bev-tag em { display: none; }
+.bev-labels.far .bev-tag { padding: 1px 5px 1px 4px; font-size: 9px; line-height: 11px; }
+.bev-labels .bev-tag.gap, .bev-labels .bev-tag.speed { font-weight: 700; border-radius: 4px; }
+.bev-labels .bev-dist { font: 500 10px ui-monospace, Consolas, monospace; color: #566170; }
+.bev-hud { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
+.bev-hud span { display: flex; align-items: center; gap: 6px; font: 600 11px/1 ui-monospace, Consolas, monospace; color: var(--text-soft);
+  padding: 6px 8px; border-radius: 5px; background: rgba(10, 13, 18, 0.8); border: 1px solid rgba(255, 255, 255, 0.07); }
+.bev-hud span b { color: var(--faint); font-weight: 600; }
+.bev-hud span em { font-style: normal; }
+.bev-hud span i { width: 8px; height: 8px; border-radius: 50%; }
+.bev-hud span.warn { color: var(--hud-amber); }
+.bev-hud span:empty { display: none; }
+.bev-tools { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap;
+  justify-content: space-between; gap: 6px; pointer-events: none; }
+.bev-tools div { display: flex; flex-wrap: wrap; gap: 6px; pointer-events: auto; }
+.bev-tools button { height: 32px; padding: 0 11px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px;
+  background: rgba(10, 13, 18, 0.82); color: #dde3ea; font: 650 12px system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
+.bev-tools button:hover { background: rgba(38, 43, 47, 0.92); }
+.bev-tools button[aria-pressed="false"] { color: var(--faint); border-style: dashed; }
+.bev-card { padding: 9px 11px 10px; border-radius: 7px;
+  background: var(--bev-bg); border: 1px solid var(--line);
+  font: 600 11px/1.2 ui-monospace, Consolas, monospace; color: var(--text-soft); }
+.bev-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.bev-card-head b { color: var(--muted); font-weight: 650; letter-spacing: 0.04em; }
+.bev-card-head button { padding: 0; border: 0; background: none; color: var(--muted); letter-spacing: 0.04em; cursor: pointer; }
+.bev-card-head button::before { content: "▾ "; }
+.bev-card.collapsed .bev-card-head button::before { content: "▸ "; }
+.bev-card.collapsed .bev-chart, .bev-card.collapsed .bev-card-foot { display: none; }
+.bev-badge { padding: 2px 7px; border-radius: 9px; font-weight: 700; color: #0a0d12; background: #566170; }
+.bev-badge.armed, .bev-badge.go { background: var(--hud-green); }
+.bev-badge.warn { background: var(--hud-amber); }
+.bev-row { display: grid; grid-template-columns: 62px 1fr 44px; align-items: center; gap: 7px; margin-top: 6px; }
+.bev-row span { color: var(--muted); }
+.bev-row em { font-style: normal; text-align: right; color: #fff; }
+.bev-meter { position: relative; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.bev-meter i { position: absolute; top: 0; bottom: 0; left: 0; }
+.bev-meter .zone { background: rgba(255, 176, 32, 0.22); }
+.bev-meter .fill { border-radius: 4px; background: var(--text-soft); }
+.bev-meter .fill.go { background: var(--hud-green); }
+.bev-meter .mark { width: 2px; margin-left: -1px; background: #fff; }
+.bev-spark { display: block; width: 100%; height: 34px; margin-top: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.04); }
+.bev-spark .limit { stroke: rgba(255, 255, 255, 0.45); stroke-dasharray: 3 3; }
+.bev-spark .gas { stroke: var(--hud-green); fill: none; stroke-width: 1.6; }
+.bev-spark .plan { stroke: var(--muted); fill: none; stroke-width: 1; stroke-dasharray: 2 2; }
+.bev-spark line, .bev-spark path { vector-effect: non-scaling-stroke; }
+.bev-spark.tall { height: 56px; }
+.bev-spark .zero { stroke: rgba(255, 255, 255, 0.3); }
+.bev-spark .model { stroke: var(--hud-gray); fill: none; stroke-width: 1.1; }
+.bev-spark .flow { stroke: var(--hud-cyan); fill: none; stroke-width: 1; opacity: 0.8; }
+.bev-spark .fused { stroke: var(--hud-green); fill: none; stroke-width: 1.9; }
+.bev-spark .trend { stroke: var(--hud-amber); fill: none; stroke-width: 1.2; stroke-dasharray: 3 2; }
+.bev-chart-title { margin-top: 7px; color: var(--faint); font-size: 10px; }
+.bev-value { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 6px; margin-top: 4px; }
+.bev-value i { width: 8px; height: 8px; border-radius: 50%; }
+.bev-value span { color: var(--muted); }
+.bev-value em { font-style: normal; color: #fff; }
+.bev-badge.alarm { background: var(--hud-red); color: #fff; }
+.bev-card-foot { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--faint); font-size: 10px; }
+.bev-card-foot i { display: inline-block; width: 10px; height: 2px; margin-right: 4px; vertical-align: middle; }
+@media (max-width: 900px) {
+  .bev-layout { grid-template-columns: minmax(0, 1fr); }
+  .bev-side { max-height: none; min-height: 0; flex-direction: row; flex-wrap: wrap; overflow: visible; }
+  .bev-side > * { flex: 1 1 260px; }
+}
+@media (max-width: 460px) {
+  .bev-panel { height: min(62dvh, calc(100dvh - 250px)); }  /* 패널 밑으로 페이지를 끌 자리를 둔다 */
+  .bev-tools { gap: 4px; }
+  .bev-tools div { gap: 4px; }
+  .bev-tools button { height: 28px; padding: 0 6px; font-size: 11px; }
+  .bev-hud span { padding: 5px 6px; font-size: 10px; }
+  .bev-card { padding: 7px 8px 8px; }
+  .bev-row { grid-template-columns: 56px 1fr 38px; gap: 5px; }
+}
+
 
 /* ------------------------------------------------------------ 토스트 */
 .toasts {
@@ -400,7 +518,7 @@ main {
   .stepper { grid-template-columns: 56px minmax(0, 1fr) 56px; height: 54px; }
   .info-table { font-size: 12px; }
   .info-table td.note { font-size: 11px; overflow-wrap: normal; }
-  .switch-control:not(.mini) { height: 52px; }
+  .switch-control { height: 52px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::after { transition: none !important; animation: none !important; }

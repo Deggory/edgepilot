@@ -64,7 +64,18 @@ from scripts.web_console.panda_update import (
     panda_image_info,
 )
 from scripts.web_console.param_metadata import PARAM_GROUPS, PARAM_METADATA, RUNTIME_FACTS, VEHICLE_TAB
-from scripts.web_console.param_store import ParamStore, group_paths, read_document
+from scripts.web_console.param_store import ParamStore, check_value, group_paths, read_document
+from scripts.web_console.recordings import (
+    MIN_FREE_BYTES,
+    MIN_FREE_PERCENT,
+    RECORD_ROOT,
+    RECORD_STATE,
+    RECORD_STATE_TOPIC,
+    ROUTE_NAME,
+    STAGING_ROOT,
+    STORAGE_BLOCKED,
+    Recordings,
+)
 from scripts.web_console.refusal import Refusal
 from scripts.web_console.process_status import (
     MANAGER_STATE_HEAD,
@@ -75,8 +86,9 @@ from scripts.web_console.process_status import (
     ProcessStatus,
     read_binary_version,
 )
-from scripts.web_console.shm_channel import IPC_HEADER, IPC_MAGIC, IPC_VERSION, boottime_ns
+from scripts.web_console.shm_channel import IPC_HEADER, IPC_MAGIC, IPC_VERSION, IpcReader, boottime_ns
 from scripts.web_console.state_layout import (
+    CONTROL_FORMATS,
     CONTROL_STATE_AT,
     CONTROL_STATE_SIZE,
     CONTROL_STATE_TOPIC,
@@ -154,11 +166,10 @@ def pack_fields(layout, fields, values) -> bytes:
 
 
 def control_payload(**values) -> bytes:
-    """ControlState: 이름=값(정수 필드), gear는 부호 있는 정수, *_kph는 float."""
+    """ControlState: 이름=값. 형식은 state_layout.CONTROL_FORMATS(없으면 uint32)."""
     payload = bytearray(CONTROL_STATE_SIZE)
     for name, value in values.items():
-        fmt = "<f" if name.endswith("_kph") else "<i" if name == "gear" else "<I"
-        struct.pack_into(fmt, payload, CONTROL_STATE_AT[name], value)
+        struct.pack_into(CONTROL_FORMATS.get(name, "<I"), payload, CONTROL_STATE_AT[name], value)
     return bytes(payload)
 
 
@@ -213,21 +224,62 @@ class ParamStoreTest(unittest.TestCase):
         """전용 카드가 바꾸는 항목(메타데이터 card)은 일반 경로로 받지 않는다. 카드의 API가 받을 조건을 건너뛰지 않게."""
         self.paths["display"].write_text(
             json.dumps({"enabled": True, "brightness_percent": 100, "calibration_use_flow": False}), encoding="utf-8")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Refusal) as refused:
             self.store.update("display", {"calibration_use_flow": True})
+        self.assertEqual((refused.exception.code, refused.exception.status), ("error.param_managed", 400))
         self.assertIs(self.store.read_group("display")["calibration_use_flow"], False)
         self.store.update("display", {"calibration_use_flow": True}, allow_managed=True)
         self.assertIs(self.store.read_group("display")["calibration_use_flow"], True)
 
     def test_unknown_parameter_is_rejected(self):
-        with self.assertRaises(KeyError):
-            self.store.update("adaptive_cruise", {"unknown": 1})
-        with self.assertRaises(KeyError):
-            self.store.update("nonexistent", {"following_time_s": 1})
-        with self.assertRaises(ValueError):
-            self.store.update("adaptive_cruise", {})
+        for group, values, code, status in (("adaptive_cruise", {"unknown": 1}, "error.param_unknown", 404),
+                                            ("nonexistent", {"following_time_s": 1}, "error.param_unknown", 404),
+                                            ("adaptive_cruise", {}, "error.param_no_values", 400)):
+            with self.assertRaises(Refusal) as refused:
+                self.store.update(group, values)
+            self.assertEqual((refused.exception.code, refused.exception.status), (code, status), (group, values))
         self.assertEqual(self.notified, [])
         self.assertEqual(self.store.read_group("adaptive_cruise"), {"following_time_s": 1.8})
+
+    def test_values_must_be_what_the_runtime_loader_reads(self):
+        """런타임 로더(utils_json.cc)는 켜고 끄는 값이 true/false가 아니거나 숫자가 유한하지 않으면 파일을 거부하고, 시작할
+        때 거부하면 controlsd가 뜨지 못한다. 그런 값은 쓰지 않는다. 메타데이터의 범위 밖, step이 정수인 항목의 소수도."""
+        self.paths["adaptive_cruise"].write_text(json.dumps({"following_time_s": 1.8, "standstill_gap_m": 5}),
+                                                 encoding="utf-8")
+        self.paths["display"].write_text(json.dumps({"enabled": True, "brightness_percent": 100}), encoding="utf-8")
+        cases = (
+            ("steering", {"enabled": 1}, "error.param_invalid.boolean"),
+            ("steering", {"enabled": None}, "error.param_invalid.boolean"),
+            ("steering", {"gain": True}, "error.param_invalid.number"),       # 메타데이터 없는 키도 숫자만
+            ("steering", {"gain": None}, "error.param_invalid.number"),
+            ("steering", {"gain": float("nan")}, "error.param_invalid.number"),
+            ("steering", {"gain": float("inf")}, "error.param_invalid.number"),
+            ("steering", {"gain": "12"}, "error.param_invalid.number"),
+            # strtof의 범위 오류: float 밖의 큰 수, 정규화되지 않는 작은 수, float로 바꿀 수도 없는 정수
+            ("steering", {"gain": 1e39}, "error.param_invalid.number"),
+            ("steering", {"gain": 1e-40}, "error.param_invalid.number"),
+            ("steering", {"gain": 10 ** 400}, "error.param_invalid.number"),
+            ("adaptive_cruise", {"following_time_s": 9.0}, "error.param_invalid.range"),
+            ("display", {"brightness_percent": 50.5}, "error.param_invalid.integer"),
+        )
+        for group, values, code in cases:
+            before = self.store.read_group(group)
+            with self.assertRaises(Refusal) as refused:
+                self.store.update(group, values)
+            self.assertEqual((refused.exception.code, refused.exception.status), (code, 400), values)
+            self.assertEqual(self.store.read_group(group), before, values)
+        self.store.update("steering", {"gain": 0})  # 0은 범위 오류가 아니다
+        self.store.update("adaptive_cruise", {"standstill_gap_m": 5.5})  # step 0.5: 처음 값이 정수여도 소수를 받는다
+        self.assertEqual(self.store.read_group("adaptive_cruise")["standstill_gap_m"], 5.5)
+        self.store.update("adaptive_cruise", {"following_time_s": 2})
+        self.assertEqual(self.store.read_group("adaptive_cruise")["following_time_s"], 2)
+        self.assertEqual(self.notified, ["controlsd"] * 3)
+
+    def test_broken_file_is_a_coded_refusal(self):
+        self.paths["recording"].write_text("{", encoding="utf-8")
+        with self.assertRaises(Refusal) as refused:
+            self.store.update("recording", {"enabled": True})
+        self.assertEqual((refused.exception.code, refused.exception.status), ("error.param_file", 500))
 
     def test_files_read_by_their_own_process_signal_nobody(self):
         """recordd·overlayd·modeld는 파일을 스스로 다시 읽는다."""
@@ -245,8 +297,9 @@ class ParamStoreTest(unittest.TestCase):
         self.assertEqual(store.read_group("display")["brightness_percent"], 35)
 
     def test_display_update_without_backlight_is_refused(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(Refusal) as refused:
             self.store.update("display", {"brightness_percent": 35})
+        self.assertEqual((refused.exception.code, refused.exception.status), ("error.backlight_unavailable", 503))
         self.assertEqual(self.store.read_group("display")["brightness_percent"], 100)
 
     def test_alert_volume_update_leaves_backlight_alone(self):
@@ -497,6 +550,7 @@ class I18nCatalogTest(unittest.TestCase):
             for key, meta in items.items():
                 fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
                 used.update(f"param.{group}.{key}.{field}" for field in fields)
+                used.update(f"toggle.{name}" for name in meta.get("labels", []))
                 used.add(f"section.{meta['section']}")
                 if meta.get("caution"):
                     used.add(f"caution.{meta['caution']}")
@@ -530,7 +584,9 @@ class I18nCatalogTest(unittest.TestCase):
     def test_nothing_shadows_the_translation_function(self):
         """t를 가져다 쓰는 모듈은 t라는 이름을 따로 묶지 않는다(지역 변수, 매개변수). 가리면 t("...")가 숫자를 부르다
         멈춘다: BEV의 frame()이 모델 시각을 t에 두어 상태 줄이 "t is not a function"으로 끊겼다(2026-10-14)."""
-        binding = re.compile(r"\b(?:let|const|var)\s+t\b|(?<![\w.$])t\s*=>|\bcatch\s*\(\s*t\s*\)")
+        # const t, t =>, catch (t), 그리고 t를 묶는 구조 분해(const {t, x} = …, const [t] = …; {t: 다른 이름}은 괜찮다)
+        binding = re.compile(r"\b(?:let|const|var)\s+t\b|(?<![\w.$])t\s*=>|\bcatch\s*\(\s*t\s*\)"
+                             r"|\b(?:let|const|var)\s*[{\[][^}\]=]*(?<![\w.$])t\b(?!\s*:)")
         params = re.compile(r"(?<![\w.$])(\w*)\s*\(([^()]*)\)\s*(?:=>|\{)")
         found = []
         for module in page_modules():
@@ -560,6 +616,10 @@ class I18nCatalogTest(unittest.TestCase):
                       if HANGUL.search(line) and "i18n-allow" not in raw[number - 1]]
         page = re.sub(r"<!--.*?-->", "", (STATIC_DIR / "index.html").read_text(encoding="utf-8"), flags=re.S)
         found += ["index.html" for _ in HANGUL.findall(page)][:1]
+        # CSS가 그리는 글자(content)도 화면 글자다: 문구 묶음에서 data-* 속성으로 받는다(attr())
+        for sheet in STATIC_DIR.glob("*.css"):
+            code = re.sub(r"/\*.*?\*/", "", sheet.read_text(encoding="utf-8"), flags=re.S)
+            found += [f"{sheet.name}: {value}" for value in re.findall(r"content:\s*([^;}]*)", code) if HANGUL.search(value)]
         for module in WEB_CONSOLE.glob("*.py"):
             tree = ast.parse(module.read_text(encoding="utf-8"))
             docstrings = {id(node.body[0].value) for node in ast.walk(tree)
@@ -617,6 +677,19 @@ class LearnerStateTest(unittest.TestCase):
         self.assertIsNone(reader.read())
         self.path.unlink()
         self.assertIsNone(reader.read())
+
+    def test_reader_follows_a_channel_that_grows_in_place(self):
+        """생산자는 있던 공유 메모리 파일을 제자리에서 늘린다(ftruncate, 같은 inode). 새 배포의 더 큰 메시지를 옛 매핑의
+        잘린 조각으로 읽으면 해석이 깨져 콘솔 전체가 멈췄다. 파일이 메시지보다 작으면 없는 것으로 본다."""
+        size = LEARNER_STATE.size
+        publish(self.path, bytes(size - 16))
+        reader = IpcReader(str(self.path), size)
+        self.assertIsNone(reader.read_payload())
+        inode = self.path.stat().st_ino
+        publish(self.path, bytes(size + 32), seq=4)
+        self.assertEqual(self.path.stat().st_ino, inode)
+        seq, _, payload = reader.read_payload()
+        self.assertEqual((seq, len(payload)), (4, size))
 
     def test_runtime_facts_follow_a_fresh_state(self):
         """파라미터 안내가 보는 런타임 사실: controlsd가 학습한 토크 모델을 읽었는지(플래그). 상태가 없거나 낡으면
@@ -723,10 +796,11 @@ class CalibrationControlTest(unittest.TestCase):
         self.assertRegex(service, rf'"EDGEPILOT_CALIBRATION_RESET_PATH",\s*"{re.escape(CALIBRATION_RESET_PATH)}"')
 
     def test_status_decodes_model_state(self):
-        self.assertFalse(self.calibration.status()["available"])
+        missing = self.calibration.status()
+        self.assertEqual((missing["available"], missing["stale"], missing["age_s"]), (False, True, None))
         self.publish_model(1, 7, [0.0, 0.29, -0.18])
         status = self.calibration.status()
-        self.assertTrue(status["available"])
+        self.assertEqual((status["available"], status["stale"]), (True, False))
         self.assertEqual((status["status"], status["valid_blocks"]), ("calibrated", 7))
         self.assertAlmostEqual(status["rpy_deg"][1], 0.29, places=3)
         self.assertAlmostEqual(status["rpy_deg"][2], -0.18, places=3)
@@ -752,8 +826,9 @@ class CalibrationControlTest(unittest.TestCase):
 
     def test_reset_is_refused_while_engaged(self):
         self.publish_control(engaged=1)
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal) as refused:
             self.calibration.request_reset()
+        self.assertEqual((refused.exception.code, refused.exception.status), ("error.calibration_reset_engaged", 409))
         self.assertFalse(self.request.exists())
         self.publish_control(engaged=0)
         self.assertTrue(self.calibration.request_reset()["reset_pending"])
@@ -763,7 +838,7 @@ class CalibrationControlTest(unittest.TestCase):
         """보정 출처는 이 카드만 바꾸고(파라미터 API는 받지 않는다) 결합 중에는 받지 않는다. 상태의 use_flow는 modeld가
         다시 읽기 전에도 고른 값을 보이게 설정 파일에서 읽는다."""
         self.publish_control(engaged=1)
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal):
             self.calibration.set_source(True)
         self.assertIs(self.store.read_group("display")["calibration_use_flow"], False)
         self.publish_control(engaged=0)
@@ -775,6 +850,12 @@ class CalibrationControlTest(unittest.TestCase):
         self.assertFalse(self.calibration.engaged())
         self.publish_control(engaged=1, stamp=boottime_ns() - 5_000_000_000)
         self.assertFalse(self.calibration.engaged())
+
+    def test_empty_reset_path_variable_means_the_default(self):
+        """C++ env_string처럼 빈 변수는 없는 것이다(빈 경로가 "."이 되어 초기화 요청이 늘 걸려 있는 것처럼 보였다)."""
+        with mock.patch.dict(os.environ, {"EDGEPILOT_CALIBRATION_RESET_PATH": ""}):
+            calibration = CalibrationControl(self.store, str(self.model), str(self.control))
+        self.assertEqual(str(calibration.request_path), CALIBRATION_RESET_PATH)
 
 
 # ------------------------------------------------------------ Panda 펌웨어
@@ -818,31 +899,159 @@ class LateralNnModelsTest(unittest.TestCase):
 
     def test_lists_the_model_files_by_name(self):
         self.assertEqual(self.models.models(), ["k7_hev_v1", "k7_hev_v2", "k7_hev_v3"])
-        (self.models_dir / "k7_hev_v10.json").write_text("{}")
-        (self.models_dir / ".hidden.json").write_text("{}")
-        (self.models_dir / "notes.txt").write_text("")
-        self.assertEqual(self.models.models()[-2:], ["k7_hev_v3", "k7_hev_v10"], "숫자는 수로 정렬, 규칙 밖 이름은 뺀다")
+        for name in ("k7_hev_v10.json", "k7_hev_v9.json", ".hidden.json", "notes.txt"):
+            (self.models_dir / name).write_text("{}")
+        self.assertEqual(self.models.models(), ["k7_hev_v1", "k7_hev_v2", "k7_hev_v3", "k7_hev_v9", "k7_hev_v10"],
+                         "숫자는 수로 정렬, 규칙 밖 이름은 뺀다")
 
     def test_select_writes_the_choice_and_refuses_unknown(self):
         self.assertEqual(self.models.status()["selection_error"], "none")
-        status = self.models.select("k7_hev_v2")
-        self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v2"})
-        self.assertEqual((status["selected"], status["selection_error"]), ("k7_hev_v2", ""))
+        (self.models_dir / "k7_hev_v4.json").write_text("{}")  # 고르기는 파일 내용을 읽지 않는다
+        status = self.models.select("k7_hev_v4")
+        self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v4"})
+        self.assertEqual((status["selected"], status["selection_error"]), ("k7_hev_v4", ""))
         for name in ("k7_hev_v9", "../steering"):
             with self.assertRaises(Refusal) as refused:
                 self.models.select(name)
             self.assertEqual(refused.exception.code, "error.lateral_nn_unknown")
-        self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v2"}, "거부하면 그대로")
+        self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v4"}, "거부하면 그대로")
 
     def test_status_reports_default_and_controlsd(self):
         self.default.parent.mkdir()
         self.default.write_text(json.dumps({"model": "k7_hev_v3"}))
         self.assertIsNone(self.models.status()["controlsd"])
-        self.status_file.write_text(json.dumps({"selected": "k7_hev_v2", "loaded": "k7_hev_v3", "path": "",
-                                                "error": "k7_hev_v2: bad", "inputs": 33, "unix_time": 1}))
+        self.status_file.write_text(json.dumps({"selected": "k7_hev_v4", "loaded": "k7_hev_v3", "path": "",
+                                                "error": "k7_hev_v4: bad", "inputs": 33, "unix_time": 1}))
         status = self.models.status()
         self.assertEqual(status["default"], "k7_hev_v3")
         self.assertEqual(status["controlsd"]["loaded"], "k7_hev_v3")
+        # controlsd는 읽을 때만 상태 파일을 쓴다: 멈춘 뒤에는 남은 파일을 쓰는 중으로 보이지 않는다
+        running = False
+        models = LateralNnModels(self.models_dir, self.selection, self.default, str(self.status_file),
+                                 controlsd_running=lambda: running)
+        self.assertIsNone(models.status()["controlsd"])
+
+
+class RecordingsTest(unittest.TestCase):
+    """주행 기록 카드: SD의 route 목록(이름 규칙, 최근 것부터, 크기·길이, 쓰는 중), recordd 상태와 남은 공간, 지우기와
+    거부(하나라도 거부하면 아무것도 지우지 않는다)."""
+
+    OLD, CUT, BUSY, NEW = ("2026-10-12--22-37-07-989", "2026-10-16--23-07-05-554", "2026-10-16--23-13-33-641",
+                           "2026-10-17--09-00-00-000")
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        base = Path(self.temporary.name)
+        self.root, self.staging = base / "recordings", base / "staging"
+        self.root.mkdir()
+        self.staging.mkdir()
+        self.state_path = base / "record_state"
+        self.recordings = Recordings(self.root, self.staging, str(self.state_path))
+        # 닫힌 것(60 s), 끝맺지 못한 것(전원이 끊김), SD와 스테이징에 다 있는 것(쓰는 중), 스테이징에만 있는 것(막 시작)
+        self.route(self.root, self.OLD, complete=True, frames=1200, segments=2)
+        self.route(self.root, self.CUT, complete=False, frames=0, segments=3)
+        self.route(self.root, self.BUSY, complete=False, frames=0, segments=1)
+        self.route(self.staging, self.BUSY, complete=False, frames=0, segments=2)
+        self.route(self.staging, self.NEW, complete=False, frames=0, segments=0)
+        # route가 아닌 것들: 규칙 밖 이름, 파일, 밖을 가리키는 링크
+        (self.root / "notes").mkdir()
+        (self.root / "2026-10-16").mkdir()
+        (self.root / "2026-10-15--00-00-00-000.txt").write_text("")
+        self.outside = base / "outside"
+        self.route(base, "outside", complete=True, frames=20, segments=1)
+        (self.root / "2026-10-14--00-00-00-000").symlink_to(self.outside, target_is_directory=True)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    @staticmethod
+    def route(where, name, *, complete, frames, segments, size=5000):
+        path = where / name
+        (path / "events").mkdir(parents=True)
+        (path / "events" / "000.bin").write_bytes(b"x" * size)
+        for index in range(segments):
+            segment = path / "segments" / f"{index:03d}"
+            segment.mkdir(parents=True)
+            (segment / "road.h264").write_bytes(b"x" * size)
+        (path / "manifest.json").write_text(json.dumps({"version": 13, "complete": complete, "fps": 20,
+                                                        "video_frames": frames}))
+        return path
+
+    def test_constants_match_cpp(self):
+        recordd = cpp(ROOT / "src" / "recording" / "recordd.cc")
+        writer = cpp(ROOT / "src" / "recording" / "recording_writer.cc")
+        self.assertIn(f'env_string("EDGEPILOT_RECORD_ROOT", "{RECORD_ROOT}")', recordd)
+        self.assertIn('std::getenv("EDGEPILOT_RECORD_STAGING")', writer)
+        self.assertIn(f': "{STAGING_ROOT}";', writer)
+        self.assertEqual(MIN_FREE_BYTES, 5 * 1024 ** 3)
+        self.assertIn("kMinimumFreeBytes = 5ULL * 1024 * 1024 * 1024;", writer)
+        self.assertIn(f"kMinimumFreePercent = {MIN_FREE_PERCENT};", writer)
+        # route_name: put_time("%Y-%m-%d--%H-%M-%S") + '-' + 세 자리 밀리초
+        self.assertIn('"%Y-%m-%d--%H-%M-%S") << \'-\' << std::setw(3)', writer)
+        self.assertTrue(ROUTE_NAME.fullmatch(self.OLD))
+        header = cpp()
+        self.assertIn(f'kRecordStateTopic[] = "{RECORD_STATE_TOPIC}";', header)
+        fields = re.search(r"struct RecordState \{(.*?)\};", header, re.S).group(1)
+        self.assertEqual(re.findall(r"(uint\d+_t) (\w+)", fields),
+                         [("uint64_t", "timestamp_ns"), ("uint32_t", "active"), ("uint32_t", "storage_blocked")])
+        self.assertEqual(RECORD_STATE.size, 16)
+        blocked = dict(re.findall(r"kStorageBlocked(\w+) = (\d+);", header))
+        self.assertEqual({int(blocked["SdReserve"]): "sd_reserve", int(blocked["Staging"]): "staging"}, STORAGE_BLOCKED)
+        # 카드는 녹화 탭의 recording 섹션 뒤에 붙는다
+        self.assertIn("recording", PARAM_GROUPS["recording"]["sections"])
+        self.assertIn('after: "recording"', (STATIC_DIR / "recordings_card.js").read_text(encoding="utf-8"))
+
+    def test_lists_routes_newest_first(self):
+        routes = self.recordings.routes()
+        self.assertEqual([route["name"] for route in routes], [self.NEW, self.BUSY, self.CUT, self.OLD])
+        by_name = {route["name"]: route for route in routes}
+        self.assertEqual([route["busy"] for route in routes], [True, True, False, False])
+        self.assertEqual(by_name[self.OLD]["duration_s"], 60.0)
+        self.assertEqual((by_name[self.OLD]["complete"], by_name[self.CUT]["complete"]), (True, False))
+        self.assertIsNone(by_name[self.CUT]["duration_s"], "끝맺지 못한 것은 길이를 모른다")
+        self.assertIsNone(by_name[self.BUSY]["duration_s"])
+        self.assertEqual([by_name[name]["segments"] for name in (self.OLD, self.CUT, self.BUSY, self.NEW)], [2, 3, 2, 0])
+        # 크기는 할당된 블록: 적어도 파일 크기만큼, 쓰는 중인 것은 SD와 스테이징을 더한다
+        self.assertGreaterEqual(by_name[self.OLD]["bytes"], 3 * 5000)
+        self.assertGreater(by_name[self.BUSY]["bytes"], by_name[self.NEW]["bytes"])
+        status = self.recordings.status()
+        self.assertEqual(status["total_bytes"], sum(route["bytes"] for route in status["routes"]))
+
+    def test_reports_recordd_and_the_free_space(self):
+        recording = self.recordings.recording()
+        self.assertEqual((recording["available"], recording["active"], recording["storage_blocked"]), (False, False, ""))
+        publish(self.state_path, RECORD_STATE.pack(boottime_ns(), 1, 1))
+        recording = self.recordings.recording()
+        self.assertEqual((recording["available"], recording["stale"], recording["active"], recording["storage_blocked"]),
+                         (True, False, True, "sd_reserve"))
+        disk = self.recordings.status()["disk"]
+        self.assertGreater(disk["total_bytes"], 0)
+        self.assertLessEqual(disk["free_bytes"], disk["total_bytes"])
+        self.assertEqual(disk["reserve_bytes"], max(MIN_FREE_BYTES, disk["total_bytes"] * MIN_FREE_PERCENT // 100))
+        missing = Recordings(self.root / "missing", self.staging / "missing", str(self.state_path))
+        self.assertEqual((missing.routes(), missing.disk()), ([], None))
+
+    def test_delete_removes_the_chosen_routes(self):
+        before = {route["name"]: route["bytes"] for route in self.recordings.routes()}
+        result = self.recordings.delete([self.OLD, self.CUT, self.OLD])
+        self.assertEqual(result["deleted"], [self.OLD, self.CUT], "같은 이름은 한 번")
+        self.assertEqual(result["freed_bytes"], before[self.OLD] + before[self.CUT])
+        self.assertFalse((self.root / self.OLD).exists() or (self.root / self.CUT).exists())
+        self.assertEqual([route["name"] for route in result["routes"]], [self.NEW, self.BUSY])
+        self.assertTrue((self.root / "notes").is_dir() and self.outside.is_dir(), "route가 아닌 것은 그대로")
+
+    def test_delete_refuses_and_deletes_nothing(self):
+        cases = (([], "error.recordings_none", 400), ([self.OLD, "../notes"], "error.recording_bad_name", 400),
+                 ([self.OLD, "2026-10-16"], "error.recording_bad_name", 400),
+                 ([self.OLD, self.BUSY], "error.recording_busy", 409), ([self.OLD, self.NEW], "error.recording_busy", 409),
+                 ([self.OLD, "2026-01-01--00-00-00-000"], "error.recording_unknown", 404),
+                 ([self.OLD, "2026-10-14--00-00-00-000"], "error.recording_unknown", 404))
+        for names, code, status in cases:
+            with self.assertRaises(Refusal, msg=names) as refused:
+                self.recordings.delete(names)
+            self.assertEqual((refused.exception.code, refused.exception.status), (code, status), names)
+        self.assertTrue((self.root / self.OLD).is_dir(), "하나라도 거부하면 아무것도 지우지 않는다")
+        self.assertTrue((self.outside / "manifest.json").is_file(), "링크는 따라가지 않는다")
 
 
 class PandaUpdateTest(unittest.TestCase):
@@ -927,23 +1136,25 @@ class PandaUpdateTest(unittest.TestCase):
             self.assertEqual(self.panda.status()["blocker"], blocker)
 
         self.publish_control()
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal):
             self.panda.request("EDGE-00000000-DEBUG")  # 페이지가 본 이미지가 아니다
         status = self.panda.request("EDGE-f9907afb-DEBUG")
         self.assertTrue(status["request_pending"])
         self.assertEqual(self.request.read_text(), "EDGE-f9907afb-DEBUG\n")
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal):
             self.panda.request("EDGE-f9907afb-DEBUG")  # 이미 요청했다
 
     def test_flash_needs_a_running_pandad_and_a_panda(self):
         self.image.write_bytes(panda_image())
         self.publish_control()
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal) as refused:
             self.panda.request("EDGE-f9907afb-DEBUG")
+        self.assertEqual(refused.exception.code, "error.pandad_missing")
         self.publish_pandad(stamp=boottime_ns() - 10_000_000_000)
-        self.assertFalse(self.panda.status()["available"])
+        stale = self.panda.status()
+        self.assertEqual((stale["available"], stale["stale"], stale["mode"]), (True, True, "none"))
         self.publish_pandad(mode="none", version="")
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(Refusal):
             self.panda.request("EDGE-f9907afb-DEBUG")
         self.publish_pandad(hw_type=7)
         self.assertFalse(self.panda.status()["hw_supported"])
@@ -1008,16 +1219,16 @@ class ProcessStatusTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "edgepilot_manager_state"
             processes = ProcessStatus(str(path), install_dir=Path(directory), proc=Path(directory) / "proc")
-            self.assertEqual(processes.status(), {"available": False, "age_s": 0.0, "processes": []})
+            self.assertEqual(processes.status(), {"available": False, "stale": True, "age_s": None, "processes": []})
 
             self.publish_processes(path, [("controlsd", 1), ("web_console", 0)])
             status = processes.status()
-            self.assertTrue(status["available"])
+            self.assertEqual((status["available"], status["stale"]), (True, False))
             self.assertEqual(status["processes"], [
                 {"name": "controlsd", "running": True, "version": None, "installed_version": None},
                 {"name": "web_console", "running": False, "version": None, "installed_version": None}])
             self.publish_processes(path, [("controlsd", 1), ("web_console", 0)], stamp=boottime_ns() - 10_000_000_000)
-            self.assertFalse(processes.status()["available"])
+            self.assertTrue(processes.status()["stale"])
 
     def test_versions_come_from_the_running_and_installed_binaries(self):
         """버전은 실행 중인 실행 파일(/proc/<pid>/exe)과 설치된 실행 파일에 새긴 표식에서 읽는다. 리허설에서는 replayd가
@@ -1041,7 +1252,10 @@ class ProcessStatusTest(unittest.TestCase):
             path = root / "edgepilot_manager_state"
             processes = ProcessStatus(str(path), install_dir=install, proc=proc)
             self.publish_processes(path, [("camerad", 1), ("controlsd", 1), ("modeld", 0), ("web_console", 1)])
-            by_name = {p["name"]: (p["version"], p["installed_version"]) for p in processes.status()["processes"]}
+            # 버전은 머리 줄의 목록을 펼쳤을 때만 읽는다(/proc 전체를 훑는다)
+            self.assertEqual({p["version"] for p in processes.status()["processes"]}, {None})
+            by_name = {p["name"]: (p["version"], p["installed_version"])
+                       for p in processes.status(versions=True)["processes"]}
             self.assertEqual(by_name, {"camerad": ("v0.0.4-6-gaaaaaaa", "v0.0.4-6-gaaaaaaa"),
                                        "controlsd": ("v0.0.4-6-gaaaaaaa", "v0.0.4-7-gbbbbbbb-dirty"),
                                        "modeld": (None, "v0.0.4-6-gaaaaaaa"),
@@ -1173,6 +1387,10 @@ class BevTest(unittest.TestCase):
         self.assertEqual((draw["min"], draw["max"]),
                          (cpp_value(scene, "kMinDrawDistance"), cpp_value(scene, "kMaxDrawDistance")))
         self.assertEqual(js_value(data, "DRIVE_GEAR"), cpp_value(cpp(ROOT / "src" / "car" / "can_frame.h"), "kGearDrive"))
+        # 곡률 호를 그리는 최저 속도(ARC.speed m/s)는 BEV 안내 문구에 km/h로 적혀 있다(문구는 bev.js보다 먼저 뜬다)
+        arc_kph = round(js_object(bev, "ARC")["speed"] * 3.6)
+        for lang in LANGUAGES:
+            self.assertEqual([int(n) for n in re.findall(r"(\d+) km", catalog(lang)["bev.note"])], [arc_kph], lang)
 
     def test_vehicle_tab_bands_and_bev_frame_match(self):
         """차량 특성 탭이 보이는 허용 폭(torqued 배율 ±30%, 마찰 ±50%, paramsd 조향비 0.5~2배)과 BEV 프레임 매직이
@@ -1300,6 +1518,7 @@ class StaticPageTest(unittest.TestCase):
             for name in ("three/a.js", "./three/a.js", "three//a.js", "three/./a.js"):
                 self.assertIsNotNone(assets.get(name), name)
             self.assertIsNone(assets.get("three/../three/a.js"))  # ..은 숨김 경로처럼 거부한다
+            self.assertIsNone(assets.get("a\x00.js"))  # 경로에 NUL: 500이 아니라 없는 파일
             self.assertEqual(list(assets.cache), ["three/a.js"])
 
     def test_assets_are_gzipped_once_and_stay_in_static(self):

@@ -726,27 +726,39 @@ only in the board build, against `deps/ax630` from
   - `calibration_control.py`: the camera calibration card: its state, reset
     and source switch;
   - `panda_update.py`: the Panda firmware card;
+  - `lateral_nn_models.py`: the learned torque model card: the model files,
+    the choice and what controlsd loaded;
+  - `recordings.py`: the recording files card: the routes on the SD card with
+    their sizes, the free space, and deleting routes;
   - `bev_stream.py`, `backlight.py` (the MaixCAM2 backlight, PWM3) and
     `static_assets.py`;
   - `shm_channel.py` reads the shared-memory channels and `state_layout.py`
     holds the ModelState and ControlState offsets they share;
   - `refusal.py`: the reason a request is refused, sent as a text-catalogue
-    key so the page shows it in its language.
+    key and an HTTP status so the page shows it in its language;
+  - `files.py`: the paths (relative to the working directory, environment
+    variables empty means unset) and the JSON and atomic file helpers the
+    modules share.
 - `scripts/web_console/static/`: the page, plain ES modules with no build step.
-  - `index.html`, `console.css`, `console.js` (header, tabs, routing), `ui.js`
-    (DOM helpers, cards, toasts, API calls, polling).
+  - `index.html`, `console.css` (every style, the BEV's included),
+    `console.js` (header, tabs, routing), `ui.js` (DOM helpers, cards and
+    status cards, help texts, small time charts, toasts, requests from
+    buttons, API calls, polling) and `storage.js` (choices this browser
+    remembers).
   - `i18n.js` and `i18n/ko.json`, `i18n/en.json`: the language choice and
     every text on screen, in Korean and English.
   - `param_state.js`, `param_editor.js` (the controls, saving and the item
     card) and `param_view.js` (the parameter tabs).
   - `vehicle_view.js` (the vehicle characteristics tab: learned and manual
-    values side by side) and `panda_card.js`.
+    values side by side), `panda_card.js`, `lateral_nn_card.js` (the
+    learned torque model card on the steering tab) and `recordings_card.js`
+    (the recording files card on the recording tab).
   - The BEV tab: `bev_view.js`, `bev.js` (three.js view, ported from
     sv_recorder_bev), `bev_ego.js` (the ego car; today a black 2017 K7 made in
     code), `bev_car.js` (the lead's car model), `bev_data.js` (reads the
-    ModelState and ControlState bytes the console streams), and
-    `lane_filter.js` (the planner's lane-line filter, for the ego lines the BEV
-    draws).
+    ModelState and ControlState bytes the console streams), `bev_math.js`
+    (the small maths the BEV files share), and `lane_filter.js` (the
+    planner's lane-line filter, for the ego lines the BEV draws).
   - three.js 0.186.1 in `three/`.
 - `scripts/*.service`, `install_autostart.sh`, `install_boot_tuning.sh`: the
   systemd units (`edgepilot.service`, `edgepilot-drivers.service`,

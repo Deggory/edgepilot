@@ -54,8 +54,8 @@ async def bev_frames(hz: float, model_path: str = topic_path(MODEL_STATE_TOPIC),
         now = time.monotonic()
         latest = model.read_payload()
         pending = latest is not None and latest[0] != sent_seq
-        if (pending and now >= next_frame) or now - sent_at >= idle_s:
-            send = pending and now >= next_frame
+        send = pending and now >= next_frame
+        if send or now - sent_at >= idle_s:
             current = control.read_payload()
             yield bev_frame(latest[2] if send else b"", current[2] if current is not None else b"", boottime_ns())
             sent_at = now

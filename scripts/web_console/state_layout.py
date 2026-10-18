@@ -24,10 +24,20 @@ CONTROL_STATE_AT = {
     "desired_curvature": 72, "actual_curvature": 76, "normalized_output": 80,
     "departure_alert_type": 144, "green_light_alert_armed": 152, "hud_flags": 184, "ego_speed_kph": 232,
 }
-HUD_FLAG_BITS = {"Laneless": 0, "SteerPaused": 7, "BrakeLights": 9}  # ipc_messages.h kHudFlag<이름>의 비트
+# CONTROL_STATE_AT 필드의 형식: 여기 없는 것은 uint32다
+CONTROL_FORMATS = {"timestamp_ns": "<Q", "gear": "<i", "cluster_speed_kph": "<f", "desired_curvature": "<f",
+                   "actual_curvature": "<f", "normalized_output": "<f", "ego_speed_kph": "<f"}
+HUD_FLAG_BITS = {"Laneless": 0, "LaneChanging": 5, "SteerPaused": 7, "BrakeLights": 9}  # ipc_messages.h kHudFlag<이름>의 비트
 GEAR_PARK = 0  # car/can_frame.h kGearPark
+# 제어 상태를 믿는 나이. panda_firmware.cc kControlMaxAgeNs와 같다(controlsd는 100 Hz로 낸다)
+CONTROL_MAX_AGE_S = 1.0
 
 
-def control_value(payload: bytes, name: str, fmt: str = "<I") -> Any:
+def control_value(payload: bytes, name: str) -> Any:
     """ControlState 페이로드에서 필드 하나."""
-    return struct.unpack_from(fmt, payload, CONTROL_STATE_AT[name])[0]
+    return struct.unpack_from(CONTROL_FORMATS.get(name, "<I"), payload, CONTROL_STATE_AT[name])[0]
+
+
+def control_engaged(payload: bytes) -> bool:
+    """결합 중이거나 조향 중인가. 보정 초기화·출처 바꾸기와 Panda 플래싱이 이때는 받지 않는다."""
+    return bool(control_value(payload, "engaged") or control_value(payload, "active"))
