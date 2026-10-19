@@ -1,16 +1,21 @@
 #pragma once
 
+#include "common/utils_file.h"
+#include "controls/adaptive_cruise.h"
+
+#include <chrono>
+#include <optional>
 #include <string>
 
 // controlsd가 읽는 조향 런타임 파라미터. params/steering.json이 출처다. 다만 상류(opendbc
 // CarControllerParams, 모듈 상수)에서도 코드에 박힌 차량·통신 상수는 여기 필드로만 두고 파일에서 읽지
-// 않는다(필드마다 적었다. ControlTiming은 전부 그렇다). 테스트와 리플레이 도구는 이 필드를 바꿔 쓴다.
+// 않는다(필드마다 적었다. ControlTiming은 전부 그렇다). 테스트와 재생 도구는 이 필드를 바꿔 쓴다.
 // CAN 계층(car/)은 이 헤더를 보지 않는다 — 토크 제한은 lateral_controller.cc가 HyundaiSteeringLimits로
 // 바꿔 넘긴다.
 
 // 기본값은 params/steering.json(K7 YG HEV 실차 검증값)과 일치시킨다. 로드 실패는
 // controlsd가 throw하므로 이 값은 파일 폴백이 아니라, JSON에 키가 빠졌을 때와
-// 호스트 체크·리플레이 도구가 실제로 쓰는 값이다.
+// 호스트 검사·재생 도구가 실제로 쓰는 값이다.
 struct SteeringParams {
     bool enabled = true;
 
@@ -76,7 +81,8 @@ struct SteeringParams {
     // lagd(locationd) 조향 지연 사용. 켜고 lagd가 확정(5블록)되면 경로 지연(목표 곡률을 읽는
     // 시점), 토크 컨트롤러의 요청 지연, torqued 지연에 추정값을 쓴다(상류 lat_delay).
     bool use_live_delay = false;
-    // 학습한 토크 모델로 피드포워드를 낸다(docs/lateral-nn.md). 모델 파일(models/lateral_nn.json)이 있어야 하고, 없으면
+    // 학습한 토크 모델로 피드포워드를 낸다(docs/lateral-nn.md). 웹 콘솔에서 고른 모델 파일(파라미터 디렉터리의
+    // lateral_nn.json이 가리키는 models/lateral_nn/<차종>_v<버전>.json, common/lateral_nn_path.h)이 있어야 하고, 없으면
     // 켜도 선형 피드포워드를 쓴다. PID는 그대로다.
     bool nn_feedforward = false;
     // paramsd·torqued 입력을 상류처럼 locationd 요레이트·롤로 받는다. 끄면 ESP12 요레이트(자체 바이어스
@@ -115,3 +121,41 @@ struct ControlTiming {
 bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error);
 // steering.json에서 읽는 키 가운데 a와 b가 다른 첫 키. 같으면 빈 문자열(기본값이 파일과 같은지 보는 테스트용).
 std::string first_steering_param_difference(const SteeringParams &a, const SteeringParams &b);
+
+// controlsd의 런타임 파라미터 두 파일(steering/adaptive_cruise.json)과 코드 고정값(timing). 파일은 한꺼번에
+// 읽고 한꺼번에 바꾼다.
+struct ControlParams {
+    SteeringParams steering;
+    ControlTiming timing;
+    AdaptiveCruiseConfig cruise;
+};
+
+struct ControlParamPaths {
+    std::string steering;
+    std::string cruise;
+};
+
+// 둘 다 읽어야 true. 하나라도 거부되면 params는 그대로이고 error에 사유를 쓴다.
+bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error);
+// 시작·재적용 로그의 꼬리: MDPS 속도 바꿔치기와 비전 크루즈 설정.
+std::string control_params_summary(const ControlParams &params);
+
+// 두 파일을 1초마다 stat으로 보고, 바뀌었으면 둘을 다시 읽는다(웹 콘솔이 쓴 것도 손으로 고친 것도). 하나라도
+// 거부되면 둘 다 이전 값을 유지한다.
+class ControlParamsWatcher {
+public:
+    ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now);
+
+    // 새로 적용할 값. 바뀐 게 없거나 거부됐으면(로그를 남긴다) 비어 있다.
+    std::optional<ControlParams> poll(std::chrono::steady_clock::time_point now, const ControlParams &current);
+    unsigned generation() const { return generation_; }
+
+private:
+    void stamp();
+
+    ControlParamPaths paths_;
+    FileStamp steering_stamp_;
+    FileStamp cruise_stamp_;
+    std::chrono::steady_clock::time_point next_check_;
+    unsigned generation_ = 1;
+};

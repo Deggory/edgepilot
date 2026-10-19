@@ -5,7 +5,6 @@
 // 합성 레코드로 검사한다.
 #include "recording/event_log_reader.h"
 #include "recording/recorded_can.h"
-#include "recording/recorded_model_state.h"
 #include "recording/recording_format.h"
 #include "recording/recording_writer.h"
 #include "recording/replay_route.h"
@@ -24,6 +23,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -82,6 +82,94 @@ CanBatch synthetic_batch(uint64_t timestamp_ns, uint32_t count, uint32_t dropped
     return batch;
 }
 
+// route를 시작하면 params·모델 사본과 첫 manifest를 바로 SD로 보낸다. 닫을 때까지 tmpfs에만 있으면 시동을 끄는
+// 보통의 끝에 통째로 사라졌다.
+TEST(RecordingWriter, RouteMetadataReachesTheCardAtStart) {
+    char root_template[] = "/tmp/gtest_recording_meta_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    const std::string params = root + "/params";
+    const std::string recordings = root + "/recordings";
+    mkdir(params.c_str(), 0775);
+    std::ofstream(params + "/steering.json") << "{\"steer_max\": 384}\n";
+    setenv("EDGEPILOT_RECORD_STAGING", (root + "/staging").c_str(), 1);
+    {
+        RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000);
+        writer.set_enabled(true, 5'000'000'000ULL);
+        bool arrived = false;
+        // 옮기기는 fdatasync를 거치므로 병렬 시험의 부하에서는 2초를 넘기도 했다. 도착하면 곧바로 나온다.
+        for (int i = 0; i < 1000 && !arrived; ++i) {
+            const std::vector<std::string> routes = list_dir(recordings);
+            arrived = routes.size() == 1 &&
+                      !read_file(recordings + "/" + routes[0] + "/params/steering.json").empty() &&
+                      !read_file(recordings + "/" + routes[0] + "/manifest.json").empty();
+            if (!arrived) usleep(10'000);
+        }
+        EXPECT_TRUE(arrived) << "녹화 중에 params와 manifest가 SD 쪽에 있다";
+        EXPECT_TRUE(writer.active());
+        writer.close();
+    }
+    const std::vector<std::string> routes = list_dir(recordings);
+    ASSERT_EQ(routes.size(), 1u);
+    const std::vector<uint8_t> manifest = read_file(recordings + "/" + routes[0] + "/manifest.json");
+    EXPECT_NE(std::string(manifest.begin(), manifest.end()).find("\"complete\": true"), std::string::npos)
+        << "닫을 때 쓴 manifest가 처음 것을 덮는다";
+    std::filesystem::remove_all(root);
+}
+
+// 종료(stop) 뒤에는 속도 제한 없이 옮긴다. 3 MiB/s로는 열린 세그먼트를 다 옮기기 전에 매니저가 SIGKILL했다.
+TEST(StagingMover, StopMovesWithoutTheRateLimit) {
+    char root_template[] = "/tmp/gtest_recording_move_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    mkdir((root + "/from").c_str(), 0775);
+    std::ofstream(root + "/from/big.bin") << std::string(9 << 20, 'x');  // 3 MiB/s면 3초
+    const auto start = std::chrono::steady_clock::now();
+    {
+        StagingMover mover;
+        mover.enqueue_tree(root + "/from", root + "/to");
+        mover.stop();
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    EXPECT_LT(seconds, 1.5);
+    EXPECT_EQ(read_file(root + "/to/big.bin").size(), static_cast<size_t>(9 << 20));
+    std::filesystem::remove_all(root);
+}
+
+// 키프레임마다 영상과 프레임 인덱스를 스테이징에 내보낸다. recordd가 비정상으로 끝나면(닫지 못함) 회수한 마지막
+// 세그먼트가 그 키프레임까지 읽힌다. 예전에는 frames.bin이 세그먼트 내내 stdio 버퍼에 있어 0바이트로 남았다.
+TEST(RecordingWriter, KeyframesFlushTheFrameIndex) {
+    char root_template[] = "/tmp/gtest_recording_flush_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    const std::string staging = root + "/staging";
+    setenv("EDGEPILOT_RECORD_STAGING", staging.c_str(), 1);
+    const uint64_t t0 = 5'000'000'000ULL;
+    RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
+    writer.set_storage_check([](uint64_t) { return true; });
+    writer.set_enabled(true, t0);
+    const uint8_t config[] = {'C', 'F', 'G', 0x01};
+    writer.set_codec_config(config, sizeof(config));
+    for (uint64_t i = 0; i < 5; ++i) {  // 키프레임은 0번과 3번
+        RoadAiFrame frame;
+        frame.frame_id = i;
+        frame.timestamp_ns = t0 + i * 50'000'000ULL;
+        const std::vector<uint8_t> packet(32, static_cast<uint8_t>(0xB0 + i));
+        writer.write_encoded_frame(frame, packet.data(), packet.size(), i == 0 || i == 3);
+    }
+    std::string segment;
+    FrameIndex index;
+    for (int i = 0; i < 2000 && index.records.size() < 4; ++i) {
+        const std::vector<std::string> routes = list_dir(staging);
+        if (routes.size() == 1) segment = staging + "/" + routes[0] + "/segments/000";
+        if (segment.empty() || !read_frame_index(segment, &index)) index.records.clear();
+        if (index.records.size() < 4) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_EQ(index.records.size(), 4u) << "두 번째 키프레임까지(닫지 않은 세그먼트)";
+    EXPECT_EQ(index.records[3].flags, 1u);
+    const std::vector<uint8_t> video = read_file(segment + "/road.h264");
+    EXPECT_GE(video.size(), index.records[3].file_offset + index.records[3].packet_size) << "인덱스가 가리키는 영상";
+    writer.close();
+    std::filesystem::remove_all(root);
+}
+
 TEST(RecordingWriter, RouteOnDisk) {
     char root_template[] = "/tmp/gtest_recording_XXXXXX";
     const std::string root = mkdtemp(root_template);
@@ -91,7 +179,10 @@ TEST(RecordingWriter, RouteOnDisk) {
     mkdir(params.c_str(), 0775);
     std::ofstream(params + "/steering.json") << "{\"steer_max\": 384}\n";
     std::ofstream(params + "/lateral_nn.json") << "{\"model\": \"k7_hev_v3\"}\n";  // 레포 루트에서 돈다
+    // controlsd의 상태 파일이 없는 자리: route에 남길 모델은 고르기를 따른다(보드의 /dev/shm 파일을 읽지 않는다)
+    setenv("EDGEPILOT_LATERAL_NN_STATUS", (root + "/no_status.json").c_str(), 1);
     std::ofstream(params + "/notes.txt") << "not a param file\n";
+    std::ofstream(params + "/live_torque_parameters.bin") << "EPTQC001";  // torqued 캐시도 남긴다
     setenv("EDGEPILOT_RECORD_STAGING", staging.c_str(), 1);
 
     const uint64_t t0 = 5'000'000'000ULL;
@@ -109,7 +200,6 @@ TEST(RecordingWriter, RouteOnDisk) {
         }
         writer.write_can(RecordType::CanRx, synthetic_batch(t0 + 10'000'000ULL, 3, 2));
         writer.write_can(RecordType::CanTx, synthetic_batch(t0 + 20'000'000ULL, 300, 0));
-        writer.write_can(RecordType::ModelState, synthetic_batch(t0, 1, 0));  // 무시돼야 한다
         std::vector<uint8_t> control(240);
         for (size_t i = 0; i < control.size(); ++i) control[i] = static_cast<uint8_t>(i);
         writer.write_state(RecordType::ControlState, t0 + 30'000'000ULL, control.data(), control.size());
@@ -185,7 +275,6 @@ TEST(RecordingWriter, RouteOnDisk) {
         // 진단 도구와 replayd가 쓰는 리더도 같은 레코드를 읽는다
         EventLogReader reader(route + "/events/000.bin");
         ASSERT_TRUE(reader.ok());
-        ASSERT_EQ(reader.version(), kRecordingVersion);
         EventRecordHeader header{};
         std::vector<char> payload;
         for (const Expected &record : expected) {
@@ -196,7 +285,8 @@ TEST(RecordingWriter, RouteOnDisk) {
             if (record.type == 1) {
                 // replayd처럼 되돌리면 써 넣은 묶음이 그대로 나온다
                 const CanBatch written = synthetic_batch(t0 + 10'000'000ULL, 3, 2);
-                const CanBatch decoded = decode_recorded_can(payload.data(), payload.size(), 7);
+                CanBatch decoded;
+                ASSERT_TRUE(decode_recorded_can(payload.data(), payload.size(), 7, &decoded));
                 ASSERT_EQ(decoded.count, 3);
                 ASSERT_EQ(decoded.dropped, 2);
                 for (uint32_t i = 0; i < decoded.count; ++i) {
@@ -241,8 +331,8 @@ TEST(RecordingWriter, RouteOnDisk) {
     ASSERT_NE(text.find("\"event_records\": 4"), std::string::npos);
     auto snapshot = list_dir(route + "/params");
     std::sort(snapshot.begin(), snapshot.end());
-    // params 스냅샷은 json 파일만 복사한다
-    ASSERT_EQ(snapshot, (std::vector<std::string>{"lateral_nn.json", "steering.json"}));
+    // params 스냅샷은 json 파일과 torqued 캐시만 복사한다
+    ASSERT_EQ(snapshot, (std::vector<std::string>{"lateral_nn.json", "live_torque_parameters.bin", "steering.json"}));
     // 고른 학습 토크 모델 파일도 route에 남는다(나중에 같은 모델로 재생)
     ASSERT_EQ(read_file(route + "/models/lateral_nn.json"), read_file("models/lateral_nn/k7_hev_v3.json"));
 
@@ -270,27 +360,27 @@ TEST(RecordingWriter, StorageReserveRefusesClearsAndRetries) {
     uint64_t now = 10 * kSecond;
 
     writer.set_enabled(true, now);
-    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); }))
+    ASSERT_TRUE(settle([&] { return writer.storage_blocked() && !writer.requested_enabled(); }))
         << "4 GiB: 거절하고 STORAGE FULL";
     EXPECT_EQ(writer.storage_blocked(), kStorageBlockedSdReserve);
     EXPECT_FALSE(writer.active());
     writer.set_enabled(false, now);
-    EXPECT_FALSE(writer.blocked_for_space()) << "끄면 이미 거절된 뒤라도 경고가 지워진다";
+    EXPECT_FALSE(writer.storage_blocked()) << "끄면 이미 거절된 뒤라도 경고가 지워진다";
     writer.poll_storage(now += 10 * kSecond);
     EXPECT_FALSE(writer.requested_enabled()) << "꺼 둔 동안은 다시 시작하지 않는다";
 
     writer.set_enabled(true, now);
-    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); }));
+    ASSERT_TRUE(settle([&] { return writer.storage_blocked() && !writer.requested_enabled(); }));
     free_bytes = 5 * kGiB + kGiB / 2;
     writer.poll_storage(now += 10 * kSecond);
-    EXPECT_TRUE(writer.blocked_for_space()) << "예비분은 넘었지만 1 GiB 여유가 없다";
+    EXPECT_TRUE(writer.storage_blocked()) << "예비분은 넘었지만 1 GiB 여유가 없다";
     EXPECT_FALSE(writer.requested_enabled());
     free_bytes = 7 * kGiB;
     writer.poll_storage(now + kSecond);
     EXPECT_FALSE(writer.requested_enabled()) << "공간은 5초마다만 본다";
     writer.poll_storage(now += 10 * kSecond);
     EXPECT_TRUE(writer.requested_enabled()) << "공간이 돌아오면 다시 녹화한다";
-    EXPECT_FALSE(writer.blocked_for_space());
+    EXPECT_FALSE(writer.storage_blocked());
     ASSERT_TRUE(settle([&] { return writer.active(); }));
 
     // 녹화 중 모자라지면 다음 확인(5초 뒤 프레임)에서 멈춘다.
@@ -305,7 +395,7 @@ TEST(RecordingWriter, StorageReserveRefusesClearsAndRetries) {
     frame.frame_id = 2;
     frame.timestamp_ns = now + 6 * kSecond;
     writer.write_encoded_frame(frame, packet.data(), packet.size(), false);
-    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.active(); })) << "녹화 중 공간 부족";
+    ASSERT_TRUE(settle([&] { return writer.storage_blocked() && !writer.active(); })) << "녹화 중 공간 부족";
     EXPECT_FALSE(writer.requested_enabled());
     free_bytes = 8 * kGiB;
     std::this_thread::sleep_for(std::chrono::milliseconds(2));  // route 이름은 밀리초 단위 시각이다
@@ -345,7 +435,7 @@ TEST(RecordingWriter, StagingCapStopsAndResumesBelowHalf) {
     uint64_t now = 10 * kSecond;
     ASSERT_TRUE(stage(170 * kMiB));
     writer.set_enabled(true, now);
-    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.requested_enabled(); })) << "170 MiB: 거절";
+    ASSERT_TRUE(settle([&] { return writer.storage_blocked() && !writer.requested_enabled(); })) << "170 MiB: 거절";
     EXPECT_EQ(writer.storage_blocked(), kStorageBlockedStaging);
 
     ASSERT_TRUE(stage(100 * kMiB));
@@ -370,13 +460,62 @@ TEST(RecordingWriter, StagingCapStopsAndResumesBelowHalf) {
     frame.frame_id = 2;
     frame.timestamp_ns = now + 6 * kSecond;
     writer.write_encoded_frame(frame, packet.data(), packet.size(), false);
-    ASSERT_TRUE(settle([&] { return writer.blocked_for_space() && !writer.active(); })) << "녹화 중 스테이징 상한";
+    ASSERT_TRUE(settle([&] { return writer.storage_blocked() && !writer.active(); })) << "녹화 중 스테이징 상한";
     EXPECT_EQ(writer.storage_blocked(), kStorageBlockedStaging);
     EXPECT_FALSE(writer.requested_enabled());
     writer.set_enabled(false, now);
     EXPECT_EQ(writer.storage_blocked(), 0u) << "끄면 경고를 지운다";
     writer.close();
     std::system(("rm -rf '" + root + "'").c_str());
+}
+
+// recordd는 100 Hz ControlState를 발행마다 기다려 쓰는 스레드로 남긴다. 루프마다 한 번 읽으면 한 바퀴가 10 ms를
+// 넘을 때 최신값 채널의 덮어쓴 스냅샷이 빠졌다(녹화의 약 4 %).
+TEST(StateRecorder, ControlThreadKeepsEveryPublish) {
+    char root_template[] = "/tmp/gtest_state_control_XXXXXX";
+    const std::string root = mkdtemp(root_template);
+    setenv("EDGEPILOT_RECORD_STAGING", (root + "/staging").c_str(), 1);
+    const std::string suffix = "_c" + std::to_string(getpid() % 100000);
+    const std::string topic = kControlStateTopic + suffix;
+    struct Unlink {
+        const std::string &name;
+        ~Unlink() { shm_unlink(name.c_str()); }
+    } cleanup{topic};
+    const uint64_t t0 = 5'000'000'000ULL;
+    constexpr int kPublishes = 50;
+    {
+        RecordingWriter writer(root + "/recordings", root + "/params", 1280, 720, 20, 8000000);
+        writer.set_enabled(true, t0);
+        StateRecorder recorder(suffix);
+        LatestChannel pub;
+        ASSERT_TRUE(pub.open(topic.c_str(), sizeof(ControlState), true));
+        std::atomic<bool> stop{false};
+        std::thread thread([&] {
+            while (!stop) recorder.record_control(writer, 20);
+        });
+        usleep(50'000);  // 스레드가 채널에 붙도록
+        ControlState control;
+        for (int i = 0; i < kPublishes; ++i) {
+            control.timestamp_ns = t0 + 1 + static_cast<uint64_t>(i);
+            pub.publish(&control, sizeof(control));
+            usleep(5'000);
+        }
+        usleep(50'000);
+        stop = true;
+        thread.join();
+        writer.set_enabled(false, t0 + 1'000'000'000ULL);
+        writer.close();
+    }
+    const std::vector<std::string> routes = list_dir(root + "/recordings");
+    ASSERT_EQ(routes.size(), 1u);
+    EventLogReader reader(root + "/recordings/" + routes[0] + "/events/000.bin");
+    ASSERT_TRUE(reader.ok());
+    EventRecordHeader header{};
+    std::vector<char> payload;
+    int controls = 0;
+    while (reader.next(&header, &payload)) controls += header.type == static_cast<uint16_t>(RecordType::ControlState);
+    EXPECT_EQ(controls, kPublishes);
+    std::filesystem::remove_all(root);
 }
 
 TEST(StateRecorder, WritesEachNewSnapshotOnce) {
@@ -543,21 +682,58 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
     ASSERT_TRUE(route.read_frame(route.frames[4], &out));
     ASSERT_EQ(out, packet(4));
 
-    // 이벤트는 CanRx와 PandaState만, 청크를 넘어 시각 순
-    ASSERT_EQ(route.events.size(), 3);
-    EXPECT_EQ(route.events[0].type, RecordType::PandaState);
-    EXPECT_EQ(route.events[0].timestamp_ns, t0 + 20'000'000ULL);
-    EXPECT_EQ(route.events[1].type, RecordType::CanRx);
-    EXPECT_EQ(route.events[1].timestamp_ns, t0 + 30'000'000ULL);
-    EXPECT_EQ(decode_recorded_can(route.events[1].payload.data(), route.events[1].payload.size(), 0).count, 2);
-    EXPECT_EQ(route.events[2].timestamp_ns, t0 + kMinute + 10'000'000ULL);
+    // 이벤트는 CanRx와 PandaState만, 청크를 넘어 시각 순으로 흘려 읽는다
+    const auto read_events = [&](uint64_t from_ns, size_t *chunks) {
+        ReplayEvents events(root + "/recordings/" + routes[0], from_ns);
+        *chunks = events.chunks();
+        std::vector<ReplayEvents::Event> out;
+        for (const ReplayEvents::Event *e = events.peek(); e; e = events.peek()) {
+            out.push_back(*e);
+            events.pop();
+        }
+        return out;
+    };
+    size_t chunks = 0;
+    std::vector<ReplayEvents::Event> events = read_events(t0, &chunks);
+    EXPECT_EQ(chunks, 2u);
+    ASSERT_EQ(events.size(), 3);
+    EXPECT_EQ(events[0].header.type, static_cast<uint16_t>(RecordType::PandaState));
+    EXPECT_EQ(events[0].header.timestamp_ns, t0 + 20'000'000ULL);
+    EXPECT_EQ(events[1].header.type, static_cast<uint16_t>(RecordType::CanRx));
+    EXPECT_EQ(events[1].header.timestamp_ns, t0 + 30'000'000ULL);
+    CanBatch batch;
+    ASSERT_TRUE(decode_recorded_can(events[1].payload.data(), events[1].payload.size(), 0, &batch));
+    EXPECT_EQ(batch.count, 2);
+    EXPECT_EQ(events[2].header.timestamp_ns, t0 + kMinute + 10'000'000ULL);
+    // 중간에서 시작하면 그 앞의 이벤트는 내지 않고, 2초 넘게 앞선 청크는 열지 않는다
+    events = read_events(t0 + kMinute + 5'000'000ULL, &chunks);
+    EXPECT_EQ(chunks, 2u) << "다음 청크가 시작보다 2초 넘게 앞서지 않는다";
+    ASSERT_EQ(events.size(), 1);
+    EXPECT_EQ(events[0].header.timestamp_ns, t0 + kMinute + 10'000'000ULL);
+    events = read_events(t0 + kMinute + 3'000'000'000ULL, &chunks);
+    EXPECT_EQ(chunks, 1u) << "첫 청크는 건너뛴다";
+    EXPECT_TRUE(events.empty());
+    // 끊긴 꼬리(0으로 채워진 구간)는 그 앞까지 내고 stderr에 알린다
+    const std::string last_chunk = root + "/recordings/" + routes[0] + "/events/001.bin";
+    std::ofstream(last_chunk, std::ios::binary | std::ios::app) << std::string(64, '\0');
+    testing::internal::CaptureStderr();
+    events = read_events(t0, &chunks);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(events.size(), 3u);
+    EXPECT_NE(log.find("replayd: " + last_chunk + ": truncated at"), std::string::npos) << log;
 
-    // v8 이하 녹화의 예전 매직 인덱스도 읽는다
+    // 다른 녹화 버전의 인덱스는 읽지 않는다(그 세그먼트만 건너뛴다)
     const std::string first_index = root + "/recordings/" + routes[0] + "/segments/000/frames.bin";
-    std::vector<uint8_t> legacy = read_file(first_index);
-    std::memcpy(legacy.data(), kLegacyFrameIndexMagic, 8);
+    const std::vector<uint8_t> original = read_file(first_index);
+    std::vector<uint8_t> older = original;
+    FrameIndexHeader older_header = read_at<FrameIndexHeader>(older, 0);
+    older_header.version = kRecordingVersion - 1;
+    std::memcpy(older.data(), &older_header, sizeof(older_header));
     std::ofstream(first_index, std::ios::binary)
-        .write(reinterpret_cast<const char *>(legacy.data()), static_cast<std::streamsize>(legacy.size()));
+        .write(reinterpret_cast<const char *>(older.data()), static_cast<std::streamsize>(older.size()));
+    ASSERT_EQ(ReplayRoute(root + "/recordings/" + routes[0]).segments.size(), 1);
+    std::ofstream(first_index, std::ios::binary)
+        .write(reinterpret_cast<const char *>(original.data()), static_cast<std::streamsize>(original.size()));
     ASSERT_EQ(ReplayRoute(root + "/recordings/" + routes[0]).frames.size(), std::size(written));
 
     // header_size가 파일보다 큰 인덱스(깨진 머리)는 그 세그먼트만 건너뛴다
@@ -584,7 +760,8 @@ TEST(RecordedCan, RoundTripAndTruncation) {
     const std::vector<uint8_t> payload = encode_recorded_can(batch);
     ASSERT_EQ(payload.size(), sizeof(RecordedCanBatchHeader) + 3 * sizeof(RecordedCanFrame));
 
-    const CanBatch decoded = decode_recorded_can(payload.data(), payload.size(), 42);
+    CanBatch decoded;
+    ASSERT_TRUE(decode_recorded_can(payload.data(), payload.size(), 42, &decoded));
     ASSERT_EQ(decoded.valid, 1);
     ASSERT_EQ(decoded.timestamp_ns, 42);
     ASSERT_EQ(decoded.count, 3);
@@ -603,10 +780,11 @@ TEST(RecordedCan, RoundTripAndTruncation) {
     const auto ignore = [](const RecordedCanFrame &) {};
     ASSERT_EQ(for_each_recorded_can_frame(payload.data(), payload.size() - 1, ignore), 2)
         << "마지막 프레임 중간에서 끊기면 온전한 프레임만 읽는다";
-    ASSERT_EQ(decode_recorded_can(payload.data(), payload.size() - 1, 0).count, 2);
+    ASSERT_TRUE(decode_recorded_can(payload.data(), payload.size() - 1, 0, &decoded));
+    ASSERT_EQ(decoded.count, 2);
     ASSERT_EQ(for_each_recorded_can_frame(payload.data(), sizeof(RecordedCanBatchHeader) - 1, ignore), 0);
-    ASSERT_EQ(decode_recorded_can(payload.data(), sizeof(RecordedCanBatchHeader) - 1, 0).valid, 0)
-        << "머리보다 짧으면 빈 묶음";
+    ASSERT_FALSE(decode_recorded_can(payload.data(), sizeof(RecordedCanBatchHeader) - 1, 0, &decoded))
+        << "머리보다 짧으면 false";
 
     ASSERT_EQ(encode_recorded_can(synthetic_batch(1, 300, 0)).size(),
               sizeof(RecordedCanBatchHeader) + kCanBatchMaxFrames * sizeof(RecordedCanFrame))
@@ -615,8 +793,8 @@ TEST(RecordedCan, RoundTripAndTruncation) {
     const RecordedCanBatchHeader header{300, 0};
     std::memcpy(oversized.data(), &header, sizeof(header));
     ASSERT_EQ(for_each_recorded_can_frame(oversized.data(), oversized.size(), ignore), 300);
-    ASSERT_EQ(decode_recorded_can(oversized.data(), oversized.size(), 0).count, kCanBatchMaxFrames)
-        << "CanBatch로 되돌릴 때도 최대치로 자른다";
+    ASSERT_TRUE(decode_recorded_can(oversized.data(), oversized.size(), 0, &decoded));
+    ASSERT_EQ(decoded.count, kCanBatchMaxFrames) << "CanBatch로 되돌릴 때도 최대치로 자른다";
 }
 
 // 파일 순서가 시각 순이 아닌 녹화(recordd는 쌓인 CAN을 먼저, 상태 스냅샷을 뒤에 쓴다): 창 안에서 시각 순으로 내고,
@@ -657,35 +835,6 @@ TEST(TimeOrderedEvents, ReordersAcrossFiles) {
                                      {20'000'000, can}, {20'000'000, control}, {30'000'000, can}};
     EXPECT_EQ(got, want);
     EXPECT_EQ(ends, (std::vector<std::string>{a, root + "/missing.bin bad", b}));
-}
-
-// 2026-10-15~18 녹화의 레코드 9(차선선 플러그인 LaneState, 지금은 쓰지 않는다)를 끊긴 꼬리로 보지 않고 그 뒤도 읽는다
-TEST(EventLogReader, ReadsPastRetiredLaneStateRecords) {
-    char root_template[] = "/tmp/gtest_event_log_XXXXXX";
-    const std::string path = std::string(mkdtemp(root_template)) + "/000.bin";
-    const auto control = static_cast<uint16_t>(RecordType::ControlState);
-    const uint16_t lane_state = 9;
-    {
-        std::ofstream out(path, std::ios::binary);
-        EventFileHeader file_header;
-        out.write(reinterpret_cast<const char *>(&file_header), sizeof(file_header));
-        for (uint16_t type : {control, lane_state, control}) {
-            EventRecordHeader record;
-            record.timestamp_ns = 1;
-            record.type = type;
-            record.payload_size = type == lane_state ? 6776 : 4;  // 그때의 LaneState 크기
-            out.write(reinterpret_cast<const char *>(&record), sizeof(record));
-            out << std::string(record.payload_size, '\x22');
-        }
-    }
-    EXPECT_EQ(static_cast<uint16_t>(RecordType::RetiredLaneState), lane_state);
-    EventLogReader reader(path);
-    EventRecordHeader header;
-    std::vector<char> payload;
-    std::vector<uint16_t> types;
-    while (reader.next(&header, &payload)) types.push_back(header.type);
-    EXPECT_EQ(types, (std::vector<uint16_t>{control, lane_state, control}));
-    EXPECT_FALSE(reader.truncated());
 }
 
 // 끊긴 이벤트 로그: tmpfs가 차서 0으로 채워진 꼬리, 모자란 페이로드·레코드 머리, 1 MiB를 넘는
@@ -733,17 +882,16 @@ TEST(EventLogReader, StopsAtTruncatedTail) {
         ASSERT_FALSE(reader.truncated());
     }
     {
-        // v8 이하 녹화는 예전 매직으로 시작한다
-        const std::string path = write_log("legacy.bin", 0, 4, std::string(4, '\x11'));
+        // 다른 녹화 버전은 읽지 않는다(옛 녹화는 모두 지금 버전으로 다시 썼다)
+        const std::string path = write_log("older.bin", 0, 4, std::string(4, '\x11'));
         std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
-        const uint32_t version = 8;
-        file.write(kLegacyEventLogMagic, 8);
+        const uint32_t version = kRecordingVersion - 1;
+        file.seekp(8);
         file.write(reinterpret_cast<const char *>(&version), sizeof(version));
         file.close();
         EventLogReader reader(path);
-        ASSERT_TRUE(reader.ok()) << "예전 매직";
-        ASSERT_EQ(reader.version(), 8u);
-        ASSERT_TRUE(reader.next(&header, &payload));
+        ASSERT_FALSE(reader.ok()) << "옛 버전";
+        ASSERT_FALSE(reader.next(&header, &payload));
     }
     // 페이로드가 모자람, 길이가 1 MiB 초과, 다음 레코드 머리가 반만 있음
     const struct {
@@ -775,31 +923,6 @@ TEST(EventLogReader, StopsAtTruncatedTail) {
     }
 
     std::system(("rm -rf '" + root + "'").c_str());
-}
-
-// 진단 도구가 옛 녹화의 ModelState를 현재 구조체로 읽는다: v7은 카메라 장착까지, v6은 그 앞까지
-// (장착은 0), v5는 plan_yaw 앞까지.
-TEST(RecordedModelState, DecodesV5ToV7) {
-    ModelState src;
-    src.frame_id = 42;
-    src.calibration.yaw = 0.01f;
-    src.plan_yaw[3] = 0.2f;
-    src.camera_offset_m = 0.15f;
-    src.camera_height_m = 1.3f;
-    const char *bytes = reinterpret_cast<const char *>(&src);
-    ModelState out;
-    ASSERT_TRUE(decode_recorded_model_state(bytes, sizeof(ModelState), 7, &out));
-    EXPECT_EQ(out.frame_id, 42u);
-    EXPECT_FLOAT_EQ(out.camera_offset_m, 0.15f);
-    EXPECT_FLOAT_EQ(out.camera_height_m, 1.3f);
-    ASSERT_TRUE(decode_recorded_model_state(bytes, offsetof(ModelState, camera_offset_m), 6, &out));
-    EXPECT_FLOAT_EQ(out.plan_yaw[3], 0.2f);
-    EXPECT_FLOAT_EQ(out.camera_offset_m, 0.0f);
-    ASSERT_TRUE(decode_recorded_model_state(bytes, offsetof(ModelState, plan_yaw), 5, &out));
-    EXPECT_FLOAT_EQ(out.calibration.yaw, 0.01f);
-    EXPECT_FLOAT_EQ(out.plan_yaw[3], 0.0f);
-    EXPECT_FALSE(decode_recorded_model_state(bytes, offsetof(ModelState, camera_offset_m), 7, &out))
-        << "v7이라면서 짧으면 거부";
 }
 
 }  // namespace

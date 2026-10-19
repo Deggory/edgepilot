@@ -1,122 +1,75 @@
 #include "common/utils_json.h"
 
-#include "common/utils_math.h"
-
-#include <cctype>
-#include <cerrno>
 #include <cmath>
-#include <cstdlib>
 #include <fstream>
 #include <iterator>
-#include <stdexcept>
 
-// 단순 JSON 텍스트에서 bool 값을 읽는다.
-bool parse_json_bool_value(const std::string &text, const std::string &key, bool *out) {
-    if (!out) return false;
-    const std::string quoted_key = "\"" + key + "\"";
-    const size_t key_pos = text.find(quoted_key);
-    if (key_pos == std::string::npos) return false;
+namespace {
 
-    const size_t colon = text.find(':', key_pos + quoted_key.size());
-    if (colon == std::string::npos) {
-        throw std::runtime_error("json key '" + key + "' has no value");
-    }
-    size_t cursor = colon + 1;
-    while (cursor < text.size() && std::isspace(static_cast<unsigned char>(text[cursor]))) ++cursor;
-    if (text.compare(cursor, 4, "true") == 0) {
-        *out = true;
-        return true;
-    }
-    if (text.compare(cursor, 5, "false") == 0) {
-        *out = false;
-        return true;
-    }
-    throw std::runtime_error("json key '" + key + "' is not a boolean");
+float finite_float(const JsonValue &value, const std::string &key) {
+    const float parsed = static_cast<float>(value.number());  // 수가 아니면 0이고 아래에서 거른다
+    if (!value.is_number() || !std::isfinite(parsed))
+        throw std::runtime_error("json key '" + key + "' is not a finite float");
+    return parsed;
 }
 
-// 단순 JSON 텍스트에서 float 값을 읽는다.
-bool parse_json_float_value(const std::string &text, const std::string &key, float *out) {
-    if (!out) return false;
-    const std::string quoted_key = "\"" + key + "\"";
-    const size_t key_pos = text.find(quoted_key);
-    if (key_pos == std::string::npos) return false;
+}  // namespace
 
-    const size_t colon = text.find(':', key_pos + quoted_key.size());
-    if (colon == std::string::npos) {
-        throw std::runtime_error("json key '" + key + "' has no value");
+bool parse_json_object(const std::string &text, JsonValue *out, std::string *error) {
+    std::string parse_error;
+    if (!JsonValue::parse(text, out, &parse_error)) {
+        if (error) *error = parse_error;
+        return false;
     }
-
-    const char *cursor = text.c_str() + colon + 1;
-    while (*cursor != '\0' && std::isspace(static_cast<unsigned char>(*cursor))) ++cursor;
-
-    char *end = nullptr;
-    errno = 0;
-    const float parsed = std::strtof(cursor, &end);
-    if (end == cursor || errno == ERANGE || !std::isfinite(parsed)) {
-        throw std::runtime_error("json key '" + key + "' contains an invalid float");
+    if (!out->is_object()) {
+        if (error) *error = "not a JSON object";
+        return false;
     }
-    *out = parsed;
     return true;
 }
 
-void parse_json_optional_bool(const std::string &text, const std::string &key, bool *field) {
-    bool value = false;
-    if (parse_json_bool_value(text, key, &value)) *field = value;
+bool json_bool(const JsonValue &object, const std::string &key, bool *out) {
+    const JsonValue *value = object.find(key);
+    if (!value) return false;
+    if (!value->is_bool()) throw std::runtime_error("json key '" + key + "' is not a boolean");
+    *out = value->boolean();
+    return true;
 }
 
-void parse_json_optional_float(const std::string &text, const std::string &key, float minimum, float maximum,
-                               float *field) {
-    float value = 0.0f;
-    if (parse_json_float_value(text, key, &value)) *field = clamp_float(value, minimum, maximum);
+bool json_float(const JsonValue &object, const std::string &key, float *out) {
+    const JsonValue *value = object.find(key);
+    if (!value) return false;
+    *out = finite_float(*value, key);
+    return true;
 }
 
-void parse_json_optional_int(const std::string &text, const std::string &key, int minimum, int maximum, int *field) {
-    float value = 0.0f;
-    if (parse_json_float_value(text, key, &value)) *field = clamp_int(value, minimum, maximum);
+bool json_float_list(const JsonValue &object, const std::string &key, size_t max_count, std::vector<float> *out) {
+    const JsonValue *value = object.find(key);
+    if (!value) return false;
+    if (!value->is_array()) throw std::runtime_error("json key '" + key + "' is not an array");
+    if (value->array().size() > max_count)
+        throw std::runtime_error("json key '" + key + "' has more than " + std::to_string(max_count) + " floats");
+    out->clear();
+    for (const JsonValue &item : value->array()) out->push_back(finite_float(item, key));
+    return true;
 }
 
-bool load_json_param_file(const std::string &path, const std::function<void(const std::string &)> &apply,
+bool load_json_param_file(const std::string &path, const std::function<void(const JsonValue &)> &apply,
                           std::string *error) {
     std::ifstream file(path);
     if (!file.is_open()) {
         if (error) *error = "open failed";
         return false;
     }
-    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    JsonValue root;
+    if (!parse_json_object(std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()), &root,
+                           error))
+        return false;
     try {
-        apply(text);
+        apply(root);
     } catch (const std::exception &exc) {
         if (error) *error = exc.what();
         return false;
     }
-    return true;
-}
-
-bool parse_json_float_list(const std::string &text, const std::string &key, size_t max_count, std::vector<float> *out) {
-    if (!out) return false;
-    const std::string quoted_key = "\"" + key + "\"";
-    const size_t key_pos = text.find(quoted_key);
-    if (key_pos == std::string::npos) return false;
-    const size_t open = text.find('[', key_pos + quoted_key.size());
-    if (open == std::string::npos) throw std::runtime_error("json key '" + key + "' is not an array");
-    const size_t close = text.find(']', open + 1);
-    if (close == std::string::npos) throw std::runtime_error("json key '" + key + "' has no closing bracket");
-    std::vector<float> values;
-    const char *cursor = text.c_str() + open + 1;
-    const char *array_end = text.c_str() + close;
-    for (;;) {
-        while (cursor < array_end && (std::isspace(static_cast<unsigned char>(*cursor)) || *cursor == ',')) ++cursor;
-        if (cursor >= array_end) break;
-        errno = 0;
-        char *end = nullptr;
-        const float value = std::strtof(cursor, &end);
-        if (end == cursor || end > array_end || errno == ERANGE || !std::isfinite(value))
-            throw std::runtime_error("json key '" + key + "' has a value that is not a finite float");
-        if (values.size() >= max_count)
-            throw std::runtime_error("json key '" + key + "' has more than " + std::to_string(max_count) + " floats");
-        values.push_back(value);
-        cursor = end;
-    }
-    *out = std::move(values);
     return true;
 }

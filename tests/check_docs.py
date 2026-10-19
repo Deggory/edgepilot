@@ -28,10 +28,13 @@ IMG = re.compile(r'<img[^>]*\ssrc="([^"]+)"|!\[[^\]]*\]\(([^)\s]+)\)')
 
 def documents():
     files = sorted((ROOT / "docs").glob("*.md"))
-    listed = subprocess.run(["git", "ls-files", "*/README.md"], cwd=ROOT, capture_output=True, text=True).stdout
+    # 폴더 README 목록. git이 실패하면(소유자가 다른 체크아웃 등) 조용히 빼지 않고 멈춘다.
+    listed = subprocess.run(["git", "-c", "safe.directory=*", "ls-files", "*/README.md"], cwd=ROOT,
+                            capture_output=True, text=True, check=True).stdout
     # firmware/panda는 들여온 코드지만 README는 우리 문서다
-    files += [ROOT / f for f in listed.split() if not f.startswith("firmware/panda/") or f == "firmware/panda/README.md"]
-    return files
+    files += [ROOT / f for f in listed.split()
+              if not f.startswith("firmware/panda/") or f == "firmware/panda/README.md"]
+    return list(dict.fromkeys(files))  # docs/README.md는 두 목록에 다 있다
 
 
 def slug(heading: str) -> str:

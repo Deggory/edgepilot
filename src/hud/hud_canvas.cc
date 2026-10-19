@@ -92,14 +92,14 @@ struct RowCoverage {
 }  // namespace
 
 HudCanvas::HudCanvas(void *pixels, int width, int height, int stride_bytes, std::vector<uint16_t> &coverage,
-                     std::vector<uint16_t> &damage, HudOrientation orientation)
+                     std::vector<uint16_t> &damage, bool transpose)
     : base_(static_cast<uint8_t *>(pixels)),
       width_(width),
       height_(height),
-      buffer_w_(orientation.transpose ? height : width),
-      buffer_h_(orientation.transpose ? width : height),
+      buffer_w_(transpose ? height : width),
+      buffer_h_(transpose ? width : height),
       stride_(stride_bytes),
-      orientation_(orientation),
+      transpose_(transpose),
       coverage_(coverage),
       damage_(damage) {
     if (static_cast<int>(coverage_.size()) < buffer_w_) coverage_.assign(buffer_w_, 0);
@@ -109,12 +109,7 @@ HudCanvas::HudCanvas(void *pixels, int width, int height, int stride_bytes, std:
 
 uint32_t *HudCanvas::row(int y) const { return reinterpret_cast<uint32_t *>(base_ + static_cast<size_t>(y) * stride_); }
 
-HudPoint HudCanvas::to_buffer(HudPoint p) const {
-    HudPoint b = orientation_.transpose ? HudPoint{p.y, p.x} : p;
-    if (orientation_.flip_x) b.x = static_cast<float>(buffer_w_) - b.x;
-    if (orientation_.flip_y) b.y = static_cast<float>(buffer_h_) - b.y;
-    return b;
-}
+HudPoint HudCanvas::to_buffer(HudPoint p) const { return transpose_ ? HudPoint{p.y, p.x} : p; }
 
 void HudCanvas::mark(int y, int x0, int x1) {
     const uint32_t first = static_cast<uint32_t>(x0) >> tile_shift_;
@@ -156,9 +151,10 @@ void HudCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color)
     }
 }
 
-// 모서리 넷을 시계 방향(오른쪽 위부터)으로 이은 다각형. 곧은 행을 따로 칠할 때는 위 모서리
-// 둘(왼쪽 위, 오른쪽 위)과 아래 모서리 둘(오른쪽 아래, 왼쪽 아래)을 따로 칠한다. 둘을 잇는
-// 변은 수평이라 커버리지에 끼지 않는다.
+// 모서리 넷을 시계 방향(오른쪽 위부터)으로 이은 다각형. 곧은 부분을 따로 칠할 때는 버퍼 행을 따라 자른다:
+// 가로 버퍼는 위 모서리 둘과 아래 모서리 둘을, 세로 패널 버퍼(버퍼 행 = 화면 x)는 왼쪽 모서리 둘과 오른쪽
+// 모서리 둘을 따로 칠하고 그 사이를 fill_rect로 채운다. 둘을 잇는 변은 버퍼에서 수평이라 커버리지에 끼지
+// 않는다.
 void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color) {
     radius = std::clamp(radius, 0.0f, std::min(w, h) / 2);
     const HudPoint centers[] = {{x + w - radius, y + radius},
@@ -183,14 +179,21 @@ void HudCanvas::fill_round_rect(float x, float y, float w, float h, float radius
     };
     const bool integral = x == std::floor(x) && y == std::floor(y) && w == std::floor(w) && h == std::floor(h) &&
                           radius == std::floor(radius);
-    if (!integral || h <= 2 * radius) {
+    if (!integral || (transpose_ ? w : h) <= 2 * radius) {
         corners({0, 1, 2, 3});
         return;
     }
-    corners({3, 0});
-    fill_rect(static_cast<int>(x), static_cast<int>(y + radius), static_cast<int>(w), static_cast<int>(h - 2 * radius),
-              color);
-    corners({1, 2});
+    const int ix = static_cast<int>(x), iy = static_cast<int>(y), iw = static_cast<int>(w), ih = static_cast<int>(h);
+    const int r = static_cast<int>(radius);
+    if (transpose_) {
+        corners({2, 3});
+        fill_rect(ix + r, iy, iw - 2 * r, ih, color);
+        corners({0, 1});
+    } else {
+        corners({3, 0});
+        fill_rect(ix, iy + r, iw, ih - 2 * r, color);
+        corners({1, 2});
+    }
 }
 
 void HudCanvas::fill_polygon(const HudPoint *points, int count, uint32_t color) {
@@ -234,14 +237,11 @@ void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t col
         const float t = std::clamp((near_y - screen_y) / (near_y - far_y), 0.0f, 1.0f);
         return static_cast<uint32_t>(alpha * (1.0f - t * (1.0f - far_alpha)) + 0.5f);
     };
-    const bool fade_columns = faded && orientation_.transpose && buffer_w_ <= kMaxFadeColumns;
+    const bool fade_columns = faded && transpose_ && buffer_w_ <= kMaxFadeColumns;
     std::array<uint8_t, kMaxFadeColumns> column_alpha;
     if (fade_columns) {
-        for (int bx = 0; bx < buffer_w_; ++bx) {
-            const float center = static_cast<float>(bx) + 0.5f;
-            column_alpha[bx] =
-                static_cast<uint8_t>(fade(orientation_.flip_x ? static_cast<float>(buffer_w_) - center : center));
-        }
+        for (int bx = 0; bx < buffer_w_; ++bx)
+            column_alpha[bx] = static_cast<uint8_t>(fade(static_cast<float>(bx) + 0.5f));
     }
 
     int next = 0, active[kMaxCrossings], active_count = 0;
@@ -298,11 +298,8 @@ void HudCanvas::fill_rows(const HudPoint *screen_points, int count, uint32_t col
         }
         if (inner_l >= inner_r && cover.max < cover.min) continue;
 
-        const float row_center = static_cast<float>(y) + 0.5f;
         const uint32_t row_a =
-            !faded || fade_columns
-                ? static_cast<uint32_t>(alpha + 0.5f)
-                : fade(orientation_.flip_y ? static_cast<float>(buffer_h_) - row_center : row_center);
+            !faded || fade_columns ? static_cast<uint32_t>(alpha + 0.5f) : fade(static_cast<float>(y) + 0.5f);
         auto a = [&](int x) { return fade_columns ? column_alpha[x] : row_a; };
         uint32_t *pixels = row(y);
         auto blend_covered = [&](int from, int to) {
@@ -339,9 +336,7 @@ int HudCanvas::text(int x, int y, std::string_view text, const HudFont &font, ui
 // 열이 버퍼 행 하나가 되도록 돌아 버퍼 쪽 쓰기가 이어진다.
 void HudCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color) {
     const uint32_t rgb = color & 0x00ffffffu, a = color >> 24;
-    const bool transpose = orientation_.transpose;
-    auto buffer_x = [&](int v) { return orientation_.flip_x ? buffer_w_ - 1 - v : v; };
-    auto buffer_y = [&](int v) { return orientation_.flip_y ? buffer_h_ - 1 - v : v; };
+    const bool transpose = transpose_;
     for (char c : text) {
         const HudGlyph *g = font.glyph(c);
         if (!g) continue;
@@ -353,16 +348,15 @@ void HudCanvas::glyphs(int x, int y, std::string_view text, const HudFont &font,
         const int outer0 = transpose ? col0 : line0, outer1 = transpose ? col1 : line1;
         const int inner0 = transpose ? line0 : col0, inner1 = transpose ? line1 : col1;
         for (int outer = outer0; inner0 < inner1 && outer < outer1; ++outer) {
-            const int by = buffer_y(transpose ? gx + outer : gy + outer);
+            const int by = transpose ? gx + outer : gy + outer;
+            const int origin = transpose ? gy : gx;  // 이 버퍼 행에서 글리프가 시작하는 버퍼 열
             uint32_t *pixels = row(by);
             for (int inner = inner0; inner < inner1; ++inner) {
                 const int line = transpose ? inner : outer, col = transpose ? outer : inner;
                 const uint8_t coverage = bitmap[static_cast<size_t>(line) * g->w + col];
-                if (coverage) blend(pixels[buffer_x(transpose ? gy + inner : gx + inner)], rgb, div255(a * coverage));
+                if (coverage) blend(pixels[origin + inner], rgb, div255(a * coverage));
             }
-            const int origin = transpose ? gy : gx;
-            const int bx0 = buffer_x(origin + inner0), bx1 = buffer_x(origin + inner1 - 1);
-            mark(by, std::min(bx0, bx1), std::max(bx0, bx1) + 1);
+            mark(by, origin + inner0, origin + inner1);
         }
         x += g->advance;
     }

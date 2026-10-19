@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""보드의 modeld 리플레이 모드용으로 녹화 프레임의 SCNV12R1 리플레이를 만든다.
+"""보드의 modeld 재생 모드용으로 녹화 프레임의 SCNV12R1 재생 파일을 만든다.
 
 modeld는 카메라 링 대신 이 파일을 읽고(EDGEPILOT_REPLAY_NV12) 라이브와 같은 GDC 워프,
 이력 큐 처리, axmodel을 돌린다. 보드 쪽은 docs/diagnostics.md를 본다.

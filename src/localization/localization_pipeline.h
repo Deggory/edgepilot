@@ -24,7 +24,7 @@ public:
 
     // 제어 상태(100 Hz). 차속과 lagd 입력 이력.
     void on_control(const ControlState &control);
-    // 모델 상태(20 Hz). 캘리브레이션은 바로 반영하고 카메라 주행거리는 대기열에 넣는다.
+    // 모델 상태(20 Hz). 보정은 바로 반영하고 카메라 주행거리는 대기열에 넣는다.
     void on_model(const ModelState &model);
     // IMU 묶음. 샘플과 그 사이의 카메라 주행거리를 시각 순서로 넣고, 마지막 샘플 시각의
     // 추정을 out에 채운다. now_s는 센서 신선도 판정용 현재 시각. 샘플이 없으면 false.
@@ -34,7 +34,8 @@ public:
     const LocationEstimator &estimator() const { return estimator_; }
     void set_lag_restored(bool restored) { lag_restored_ = restored; }
 
-    // |driver_torque| 이 값을 넘으면 핸들 조작(상류 Hyundai STEER_THRESHOLD)
+    // controlsd가 판정을 넘기지 않는 옛 녹화에서: |driver_torque| 이 값을 넘으면 핸들 조작(상류 Hyundai
+    // STEER_THRESHOLD)
     static constexpr int kSteeringPressedTorque = 150;
 
 private:

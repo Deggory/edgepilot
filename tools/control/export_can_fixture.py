@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """녹화 events/NNN.bin 하나를 gtest_lateral_controller의 EDGECAN1 픽스처로 내보낸다.
 
-수신 CAN(CanRx) 레코드만 담고, 타임스탬프는 첫 프레임을 0으로 다시 잰다.
+수신 CAN(CanRx) 레코드의 차 프레임만 담고, 타임스탬프는 첫 프레임을 0으로 다시 잰다. controlsd의
+is_vehicle_rx_frame(src/car/vehicle_can.h)처럼 Panda가 돌려준 우리 송신 에코·거부 프레임(flags != 0), CAN FD 길이,
+가상 버스(src > 7)는 뺀다: 픽스처에는 flags가 없어 넣으면 차가 보낸 프레임으로 읽힌다.
 사용: export_can_fixture.py <events/NNN.bin> <out.can>
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ def export(src: Path, dst: Path) -> tuple[int, float]:
         if rec.type != RECORD_CAN_RX:
             continue
         for frame in can_frames(rec.payload):
-            if frame["data_len"] <= 8:
+            if frame["flags"] == 0 and frame["data_len"] <= 8 and frame["src"] <= 7:
                 frames.append((rec.timestamp_ns, int(frame["address"]), int(frame["src"]), int(frame["data_len"]),
                                frame["data"][:8].tobytes()))
     if not frames:

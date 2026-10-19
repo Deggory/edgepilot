@@ -2,13 +2,17 @@
 // 넓이와 대조한다. 먼 쪽 흐림, 글자 폭, 둥근 사각형의 곧은 행 지름길, 그린 칸만 지우기,
 // 세로 패널 버퍼(transpose·뒤집기)가 가로 그림을 옮긴 것과 같은지, 상태 테두리와 알림 카드,
 // 아래 모서리 카드, 상태 알약 터치 영역도 본다.
+#include "controls/control_block.h"
 #include "hud/hud_canvas.h"
+#include "hud/hud_draw.h"
 #include "hud/hud_renderer.h"
+#include "hud/hud_state.h"
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace {
@@ -137,6 +141,63 @@ TEST(HudRenderer, StateBorderAndAlert) {
     EXPECT_GT(s.at(320, 425) >> 24, 150) << "아래 가운데 알림 카드";
 }
 
+// 알림 카드의 모든 문구가 카드 최대 폭(아래 모서리 카드 사이)에 들어간다. 넘치면 카드가 더 넓어지지 못해 양끝
+// 글자가 카드 밖으로 나갔다(STEERING PAUSED의 설명).
+TEST(HudRenderer, EveryAlertTextFitsTheCard) {
+    using namespace hud_draw;
+    const int max_text = 640 - 2 * (kMargin + kCornerCardW + kGap) - kAlertTextPad;
+    std::vector<HudAlertCard> cards;
+    const auto add = [&](const HudState &hud) {
+        for (bool model_ok : {false, true}) cards.push_back(hud_select_alert(hud, model_ok));
+    };
+    for (int r = 1; r < static_cast<int>(BlockReason::Count); ++r) {  // 결합 거부와 해제 예고: 차단 사유마다
+        const BlockReason reason = static_cast<BlockReason>(r);
+        HudState reject;
+        std::snprintf(reject.engage_reject_label, sizeof(reject.engage_reject_label), "%s", block_reason_label(reason));
+        add(reject);
+        HudState soft;
+        soft.soft_disabling = true;
+        std::snprintf(soft.active_block, sizeof(soft.active_block), "%s", block_reason_name(reason));
+        add(soft);
+    }
+    HudState hud;
+    hud.steering_fault = true;
+    add(hud);
+    hud = HudState{};
+    hud.panda_faults = 1;
+    add(hud);
+    for (bool by_driver : {false, true}) {
+        hud = HudState{};
+        hud.controller_active = hud.steer_paused = true;
+        hud.steer_paused_by_driver = by_driver;
+        add(hud);
+    }
+    hud = HudState{};
+    hud.steer_saturated = true;
+    add(hud);
+    hud = HudState{};
+    add(hud);  // 서비스 대기
+    for (int direction : {-1, 1}) {
+        hud = HudState{};
+        hud.services_healthy = hud.controller_active = true;
+        hud.lane_change = 1;
+        hud.lane_change_direction = direction;
+        add(hud);
+    }
+    for (DepartureAlertType type : {DepartureAlertType::lead_departed, DepartureAlertType::green_light}) {
+        hud = HudState{};
+        hud.services_healthy = true;
+        hud.departure_alert_type = type;
+        add(hud);
+    }
+    for (const HudAlertCard &card : cards) {
+        ASSERT_FALSE(card.empty());
+        const float arrows = card.arrow ? 2.0f * (kAlertArrowGap + kAlertArrowW / 2.0f) : 0.0f;
+        EXPECT_LE(kHudTitleFont.width(card.title) + arrows, max_text) << card.title;
+        EXPECT_LE(kHudBodyFont.width(card.detail), max_text) << card.title << ": " << card.detail;
+    }
+}
+
 TEST(HudRenderer, ReusedBufferMatchesFreshBuffer) {
     // 같은 버퍼에 다른 장면을 이어 그려도(그린 칸만 지움) 새 버퍼에 그린 것과 같다
     HudState first;
@@ -152,12 +213,11 @@ TEST(HudRenderer, ReusedBufferMatchesFreshBuffer) {
     second.cluster_speed_kph = 5.0f;
 
     ParsedModelOutput road;  // 굽은 길: 경로와 차선 띠(다각형 행 칠하기)
-    road.valid = road.plan.valid = true;
+    road.valid = true;
     for (int i = 0; i < kTrajectorySize; ++i) {
         const float x = model_x_idx(i), curve = 0.0006f * x * x;
         road.plan.points[i] = {x, curve, 0.0f};
         for (int lane = 0; lane < 4; ++lane) {
-            road.lanes[lane].valid = true;
             road.lanes[lane].probability = 0.9f;
             road.lanes[lane].points[i] = {x, -5.4f + 3.6f * lane + curve, kModelHeight};
         }
@@ -181,7 +241,7 @@ TEST(HudRenderer, ReusedBufferMatchesFreshBuffer) {
 // 글자·사각형은 화소까지 같고, 다각형은 부표본 행 방향이 바뀌어 가장자리만 조금 다르다.
 TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
     ParsedModelOutput road;
-    road.valid = road.plan.valid = true;
+    road.valid = true;
     for (int i = 0; i < kTrajectorySize; ++i) {
         const float x = model_x_idx(i), curve = 0.0006f * x * x;
         road.plan.points[i] = {x, curve, 0.0f};
@@ -194,11 +254,10 @@ TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
     hud.debug_card = true;
     const ProjectionState projection = make_projection_state(0, 0, 0);
 
-    Surface landscape(640, 480), portrait(480, 640), flipped(480, 640);
-    HudRenderer a, b, c;
+    Surface landscape(640, 480), portrait(480, 640);
+    HudRenderer a, b;
     a.draw({landscape.pixels.data(), 640, 480, 640 * 4}, road, projection, hud);
-    b.draw({portrait.pixels.data(), 640, 480, 480 * 4, {true, false, false}}, road, projection, hud);
-    c.draw({flipped.pixels.data(), 640, 480, 480 * 4, {true, true, true}}, road, projection, hud);
+    b.draw({portrait.pixels.data(), 640, 480, 480 * 4, true}, road, projection, hud);
     int exact = 0, close = 0, worst = 0;
     double ink_l = 0.0, ink_p = 0.0;
     for (int y = 0; y < 480; ++y) {
@@ -210,8 +269,6 @@ TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
             worst = std::max(worst, d);
             ink_l += (l >> 24) / 255.0;
             ink_p += (p >> 24) / 255.0;
-            // 뒤집은 버퍼는 뒤집지 않은 세로 버퍼를 그대로 거울에 비춘 것
-            ASSERT_EQ(flipped.at(479 - y, 639 - x), p) << x << "," << y;
         }
     }
     EXPECT_GT(exact, 640 * 480 * 99 / 100) << "거의 모든 화소가 같다";
@@ -222,7 +279,7 @@ TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
     Surface text_l(200, 60), text_p(60, 200);
     text_l.canvas().text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
     text_l.canvas().fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
-    HudCanvas tp(text_p.pixels.data(), 200, 60, 60 * 4, text_p.coverage, text_p.damage, {true, false, false});
+    HudCanvas tp(text_p.pixels.data(), 200, 60, 60 * 4, text_p.coverage, text_p.damage, true);
     tp.text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
     tp.fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
     for (int y = 0; y < 60; ++y)

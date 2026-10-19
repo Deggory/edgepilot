@@ -50,7 +50,6 @@ TEST(ModelOutputParser, Master) {
     ParsedLeadPoint lead;
     float lead_prob = 0.0f;
     ASSERT_TRUE(parsed.valid);
-    ASSERT_EQ(parsed.plan.best_index, 0);
     ASSERT_NEAR(parsed.plan.points[7].x, 23.0f, 1e-6f);
     ASSERT_NEAR(parsed.plan.points[7].y, 0.75f, 1e-6f);
     ASSERT_NEAR(parsed.lanes[1].points[5].y, -1.75f, 1e-6f);
@@ -65,7 +64,6 @@ TEST(ModelOutputParser, Master) {
     ASSERT_NEAR(parsed.meta.gas_press[0], 0.5f, 1e-6f) << "로짓 0은 확률 0.5";
     ASSERT_NEAR(parsed.meta.brake_press[0], 1.0f / (1.0f + std::exp(-3.0f)), 1e-6f);
     for (int i = 1; i < kMetaPressHorizons; ++i) ASSERT_NEAR(parsed.meta.brake_press[i], 0.5f, 1e-6f) << i;
-    ASSERT_TRUE(parsed.has_pose);
     ASSERT_NEAR(parsed.pose.trans[2], 22.0f, 1e-6f);
     ASSERT_NEAR(parsed.pose.trans_std[0], 0.05f, 1e-6f);
     ASSERT_TRUE(ModelOutputParser::parse(std::vector<float>(kModelOutputFloats + 2, 0.0f)).valid)
@@ -97,6 +95,24 @@ TEST(ModelTemporal, TurnDesireClearsWhenTheTurnEnds) {
     }
     ASSERT_EQ(turn, 0.0f) << "회전을 마치면 이력의 회전 펄스를 지운다";
     ASSERT_EQ(lane_change, 1.0f) << "차선 변경 펄스는 남긴다";
+}
+
+// 정해진 desire 수열 뒤 이력에 남는 펄스(최신 틱부터 센 칸, desire 번호). make_m2_data.py의 desire_step도 같은 값을
+// 낸다(check_recording_reader.py가 같은 수열과 기준값으로 본다). 둘이 갈리면 eval 기준과 양자화 표본이 보드 입력과
+// 달라진다.
+TEST(ModelTemporal, DesireSequenceMatchesTheToolQueue) {
+    SupercomboTemporalState state;
+    for (int desire : {0, 3, 3, 0, 1, 1, 1, 0, 0, 2, 2, 3, 0, 1, 1, 4, 4, 0, 1, 1, 2}) {
+        state.set_desire(desire);
+        state.push_desire_pulse();
+    }
+    const auto &history = state.desire_history();
+    std::vector<std::pair<int, int>> pulses;
+    for (int back = 0; back < SupercomboTemporalState::kDesireHistoryTicks; ++back)
+        for (int i = 0; i < kDesireLen; ++i)
+            if (history[(SupercomboTemporalState::kDesireHistoryTicks - 1 - back) * kDesireLen + i] != 0.0f)
+                pulses.emplace_back(back, i);
+    EXPECT_EQ(pulses, (std::vector<std::pair<int, int>>{{0, 2}, {2, 1}, {5, 4}, {9, 3}, {19, 3}}));
 }
 
 // desire: rising-edge 펄스, 100틱 이력 밀기, 4틱 max-pool.
@@ -139,7 +155,7 @@ TEST(ModelTemporal, Features) {
     std::vector<float> raw(kModelOutputFloats, 0.0f), zeros(kModelOutputFloats, 0.0f);
     for (int i = 0; i < kModelFeatureLen; ++i)
         raw[SupercomboTemporalState::kHiddenOffset + i] = static_cast<float>(i + 1);
-    ASSERT_TRUE(state.push_feature_history(raw.data(), raw.size()));
+    state.push_feature_history(raw.data());
     const auto &features = state.feature_history();
     const size_t newest = (SupercomboTemporalState::kFeatureHistoryTicks - 1) * kModelFeatureLen;
     ASSERT_EQ(features[newest], 1.0f);
@@ -150,12 +166,22 @@ TEST(ModelTemporal, Features) {
     for (int pushes = 0; pushes < 3; ++pushes) {
         state.feature_input(input.data());
         ASSERT_EQ(input[last_row], 0.0f) << pushes << "프레임 뒤에는 아직 입력에 없다";
-        ASSERT_TRUE(state.push_feature_history(zeros.data(), zeros.size()));
+        state.push_feature_history(zeros.data());
     }
     state.feature_input(input.data());
     ASSERT_EQ(input[last_row], 1.0f);
     ASSERT_EQ(input[last_row + kModelFeatureLen - 1], 512.0f);
-    ASSERT_FALSE(state.push_feature_history(raw.data(), 100)) << "짧은 raw 출력은 거부한다";
+
+    // 이력은 96칸 링이다: 여러 바퀴 돈 뒤에도 입력 행은 오래된 것부터 4칸 간격이다
+    for (int k = 1; k <= 200; ++k) {
+        std::fill(raw.begin() + SupercomboTemporalState::kHiddenOffset,
+                  raw.begin() + SupercomboTemporalState::kHiddenOffset + kModelFeatureLen, static_cast<float>(k));
+        state.push_feature_history(raw.data());
+    }
+    state.feature_input(input.data());
+    for (int t = 0; t < SupercomboTemporalState::kFeatureInputTicks; ++t)
+        ASSERT_EQ(input[t * kModelFeatureLen], static_cast<float>(105 + 4 * t)) << "행 " << t;
+    EXPECT_EQ(state.feature_history().back(), 200.0f) << "시간 순 사본의 마지막은 최신";
 }
 
 // 이미지: 5프레임 링, 모델 입력은 t-4 다음 t.
@@ -251,15 +277,14 @@ int main(int argc, char *argv[]) {
     }
 
     const ParsedModelOutput parsed = ModelOutputParser::parse(raw);
-    if (!parsed.valid || !parsed.plan.valid || !parsed.has_pose) {
-        std::cerr << "parser did not produce required plan/pose outputs\n";
+    if (!parsed.valid) {
+        std::cerr << "raw dump is shorter than the model output\n";
         return 1;
     }
 
     ParsedLeadPoint lead;
     const bool have_lead = parsed.leads.primary(0, 0.0f, &lead);
-    std::cout << "raw_size=" << raw_size << " frames=" << frame_count << " plan_best=" << parsed.plan.best_index
-              << " plan_prob=" << parsed.plan.probability << " lane0_prob=" << parsed.lanes[0].probability
+    std::cout << "raw_size=" << raw_size << " frames=" << frame_count << " lane0_prob=" << parsed.lanes[0].probability
               << " pose_vx=" << parsed.pose.trans[0] << " lead_valid=" << (have_lead ? 1 : 0);
     if (have_lead) std::cout << " lead_x=" << lead.x << " lead_y=" << lead.y;
     std::cout << "\n";

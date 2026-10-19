@@ -1,5 +1,5 @@
-"""녹화 탭의 주행 기록 카드(docs/runtime-options.md): recordd가 SD 카드에 쌓은 route(recordings/<이름>)마다 크기와 길이를
-보이고, 고른 route를 지운다.
+"""녹화 탭의 주행 기록 카드(docs/runtime-options.md): recordd가 SD 카드에 쌓은 route(recordings/<이름>)마다
+크기와 길이를 보이고, 고른 route를 지운다.
 
 - route는 이름 규칙(시작 시각 YYYY-MM-DD--HH-MM-SS-mmm, recording_writer.cc route_name)에 맞는 디렉터리만 다룬다. 다른
   파일과 디렉터리, 링크는 보이지도 지우지도 않는다.
@@ -83,10 +83,7 @@ def video_seconds(manifest: Dict[str, Any] | None) -> float | None:
     manifest가 시작할 때의 값이라 None이다."""
     if not manifest or manifest.get("complete") is not True:
         return None
-    frames, fps = manifest.get("video_frames"), manifest.get("fps")
-    if not isinstance(frames, int) or not isinstance(fps, (int, float)) or fps <= 0:
-        return None
-    return round(frames / fps, 1)
+    return round(manifest["video_frames"] / manifest["fps"], 1)
 
 
 class Recordings:
@@ -116,13 +113,15 @@ class Recordings:
         return out
 
     def recording(self) -> Dict[str, Any]:
-        """recordd의 녹화 상태: 신선도와 active(route를 쓰는 중), storage_blocked(공간 때문에 멈춘 이유 코드, 없으면 "")."""
+        """recordd의 녹화 상태: 신선도와 active(route를 쓰는 중), storage_blocked(공간 때문에 멈춘 이유
+        코드, 없으면 "")."""
         latest = self.state.read_payload()
         state = {**freshness(latest[1] if latest else None, RECORD_STATE_MAX_AGE_S), "active": False,
                  "storage_blocked": ""}
         if latest is not None:
             _, active, blocked = RECORD_STATE.unpack_from(latest[2])
-            state.update(active=bool(active), storage_blocked=STORAGE_BLOCKED.get(blocked, str(blocked) if blocked else ""))
+            reason = STORAGE_BLOCKED.get(blocked, str(blocked) if blocked else "")
+            state.update(active=bool(active), storage_blocked=reason)
         return state
 
     def disk(self) -> Dict[str, Any] | None:
@@ -131,8 +130,7 @@ class Recordings:
             space = os.statvfs(self.root)
         except OSError:
             return None
-        block = space.f_frsize or space.f_bsize
-        total, free = block * space.f_blocks, block * space.f_bavail
+        total, free = space.f_frsize * space.f_blocks, space.f_frsize * space.f_bavail
         return {"total_bytes": total, "free_bytes": free,
                 "reserve_bytes": max(MIN_FREE_BYTES, total * MIN_FREE_PERCENT // 100)}
 
@@ -149,8 +147,8 @@ class Recordings:
             raise Refusal("error.recordings_none", status=400)
         staged = route_names(self.staging)
         for name in chosen:
-            if not isinstance(name, str) or not ROUTE_NAME.fullmatch(name):
-                raise Refusal("error.recording_bad_name", status=400, name=str(name))
+            if not ROUTE_NAME.fullmatch(name):
+                raise Refusal("error.recording_bad_name", status=400, name=name)
             if name in staged:
                 raise Refusal("error.recording_busy", name=name)
             path = self.root / name

@@ -11,20 +11,17 @@
 #endif
 
 #include <algorithm>
-#include <cerrno>
 #include <climits>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 
 namespace {
 
-// futex 대기 한 번의 상한. 깨우지 않는 생산자라도 이 안에 데이터를 보고, 이 시간 초과로 그런 생산자를 알아챈다.
+// futex 대기 한 번의 상한. 끝없이 기다리는 호출도 이만큼마다 깨어 다시 본다.
 constexpr uint64_t kMaxFutexWaitNs = 100000000ULL;
 
-// 기다리는 쪽을 깨운다. waiters 셈은 보지 않고 늘 FUTEX_WAKE를 부른다: 다른 빌드가 머리를 다시 초기화(memset)하면
-// 기다리는 중의 셈이 어긋나(0 밑으로 감겨) 깨움을 영영 빠뜨릴 수 있다. 기다리는 이가 없으면 syscall 하나(약 1 µs)다.
+// 기다리는 쪽을 깨운다. 기다리는 이가 없어도 FUTEX_WAKE를 부른다(syscall 하나, 약 1 µs).
 void wake_all(std::atomic<uint32_t> *word) {
     word->fetch_add(1);
 #if defined(__linux__)
@@ -32,54 +29,27 @@ void wake_all(std::atomic<uint32_t> *word) {
 #endif
 }
 
-}  // namespace
-
+// still_waiting()이 참이면 word가 바뀌거나 timeout_ns(상한 100 ms)가 지날 때까지 잔다. 깨움 단어를 조건보다 먼저
+// 읽으므로 그 사이의 발행은 FUTEX_WAIT가 바로 돌아오게 한다. 가짜로 깰 수 있어 호출자가 다시 본다. 리눅스 밖(호스트
+// 시험)은 1 ms 잔다.
 template <class StillWaiting>
-void WakeWaiter::wait(std::atomic<uint32_t> *word, std::atomic<uint32_t> *waiters, uint64_t timeout_ns,
-                      StillWaiting still_waiting, const std::string &name) {
+void wait_wake(std::atomic<uint32_t> *word, uint64_t timeout_ns, StillWaiting still_waiting) {
 #if defined(__linux__)
-    if (polling_) {
-        if (word->load() == polled_word_) {
-            usleep(1000);
-            return;
-        }
-        polling_ = false;  // 생산자가 다시 깨운다(새 빌드로 다시 떴다)
-        std::fprintf(stderr, "ipc: %s producer wakes again, waiting on futex\n", name.c_str());
-    }
-    // waiters는 이 방식 전 빌드의 생산자(waiters가 0이면 깨우지 않았다)를 위해 계속 센다.
-    waiters->fetch_add(1);
     const uint32_t before = word->load();
-    bool timed_out = false;
-    if (still_waiting()) {
-        const uint64_t ns = std::min(timeout_ns, kMaxFutexWaitNs);
-        timespec relative{static_cast<time_t>(ns / 1000000000ULL), static_cast<long>(ns % 1000000000ULL)};
-        // 공유 메모리라 FUTEX_PRIVATE_FLAG는 쓰지 않는다. 깨움·시간 초과·신호 어느 것이든 돌아가 호출자가 다시 본다.
-        timed_out =
-            syscall(SYS_futex, reinterpret_cast<uint32_t *>(word), FUTEX_WAIT, before, &relative, nullptr, 0) != 0 &&
-            errno == ETIMEDOUT;
-    }
-    waiters->fetch_sub(1);
-    // 시간 초과로 깼는데 그사이 데이터가 왔고 깨움 단어가 그대로면 생산자가 깨우지 않는 빌드다. 막 발행하던(데이터를 쓰고
-    // 깨우기 직전인) 새 생산자를 잘못 보지 않게 1 ms 뒤 한 번 더 본다.
-    if (timed_out && !still_waiting() && word->load() == before) {
-        usleep(1000);
-        if (word->load() == before) {
-            polling_ = true;
-            polled_word_ = before;
-            std::fprintf(stderr, "ipc: %s producer does not wake (older build?), polling every 1 ms\n", name.c_str());
-        }
-    }
+    if (!still_waiting()) return;
+    const uint64_t ns = std::min(timeout_ns, kMaxFutexWaitNs);
+    timespec relative{static_cast<time_t>(ns / 1000000000ULL), static_cast<long>(ns % 1000000000ULL)};
+    // 공유 메모리라 FUTEX_PRIVATE_FLAG는 쓰지 않는다. 깨움·시간 초과·신호 어느 것이든 돌아가 호출자가 다시 본다.
+    syscall(SYS_futex, reinterpret_cast<uint32_t *>(word), FUTEX_WAIT, before, &relative, nullptr, 0);
 #else
     (void)word;
-    (void)waiters;
     (void)timeout_ns;
     (void)still_waiting;
-    (void)name;
-    (void)polling_;
-    (void)polled_word_;
     usleep(1000);
 #endif
 }
+
+}  // namespace
 
 // ---- ShmRegion ----
 
@@ -123,11 +93,9 @@ void ShmRegion::close() {
 
 FrameRing::~FrameRing() { close(); }
 
-bool FrameRing::open(bool create, unsigned width, unsigned height, unsigned slots) {
+bool FrameRing::open(bool create, unsigned width, unsigned height, unsigned slots, const char *name) {
     close();
-    if (width == 0 || height == 0 || slots == 0 || slots > kFrameSlots) return false;
-
-    if (!region_.open(kRoadAiFrameRing, create)) return false;
+    if (!region_.open(name, create)) return false;
     if (create && !region_.resize(sizeof(FrameRingHeader))) {
         std::perror("ipc: ftruncate frame ring");
         close();
@@ -256,8 +224,7 @@ LatestChannel::~LatestChannel() { close(); }
 
 bool LatestChannel::open(const char *name, size_t payload_capacity, bool create) {
     close();
-    name_ = name ? name : "";
-    if (!region_.open(name_.c_str(), create)) return false;
+    if (!region_.open(name, create)) return false;
 
     const size_t map_size = sizeof(IpcHeader) + payload_capacity;
     if (create) {
@@ -271,8 +238,8 @@ bool LatestChannel::open(const char *name, size_t payload_capacity, bool create)
         // 그대로 mmap하면 header를 읽는 순간 SIGBUS가 난다.
         size_t actual = 0;
         if (!region_.file_size(&actual) || actual < map_size) {
-            std::fprintf(stderr, "ipc: ipc channel size mismatch name=%s actual=%zu expected=%zu\n", name_.c_str(),
-                         actual, map_size);
+            std::fprintf(stderr, "ipc: ipc channel size mismatch name=%s actual=%zu expected=%zu\n", name, actual,
+                         map_size);
             close();
             return false;
         }
@@ -294,7 +261,6 @@ bool LatestChannel::open(const char *name, size_t payload_capacity, bool create)
         header_->seq.store(0, std::memory_order_release);
         header_->timestamp_ns.store(0, std::memory_order_release);
         header_->payload_size.store(0, std::memory_order_release);
-        header_->waiters.store(0);
         std::memset(payload_, 0, payload_capacity);
     }
     // 다른 빌드의 레이아웃이 남은 채널은 매핑도 풀어 valid()가 거짓이게 한다(CanQueue·FrameRing과 같다).
@@ -311,7 +277,7 @@ void LatestChannel::close() {
 }
 
 bool LatestChannel::publish(const void *payload, size_t payload_size) {
-    if (!header_ || !payload || payload_size > header_->payload_capacity) return false;
+    if (!header_ || payload_size > header_->payload_capacity) return false;
 
     uint64_t seq = header_->seq.load(std::memory_order_relaxed);
     if ((seq & 1ULL) != 0) ++seq;
@@ -329,22 +295,15 @@ bool LatestChannel::publish(const void *payload, size_t payload_size) {
 }
 
 void LatestChannel::wait_publish(uint64_t seen_seq, uint64_t timeout_ns) const {
-    if (!header_) {
-        usleep(1000);
-        return;
-    }
-    // 발행이 진행 중(홀수 seq)이어도 기다린다. 다 쓴 뒤 깨우므로, 그 사이의 시간 초과를 깨우지 않는 생산자로 보지 않는다.
-    waiter_.wait(
-        &header_->wake, &header_->waiters, timeout_ns,
-        [&] {
-            const uint64_t seq = header_->seq.load();
-            return seq == seen_seq || (seq & 1ULL) != 0;
-        },
-        name_);
+    // 발행이 진행 중(홀수 seq)이어도 기다린다. 다 쓴 뒤 깨운다.
+    wait_wake(&header_->wake, timeout_ns, [&] {
+        const uint64_t seq = header_->seq.load();
+        return seq == seen_seq || (seq & 1ULL) != 0;
+    });
 }
 
 bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) const {
-    if (!header_ || !payload) return false;
+    if (!header_) return false;
     for (int attempt = 0; attempt < 4; ++attempt) {
         const uint64_t before = header_->seq.load(std::memory_order_acquire);
         if (before == 0 || (before & 1ULL) != 0) return false;
@@ -363,15 +322,15 @@ bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) 
 }
 
 bool LatestChannel::read_new(uint64_t *last_seq, void *payload, size_t payload_capacity, int timeout_ms) const {
+    if (!header_) return false;
     const uint64_t timeout_ns = timeout_ms < 0 ? UINT64_MAX : static_cast<uint64_t>(timeout_ms) * 1000000ULL;
     uint64_t start = 0;  // 기다려야 할 때만 시계를 읽는다(CLOCK_BOOTTIME은 이 보드에서 진짜 syscall이다)
     while (true) {
         // seq가 그대로면 페이로드를 복사하지 않는다(폴링하는 쪽이 대부분 이 경우다)
-        const uint64_t current = header_ ? header_->seq.load(std::memory_order_acquire) : 0;
-        const bool unchanged = header_ && last_seq && current == *last_seq;
+        const uint64_t current = header_->seq.load(std::memory_order_acquire);
         uint64_t seq = 0;
-        if (!unchanged && read(payload, payload_capacity, &seq) && (!last_seq || seq != *last_seq)) {
-            if (last_seq) *last_seq = seq;
+        if (current != *last_seq && read(payload, payload_capacity, &seq) && seq != *last_seq) {
+            *last_seq = seq;
             return true;
         }
         if (timeout_ms == 0) return false;
@@ -395,10 +354,7 @@ CanQueue::~CanQueue() { close(); }
 
 bool CanQueue::open(const char *name, unsigned slot_count, bool create) {
     close();
-    if (!name || name[0] == '\0' || slot_count == 0) return false;
-
-    name_ = name;
-    if (!region_.open(name_.c_str(), create)) {
+    if (!region_.open(name, create)) {
         std::perror("ipc: shm_open CAN queue");
         return false;
     }
@@ -413,15 +369,14 @@ bool CanQueue::open(const char *name, unsigned slot_count, bool create) {
     }
     if (create) {
         if (actual < map_size && !region_.resize(map_size)) {
-            std::fprintf(stderr, "ipc: CAN queue resize failed name=%s actual=%zu expected=%zu\n", name_.c_str(),
-                         actual, map_size);
+            std::fprintf(stderr, "ipc: CAN queue resize failed name=%s actual=%zu expected=%zu\n", name, actual,
+                         map_size);
             std::perror("ipc: ftruncate CAN queue");
             close();
             return false;
         }
     } else if (actual < map_size) {
-        std::fprintf(stderr, "ipc: CAN queue size mismatch name=%s actual=%zu expected=%zu\n", name_.c_str(), actual,
-                     map_size);
+        std::fprintf(stderr, "ipc: CAN queue size mismatch name=%s actual=%zu expected=%zu\n", name, actual, map_size);
         close();
         return false;
     }
@@ -445,7 +400,7 @@ bool CanQueue::open(const char *name, unsigned slot_count, bool create) {
     }
 
     if (header_->magic != kCanQueueMagic || header_->version != kCanQueueVersion || header_->slot_count != slot_count) {
-        std::fprintf(stderr, "ipc: CAN queue header mismatch name=%s magic=0x%x version=%u slots=%u\n", name_.c_str(),
+        std::fprintf(stderr, "ipc: CAN queue header mismatch name=%s magic=0x%x version=%u slots=%u\n", name,
                      header_->magic, header_->version, header_->slot_count);
         close();
         return false;
@@ -485,7 +440,7 @@ void copy_can_batch(CanBatch *to, const CanBatch &from) {
 }  // namespace
 
 bool CanQueue::push(const CanBatch &batch) {
-    if (!header_ || !slots_) return false;
+    if (!header_) return false;
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_relaxed);
     const uint64_t read_seq = header_->read_seq.load(std::memory_order_acquire);
     if (write_seq - read_seq >= header_->slot_count) return false;
@@ -497,7 +452,7 @@ bool CanQueue::push(const CanBatch &batch) {
 }
 
 bool CanQueue::pop(CanBatch *batch) {
-    if (!header_ || !slots_ || !batch) return false;
+    if (!header_) return false;
     const uint64_t read_seq = header_->read_seq.load(std::memory_order_relaxed);
     const uint64_t write_seq = header_->write_seq.load(std::memory_order_acquire);
     if (read_seq == write_seq) return false;
@@ -520,9 +475,8 @@ bool CanQueue::pop_wait(CanBatch *batch, uint64_t timeout_ns) {
     while (true) {
         const uint64_t elapsed = monotonic_now_ns() - start;
         if (elapsed >= timeout_ns) return false;
-        waiter_.wait(
-            &header_->wake, &header_->waiters, timeout_ns - elapsed,
-            [&] { return header_->write_seq.load() == header_->read_seq.load(); }, name_);
+        wait_wake(&header_->wake, timeout_ns - elapsed,
+                  [&] { return header_->write_seq.load() == header_->read_seq.load(); });
         if (pop(batch)) return true;
     }
 }

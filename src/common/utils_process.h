@@ -48,7 +48,7 @@ inline std::string params_dir() {
     return value && value[0] != '\0' ? std::string(value) : std::string("params");
 }
 
-inline std::string param_path(const char *name) { return params_dir() + "/" + (name ? name : ""); }
+inline std::string param_path(const char *name) { return params_dir() + "/" + name; }
 
 namespace utils_process_detail {
 
@@ -57,9 +57,7 @@ inline volatile sig_atomic_t *&stop_flag() {
     return flag;
 }
 
-inline void stop_signal_handler(int) {
-    if (stop_flag() != nullptr) *stop_flag() = 1;
-}
+inline void stop_signal_handler(int) { *stop_flag() = 1; }  // install_stop_signal_handlers가 깃발부터 둔다
 
 }  // namespace utils_process_detail
 

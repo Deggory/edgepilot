@@ -43,12 +43,10 @@ public:
 
     void rpy(float out[3]) const;
     bool flow_applied() const { return flow_applied_; }
-    bool requested() const { return requested_; }
     uint32_t flags() const { return flags_; }
 
 private:
     bool initialized_ = false;
-    bool requested_ = false;     // 마지막으로 본 설정
     bool active_ = false;        // 지금 따르는 설정(결합 중 바뀐 설정은 해제 뒤에 온다)
     bool flow_applied_ = false;  // 지금 목표가 광류다
     bool transition_ = false;    // 광류에서 포즈로 돌아오는 중

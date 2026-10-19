@@ -4,7 +4,6 @@
 // 출처가 바뀐 캐시는 배율·마찰만 이어 쓴다.
 
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -73,10 +72,9 @@ public:
     TorqueRestore restore_status() const { return restore_; }
     const TorqueTuning &tuning() const { return offline_; }
     bool localizer_source() const { return localizer_source_; }
-    // 상류 torqued는 lateralDelay 메시지(lagd)로 lag를 바꾼다. 이후 들어오는 점부터 적용한다.
-    void set_lag(double lag_s) {
-        if (std::isfinite(lag_s) && lag_s > 0.0) lag_s_ = lag_s;
-    }
+    // 상류 torqued는 lateralDelay 메시지(lagd)로 lag를 바꾼다. 이후 들어오는 점부터 적용한다. 값은 controlsd의 경로
+    // 지연이다(lagd 0.15~0.65 s 또는 설정값).
+    void set_lag(double lag_s) { lag_s_ = lag_s; }
     double lag() const { return lag_s_; }
 
     // 적합에 점을 전부 쓴다(상류는 2000점 무작위 추출). 참조 구현 대조용.
@@ -130,7 +128,7 @@ private:
     int raw_head_ = 0;  // 가장 오래된 표본
     int raw_count_ = 0;
     std::array<Bucket, kBuckets> buckets_{};
-    std::vector<std::array<double, 2>> fit_points_;
+    std::vector<const std::array<double, 2> *> fit_points_;  // 적합할 점(버킷의 점을 가리킨다)
     Filter factor_f_, offset_f_, friction_f_;
     long frame_ = -1;
     bool has_motion_t_ = false;

@@ -3,7 +3,7 @@
 
 // 녹화된 CanRx/CanTx 페이로드: RecordedCanBatchHeader 뒤에 RecordedCanFrame이 count개.
 // recordd가 쓰고 replayd와 진단 도구가 읽는다. 읽을 때는 페이로드에 다 들어 있는 프레임만 본다
-// (끊긴 꼬리는 버린다).
+// (끊긴 꼬리는 버린다). 디스크의 프레임은 IpcCanFrame과 같은 바이트라 통째로 복사한다.
 
 #include "common/ipc_messages.h"
 #include "recording/recording_format.h"
@@ -14,24 +14,18 @@
 #include <cstring>
 #include <vector>
 
+static_assert(sizeof(RecordedCanFrame) == sizeof(IpcCanFrame) &&
+                  offsetof(RecordedCanFrame, flags) == offsetof(IpcCanFrame, flags) &&
+                  offsetof(RecordedCanFrame, data) == offsetof(IpcCanFrame, data),
+              "recorded CAN frames are IpcCanFrame bytes");
+
 // 배치를 디스크 형식으로 직렬화한다. 프레임은 kCanBatchMaxFrames개까지만 쓴다.
 inline std::vector<uint8_t> encode_recorded_can(const CanBatch &batch) {
     const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
     std::vector<uint8_t> payload(sizeof(RecordedCanBatchHeader) + count * sizeof(RecordedCanFrame));
     const RecordedCanBatchHeader header{count, batch.dropped};
     std::memcpy(payload.data(), &header, sizeof(header));
-    uint8_t *out = payload.data() + sizeof(header);
-    for (uint32_t index = 0; index < count; ++index, out += sizeof(RecordedCanFrame)) {
-        const IpcCanFrame &source = batch.frames[index];
-        RecordedCanFrame recorded;
-        recorded.address = source.address;
-        recorded.src = source.src;
-        recorded.bus_time = source.bus_time;
-        recorded.data_len = source.data_len;
-        recorded.flags = source.flags;
-        std::memcpy(recorded.data, source.data, sizeof(recorded.data));
-        std::memcpy(out, &recorded, sizeof(recorded));
-    }
+    std::memcpy(payload.data() + sizeof(header), batch.frames, count * sizeof(RecordedCanFrame));
     return payload;
 }
 
@@ -40,7 +34,7 @@ inline std::vector<uint8_t> encode_recorded_can(const CanBatch &batch) {
 template <typename Fn>
 uint32_t for_each_recorded_can_frame(const void *payload, size_t size, Fn &&fn, uint32_t *dropped = nullptr) {
     RecordedCanBatchHeader header;
-    if (!payload || size < sizeof(header)) return 0;
+    if (size < sizeof(header)) return 0;
     const uint8_t *bytes = static_cast<const uint8_t *>(payload);
     std::memcpy(&header, bytes, sizeof(header));
     if (dropped) *dropped = header.dropped;
@@ -54,26 +48,19 @@ uint32_t for_each_recorded_can_frame(const void *payload, size_t size, Fn &&fn, 
     return count;
 }
 
-// 페이로드를 CanBatch로 되돌린다(replayd). 프레임은 kCanBatchMaxFrames개에서도 자른다.
-inline CanBatch decode_recorded_can(const void *payload, size_t size, uint64_t timestamp_ns) {
-    CanBatch batch;
-    if (!payload || size < sizeof(RecordedCanBatchHeader)) return batch;
-    batch.timestamp_ns = timestamp_ns;
-    batch.valid = 1;
-    for_each_recorded_can_frame(
-        payload, size,
-        [&batch](const RecordedCanFrame &frame) {
-            if (batch.count >= kCanBatchMaxFrames) return;
-            IpcCanFrame &out = batch.frames[batch.count++];
-            out.address = frame.address;
-            out.src = frame.src;
-            out.bus_time = frame.bus_time;
-            out.data_len = frame.data_len;
-            out.flags = frame.flags;
-            std::memcpy(out.data, frame.data, sizeof(out.data));
-        },
-        &batch.dropped);
-    return batch;
+// 페이로드를 out에 되돌린다(replayd, replay_controls). 머리와 count개 프레임만 쓰므로(받는 쪽은 count까지만
+// 읽는다) 한 배치를 계속 다시 쓸 수 있다. 프레임은 kCanBatchMaxFrames개에서도 자른다. 머리보다 짧으면 false.
+inline bool decode_recorded_can(const void *payload, size_t size, uint64_t timestamp_ns, CanBatch *out) {
+    RecordedCanBatchHeader header;
+    if (size < sizeof(header)) return false;
+    std::memcpy(&header, payload, sizeof(header));
+    const size_t whole = (size - sizeof(header)) / sizeof(RecordedCanFrame);
+    out->timestamp_ns = timestamp_ns;
+    out->valid = 1;
+    out->count = static_cast<uint32_t>(std::min<size_t>({header.count, whole, kCanBatchMaxFrames}));
+    out->dropped = header.dropped;
+    std::memcpy(out->frames, static_cast<const uint8_t *>(payload) + sizeof(header), out->count * sizeof(IpcCanFrame));
+    return true;
 }
 
 #endif

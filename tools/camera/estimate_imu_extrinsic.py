@@ -10,7 +10,6 @@ roll은 모델 pose의 롤 성분 오차가 커서 route마다 1° 정도 흔들
 사용: estimate_imu_extrinsic.py <route_dir>...
 """
 import math
-import struct
 import sys
 from pathlib import Path
 
@@ -18,17 +17,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 import recording_reader as rr  # noqa: E402
+from model_warp import rotation_from_rpy  # noqa: E402
 
 CAMODO_DELAY_S = 0.1   # locationd kCamOdoPoseDelay
 MIN_YAW_RATE = 0.08    # rad/s
 MIN_SPEED = 4.0        # m/s
-
-
-def euler_rotate(r, p, y):
-    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
-    return np.array([[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-                     [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-                     [-sp, cp * sr, cp * cr]])
 
 
 def load(route: Path):
@@ -42,16 +35,14 @@ def load(route: Path):
                 ctl_t.append(c["timestamp_ns"] * 1e-9)
                 ctl_v.append(c["ego_speed_kph"] / 3.6)
             elif rec.type == rr.RECORD_MODEL_STATE:
-                layout = rec.model_layout()
-                cap, = struct.unpack_from("<Q", rec.payload, layout["capture_timestamp_ns"])
-                p = np.frombuffer(rec.payload, rr.POSE_STATE, 1, layout["pose"])[0]
-                cal = np.frombuffer(rec.payload, rr.CALIBRATION_STATE, 1, layout["calibration"])[0]
+                model = rec.model_state()
+                cap = int(model["capture_timestamp_ns"])
+                p, cal = model["pose"], model["calibration"]
                 if p["valid"] and cal["status"] == 1:
-                    rotation = euler_rotate(float(cal["roll"]), float(cal["pitch"]), float(cal["yaw"]))
+                    rotation = rotation_from_rpy(float(cal["roll"]), float(cal["pitch"]), float(cal["yaw"]))
                     pose.append((cap * 1e-9 - CAMODO_DELAY_S, *(rotation @ p["rot"].astype(float))))
             elif rec.type == rr.RECORD_IMU:
-                _, count, _ = rr.IMU_BATCH_HEAD.unpack_from(rec.payload, 0)
-                imu.append(np.frombuffer(rec.payload, rr.IMU_SAMPLE, count, rr.IMU_BATCH_HEAD.size).copy())
+                imu.append(rec.imu_samples())
     if not imu or not pose:
         raise SystemExit(f"{route}: no IMU or pose records")
     return np.array(ctl_t), np.array(ctl_v), np.array(pose), np.concatenate(imu)

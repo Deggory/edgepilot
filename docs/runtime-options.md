@@ -54,7 +54,7 @@ parts below.
 targets the openpilot master supercombo core: 5 inputs (`input_imgs` and
 `big_input_imgs` uint8 `[1,12,128,256]`, `desire` `[1,25,8]`,
 `features_buffer` `[1,24,512]`, `traffic_convention` `[1,2]`) and 2576 output
-floats (15 head outputs reassembled, or one `[1,2576]` output). `modeld` checks
+floats (15 head outputs reassembled). `modeld` checks
 names, shapes, dtypes, and buffer sizes at startup and refuses any other
 axmodel rather than misreading it.
 
@@ -62,9 +62,7 @@ axmodel rather than misreading it.
 | --- | --- | --- |
 | `EDGEPILOT_PROFILE=1` | off | `modeld` prints warp/inputs/NPU/outputs averages every 30 frames; `overlayd` adds HUD draw and video push timing to its status line. |
 | `EDGEPILOT_CAMERA_INTRINSICS=fx,fy,cx,cy` | `1131.24,1130.85,940.13,552.60`, the calibrated MaixCAM2 camera | Camera intrinsics at 1920x1080, scaled to the capture size. Set it to replay footage from another camera. |
-| `EDGEPILOT_CALIB_ROLL_DEG`, `EDGEPILOT_CALIB_PITCH_DEG`, `EDGEPILOT_CALIB_YAW_DEG` | unset | Manual calibration in degrees for both the HUD projection and the model input warp. If any value is set, it wins and online calibration is applied to neither; the manual values also seed `params/calibration.json`. Otherwise the saved calibration is restored and pose-based online calibration feeds the next frame's input warp, matching openpilot's `cameraOdometry -> liveCalibration -> modeld` loop. |
-| `EDGEPILOT_CALIB_AUTO=0` | on | Disables pose-based online calibration and keeps the restored or manually supplied projection. |
-| `EDGEPILOT_LOG_CALIB=1` | off | Prints the online calibrator status, accepted/rejected sample counts, valid block count, rpy, and spread. |
+| `EDGEPILOT_CALIB_AUTO=0` | on | Disables pose-based online calibration and keeps the restored projection (`params/calibration.json`, or zero without one). On, the saved calibration is restored and pose-based online calibration feeds the next frame's input warp, matching openpilot's `cameraOdometry -> liveCalibration -> modeld` loop. |
 | `EDGEPILOT_FLOW_CALIB=0` | on | Turns off the optical-flow calibrator (VPP/IVE). On, it is recorded in `ModelState.flow_calibration` and logged as `flowcal:` lines; the warp uses it only when the device setting `calibration_use_flow` is on ([Flow calibration](flow-calibration.md#using-the-estimate)). Off, nothing new is measured; a stored estimate (`params/flow_calibration.json`) is still recorded and can still be applied, and with none the recorded status stays 0. |
 
 ### Camera and input warp
@@ -72,16 +70,14 @@ axmodel rather than misreading it.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `EDGEPILOT_MAX_SHUTTER_US=N` | `33333`, the 30 fps frame time | Caps the auto-exposure shutter in `camerad`, so the 20 fps sensor does not add motion blur. `0` leaves the sensor default. |
-| `EDGEPILOT_WARP_CPU=1` | off: the GDC warp | Disables the GDC warp and returns the whole input warp to the CPU; the wide tower is warped on the second core. The GDC path also falls back to the CPU when it cannot be set up or the frame is NV21. |
 
 ### Storage and replay
 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `EDGEPILOT_PARAMS_DIR=/path/to/params` | `params/` relative to the runtime working directory | Overrides the shared runtime parameter directory, and is the only way to relocate parameter files; there are no per-file overrides. The web console reads the factory defaults from the directory beside it with `.defaults` added (`params.defaults/`, filled by the upload script). |
-| `EDGEPILOT_REPLAY_NV12=/path/to/replay.scnv12` | unset: the camera ring | When launching `modeld` directly, runs headless from an `SCNV12R1` NV12 replay file instead of the camera ring. Width, height, and frame count are read from the replay header; the warp uses the same GDC path as live. This is for validating inference and online calibration from collected logs. It still runs on the board, since it needs the NPU. |
+| `EDGEPILOT_REPLAY_NV12=/path/to/replay.scnv12` | unset: the camera ring | When launching `modeld` directly, runs headless from an `SCNV12R1` NV12 replay file instead of the camera ring. Width, height, and frame count are read from the replay header; the warp uses the same GDC path as live. This is for validating inference from collected logs; the online calibration does not update (the replay's speed is 0) and the desire input is always 0. It still runs on the board, since it needs the NPU. |
 | `EDGEPILOT_CAMERA_OFFSET_M=m`, `EDGEPILOT_CAMERA_HEIGHT_M=m` | `0` and the model height, 1.22 m | The camera mount for replay mode, which does not read `params/display.json`. Live capture uses `camera_offset_m` and `camera_height_m` from the device settings. |
-| `EDGEPILOT_MAX_FRAMES=N` | `0`: no limit | Stops after `N` frames (`modeld` inferred frames, `camerad` captured frames). This is mainly useful with replay mode. |
 | `EDGEPILOT_RAW_DUMP=/path/to/dump.bin` | unset | During replay, writes every raw model output to an `SCODMP1` file that `gtest_model_output` reads; see [Model swap verification](diagnostics.md#model-swap-verification). |
 | `EDGEPILOT_RECORD_ROOT=dir` | `recordings` under the install directory | Where `recordd` writes its routes. `params/recording.json` `enabled` toggles recording. |
 | `EDGEPILOT_RECORD_STAGING=dir` | `/tmp/record_staging` | The staging directory in RAM that `recordd` writes through. A route left there by a session that died is moved to the record root at start. |
@@ -105,7 +101,7 @@ and the one the manager sets before it starts `pandad`.
 | `EDGEPILOT_PANDA_SAFETY=nooutput\|silent\|elm327\|hyundai\|hyundaiCommunity\|allOutput` | `nooutput` | `hyundaiCommunity` | Panda safety mode for `pandad`. `hyundai` defaults its parameter to `2` (the Hyundai/Kia hybrid path), every other mode to `0`; an unknown name falls back to `nooutput`. |
 | `EDGEPILOT_PANDA_SAFETY_PARAM=N` | the mode's default | `0` | Numeric safety parameter passed with the safety mode. |
 | `EDGEPILOT_PANDA_TX=1` | `0` | `1` | Allows `pandad` to relay ordered `/dev/shm/edgepilot_sendcan` batches to the Panda. |
-| `EDGEPILOT_PANDA_ENGAGED=1` | disengaged | engaged | Sends the Panda heartbeat as engaged; only meaningful with `EDGEPILOT_PANDA_TX=1`. |
+| `EDGEPILOT_PANDA_ENGAGED=1` | disengaged | engaged | Sends the Panda heartbeat as engaged; only meaningful with `EDGEPILOT_PANDA_TX=1`. The bundled firmware (`firmware/panda`) ignores the value and only resets its heartbeat timer; newer firmware reads it. |
 | `EDGEPILOT_PANDA_LOG_CAN=1` | off | off | Prints every received CAN frame from `pandad`. This is a bus-bringup aid only; at full bus load it is far too noisy to leave on. |
 | `EDGEPILOT_PANDA_FIRMWARE=path` | `firmware/panda.bin.signed` | same | The Panda application image the web console flashes, relative to the install directory (built by `make -C firmware/panda`). `pandad` and the web console read the same variable. |
 
@@ -138,9 +134,10 @@ Panda's health confirm that configuration
 
 `overlayd` turns the backlight on at start (`pwmchip0/pwm3`, level from
 `maix_backlight_value` in `/boot/configs` and `disp_max_backlight` in
-`/boot/board`). The web console then applies `params/display.json` through
-`scripts/web_console/backlight.py` on the same PWM: duty = 100 µs period x
-brightness % x `disp_max_backlight` %, and `enabled: false` sets the duty to 0.
+`/boot/board`) and then applies `params/display.json` on the same PWM: duty =
+100 µs period x brightness % x `disp_max_backlight` %, and `enabled: false`
+sets the duty to 0 ([HUD](hud.md#backlight)). The web console only writes the
+file, and shows the level it reads back from the PWM.
 
 ### Alerts
 
@@ -164,10 +161,10 @@ atomically: to a temporary file, synced, then renamed over the old one.
 
 | File | Written by | Read by | A change applies |
 | --- | --- | --- | --- |
-| `steering.json` | web console: Steering and Vehicle tabs | `controlsd`; `locationd` reads `steer_actuator_delay` once at start | on the next control cycle: the web console signals `controlsd`, which also checks the file every second |
+| `steering.json` | web console: Steering and Vehicle tabs | `controlsd`; `locationd` reads `steer_actuator_delay` once at start | within 1 s: `controlsd` checks both files every second |
 | `adaptive_cruise.json` | web console: Vision cruise tab | `controlsd` | as `steering.json` |
 | `recording.json` | web console: Recording tab | `recordd` | `enabled` within 250 ms; `bitrate_bps` when `recordd` next starts |
-| `display.json` | web console: Device settings tab; `calibration_use_flow` from the Vehicle tab's calibration card | web console (backlight), `modeld` (camera mount, calibration source), `overlayd` (alert volume) | the backlight at once; `modeld` and `overlayd` within 1 s |
+| `display.json` | web console: Device settings tab; `calibration_use_flow` from the Vehicle tab's calibration card | `overlayd` (backlight, alert volume), `modeld` (camera mount, calibration source) | within 1 s |
 | `lateral_nn.json` | web console: Steering tab's learned torque model card | `controlsd`, `recordd` | `controlsd` checks it every second and loads the new model in the background ([Lateral NN](lateral-nn.md#models-choice-and-switch)) |
 | `calibration.json` | `modeld` | `modeld`, at start | the runtime's own state, see below |
 
@@ -189,17 +186,20 @@ sequenceDiagram
     participant C as controlsd
     B->>W: PATCH<br>/api/params/steering
     W->>F: write, rename
-    W->>C: SIGHUP
     W-->>B: new values
-    C->>F: read both files
-    Note over C: next 10 ms tick,<br>PID state kept
+    C->>F: stat every second,<br>read both files
+    Note over C: applied on that tick,<br>PID state kept
 ```
 
-The signal makes `controlsd` read the files on its next 10 ms tick and apply
-them on the same tick, keeping the control and PID state. Without the signal,
-its check every second finds the change.
+The web console only writes the file. `controlsd` checks both files every
+second (a rename gives the file a new inode, so every write is seen), reads
+them when one changed and applies them on that tick, keeping the control and
+PID state. A change therefore applies within a second. If `controlsd` is not
+running, the editor says the value is saved and `controlsd` is not running; it
+reads the file when it starts.
 
 `params/calibration.json` is also tracked as the initial calibration seed. The
+tracked copy is all zero (uncalibrated), the same as having no file. The
 runtime replaces it atomically when a stable calibration is learned, and
 restores it before the first model frame; manual `EDGEPILOT_CALIB_*` values
 take precedence and seed it. `scripts/upload_to_board.sh` preserves an existing
@@ -222,7 +222,7 @@ at the next start:
 | `flow_calibration.json` | `modeld` | the first estimate and a mount change at once, otherwise every minute and on exit | at `modeld` start |
 | `live_parameters.json` | `controlsd` (paramsd) | every minute, if it changed | at `controlsd` start |
 | `live_torque_parameters.bin` | `controlsd` (torqued) | every 12 s, if it gathered new points | at `controlsd` start |
-| `live_delay.json` | `locationd` (lagd) | every 60 s and on exit | at `locationd` start, unless the saved estimate is invalid; a changed `steer_actuator_delay` does not discard it |
+| `live_delay.json` | `locationd` (lagd) | every 60 s and on exit | at `locationd` start, unless it is from another cache version, invalid, or out of range (then it is deleted); a changed `steer_actuator_delay` does not discard it |
 
 A saved learner state that fails to restore is deleted (for torqued, only a
 corrupt cache). paramsd's state also fails when the mass, wheelbase, centre of
@@ -292,8 +292,7 @@ What each tab writes:
 
 ```mermaid
 flowchart LR
-    device["Device settings"] --> pwm(["backlight PWM"])
-    device --> flash["Panda flash<br>request"]
+    device["Device settings"] --> flash["Panda flash<br>request"]
     device --> dj["display.json"]
     rec["Recording"] --> rj["recording.json"]
     cruise["Vision cruise"] --> aj["adaptive_cruise.json"]
@@ -303,9 +302,7 @@ flowchart LR
     steering["Steering"] --> sj
     steering --> lj["lateral_nn.json"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
-    classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
     class steering,vehicle,cruise,rec,device,sj,lj,reset,dj,aj,rj,flash proc
-    class pwm external
 ```
 
 The BEV tab writes nothing. The two request files sit in `/dev/shm`: `modeld`

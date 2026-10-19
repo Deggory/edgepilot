@@ -28,7 +28,6 @@ target_link_libraries(replay_controls PRIVATE controls)
 
 # 보드 전용: 광류 작업(modeld와 같은 FlowTracker: 보정 창과 앞차 확대율)을 녹화 구간 하나에 돌린다. VDEC 디코딩, IVE.
 if(EDGEPILOT_BUILD_RUNTIME)
-  add_executable(flow_calibration_replay flow_calibration_replay.cc
-                 ${PROJECT_SOURCE_DIR}/src/model/flow_worker.cc)
+  add_executable(flow_calibration_replay flow_calibration_replay.cc)
   configure_board_target(flow_calibration_replay model recording maixcam2_ive maixcam2_vdec maixcam2_gdc)
 endif()

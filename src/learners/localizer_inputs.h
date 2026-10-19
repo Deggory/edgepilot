@@ -11,6 +11,7 @@
 
 inline bool localizer_sample_from(const LocalizationState &loc, bool enabled, double age_s, double sample_t_s,
                                   LocalizerSample *out) {
+    out->stamp_ns = loc.timestamp_ns;
     out->t_s = sample_t_s;
     out->yaw_rate_rad_s = loc.angular_velocity_calib[2];
     out->yaw_rate_std_rad_s = loc.angular_velocity_calib_std[2];

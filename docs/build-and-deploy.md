@@ -28,6 +28,7 @@ directories are generated output and are not tracked:
 | --- | --- |
 | `build-ax630/` | MaixCAM2 runtime (`tools/docker_ax630/build.sh`), the upload default |
 | `build-host/` | host tests and tools (`scripts/run_host_tests.sh`) |
+| `build-linux-test/` | the same, built with the board's compiler in Docker (`scripts/run_host_tests.sh --linux`) |
 
 The runtime build produces `camerad`, `modeld`, `overlayd`, `controlsd`,
 `pandad`, `panda_flash`, `recordd`, `imud`, `locationd`, `replayd`, and
@@ -156,9 +157,10 @@ scripts/run_host_tests.sh
 ```
 
 Builds `build-host/` with the runtime off and runs every test through `ctest`:
-320 googletest cases, `check_web_console.py`, `check_recording_reader.py` and
-`check_docs.py`. It needs neither the board nor `deps/`; googletest is
-downloaded on the first configure. See [Host tests](../tests/README.md).
+356 googletest cases, `check_web_console.py`, `check_manager.py`,
+`check_recording_reader.py` and `check_docs.py`. It needs neither the board nor
+`deps/`; googletest is downloaded on the first configure. See
+[Host tests](../tests/README.md).
 
 ## Related
 

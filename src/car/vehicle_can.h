@@ -7,31 +7,22 @@
 
 struct Sas11Values {
     float steering_angle_deg = 0.0f;
-    float steering_rate_deg = 0.0f;
 };
 
 struct Mdps12Values {
     int driver_torque = 0;
-    int driver_torque_raw_signal = 0;
     bool toi_unavailable = false;
     bool toi_active = false;
     bool toi_fault = false;
-    bool fail_state = false;
-    bool sensor_error = false;
-    int msg_count = 0;
-    int checksum = 0;
     int output_torque = 0;  // CR_Mdps_OutTq: MDPS가 실제로 내는 토크(원시값 - 2048, DBC 0.1 단위)
 };
 
 struct Esp12Values {
-    float yaw_rate_deg_s = 0.0f;
     float yaw_rate_rad_s = 0.0f;
     bool yaw_rate_valid = true;
     float lat_accel_mps2 = 0.0f;
     bool lat_accel_valid = false;
     float long_accel_mps2 = 0.0f;
-    bool long_accel_valid = false;
-    float brake_pressure_bar = 0.0f;
 };
 
 struct WhlSpd11Values {
@@ -78,22 +69,14 @@ struct ElectGearValues {
 struct Cgw1Values {
     bool driver_door_open = false;
     bool passenger_door_open = false;
-    bool front_door_open = false;
     bool seatbelt_unlatched = false;
     bool left_blinker = false;
     bool right_blinker = false;
-    bool hazard = false;
 };
 
 struct Cgw2Values {
     bool rear_left_door_open = false;
     bool rear_right_door_open = false;
-    bool rear_door_open = false;
-};
-
-struct Lca11Values {
-    bool left_blindspot = false;
-    bool right_blindspot = false;
 };
 
 struct Tpms11Values {
@@ -175,9 +158,6 @@ struct VehicleCanState {
     bool right_blinker = false;
     double left_blinker_until_s = -1.0;
     double right_blinker_until_s = -1.0;
-    bool hazard = false;
-    bool left_blindspot = false;
-    bool right_blindspot = false;
     int tpms_unit = 0;
     float tpms_pressure_fl = 0.0f;
     float tpms_pressure_fr = 0.0f;
@@ -234,9 +214,6 @@ Cgw1Values decode_cgw1(const std::array<uint8_t, 8> &data);
 // K7 CGW2 rear door 값을 해석한다.
 Cgw2Values decode_cgw2(const std::array<uint8_t, 8> &data);
 
-// K7 LCA11 blind-spot indicators를 해석한다.
-Lca11Values decode_lca11(const std::array<uint8_t, 8> &data);
-
 Tpms11Values decode_tpms11(const std::array<uint8_t, 8> &data);
 
 // 차 상태에 넣을 수신 프레임인가: Panda가 돌려준 우리 송신 에코(flags)·거부 프레임이나 CAN FD 길이, 차 버스가
@@ -249,8 +226,20 @@ inline bool is_vehicle_rx_frame(uint32_t flags, uint32_t data_len, uint32_t src)
 void update_vehicle_can_state(VehicleCanState *state, uint32_t address, const std::array<uint8_t, 8> &data,
                               uint8_t length, uint8_t bus, double now_s);
 
-// K7 lateral 제어에 필요한 필수 CAN이 모두 최신인지 확인한다.
+// K7 lateral 제어에 필요한 필수 CAN의 수신 시각. 휠 속도는 제어의 모든 속도 임계값 기준이라 낡으면 대체하지 않고
+// 제어를 막는다(vehicle_speed_kph는 NaN을 돌려준다).
+inline constexpr double VehicleCanState::*kRequiredMessageTimes[] = {
+    &VehicleCanState::lkas11_time_s,  &VehicleCanState::clu11_time_s,      &VehicleCanState::sas11_time_s,
+    &VehicleCanState::mdps12_time_s,  &VehicleCanState::tcs13_time_s,      &VehicleCanState::tcs15_time_s,
+    &VehicleCanState::e_ems11_time_s, &VehicleCanState::elect_gear_time_s, &VehicleCanState::cgw1_time_s,
+    &VehicleCanState::cgw2_time_s,    &VehicleCanState::whl_spd11_time_s};
+
+// 필수 CAN(kRequiredMessageTimes)이 모두 최신인지 확인한다.
 bool vehicle_state_fresh(const VehicleCanState &state, double now_s, double timeout_s = 0.5);
+
+// 시험·재생 도구용: 컨트롤러가 읽는 수신 메시지(필수 CAN과 ESP12)를 모두 now_s에 받은 것으로 둔다. 목록을 저마다
+// 손으로 들면 새 메시지가 필수가 됐을 때 재생이 말없이 매 틱 막혔다.
+void stamp_received_messages(VehicleCanState *state, double now_s);
 
 // LKAS/CLU/MDPS seed frame이 모두 준비됐는지 확인한다.
 bool seed_frames_ready(const VehicleCanState &state);

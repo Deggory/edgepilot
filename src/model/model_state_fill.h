@@ -9,12 +9,8 @@
 #include "common/projection.h"
 #include "model/calibration_online.h"
 
-// plan이 차선 점 거리(X_IDXS)에 닿는 시각(lane_t). 끝을 넘는 점은 NaN, 정차 부근의 뒤로 뛰는 knot은
-// 두 knot 시각 사이로 묶여 lane_t는 단조다.
-void compute_lane_t(const ParsedPlan &plan, float lane_t[kTrajectorySize]);
-
-void fill_model_state(ModelState &state, const ParsedModelOutput &parsed, const ProjectionState &projection,
-                      const OnlineCalibrator::Snapshot &calibration, uint64_t frame_id, uint64_t capture_timestamp_ns,
-                      float model_execution_ms);
+ModelState fill_model_state(const ParsedModelOutput &parsed, const ProjectionState &projection,
+                            const OnlineCalibrator::Snapshot &calibration, uint64_t frame_id,
+                            uint64_t capture_timestamp_ns, float model_execution_ms);
 
 #endif

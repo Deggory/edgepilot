@@ -75,9 +75,11 @@ private:
     bool one_blinker_last_ = false;
     // 변경 중 운전자가 반대쪽으로 민 연속 프레임
     int against_frames_ = 0;
-    // 회전 중인 쪽(-1 왼쪽, 1 오른쪽, 0 아님)과 회전한 프레임 수
+    // 회전 중인 쪽(-1 왼쪽, 1 오른쪽, 0 아님)과 회전한 프레임 수. 15초 상한으로 거뒀으면 핸들이 돌아오거나 깜빡이를
+    // 끌 때까지 turn_expired_다.
     int turn_direction_ = 0;
     int turn_frames_ = 0;
+    bool turn_expired_ = false;
     // 최근 1초의 속도(감속 판단). 모델 프레임마다 하나
     std::array<float, 21> speeds_{};
     int speed_count_ = 0;

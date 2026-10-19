@@ -30,13 +30,12 @@ constexpr double kMinFilterDecay = 50.0;
 constexpr double kMaxFilterDecay = 250.0;
 constexpr double kLatAccThreshold = 1.0;
 constexpr double kMinEngageBuffer = 2.0;
-constexpr int kTorqueVersion = 2;  // 2: 요레이트·롤 출처 바이트(1은 출처 없이 ESP12)
+constexpr int kTorqueVersion = 2;  // 2: 요레이트·롤 출처 바이트
 constexpr double kSteerBucketBounds[TorqueEstimator::kBuckets][2] = {
     {-0.5, -0.3}, {-0.3, -0.2}, {-0.2, -0.1}, {-0.1, 0.0}, {0.0, 0.1}, {0.1, 0.2}, {0.2, 0.3}, {0.3, 0.5}};
 constexpr int kMinBucketPoints[TorqueEstimator::kBuckets] = {100, 300, 500, 500, 500, 500, 300, 100};
+// 캐시 머리. 매직이 다르면 깨진 캐시, 버전이 다르면 키가 다른 캐시로 보고 처음부터 배운다(restore)
 constexpr char kTorqueCacheMagic[8] = {'E', 'D', 'G', 'E', 'T', 'Q', 'C', '1'};
-// 2026-10-07 이전 빌드가 쓴 캐시의 매직. 읽기만 한다.
-constexpr char kLegacyTorqueCacheMagic[8] = {'K', '2', '3', '0', 'T', 'Q', 'C', '1'};
 
 uint64_t splitmix64(uint64_t *state) {
     uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
@@ -174,9 +173,9 @@ int TorqueEstimator::valid_percent() const {
 }
 
 void TorqueEstimator::estimate_params(double *slope, double *offset, double *friction) {
-    fit_points_.clear();  // 예약해 둔 버퍼를 재사용한다
+    fit_points_.clear();  // 예약해 둔 버퍼를 재사용한다. 점은 복사하지 않고 가리킨다(최대 12,000개를 4 Hz로 섞는다)
     for (const Bucket &b : buckets_)
-        for (int i = 0; i < b.count; ++i) fit_points_.push_back(b.at(i));
+        for (int i = 0; i < b.count; ++i) fit_points_.push_back(&b.at(i));
     const int total = static_cast<int>(fit_points_.size());
     int n = total;
     if (!fit_all_points_ && total > kFitPointsTotal) {  // rng.choice(replace=False): 부분 셔플
@@ -189,7 +188,7 @@ void TorqueEstimator::estimate_params(double *slope, double *offset, double *fri
     // 총최소제곱: [x, 1, y]의 최소 특이벡터 n에서 y = −(n0·x + n1)/n2
     std::array<std::array<double, 3>, 3> ata{};
     for (int i = 0; i < n; ++i) {
-        const double r[3] = {fit_points_[i][0], 1.0, fit_points_[i][1]};
+        const double r[3] = {(*fit_points_[i])[0], 1.0, (*fit_points_[i])[1]};
         for (int a = 0; a < 3; ++a)
             for (int b = 0; b < 3; ++b) ata[a][b] += r[a] * r[b];
     }
@@ -200,11 +199,11 @@ void TorqueEstimator::estimate_params(double *slope, double *offset, double *fri
     const double sin = std::sqrt(*slope * *slope / (*slope * *slope + 1.0));
     const double cos = std::sqrt(1.0 / (*slope * *slope + 1.0));
     double mean = 0.0;
-    for (int i = 0; i < n; ++i) mean += -fit_points_[i][0] * sin + fit_points_[i][1] * cos;
+    for (int i = 0; i < n; ++i) mean += -(*fit_points_[i])[0] * sin + (*fit_points_[i])[1] * cos;
     mean /= n;
     double var = 0.0;
     for (int i = 0; i < n; ++i) {
-        const double d = -fit_points_[i][0] * sin + fit_points_[i][1] * cos - mean;
+        const double d = -(*fit_points_[i])[0] * sin + (*fit_points_[i])[1] * cos - mean;
         var += d * d;
     }
     *friction = std::sqrt(var / n) * kFrictionFactor;
@@ -358,15 +357,13 @@ TorqueRestore TorqueEstimator::restore(const std::string &cache, double *factor,
     float key_friction = 0, key_factor = 0, f_factor = 0, f_offset = 0, f_friction = 0, decay = 0;
     uint8_t source = 0, valid = 0;
     uint32_t n = 0;
-    if (cache.size() < pos ||
-        (std::memcmp(cache.data(), kTorqueCacheMagic, pos) != 0 &&
-         std::memcmp(cache.data(), kLegacyTorqueCacheMagic, pos) != 0) ||
-        !take(cache, &pos, &version) || !take(cache, &pos, &key_friction) || !take(cache, &pos, &key_factor) ||
-        (version >= 2 && !take(cache, &pos, &source)) || !take(cache, &pos, &valid) || !take(cache, &pos, &f_factor) ||
-        !take(cache, &pos, &f_offset) || !take(cache, &pos, &f_friction) || !take(cache, &pos, &decay) ||
-        !take(cache, &pos, &n) || cache.size() != pos + static_cast<size_t>(n) * 2 * sizeof(float))
+    if (cache.size() < pos || std::memcmp(cache.data(), kTorqueCacheMagic, pos) != 0 || !take(cache, &pos, &version) ||
+        !take(cache, &pos, &key_friction) || !take(cache, &pos, &key_factor) || !take(cache, &pos, &source) ||
+        !take(cache, &pos, &valid) || !take(cache, &pos, &f_factor) || !take(cache, &pos, &f_offset) ||
+        !take(cache, &pos, &f_friction) || !take(cache, &pos, &decay) || !take(cache, &pos, &n) ||
+        cache.size() != pos + static_cast<size_t>(n) * 2 * sizeof(float))
         return TorqueRestore::Corrupt;
-    if ((version != kTorqueVersion && version != 1) || key_friction != static_cast<float>(offline_.friction) ||
+    if (version != kTorqueVersion || key_friction != static_cast<float>(offline_.friction) ||
         key_factor != static_cast<float>(offline_.lat_accel_factor))
         return TorqueRestore::KeyMismatch;
     if ((source != 0) != localizer_source_) {

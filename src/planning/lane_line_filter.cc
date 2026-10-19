@@ -30,13 +30,6 @@ double interpolate(const Line &px, const Line &py, int j, double x) {
 }  // namespace
 
 void LaneLineFilter::update(double t_s, const float *x, const float *y, double v_mps, double curvature, float *out) {
-    for (int i = 0; i < kTrajectorySize; ++i) {
-        if (!std::isfinite(x[i]) || !std::isfinite(y[i])) {
-            std::copy(y, y + kTrajectorySize, out);
-            have_ = false;
-            return;
-        }
-    }
     const double dt = t_s - t_s_;
     bool restart = !have_ || !(dt > 0.0) || dt > kMaxGapS || weight_ >= 1.0;
     Line predicted{};

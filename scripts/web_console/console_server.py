@@ -25,18 +25,17 @@ API(받지 않는 요청은 상태 코드와 {"detail": {"code": 문구 키, 자
 from __future__ import annotations
 
 import argparse
-import contextlib
 import gzip
 import os
 from typing import Any, Callable, Dict, List
 
-# fastapi/uvicorn은 서버를 띄울 때만 import한다. tests/check_web_console.py가 stdlib만으로 나머지 모듈을 쓴다.
-# 요청 모델만은 이 모듈 전역에 있어야 한다: `from __future__ import annotations` 때문에 FastAPI가 라우트의
-# 문자열 애너테이션을 모듈 전역에서 해석하므로, 지역 클래스면 NameError로 죽는다.
-try:
-    from pydantic import BaseModel
-except ImportError:  # 호스트 검사: 웹 스택 없이 import된다
-    BaseModel = object  # type: ignore[assignment,misc]
+# 이 모듈은 서버를 띄울 때(__main__)만 import된다. tests/check_web_console.py는 나머지 모듈만 stdlib으로 쓴다.
+# 요청 모델은 이 모듈 전역에 있어야 한다: `from __future__ import annotations` 때문에 FastAPI가 라우트의 문자열
+# 애너테이션을 모듈 전역에서 해석하므로, 지역 클래스면 NameError로 죽는다.
+import uvicorn
+from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel
 
 from .backlight import DisplayBacklight
 from .bev_stream import BEV_MAX_HZ, bev_frames, bev_layout
@@ -51,53 +50,41 @@ from .refusal import Refusal
 from .static_assets import StaticAssets
 
 
-class ParamPatch(BaseModel):  # type: ignore[misc,valid-type]
+class ParamPatch(BaseModel):
     values: Dict[str, Any]
 
 
-class PandaFlashRequest(BaseModel):  # type: ignore[misc,valid-type]
+class PandaFlashRequest(BaseModel):
     version: str
 
 
-class CalibrationSourceRequest(BaseModel):  # type: ignore[misc,valid-type]
+class CalibrationSourceRequest(BaseModel):
     use_flow: bool
 
 
-class LateralNnRequest(BaseModel):  # type: ignore[misc,valid-type]
+class LateralNnRequest(BaseModel):
     model: str
 
 
-class RecordingDeleteRequest(BaseModel):  # type: ignore[misc,valid-type]
+class RecordingDeleteRequest(BaseModel):
     names: List[str]
 
 
-def create_app(store: ParamStore | None = None, processes: ProcessStatus | None = None,
-               learners: LearnerMonitor | None = None, localization: LocalizationReader | None = None,
-               calibration: CalibrationControl | None = None, panda: PandaUpdate | None = None,
-               assets: StaticAssets | None = None, backlight: DisplayBacklight | None = None,
-               lateral_nn: LateralNnModels | None = None, recordings: Recordings | None = None,
-               stopping: Callable[[], bool] = lambda: False) -> "FastAPI":
-    from fastapi import FastAPI, Header, HTTPException, Query
-    from fastapi.responses import JSONResponse, Response, StreamingResponse
+# stopping: 서버가 끝나는 중인지(스트림이 그만 보낸다)
+def create_app(stopping: Callable[[], bool]) -> FastAPI:
+    backlight = DisplayBacklight()
+    store = ParamStore()
+    processes = ProcessStatus()
+    learners = LearnerMonitor()
+    learners.start()
+    localization = LocalizationReader()
+    calibration = CalibrationControl(store)
+    panda = PandaUpdate()
+    assets = StaticAssets()
+    lateral_nn = LateralNnModels(controlsd_running=lambda: learners.fresh_state() is not None)
+    recordings = Recordings()
 
-    backlight = backlight or DisplayBacklight()
-    store = store or ParamStore(backlight=backlight)
-    processes = processes or ProcessStatus()
-    learners = learners or LearnerMonitor()
-    localization = localization or LocalizationReader()
-    calibration = calibration or CalibrationControl(store)
-    panda = panda or PandaUpdate()
-    assets = assets or StaticAssets()
-    lateral_nn = lateral_nn or LateralNnModels(controlsd_running=lambda: learners.fresh_state() is not None)
-    recordings = recordings or Recordings()
-
-    @contextlib.asynccontextmanager
-    async def lifespan(_application):
-        learners.start()
-        yield
-        learners.stop()
-
-    application = FastAPI(title="edgepilot web console", docs_url="/docs", lifespan=lifespan)
+    application = FastAPI(title="edgepilot web console", docs_url="/docs")
 
     # 모든 라우트가 같은 꼴로 거부한다: Refusal은 그 상태 코드와 문구 키, 파일 오류는 500과 error.io(이유 글자)
     @application.exception_handler(Refusal)
@@ -106,7 +93,8 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
 
     @application.exception_handler(OSError)
     async def file_failed(_request, exc: OSError):
-        return JSONResponse(status_code=500, content={"detail": Refusal("error.io", status=500, error=str(exc)).detail()})
+        refusal = Refusal("error.io", status=500, error=str(exc))
+        return JSONResponse(status_code=500, content={"detail": refusal.detail()})
 
     def static_response(name: str, if_none_match: str | None, accept_encoding: str) -> Response:
         asset = assets.get(name)
@@ -158,13 +146,14 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
     def set_calibration_source(request: CalibrationSourceRequest) -> Dict[str, Any]:
         return calibration.set_source(request.use_flow)
 
+    # 학습 토크 모델 카드는 runtime(lateral_nn_loaded)으로 파라미터 안내를 갱신한다
     @application.get("/api/lateral_nn")
     def get_lateral_nn() -> Dict[str, Any]:
-        return lateral_nn.status()
+        return {**lateral_nn.status(), "runtime": learners.runtime_facts()}
 
     @application.post("/api/lateral_nn")
     def set_lateral_nn(request: LateralNnRequest) -> Dict[str, Any]:
-        return lateral_nn.select(request.model)
+        return {**lateral_nn.select(request.model), "runtime": learners.runtime_facts()}
 
     @application.get("/api/panda")
     def get_panda() -> Dict[str, Any]:
@@ -195,8 +184,6 @@ def create_app(store: ParamStore | None = None, processes: ProcessStatus | None 
 
 
 def main() -> None:
-    import uvicorn
-
     parser = argparse.ArgumentParser(prog="python3 -m web_console")
     parser.add_argument("--host", default=os.environ.get("EDGEPILOT_WEB_CONSOLE_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("EDGEPILOT_WEB_CONSOLE_PORT", "8080")))

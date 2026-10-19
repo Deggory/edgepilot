@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -24,9 +23,6 @@
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
-volatile sig_atomic_t g_reload_params = 0;
-
-void reload_signal_handler(int) { g_reload_params = 1; }
 
 bool open_when_ready(LatestChannel *channel, const char *topic, size_t size, bool create) {
     while (!g_stop) {
@@ -46,8 +42,8 @@ bool open_when_ready(CanQueue *queue, const char *topic, bool create) {
     return false;
 }
 
-CanBatch make_send_batch(const std::vector<CanFrame> &frames) {
-    return make_can_batch(frames, [](IpcCanFrame *dst, const CanFrame &src) {
+void fill_send_batch(CanBatch *batch, const std::vector<CanFrame> &frames) {
+    fill_can_batch(batch, frames.data(), frames.size(), [](IpcCanFrame *dst, const CanFrame &src) {
         dst->address = src.address;
         dst->src = src.bus;
         dst->data_len = src.length;
@@ -124,7 +120,6 @@ struct TickStats {
 int main() {
     install_stop_signal_handlers(&g_stop);
     log_build_version("controlsd");
-    signal(SIGHUP, reload_signal_handler);
 
     try {
         CanQueue can_sub;
@@ -197,44 +192,38 @@ int main() {
         auto next_tick = start;
         auto log_start = start;
         ControlParamsWatcher param_watcher(param_paths, start);
-        CanBatch can_batch;  // 틱마다 21.5 KB를 0으로 채우지 않게 루프 밖에 둔다(pop은 count까지 채운다)
+        // 틱마다 0으로 채우지 않게 루프 밖에 둔다(CAN 묶음 21.5 KB: pop과 fill_send_batch는 count까지 채운다,
+        // ModelState 3.7 KB: 새 스냅샷일 때만 복사한다)
+        CanBatch can_batch, send_batch;
+        ModelState model;
+        PandaState panda_state;
 
         while (!g_stop) {
             const auto scheduled = next_tick;  // 이번 틱이 깨어나야 했던 시각
             next_tick += std::chrono::milliseconds(10);
             const auto work_start = Clock::now();
             const double now_s = std::chrono::duration<double>(work_start - start).count();
-            const uint64_t can_now_ns = monotonic_now_ns();
 
-            const bool reload_requested = g_reload_params != 0;
-            if (reload_requested) g_reload_params = 0;
-            if (const auto reloaded = param_watcher.poll(work_start, reload_requested, params)) {
+            if (const auto reloaded = param_watcher.poll(work_start, params)) {
                 params = *reloaded;
                 tick.apply_params(params);
             }
             std::shared_ptr<const LateralNnModel> next_nn;
             if (nn_selector.poll(work_start, &next_nn)) tick.set_lateral_nn(next_nn);
 
+            // 신선도는 꺼낸 직후의 시각으로 잰다(pandad 송신 스레드와 같다). 틱 시작 시각이면 그 뒤에 들어온
+            // 묶음이 미래 시각이라 버려졌다.
             while (can_sub.pop(&can_batch)) {
-                if (!tick.on_can_batch(can_batch, can_now_ns, now_s)) {
+                if (!tick.on_can_batch(can_batch, monotonic_now_ns(), now_s)) {
                     ++stats.stale_can_batches;
                     continue;
                 }
-                stats.can_frames += std::min<uint32_t>(can_batch.count, kCanBatchMaxFrames);
+                stats.can_frames += can_batch.count;
             }
-            ModelState model;
-            uint64_t next_model_seq = model_seq;
-            if (model_sub.read(&model, sizeof(model), &next_model_seq) && next_model_seq != model_seq) {
-                model_seq = next_model_seq;
-                tick.on_model(model);
-            }
-            PandaState panda_state;
-            uint64_t next_panda_state_seq = panda_state_seq;
-            if (panda_state_sub.read(&panda_state, sizeof(panda_state), &next_panda_state_seq) &&
-                next_panda_state_seq != panda_state_seq) {
-                panda_state_seq = next_panda_state_seq;
+            // seq가 그대로면 복사하지 않는다(read_new, 기다리지 않음)
+            if (model_sub.read_new(&model_seq, &model, sizeof(model), 0)) tick.on_model(model);
+            if (panda_state_sub.read_new(&panda_state_seq, &panda_state, sizeof(panda_state), 0))
                 tick.on_panda(panda_state);
-            }
             // locationd가 없어도 제어는 그대로라 붙을 때까지 1초마다 다시 열어 본다.
             if (!localization_open && now_s >= next_localization_open_s) {
                 localization_open = localization_sub.open(kLocalizationStateTopic, sizeof(LocalizationState), false);
@@ -246,7 +235,7 @@ int main() {
                 localization.read = localization_sub.read(&localization.state, sizeof(localization.state));
                 localization.read_ns = monotonic_now_ns();
             }
-            tick.on_localization(localization, can_now_ns, now_s);
+            tick.on_localization(localization, now_s);
 
             // IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness
             // 판정에는 공유 상태를 읽은 직후의 시간을 사용한다.
@@ -258,7 +247,7 @@ int main() {
 
             const LateralControlResult &result = tick.result();
             if (result.should_send && !result.frames.empty()) {
-                const CanBatch send_batch = make_send_batch(result.frames);
+                fill_send_batch(&send_batch, result.frames);
                 if (!sendcan_pub.push(send_batch)) {
                     ++stats.publish_errors;
                     ++stats.send_queue_full;
@@ -303,6 +292,11 @@ int main() {
             }
         }
         std::fprintf(stderr, "controlsd: stopping\n");
+        // 마지막 저장 뒤 배운 것(paramsd 최대 60초, torqued 12초)을 남기고 쓰기가 끝날 때까지 기다린다
+        LearnerOutputs last = tick.final_learner_outputs();
+        if (last.vehicle_json) learner_store.write(vehicle_learn_path, std::move(*last.vehicle_json));
+        if (last.torque_cache) learner_store.write(torque_learn_path, std::move(*last.torque_cache));
+        learner_store.flush();
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "controlsd error: %s\n", error.what());

@@ -23,6 +23,8 @@ constexpr uint8_t kPandaRequestReset = 0xd8;
 constexpr uint8_t kPandaRequestSafetyModel = 0xdc;
 constexpr uint8_t kPandaRequestPacketVersions = 0xdd;
 constexpr uint8_t kPandaRequestHeartbeat = 0xf3;
+constexpr uint8_t kPandaRequestCanClear = 0xf1;  // wValue 버스 번호면 그 송신 큐, 0xFFFF면 수신 큐를 비운다
+constexpr uint16_t kPandaCanClearRxQueue = 0xFFFF;
 
 constexpr uint8_t kPandaFlashEndpoint = 0x02;  // bootstub: 앱 이미지를 4바이트 단위로 받는 bulk OUT
 constexpr uint8_t kPandaFlasherMagic[4] = {0xde, 0xad, 0xd0, 0x0d};

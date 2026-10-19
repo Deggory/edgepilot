@@ -85,7 +85,8 @@ CarKalman::Globals CarKalman::globals_from(const VehicleModelConstants &c) {
     return g;
 }
 
-// Guiggiani 7.211-7.213 선형 단일트랙. 횡속도·요레이트만 움직이고 나머지는 랜덤워크.
+// Guiggiani 7.211-7.213 선형 단일트랙. 횡속도·요레이트만 움직이고 나머지는 랜덤워크라 F = I + hJ에서 J는
+// kSpeedY·kYawRate 행만 0이 아니다(predict가 이것을 쓴다).
 void CarKalman::step(const Globals &g, const Vec &x, double h, Vec *x_next, Mat *f) {
     const double sf = x[kStiffness], sr = x[kSteerRatio], u = x[kSpeedX];
     const double v = x[kSpeedY], r = x[kYawRate], th = x[kRoadRoll];
@@ -139,19 +140,24 @@ void CarKalman::predict(double dt) {
         Vec xn;
         Mat f;
         step(g_, x_, h, &xn, &f);
-        Mat fp{};
-        for (int i = 0; i < kN; ++i)
+        // P ← F·P·Fᵀ + hQ. F의 다른 행은 단위 벡터라 그 행(F·P)과 열((F·P)·Fᵀ)은 곱해도 그대로다. 움직이는 두
+        // 행과 두 열만 전체 곱과 같은 순서로 내적하므로 결과가 비트 단위로 같고, 곱셈은 1,458번에서 324번이 된다.
+        constexpr int kMoving[] = {kSpeedY, kYawRate};
+        Mat fp = p_;
+        for (const int i : kMoving)
             for (int k = 0; k < kN; ++k) {
                 double acc = 0.0;
                 for (int l = 0; l < kN; ++l) acc += f[i][l] * p_[l][k];
                 fp[i][k] = acc;
             }
-        for (int i = 0; i < kN; ++i)
-            for (int k = 0; k < kN; ++k) {
+        for (int i = 0; i < kN; ++i) {
+            for (int k = 0; k < kN; ++k) p_[i][k] = fp[i][k] + h * qm[i][k];
+            for (const int k : kMoving) {
                 double acc = 0.0;
                 for (int l = 0; l < kN; ++l) acc += fp[i][l] * f[k][l];
                 p_[i][k] = acc + h * qm[i][k];
             }
+        }
         x_ = xn;
     }
 }
@@ -239,7 +245,7 @@ void VehicleParamsLearner::handle_device_motion(const VehicleParamsInput &in) {
     if (!localizer_roll && in.lat_accel_valid && in.speed_mps > kRollMinSpeed &&
         std::fabs(centripetal) < kRollMaxCentripetal) {
         const double candidate = std::asin(clip((in.lat_accel_mps2 - centripetal) / kGravity, -1.0, 1.0));
-        if (kRollStd < kRollStdMax && candidate > kRollMin && candidate < kRollMax) {
+        if (candidate > kRollMin && candidate < kRollMax) {  // kRollStd는 유효 한계(kRollStdMax) 안이다
             roll = candidate;
             roll_std = kRollStd;
         }
@@ -352,21 +358,20 @@ std::string persist_vehicle_params(const VehicleParams &p, const VehicleModelCon
 VehicleParamsInit restore_vehicle_params(const std::string &json, const VehicleModelConstants &c) {
     VehicleParamsInit init;
     init.steer_ratio = c.steer_ratio;
+    JsonValue root;
     float version = 0, mass = 0, wheelbase = 0, cf = 0, tsf = 0, sr = 0, sf = 0, offset = 0, bias = 0;
-    const bool parsed =
-        parse_json_float_value(json, "version", &version) && parse_json_float_value(json, "mass_kg", &mass) &&
-        parse_json_float_value(json, "wheelbase_m", &wheelbase) &&
-        parse_json_float_value(json, "center_to_front_m", &cf) &&
-        parse_json_float_value(json, "tire_stiffness_factor", &tsf) &&
-        parse_json_float_value(json, "steer_ratio", &sr) && parse_json_float_value(json, "stiffness_factor", &sf) &&
-        parse_json_float_value(json, "angle_offset_average_deg", &offset) &&
-        parse_json_float_value(json, "yaw_bias_rad_s", &bias);
+    const bool parsed = parse_json_object(json, &root) && json_float(root, "version", &version) &&
+                        json_float(root, "mass_kg", &mass) && json_float(root, "wheelbase_m", &wheelbase) &&
+                        json_float(root, "center_to_front_m", &cf) && json_float(root, "tire_stiffness_factor", &tsf) &&
+                        json_float(root, "steer_ratio", &sr) && json_float(root, "stiffness_factor", &sf) &&
+                        json_float(root, "angle_offset_average_deg", &offset) &&
+                        json_float(root, "yaw_bias_rad_s", &bias);
     // 상류 지문 대조 자리. 단일 차종이라 차량 상수가 같으면 같은 차로 본다.
     const bool same_car = parsed && static_cast<int>(version) == kPersistVersion && near_constant(mass, c.mass_kg) &&
                           near_constant(wheelbase, c.wheelbase_m) && near_constant(cf, c.center_to_front_m) &&
                           near_constant(tsf, c.tire_stiffness_factor);
-    const bool sane = same_car && std::isfinite(sr) && 0.5 * c.steer_ratio <= sr && sr <= 2.0 * c.steer_ratio &&
-                      std::isfinite(offset) && std::isfinite(bias);
+    // JSON에는 유한한 수만 있다(아니면 parse_json_object가 거부한다)
+    const bool sane = same_car && 0.5 * c.steer_ratio <= sr && sr <= 2.0 * c.steer_ratio;
     if (!sane) return init;
     init.restored = true;
     init.steer_ratio = sr;

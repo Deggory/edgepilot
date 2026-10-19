@@ -26,6 +26,29 @@ PandaGateOutput PandaHealthGate::update(const PandaState &state, uint64_t now_ns
     return out;
 }
 
+LateralPath path_from_model_state(const ModelState &state, uint64_t now_ns, uint64_t timeout_ns) {
+    LateralPath path;
+    // modeld는 유효한 출력만 낸다. 무효(valid 0)는 시작할 때의 빈 상태뿐이고 그 시각은 0이라 여기서 걸린다.
+    if (!timestamp_fresh_ns(state.model_timestamp_ns, now_ns, timeout_ns)) {
+        path.model_lost = true;
+        return path;
+    }
+
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        const float x = state.plan[i].x;
+        if (x < 1.0f || x > 80.0f) continue;
+        if (path.point_count > 0 && x <= path.reach_m) continue;
+        path.reach_m = x;
+        ++path.point_count;
+    }
+
+    // 점 개수만 보면 몇 미터짜리 경로도 통과한다. 그런 경로의 psi는 무의미하고
+    // 저속 토크 보정이 그걸 상한까지 키운다.
+    constexpr float kMinPathReachM = 5.0f;
+    path.usable_for_steering = path.point_count >= 4 && path.reach_m >= kMinPathReachM;
+    return path;
+}
+
 PathHoldOutput PathHoldGate::update(const ModelState &model, uint64_t now_ns, uint64_t model_timeout_ns) {
     PathHoldOutput out;
     out.raw = path_from_model_state(model, now_ns, model_timeout_ns);
@@ -33,12 +56,10 @@ PathHoldOutput PathHoldGate::update(const ModelState &model, uint64_t now_ns, ui
     if (out.raw.usable_for_steering) {
         last_usable_ = out.raw;
         last_usable_model_timestamp_ns_ = model.model_timestamp_ns;
-    } else if (out.raw.invalid_reason == "path_invalid" && last_usable_.usable_for_steering &&
-               timestamp_fresh_ns(model.model_timestamp_ns, now_ns, model_timeout_ns) &&
-               last_usable_model_timestamp_ns_ != 0 && now_ns >= last_usable_model_timestamp_ns_ &&
+    } else if (!out.raw.model_lost && last_usable_.usable_for_steering &&
                now_ns - last_usable_model_timestamp_ns_ <= kPathInvalidHoldNs) {
+        // 모델은 신선한데(그 시각은 마지막으로 쓸 수 있던 모델 시각 뒤다) 경로가 짧다: 마지막 경로를 잠깐 둔다
         out.path = last_usable_;
-        out.path.invalid_reason.clear();
         out.hold_applied = true;
     }
     return out;

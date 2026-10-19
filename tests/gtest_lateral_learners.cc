@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <functional>
 #include <initializer_list>
 #include <string>
@@ -719,16 +718,9 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
     ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, truncated).restore_status(), TorqueRestore::Corrupt);
     ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, bad_magic).restore_status(), TorqueRestore::Corrupt);
     ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, "").restore_status(), TorqueRestore::None);
-    // 예전 매직으로 쓴 캐시(2026-10-07 이전 빌드)도 그대로 이어 쓴다
-    std::string old_magic_cache = valid_cache;
-    old_magic_cache.replace(0, 8, "K230TQC1");
-    TorqueEstimator from_old_magic(tuning, kTorqueLag, 5, old_magic_cache);
-    ASSERT_EQ(from_old_magic.restore_status(), TorqueRestore::Restored);
-    ASSERT_EQ(from_old_magic.points().size(), valid_points.size());
-    ASSERT_EQ(valid_cache.compare(0, 8, "EDGETQC1"), 0) << "새로 쓰는 캐시는 새 매직";
+    ASSERT_EQ(valid_cache.compare(0, 8, "EDGETQC1"), 0);
 
-    // 다른 요레이트·롤 출처의 캐시: 점과 절편은 버리고(롤 출처 차이만큼 어긋난다) 배율·마찰만
-    // 이어 쓴다. 출처 바이트가 없는 옛 캐시(버전 1)는 ESP12 출처다.
+    // 다른 요레이트·롤 출처의 캐시: 점과 절편은 버리고(롤 출처 차이만큼 어긋난다) 배율·마찰만 이어 쓴다.
     TorqueEstimator switched(tuning, kTorqueLag, 5, valid_cache, true);
     ASSERT_EQ(switched.restore_status(), TorqueRestore::SourceChanged);
     ASSERT_EQ(switched.total_points(), 0);
@@ -740,12 +732,6 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
     ASSERT_EQ(switched.params().decay, 50.0);
     ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, switched.cache(), true).restore_status(), TorqueRestore::Restored)
         << "새 출처로 저장한 캐시는 그 출처로 복원한다";
-    std::string legacy = valid_cache;  // 버전 1: 버전 4바이트 뒤 키 8바이트, 출처 바이트 없음
-    const int32_t v1 = 1;
-    std::memcpy(&legacy[8], &v1, sizeof(v1));
-    legacy.erase(8 + 4 + 8, 1);
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, legacy).restore_status(), TorqueRestore::Restored);
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, legacy, true).restore_status(), TorqueRestore::SourceChanged);
 }
 
 // ---------------------------------------------------------------- controlsd 연결
@@ -753,10 +739,7 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
 // 모든 수신 메시지가 방금 들어온 60 km/h 주행 상태.
 VehicleCanState driving_vehicle(double t) {
     VehicleCanState v;
-    for (double *time : {&v.lkas11_time_s, &v.clu11_time_s, &v.sas11_time_s, &v.esp12_time_s, &v.mdps12_time_s,
-                         &v.tcs13_time_s, &v.tcs15_time_s, &v.e_ems11_time_s, &v.elect_gear_time_s, &v.whl_spd11_time_s,
-                         &v.cgw1_time_s, &v.cgw2_time_s})
-        *time = t;
+    stamp_received_messages(&v, t);
     v.wheel_speed_fl_kph = v.wheel_speed_fr_kph = v.wheel_speed_rl_kph = v.wheel_speed_rr_kph = 60.0f;
     v.gear = 5;
     return v;
@@ -869,6 +852,27 @@ TEST(LateralLearners, LocalizerSamplesObservedAtTheirTime) {
     EXPECT_FALSE(d.l.last_torque_input().pose_valid) << "torqued는 시작할 때의 출처(locationd) 점만 쓴다";
 }
 
+// 같은 locationd 표본을 여러 틱 읽어도 한 번만 쌓는다. 학습기 시계로 옮긴 시각(t_s)은 읽을 때마다 조금씩 달라서
+// (controlsd의 두 시계를 읽는 시각 차이) locationd의 원래 시각(stamp_ns)으로 가린다.
+TEST(LateralLearners, SameLocalizerSampleIsKeptOnce) {
+    const SteeringParams sp;
+    LateralLearners l(sp, "", "", 1);
+    LocalizerSample s;
+    s.stamp_ns = 1'000'000'000ULL;
+    s.t_s = 1.0;
+    s.pose_ok = s.roll_ok = true;
+    l.set_localizer(true, s);
+    for (int tick = 1; tick < 10; ++tick) {
+        s.t_s = 1.0 + 1e-7 * tick;  // 같은 표본, 다시 계산한 시각만 조금 다르다
+        l.set_localizer(true, s);
+    }
+    EXPECT_EQ(l.localizer_sample_count(), 1u);
+    s.stamp_ns += 100'000'000ULL;
+    s.t_s = 1.1;
+    l.set_localizer(true, s);
+    EXPECT_EQ(l.localizer_sample_count(), 2u) << "새 표본";
+}
+
 // 그 시각의 표본이 없거나 자세가 무효인 틱은 ESP12 요레이트이고 torqued 점은 만들지 않는다
 TEST(LateralLearners, LocalizerFallsBackToEspPerTick) {
     const SteeringParams sp;
@@ -924,8 +928,6 @@ TEST(LateralLearners, TorqueLagFollowsLateralDelay) {
     EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), sp.steer_actuator_delay);
     l.set_lateral_delay(0.5);
     EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), 0.5);
-    l.set_lateral_delay(std::nan(""));
-    EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), 0.5) << "잘못된 값은 무시";
     VehicleCanState vehicle = driving_vehicle(1.0);
     vehicle.yaw_rate_valid = true;
     vehicle.lat_accel_valid = true;

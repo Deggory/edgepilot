@@ -1,11 +1,10 @@
 #pragma once
 
-// 작은 JSON 읽기. 학습한 모델 파일처럼 중첩된 문서를 통째로 읽을 때 쓴다(파라미터 파일은 utils_json의 키 단위
-// 헬퍼를 쓴다). 쓰기는 하지 않는다.
+// 작은 JSON 읽기. 런타임이 읽는 JSON 파일은 모두 이것으로 푼다(파라미터·학습 파일은 utils_json의 헬퍼가 그 위에서
+// 키를 읽는다). 쓰기는 하지 않는다.
 // - 객체, 배열, 숫자(double), 문자열(\uXXXX는 UTF-8로), true/false/null.
 // - 깊이 64까지. 오류는 위치(바이트)와 함께 돌려준다.
 
-#include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>

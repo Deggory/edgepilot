@@ -38,13 +38,10 @@ from pathlib import Path
 
 import numpy as np
 
-from model_warp import _rotation_from_rpy, maixcam2_intrinsics
-from recording_reader import (CALIBRATION_STATE, MODEL_STATE_HEAD, RECORD_CAN_RX, RECORD_CONTROL_STATE,
-                              RECORD_MODEL_STATE, TRAJECTORY_SIZE, SegmentInfo, calibration_source, can_frames,
-                              iter_event_records, route_event_files, route_segments, segment_video)
-
-# openpilot X_IDXS: 궤적 점마다 놓인 거리
-X_IDXS = np.array([192.0 * (i / (TRAJECTORY_SIZE - 1.0)) ** 2 for i in range(TRAJECTORY_SIZE)])
+from model_warp import maixcam2_intrinsics, rotation_from_rpy
+from recording_reader import (RECORD_CAN_RX, RECORD_CONTROL_STATE, RECORD_MODEL_STATE, TRAJECTORY_SIZE, X_IDXS,
+                              SegmentInfo, can_frames, iter_event_records, route_event_files, route_segments,
+                              segment_video)
 
 LKA14_ADDRESS, CAMERA_BUS = 0x484, 2
 ESP12_ADDRESS, VEHICLE_BUS = 0x220, 0
@@ -119,21 +116,17 @@ def read_route(route: Path) -> RouteData:
                     yaw_t.append(rec.timestamp_ns)
                     yaw.append(((raw >> 40) & 0x1FFF) * 0.01 - 40.95)
             elif rec.type == RECORD_MODEL_STATE:
-                layout = rec.model_layout()
-                head = np.frombuffer(rec.payload, MODEL_STATE_HEAD, count=1)[0]
-                points = np.frombuffer(rec.payload, np.float32, count=4 * TRAJECTORY_SIZE * 3,
-                                       offset=layout["lanes"]).reshape(4, TRAJECTORY_SIZE, 3)
-                probs = np.frombuffer(rec.payload, np.float32, count=4, offset=layout["lane_probabilities"])
-                cal = np.frombuffer(rec.payload, CALIBRATION_STATE, count=1, offset=layout["calibration"])[0]
-                mt.append(int(head["capture_timestamp_ns"]))
+                model = rec.model_state()
+                points, probs = rec.model_lanes()
+                cal = model["calibration"]
+                mt.append(int(model["capture_timestamp_ns"]))
                 mlt.append(rec.timestamp_ns)
-                fid.append(int(head["frame_id"]))
-                lanes.append(points[1:3].copy())
-                prob.append(probs[1:3].copy())
+                fid.append(int(model["frame_id"]))
+                lanes.append(points[1:3])
+                prob.append(probs[1:3])
                 rpy.append((cal["roll"], cal["pitch"], cal["yaw"]))
-                offset.append(np.frombuffer(rec.payload, np.float32, count=1, offset=layout["camera_offset_m"])[0]
-                              if "camera_offset_m" in layout else 0.0)
-                source.append(int(calibration_source(rec.payload, rec.version)["source"]))
+                offset.append(float(model["camera_offset_m"]))
+                source.append(int(model["calibration_source"]["source"]))
             elif rec.type == RECORD_CONTROL_STATE:
                 state = rec.control_state()
                 ct.append(rec.timestamp_ns)
@@ -290,7 +283,9 @@ def find_scenes(data: RouteData, a: Aligned, per_kind: dict[str, int], has_video
         }
         for kind, (mask, min_s) in masks.items():
             for start, end in runs(mask, a.t, MERGE_S):
-                duration = a.t[end] - a.t[start]
+                # 길이는 조건이 실제로 참인 시간이다. 이어 붙인 구간 길이(end - start)에는 짧은 틈이 들어가, 깜빡이는
+                # 짧은 불일치가 '1 s 이상' 장면으로 뽑혔다(2026-10-14 route의 오른쪽 gap: 구간 1.3 s, 참 0.1 s).
+                duration = float(mask[start:end + 1].sum()) / MODEL_HZ
                 if duration < min_s:
                     continue
                 inside = np.arange(start, end + 1)[mask[start:end + 1]]
@@ -305,7 +300,7 @@ def find_scenes(data: RouteData, a: Aligned, per_kind: dict[str, int], has_video
                     # 이어 붙인 구간의 가운데에 가장 가까운, 조건을 만족하는 프레임
                     peak, score = int(inside[np.argmin(np.abs(inside - (start + end) / 2))]), duration
                 candidates.append({"kind": kind, "side": side, "start_s": float(a.t[start]),
-                                   "end_s": float(a.t[end]), "duration_s": float(duration), "peak": peak,
+                                   "end_s": float(a.t[end]), "duration_s": duration, "peak": peak,
                                    "score": float(score), "diff_m": float(diff[peak]), "route_median_m": median})
     chosen: list[dict] = []
     for kind in KINDS:
@@ -383,7 +378,7 @@ def project(points: np.ndarray, rpy: np.ndarray, camera_offset: float, k: tuple)
     fx, fy, cx, cy = k
     p = points.astype(np.float64).copy()
     p[:, 1] += camera_offset  # 가상 카메라가 오프셋만큼 오른쪽이라 모델은 실제 점을 y - 오프셋으로 본다
-    device = p @ _rotation_from_rpy(*rpy).T
+    device = p @ rotation_from_rpy(*rpy).T
     view = device[:, [1, 2, 0]]
     uv = np.stack([fx * view[:, 0] / view[:, 2] + cx, fy * view[:, 1] / view[:, 2] + cy], 1)
     uv[view[:, 2] < 1.0] = np.nan

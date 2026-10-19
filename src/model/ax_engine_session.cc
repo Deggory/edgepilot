@@ -6,37 +6,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <cstdio>
 #include <cstring>
 #include <functional>
-#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <string>
 
 namespace {
-
-// AX_SYS/AX_ENGINE 초기화는 프로세스당 한 번. 세션을 여러 개 만들어도 공유한다.
-void init_runtime_once() {
-    static std::once_flag once;
-    static int status = 0;
-    std::call_once(once, [] {
-        if (AX_SYS_Init() != 0) {
-            status = 1;
-            return;
-        }
-        // AI-ISP(camerad)가 NPU 한 코어를 쓰므로 NPU는 늘 가상 분할로 부팅되고
-        // (/boot/configs maix_npu_ai_isp=1), 모델은 코어 하나용(NPU1)으로 컴파일돼 있다.
-        // NPU 모드는 시스템 전역이라 같은 모드로 초기화해야 한다.
-        AX_ENGINE_NPU_ATTR_T attr;
-        std::memset(&attr, 0, sizeof(attr));
-        attr.eHardMode = AX_ENGINE_VIRTUAL_NPU_ENABLE;
-        if (AX_ENGINE_Init(&attr) != 0) status = 2;
-    });
-    if (status == 1) throw std::runtime_error("AX_SYS_Init failed");
-    if (status == 2)
-        throw std::runtime_error("AX_ENGINE_Init (virtual NPU) failed; is maix_npu_ai_isp=1 in /boot/configs?");
-}
 
 AxEngineSession::DataType to_dtype(AX_ENGINE_DATA_TYPE_T dt) {
     switch (dt) {
@@ -75,33 +51,29 @@ AxEngineSession::AxEngineSession(const std::string &model_path) {
     if (map == MAP_FAILED) throw std::runtime_error("cannot map axmodel: " + model_path);
     model_map_ = map;
 
-    init_runtime_once();
+    // 프로세스(modeld)에 세션은 하나다. 생성자가 던지면 modeld가 끝나므로 잡은 것을 따로 풀지 않는다.
+    if (AX_SYS_Init() != 0) throw std::runtime_error("AX_SYS_Init failed");
+    // AI-ISP(camerad)가 NPU 한 코어를 쓰므로 NPU는 늘 가상 분할로 부팅되고(/boot/configs maix_npu_ai_isp=1),
+    // 모델은 코어 하나용(NPU1)으로 컴파일돼 있다. NPU 모드는 시스템 전역이라 같은 모드로 초기화해야 한다.
+    AX_ENGINE_NPU_ATTR_T attr;
+    std::memset(&attr, 0, sizeof(attr));
+    attr.eHardMode = AX_ENGINE_VIRTUAL_NPU_ENABLE;
+    if (AX_ENGINE_Init(&attr) != 0)
+        throw std::runtime_error("AX_ENGINE_Init (virtual NPU) failed; is maix_npu_ai_isp=1 in /boot/configs?");
 
     AX_ENGINE_HANDLE_EXTRA_T extra;
     std::memset(&extra, 0, sizeof(extra));
-    if (AX_ENGINE_CreateHandleV2(&handle_, model_map_, static_cast<AX_U32>(model_size_), &extra) != 0) {
-        release();
+    if (AX_ENGINE_CreateHandleV2(&handle_, model_map_, static_cast<AX_U32>(model_size_), &extra) != 0)
         throw std::runtime_error("AX_ENGINE_CreateHandleV2 failed: " + model_path);
-    }
-    if (AX_ENGINE_CreateContextV2(handle_, &context_) != 0) {
-        release();
+    if (AX_ENGINE_CreateContextV2(handle_, &context_) != 0)
         throw std::runtime_error("AX_ENGINE_CreateContextV2 failed");
-    }
     ::madvise(model_map_, model_size_, MADV_DONTNEED);
     if (const char *v = AX_ENGINE_GetModelToolsVersion(handle_)) tools_version_ = v;
 
     AX_ENGINE_IO_INFO_T *info = nullptr;
-    if (AX_ENGINE_GetIOInfo(handle_, &info) != 0 || !info) {
-        release();
-        throw std::runtime_error("AX_ENGINE_GetIOInfo failed");
-    }
-    try {
-        allocate(input_block_, inputs_, info->pInputs, info->nInputSize);
-        allocate(output_block_, outputs_, info->pOutputs, info->nOutputSize);
-    } catch (...) {
-        release();
-        throw;
-    }
+    if (AX_ENGINE_GetIOInfo(handle_, &info) != 0) throw std::runtime_error("AX_ENGINE_GetIOInfo failed");
+    allocate(input_block_, inputs_, info->pInputs, info->nInputSize);
+    allocate(output_block_, outputs_, info->pOutputs, info->nOutputSize);
 
     // AX_ENGINE_IO_T 한 개 + 입력·출력 버퍼 배열을 한 덩어리로 들고 다닌다.
     io_storage_.assign(sizeof(AX_ENGINE_IO_T) + sizeof(AX_ENGINE_IO_BUFFER_T) * (inputs_.size() + outputs_.size()), 0);
@@ -124,7 +96,12 @@ AxEngineSession::AxEngineSession(const std::string &model_path) {
     io->nOutputSize = static_cast<AX_U32>(outputs_.size());
 }
 
-AxEngineSession::~AxEngineSession() { release(); }
+AxEngineSession::~AxEngineSession() {
+    AX_SYS_MemFree(input_block_.phys, input_block_.virt);
+    AX_SYS_MemFree(output_block_.phys, output_block_.virt);
+    AX_ENGINE_DestroyHandle(handle_);
+    ::munmap(model_map_, model_size_);
+}
 
 void AxEngineSession::allocate(Block &block, std::vector<Tensor> &tensors, const void *metas_ptr, unsigned count) {
     const auto *metas = static_cast<const AX_ENGINE_IO_META_T *>(metas_ptr);
@@ -134,7 +111,6 @@ void AxEngineSession::allocate(Block &block, std::vector<Tensor> &tensors, const
         offsets[i] = total;
         total += (metas[i].nSize + kTensorAlign - 1) / kTensorAlign * kTensorAlign;
     }
-    if (total == 0) return;
     void *virt = nullptr;
     AX_U64 phys = 0;
     if (AX_SYS_MemAllocCached(&phys, &virt, static_cast<AX_U32>(total), 128,
@@ -158,21 +134,6 @@ void AxEngineSession::allocate(Block &block, std::vector<Tensor> &tensors, const
     }
 }
 
-void AxEngineSession::release() {
-    for (Block *block : {&input_block_, &output_block_}) {
-        if (block->virt) AX_SYS_MemFree(block->phys, block->virt);
-        *block = Block();
-    }
-    inputs_.clear();
-    outputs_.clear();
-    if (handle_) AX_ENGINE_DestroyHandle(handle_);
-    handle_ = nullptr;
-    context_ = nullptr;
-    if (model_map_) ::munmap(model_map_, model_size_);
-    model_map_ = nullptr;
-    model_size_ = 0;
-}
-
 int AxEngineSession::input_index(const std::string &name) const {
     for (size_t i = 0; i < inputs_.size(); ++i)
         if (inputs_[i].name == name) return static_cast<int>(i);
@@ -182,11 +143,9 @@ int AxEngineSession::input_index(const std::string &name) const {
 bool AxEngineSession::run() {
     // 블록마다 한 번씩. 텐서마다 부르면 출력 15개 invalidate만 프레임당 약 0.6 ms였다(범위가 바뀌는 호출은 한 번에
     // 약 40 µs, 같은 범위를 한 번에는 약 15 µs; 2026-10-13 보드 측정).
-    if (input_block_.virt)
-        AX_SYS_MflushCache(input_block_.phys, input_block_.virt, static_cast<AX_U32>(input_block_.bytes));
+    AX_SYS_MflushCache(input_block_.phys, input_block_.virt, static_cast<AX_U32>(input_block_.bytes));
     auto *io = reinterpret_cast<AX_ENGINE_IO_T *>(io_storage_.data());
     if (AX_ENGINE_RunSyncV2(handle_, context_, io) != 0) return false;
-    if (output_block_.virt)
-        AX_SYS_MinvalidateCache(output_block_.phys, output_block_.virt, static_cast<AX_U32>(output_block_.bytes));
+    AX_SYS_MinvalidateCache(output_block_.phys, output_block_.virt, static_cast<AX_U32>(output_block_.bytes));
     return true;
 }

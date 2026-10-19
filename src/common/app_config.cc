@@ -3,8 +3,6 @@
 #include "common/utils_process.h"
 
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <stdexcept>
 
 std::string AppConfig::usage(const char *program_name) {
@@ -35,18 +33,8 @@ AppConfig AppConfig::from_env_defaults() {
         config.camera_cy = v[3];
     }
     config.set_warp_source(config.nv12_width, config.nv12_height);
-
-    config.max_frames = env_unsigned("EDGEPILOT_MAX_FRAMES", 0);
-
     config.replay_nv12_path = env_string("EDGEPILOT_REPLAY_NV12");
-
-    config.manual_calibration = env_present("EDGEPILOT_CALIB_ROLL_DEG") || env_present("EDGEPILOT_CALIB_PITCH_DEG") ||
-                                env_present("EDGEPILOT_CALIB_YAW_DEG");
     config.calibration_auto = env_flag("EDGEPILOT_CALIB_AUTO", true);
-    config.manual_roll = deg_to_rad(env_float("EDGEPILOT_CALIB_ROLL_DEG", 0.0f));
-    config.manual_pitch = deg_to_rad(env_float("EDGEPILOT_CALIB_PITCH_DEG", 0.0f));
-    config.manual_yaw = deg_to_rad(env_float("EDGEPILOT_CALIB_YAW_DEG", 0.0f));
-    config.log_calibration = env_flag("EDGEPILOT_LOG_CALIB");
     config.profile = env_flag("EDGEPILOT_PROFILE");
     config.flow_calibration = env_flag("EDGEPILOT_FLOW_CALIB", true);
     return config;

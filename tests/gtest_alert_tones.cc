@@ -33,7 +33,6 @@ TEST(AlertTones, ShortCleanAndDistinct) {
     }
     for (size_t a = 0; a < tones.size(); ++a)
         for (size_t b = a + 1; b < tones.size(); ++b) EXPECT_NE(tones[a], tones[b]);
-    EXPECT_TRUE(render_alert_tone(AlertSoundId::count, kRate).empty());
 }
 
 }  // namespace

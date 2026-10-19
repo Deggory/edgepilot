@@ -88,9 +88,9 @@ bool load_adaptive_cruise_params_json(const std::string &path, AdaptiveCruiseCon
     if (!config) return false;
     return load_json_param_file(
         path,
-        [config](const std::string &text) {
-            parse_json_fields(text, kAdaptiveBools, config);
-            parse_json_fields(text, kAdaptiveFloats, config);
+        [config](const JsonValue &root) {
+            parse_json_fields(root, kAdaptiveBools, config);
+            parse_json_fields(root, kAdaptiveFloats, config);
         },
         error);
 }
@@ -190,7 +190,7 @@ struct AdaptiveCruiseController::Tick {
 
 // 세션 종료. cruise_active 는 SCC12와 CLU11 추정이 같은 필드를 쓰므로 한 틱
 // 깜빡임이 가능하다. 유예를 두되, 실제로 꺼지면 반드시 버린다 — 예전에는
-// 버리지 않아 다음 engage 때 이전 주행의 천장이 남았다. 선행차 필터도 잊어서
+// 버리지 않아 다음 결합 때 이전 주행의 천장이 남았다. 앞차 필터도 잊어서
 // 다음 세션은 새로 본 거리에서 시작한다.
 void AdaptiveCruiseController::teardown_session(const AdaptiveCruiseInput &input, const Tick &tick) {
     if (input.cruise_active) {
@@ -264,7 +264,7 @@ void AdaptiveCruiseController::resolve_command_mismatch(const AdaptiveCruiseInpu
     }
 }
 
-// 선행차가 있으면 차간 보정을 더한 추종 속도, 없으면 (복원 지연 뒤) 천장.
+// 앞차가 있으면 차간 보정을 더한 추종 속도, 없으면 (복원 지연 뒤) 천장.
 float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input, const Tick &tick,
                                              bool *lead_valid) const {
     const Session &s = session_;

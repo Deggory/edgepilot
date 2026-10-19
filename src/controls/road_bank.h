@@ -18,7 +18,7 @@ public:
     void update(float dt_s, float speed_mps, float lat_accel_mps2, bool lat_accel_valid, float yaw_rate_rad_s,
                 bool yaw_rate_valid) {
         const float alpha = dt_s / (kRcS + dt_s);
-        if (yaw_rate_valid && lat_accel_valid && std::isfinite(lat_accel_mps2) && speed_mps > kMinSpeedMps &&
+        if (yaw_rate_valid && lat_accel_valid && speed_mps > kMinSpeedMps &&
             std::fabs(yaw_rate_rad_s * speed_mps) < kMaxYawAccel) {
             const float bank = clamp_float(lat_accel_mps2 + yaw_rate_rad_s * speed_mps, -2.0f, 2.0f);
             if (!init_) {

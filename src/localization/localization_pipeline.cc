@@ -21,8 +21,13 @@ void LocalizationPipeline::on_control(const ControlState &control) {
     s.t = static_cast<double>(control.timestamp_ns) * 1e-9;
     estimator_.handle_car_speed(s.t, v, control.vehicle_fresh != 0 && std::isfinite(control.ego_speed_kph));
     s.active = control.active != 0;
-    s.pressed = std::abs(control.driver_torque) > kSteeringPressedTorque;
-    s.saturated = std::fabs(control.normalized_output) >= 0.999f;
+    if (control.hud_flags & kHudFlagLagInputs) {  // controlsd의 판정(상류 lagd와 같은 입력)
+        s.pressed = (control.hud_flags & kHudFlagSteeringPressed) != 0;
+        s.saturated = (control.hud_flags & kHudFlagLatSaturated) != 0;
+    } else {  // 옛 녹화와 controlsd: 순간값으로 어림한다
+        s.pressed = std::abs(control.driver_torque) > kSteeringPressedTorque;
+        s.saturated = std::fabs(control.normalized_output) >= 0.999f;
+    }
     s.desired_curvature = std::isfinite(control.desired_curvature) ? control.desired_curvature : 0.0;
     s.v_ego = v;
     if (!control_history_.empty() && s.t < control_history_.back().t) control_history_.clear();

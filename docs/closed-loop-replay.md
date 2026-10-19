@@ -98,7 +98,15 @@ beyond that.
 
 Driver torque and inactive ticks are disturbances the simulation cannot
 reproduce. Those ticks resynchronise to the recording, and the next
-free-running segment starts from the real pose.
+free-running segment starts from the real pose. A tick is inactive when the
+simulated controller rests or when the recording shows the board did not
+steer (disengaged, waiting at a stop); before 2026-10-19 only the first
+counted, so a drive with long manual stretches was scored against the
+driver's own steering (35 % of the scored ticks on
+`2026-10-16--23-16-18-719`, RMS 0.0775 then, 0.0950 m/s² after; reading the
+records in time order, also since 2026-10-19, gives 0.0941). As in
+`controlsd`, a single invalid plan frame is held for up to 150 ms
+(`PathHoldGate`).
 
 The driver gate has hysteresis: 150 counts in, 60 counts and 0.5 s out. Driver
 torque is noisy even hands-off, so a single threshold shatters a drive into
@@ -112,7 +120,7 @@ stateDiagram-v2
     state "free-running" as free
     [*] --> resync
     resync --> free: active, driver torque<br>below 60 for 0.5 s
-    free --> resync: driver torque 150<br>or more, or inactive
+    free --> resync: driver torque 150<br>or more, or inactive<br>(here or in the recording)
 ```
 
 ### Plant
@@ -191,12 +199,17 @@ So that default was the 1.5× curve.
 **Feedforward factor.** With the earlier curve, raising the controller's
 `lat_accel_factor` to the torqued estimate (3.15) looked like a 12 cm push to
 the outside of left curves. With the re-identified plant the same change is
-neutral (RMS 0.109 → 0.110 m).
+neutral (RMS 0.109 → 0.110 m). Before 2026-10-19, `--laf` also scaled the
+plant, so a comparison made with it cancels out or, on a route that uses
+torqued, moves only the plant; measure it again before relying on it.
 
 The DC gain is fixed relative to `torque_lat_accel_factor` in the route's
-`steering.json`. So **a feedforward factor can only be ranked with a plant
-identified on the same car setup**. Check the open-loop R² against a gain
-scale before trusting such a comparison.
+`steering.json`; `--laf` changes the controller only. While the recording uses
+torqued, the controller takes the learned factor and `--laf` does not reach
+it (the tool warns); `--torque` replaces the learned values instead. So **a
+feedforward factor can only be ranked with a plant identified on the same car
+setup**. Check the open-loop R² against a gain scale before trusting such a
+comparison.
 
 ## Limits
 

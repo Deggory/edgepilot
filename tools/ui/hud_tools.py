@@ -26,12 +26,9 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
-from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE, RECORDING_VERSION,  # noqa: E402
-                              iter_event_records, model_state_layout,
-                              route_event_files, route_segments, segment_video)
+from recording_reader import (CONTROL_STATE_SIZE, RECORD_CONTROL_STATE, RECORD_MODEL_STATE,  # noqa: E402
+                              iter_event_records, route_event_files, route_segments, segment_video)
 
-MODEL_STATE_SIZE = model_state_layout(RECORDING_VERSION)["__size__"]  # hud_snapshot은 현재 구조체를 읽는다
-CONTROL_STATE_SIZE = 240
 FRAME_MAGIC = b"EDGEARGB"
 
 
@@ -39,25 +36,34 @@ FRAME_MAGIC = b"EDGEARGB"
 
 class ModelMoment(NamedTuple):
     ts: int
-    payload: memoryview
+    path: Path  # 레코드가 든 청크(고른 순간의 원본은 이 청크에서 다시 읽는다)
     frame_id: int
     lanes: tuple[float, float, float, float]
     lead_valid: int
 
 
 def scan(route: Path) -> tuple[list[tuple[int, np.void]], list[ModelMoment]]:
+    """제어 상태(사본)와 모델 순간들. 레코드의 페이로드 뷰는 쥐지 않는다: 뷰 하나가 청크 버퍼 전체를 붙잡아 route
+    전체가 메모리에 남았다."""
     controls, models = [], []
     for path in route_event_files(route):
         for rec in iter_event_records(path):
             if rec.type == RECORD_CONTROL_STATE:
-                controls.append((rec.timestamp_ns, rec.control_state()))
-            elif rec.type == RECORD_MODEL_STATE and rec.version >= 7:
-                layout = rec.model_layout()
-                frame_id, = struct.unpack_from("<Q", rec.payload, 0)
-                lanes = struct.unpack_from("<4f", rec.payload, layout["lane_probabilities"])
-                lead_valid, = struct.unpack_from("<I", rec.payload, layout["lead"])
-                models.append(ModelMoment(rec.timestamp_ns, rec.payload, frame_id, lanes, lead_valid))
+                controls.append((rec.timestamp_ns, rec.control_state().copy()))
+            elif rec.type == RECORD_MODEL_STATE:
+                model = rec.model_state()
+                models.append(ModelMoment(rec.timestamp_ns, path, int(model["frame_id"]),
+                                          tuple(float(p) for p in model["lane_probabilities"]),
+                                          int(model["lead"]["valid"])))
     return controls, models
+
+
+def model_payload(moment: ModelMoment) -> bytes:
+    """고른 순간의 ModelState 원본을 그 청크에서 다시 읽는다."""
+    for rec in iter_event_records(moment.path):
+        if rec.type == RECORD_MODEL_STATE and rec.timestamp_ns == moment.ts:
+            return bytes(rec.payload)
+    sys.exit(f"{moment.path}: model state at {moment.ts} is gone")
 
 
 def score(control: np.void, model: ModelMoment) -> float:
@@ -99,9 +105,7 @@ def cmd_inputs(args: argparse.Namespace) -> int:
     control = controls[cj][1]
 
     args.out.mkdir(parents=True, exist_ok=True)
-    # v7에는 끝의 페달 예측이 없다. 현재 구조체 크기까지 0으로 채운다
-    raw_model = bytes(model.payload[:MODEL_STATE_SIZE])
-    (args.out / "model.bin").write_bytes(raw_model + b"\0" * (MODEL_STATE_SIZE - len(raw_model)))
+    (args.out / "model.bin").write_bytes(model_payload(model))
     raw = control.tobytes()
     (args.out / "control.bin").write_bytes(raw + b"\0" * (CONTROL_STATE_SIZE - len(raw)))
     seconds = (int(model.ts) - int(model_ts[0])) / 1e9

@@ -8,6 +8,8 @@
 #include <cstring>
 #include <string>
 
+namespace {
+
 TEST(BuildVersion, MarkerPrecedesTheVersion) {
     const std::string version = edgepilot_version();
     EXPECT_EQ(std::string(kBuildVersionMarker), EDGEPILOT_VERSION_MARKER_PREFIX + version);
@@ -21,3 +23,5 @@ TEST(BuildVersion, PrintableAndShort) {
     for (const char c : version)
         EXPECT_TRUE(std::isalnum(static_cast<unsigned char>(c)) || std::strchr("._+-", c)) << version;
 }
+
+}  // namespace

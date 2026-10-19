@@ -14,7 +14,9 @@
 //   --gain G, --gain-pts a,b,c,d  플랜트 이득(속도 노드 전부 G, 또는 노드별)
 //   --path-lag S               조향각 → 진행 지연(초, 기본 0.11, 0이면 조향각 곡률로 진행한다)
 //   --sad S, --kp, --ki, --laf  컨트롤러 steer_actuator_delay·토크 이득. lagd 지연을 쓰는 설정(use_live_delay)이면
-//                              녹화의 lagd 추정이 유효한 동안 그것이 경로 지연이다.
+//                              녹화의 lagd 추정이 유효한 동안 그것이 경로 지연이다. --laf는 컨트롤러만 바꾸고
+//                              플랜트의 토크 환산은 --steering 값 그대로다. 녹화가 torqued를 쓰는 동안 컨트롤러는
+//                              학습 배율을 쓰므로 --laf가 닿지 않는다(--torque로 바꾼다, 끝에 경고).
 //   --driver-high/--driver-low T, --driver-release N  운전자 개입 히스테리시스
 //   --steering route/params/steering.json  녹화 당시 튜닝(없으면 코드 기본값). 녹화의 LearnerState
 //                              학습값(paramsd·torqued)은 controlsd처럼 매번 컨트롤러에 넣는다.
@@ -25,18 +27,20 @@
 //   --lateral-nn m.json        학습한 토크 모델(docs/lateral-nn.md). --steering의 nn_feedforward가 켜져 있을 때 쓴다.
 #include "car/hyundai_can.h"
 #include "car/vehicle_can.h"
+#include "cli_args.h"
 #include "common/ipc_messages.h"
 #include "common/utils_time.h"
+#include "controls/control_holds.h"
 #include "controls/control_params.h"
 #include "controls/lateral_controller.h"
-#include "controls/lateral_path.h"
 #include "controls/lateral_torque.h"
 #include "localization/lateral_lag.h"
 #include "planning/lateral_planner.h"
+#include "recorded_vehicle_can.h"
 #include "recording/event_log_reader.h"
 #include "recording/recorded_can.h"
-#include "recording/recorded_model_state.h"
 #include "recording/recording_format.h"
+#include "route_events.h"
 
 #include <algorithm>
 #include <array>
@@ -63,15 +67,18 @@ constexpr double kEsp12MaxAgeS = 0.1;
 // controlsd처럼 lagd 추정은 이 안의 것만 쓴다(ControlsTick::on_localization)
 constexpr double kLocalizationMaxAgeS = 2.0;
 
+// 이득 곡선의 속도 노드(m/s). 일정한 kf 가정이 저속에서 깨져 노드가 필요하다.
+constexpr float kGainSpeedsMps[] = {3.0f, 8.0f, 15.0f, 25.0f};
+constexpr int kGainNodes = 4;
+
 // 비워 둔 값은 코드 기본값을 쓴다.
 struct Options {
     bool open_loop = false;
-    std::optional<float> sad, kp, ki, laf, gain;
-    const char *gain_pts = nullptr;
+    std::optional<float> sad, kp, ki, laf, gain, lane_filter;
+    std::optional<std::array<float, kGainNodes>> gain_pts;
+    std::optional<std::array<float, 3>> torque;  // factor, offset, friction
     const char *steering_path = nullptr;
-    const char *torque = nullptr;
     const char *lateral_nn = nullptr;
-    std::optional<double> lane_filter;
     float camera_shift = 0.0f;
     float wn = 16.0f, zeta = 3.0f;
     float path_lag = kDefaultPathLagS;
@@ -90,6 +97,7 @@ struct Options {
     std::exit(2);
 }
 
+// 숫자 범위는 파라미터 로더와 같다(sad·kp·ki·laf).
 Options parse_options(int argc, char **argv) {
     Options o;
     for (int i = 1; i < argc; ++i) {
@@ -98,50 +106,72 @@ Options parse_options(int argc, char **argv) {
             if (i + 1 >= argc) usage(argv[0]);
             return argv[++i];
         };
-        if (arg == "--open-loop")
-            o.open_loop = true;
-        else if (arg == "--wn")
-            o.wn = static_cast<float>(std::atof(value()));
-        else if (arg == "--zeta")
-            o.zeta = static_cast<float>(std::atof(value()));
-        else if (arg == "--delay")
-            o.delay = std::atoi(value());
-        else if (arg == "--gain")
-            o.gain = static_cast<float>(std::atof(value()));
-        else if (arg == "--gain-pts")
-            o.gain_pts = value();
-        else if (arg == "--sad")
-            o.sad = static_cast<float>(std::atof(value()));
-        else if (arg == "--kp")
-            o.kp = static_cast<float>(std::atof(value()));
-        else if (arg == "--ki")
-            o.ki = static_cast<float>(std::atof(value()));
-        else if (arg == "--laf")
-            o.laf = static_cast<float>(std::atof(value()));
-        else if (arg == "--driver-high")
-            o.driver_high = std::atoi(value());
-        else if (arg == "--driver-low")
-            o.driver_low = std::atoi(value());
-        else if (arg == "--driver-release")
-            o.driver_release = std::atoi(value());
-        else if (arg == "--steering")
-            o.steering_path = value();
-        else if (arg == "--torque")
-            o.torque = value();
-        else if (arg == "--camera-shift")
-            o.camera_shift = static_cast<float>(std::atof(value()));
-        else if (arg == "--lane-filter")
-            o.lane_filter = std::atof(value());
-        else if (arg == "--lateral-nn")
-            o.lateral_nn = value();
-        else if (arg == "--path-lag")
-            o.path_lag = static_cast<float>(std::atof(value()));
-        else if (arg.rfind("--", 0) == 0)
+        // 값이 숫자(목록)가 아니거나 범위 밖이면 사용법 오류
+        const auto check = [&](bool ok) {
+            if (ok) return;
+            std::fprintf(stderr, "bad value for %s: %s\n", arg.c_str(), argv[i]);
             usage(argv[0]);
-        else
+        };
+        const auto number = [&](double lo, double hi) {
+            float v = 0.0f;
+            check(parse_float_arg(value(), &v, lo, hi));
+            return v;
+        };
+        const auto count = [&](int lo, int hi) {
+            int v = 0;
+            check(parse_int_arg(value(), &v, lo, hi));
+            return v;
+        };
+        if (arg == "--open-loop") {
+            o.open_loop = true;
+        } else if (arg == "--wn") {
+            o.wn = number(0.1, 1000.0);
+        } else if (arg == "--zeta") {
+            o.zeta = number(0.0, 100.0);
+        } else if (arg == "--delay") {
+            o.delay = count(0, 1000);
+        } else if (arg == "--gain") {
+            o.gain = number(0.0, 100.0);
+        } else if (arg == "--gain-pts") {
+            std::array<float, kGainNodes> pts{};
+            check(parse_float_list_arg(value(), pts.data(), kGainNodes));
+            o.gain_pts = pts;
+        } else if (arg == "--sad") {
+            o.sad = number(0.01, 1.0);
+        } else if (arg == "--kp") {
+            o.kp = number(0.0, 10.0);
+        } else if (arg == "--ki") {
+            o.ki = number(0.0, 2.0);
+        } else if (arg == "--laf") {
+            o.laf = number(0.5, 5.0);
+        } else if (arg == "--driver-high") {
+            o.driver_high = count(0, 10000);
+        } else if (arg == "--driver-low") {
+            o.driver_low = count(0, 10000);
+        } else if (arg == "--driver-release") {
+            o.driver_release = count(0, 100000);
+        } else if (arg == "--steering") {
+            o.steering_path = value();
+        } else if (arg == "--torque") {
+            std::array<float, 3> torque{};
+            check(parse_float_list_arg(value(), torque.data(), 3));
+            o.torque = torque;
+        } else if (arg == "--camera-shift") {
+            o.camera_shift = number(-kMaxDeviationY, kMaxDeviationY);
+        } else if (arg == "--lane-filter") {
+            o.lane_filter = number(0.0, 1.0);
+            check(*o.lane_filter > 0.0f);
+        } else if (arg == "--lateral-nn") {
+            o.lateral_nn = value();
+        } else if (arg == "--path-lag") {
+            o.path_lag = number(0.0, 1.0);
+        } else if (arg.rfind("--", 0) == 0) {
+            usage(argv[0]);
+        } else {
             o.positional.push_back(argv[i]);
+        }
     }
-    if (o.positional.size() < 2 || !(o.path_lag >= 0.0f && o.path_lag <= 1.0f)) usage(argv[0]);
+    if (o.positional.size() < 2) usage(argv[0]);
     return o;
 }
 
@@ -159,10 +189,6 @@ private:
     std::vector<float> buffer_;
     size_t head_ = 0;
 };
-
-// 이득 곡선의 속도 노드(m/s). 일정한 kf 가정이 저속에서 깨져 노드가 필요하다.
-constexpr float kGainSpeedsMps[] = {3.0f, 8.0f, 15.0f, 25.0f};
-constexpr int kGainNodes = 4;
 
 // 토크 -> 횡가속도 플랜트. DC 이득은 1/kf(=FF 보정이 맞다는 가정)이고
 // 이득 곡선이 그 속도별 오차를 담는다. 순수 지연 + 2차 지연으로 MDPS/타이어
@@ -211,24 +237,35 @@ private:
     float a_dot_ = 0.0f;
 };
 
-// 녹화 차 기준 (dy, dpsi)만큼 벌어진 시뮬 차의 차체 좌표로 옮긴다.
+// 녹화 차 기준 (dy, dpsi)만큼 벌어진 시뮬 차의 차체 좌표로 옮긴다. 차선·도로 경계는 모델 출력처럼 고정 격자
+// (X_IDXS)의 점이라, 옮긴 점을 그 격자에 다시 보간한다. 회전으로 앞 점보다 뒤로 간 점은 앞 점의 x로 묶는다.
 void transform_model(ModelState &ms, float dy, float dpsi) {
     const float c = std::cos(dpsi);
     const float s = std::sin(dpsi);
-    const auto tf = [&](IpcPoint &p) {
+    for (IpcPoint &p : ms.plan) {
         const float x = p.x;
         const float y = p.y - dy;
         p.x = c * x + s * y;
         p.y = -s * x + c * y;
-    };
-    for (int i = 0; i < kTrajectorySize; ++i) {
-        tf(ms.plan[i]);
-        for (auto &lane : ms.lanes) tf(lane[i]);
-        for (auto &edge : ms.road_edges) tf(edge[i]);
     }
-    // 플래너는 lane x를 보간축으로 쓴다. 회전 뒤 역행하면 보간이 깨진다.
-    for (auto &lane : ms.lanes)
-        for (int i = 1; i < kTrajectorySize; ++i) lane[i].x = std::max(lane[i].x, lane[i - 1].x);
+    const auto regrid = [&](IpcLanePoint(&line)[kTrajectorySize]) {
+        float xs[kTrajectorySize], ys[kTrajectorySize];
+        for (int i = 0; i < kTrajectorySize; ++i) {
+            const float x = model_x_idx(i);
+            const float y = line[i].y - dy;
+            xs[i] = i > 0 ? std::max(c * x + s * y, xs[i - 1]) : c * x + s * y;
+            ys[i] = -s * x + c * y;
+        }
+        for (int i = 0, j = 1; i < kTrajectorySize; ++i) {
+            const float x = model_x_idx(i);
+            while (j < kTrajectorySize - 1 && xs[j] < x) ++j;
+            const float span = xs[j] - xs[j - 1];
+            const float p = span > 0.0f ? std::clamp((x - xs[j - 1]) / span, 0.0f, 1.0f) : 1.0f;
+            line[i].y = ys[j - 1] + p * (ys[j] - ys[j - 1]);
+        }
+    };
+    for (auto &lane : ms.lanes) regrid(lane);
+    for (auto &edge : ms.road_edges) regrid(edge);
 }
 
 // 녹화에서 그대로 가져오는 외생 입력. 시뮬이 바꿀 수 없는 것들이다.
@@ -255,6 +292,9 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+    // 플랜트(차)의 토크 → 횡가속 환산은 route의 steering.json 값으로 고정한다. --laf는 컨트롤러만 바꾼다(예전에는
+    // 플랜트 이득까지 같이 바꿔 컨트롤러 효과와 상쇄되거나, torqued를 쓰는 route에서는 플랜트만 바뀌었다).
+    const float plant_lat_accel_factor = steering.torque_lat_accel_factor;
     steering.steer_actuator_delay = opt.sad.value_or(steering.steer_actuator_delay);
     steering.torque_kp = opt.kp.value_or(steering.torque_kp);
     steering.torque_ki = opt.ki.value_or(steering.torque_ki);
@@ -268,17 +308,12 @@ int main(int argc, char **argv) {
     // 10-03·10-04 차선 주행의 R²로 고른 것)과 8 m/s 아래만 다르다.
     const float default_gain[kGainNodes] = {1.05f, 0.385f, 1.04f, 1.74f};
     float gain_curve[kGainNodes];
-    for (int i = 0; i < kGainNodes; ++i) gain_curve[i] = opt.gain.value_or(default_gain[i]);
-    if (opt.gain_pts != nullptr) {
-        std::sscanf(opt.gain_pts, "%f,%f,%f,%f", &gain_curve[0], &gain_curve[1], &gain_curve[2], &gain_curve[3]);
-    }
+    for (int i = 0; i < kGainNodes; ++i)
+        gain_curve[i] = opt.gain_pts ? (*opt.gain_pts)[i] : opt.gain.value_or(default_gain[i]);
     Plant plant(opt.wn, opt.zeta, gain_curve, opt.delay);
 
     LateralPlanner planner(steering);
-    if (opt.lane_filter) {
-        if (!(*opt.lane_filter > 0.0 && *opt.lane_filter <= 1.0)) usage(argv[0]);
-        planner.set_lane_filter_weight(*opt.lane_filter);
-    }
+    if (opt.lane_filter) planner.set_lane_filter_weight(*opt.lane_filter);
     LateralControllerConfig cfg;
     cfg.force_engaged = true;
     cfg.steering_params = steering;
@@ -298,12 +333,15 @@ int main(int argc, char **argv) {
     }
     constexpr uint64_t kControllerNowNs = 1'000'000'000'000ULL;  // plan 나이를 재는 컨트롤러 시계(고정)
     controller.set_clock([] { return kControllerNowNs; });
+    PathHoldGate path_gate;
+    const uint64_t model_timeout_ns = static_cast<uint64_t>(ControlTiming{}.model_timeout_ms) * 1'000'000ULL;
+    long laf_ignored_learner_states = 0;  // --laf를 줬는데 녹화가 torqued를 써 컨트롤러가 학습 배율을 쓴 LearnerState
     TorqueController inverse_model;
 
     const char *out_path = opt.positional[0];
     const bool want_csv = std::strcmp(out_path, "-") != 0;
-    std::FILE *out = std::fopen(want_csv ? out_path : "/dev/null", "w");
-    if (out == nullptr) {
+    std::FILE *out = want_csv ? std::fopen(out_path, "w") : nullptr;  // -면 행을 서식화하지 않는다(점수만)
+    if (want_csv && out == nullptr) {
         std::fprintf(stderr, "cannot open %s\n", out_path);
         return 1;
     }
@@ -311,10 +349,11 @@ int main(int argc, char **argv) {
     // 기준으로 삼지 않아 설정 간 A/B에 편향이 없다. k_path는 시뮬 차의 진행 곡률(k_sim을 조향각 → 진행 지연만큼 늦춘
     // 것), delay는 컨트롤러가 쓴 경로 지연, nn과 ff는 학습한 토크 모델을 섞었는지와 피드포워드(횡가속 공간), bank는
     // 컨트롤러의 편경사 추정이다.
-    std::fprintf(out,
-                 "t,seg,v_kph,active,block,k_des,k_sim,k_rec,a_cmd,a_act,"
-                 "angle_sim,angle_rec,t_des,t_apply,t_rec,driver,active_rec,dy,dpsi,"
-                 "lane_y,lane_ok,clamped,k_path,delay,nn,ff,bank\n");
+    if (out)
+        std::fprintf(out,
+                     "t,seg,v_kph,active,block,k_des,k_sim,k_rec,a_cmd,a_act,"
+                     "angle_sim,angle_rec,t_des,t_apply,t_rec,driver,active_rec,dy,dpsi,"
+                     "lane_y,lane_ok,clamped,k_path,delay,nn,ff,bank\n");
     // 진행 곡률: 시뮬과 녹화의 조향각 곡률을 같은 지연선에 지나게 해, 시뮬이 녹화와 같으면 자세 차이도 0이다
     const int path_lag_frames = static_cast<int>(std::lround(opt.path_lag / kDtCtrl));
     DelayLine sim_path(path_lag_frames), rec_path(path_lag_frames);
@@ -333,11 +372,11 @@ int main(int argc, char **argv) {
     double route_t0 = -1.0;
     float dy = 0.0f;
     float dpsi = 0.0f;
-    bool calibrated = true;
     LiveLateralParams live_now;
     float angle_sim = 0.0f;
     float k_sim = 0.0f;
-    bool active_prev = false;
+    // 직전 틱의 컨트롤러 판정. controlsd(ControlsTick)처럼 플래너에 latActive와 핸들 조작으로 준다.
+    bool lat_active_prev = false, steering_pressed_prev = false;
     int frame = 0;
     int clamped = 0;
     int segment = 0;
@@ -370,13 +409,8 @@ int main(int argc, char **argv) {
 
         VehicleCanState vehicle{};
         vehicle.has_lkas11_seed = vehicle.has_clu11_seed = vehicle.has_mdps12_seed = true;
-        for (double *stamp :
-             {&vehicle.lkas11_time_s, &vehicle.clu11_time_s, &vehicle.sas11_time_s, &vehicle.esp12_time_s,
-              &vehicle.whl_spd11_time_s, &vehicle.scc11_time_s, &vehicle.mdps12_time_s, &vehicle.tcs13_time_s,
-              &vehicle.tcs15_time_s, &vehicle.e_ems11_time_s, &vehicle.elect_gear_time_s, &vehicle.cgw1_time_s,
-              &vehicle.cgw2_time_s}) {
-            *stamp = sim_t;
-        }
+        stamp_received_messages(&vehicle, sim_t);
+        vehicle.scc11_time_s = sim_t;
         vehicle.gear = kGearDrive;
         vehicle.cluster_speed_raw = ex.v_kph;
         vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = ex.v_kph;
@@ -407,14 +441,16 @@ int main(int argc, char **argv) {
         LateralTarget t = target;
         if (t.valid) t.capture_timestamp_ns = kControllerNowNs - static_cast<uint64_t>(age_s * 1e9);
         const uint64_t path_now_ns = ms_sim.capture_timestamp_ns + static_cast<uint64_t>(age_s * 1e9);
-        LateralPath path = have_model ? path_from_model_state(ms_sim, path_now_ns) : LateralPath{};
+        // controlsd(ControlsTick)처럼 무효 plan 한 프레임은 PathHoldGate가 덮는다
+        LateralPath path = have_model ? path_gate.update(ms_sim, path_now_ns, model_timeout_ns).path : LateralPath{};
 
         const LateralControlResult r = controller.update(path, t, vehicle, sim_t, frame++, true, true);
-        active_prev = r.active;
+        lat_active_prev = r.lat_active;
+        steering_pressed_prev = r.steering_pressed;
 
         // 토크 -> 요청 횡가속도. 부호는 kTorqueOutputSign의 역이다(±1이라 같은 값을 곱한다).
         const float a_cmd = static_cast<float>(kTorqueOutputSign * r.apply_torque) /
-                            ((1.0f / steering.torque_lat_accel_factor) * static_cast<float>(steering.steer_max));
+                            ((1.0f / plant_lat_accel_factor) * static_cast<float>(steering.steer_max));
         const float a_act = plant.step(a_cmd, v_mps);
         k_sim = a_act / (v_clamped * v_clamped);
 
@@ -438,7 +474,9 @@ int main(int argc, char **argv) {
         } else {
             driver_quiet_frames = 0;
         }
-        const bool resync = !r.active || driver_engaged;
+        // 보드가 조향하지 않은 틱(해제, 정차 대기)도 되돌린다. 그 구간을 자유 주행으로 채점하면 사람이 조향한 녹화와
+        // 비교하게 된다(10-16 route의 채점 틱 35 %).
+        const bool resync = !r.active || driver_engaged || ex.active_rec == 0;
         if (resync) {
             plant.resync(ex.k_rec * v_clamped * v_clamped);
             k_sim = ex.k_rec;
@@ -487,103 +525,100 @@ int main(int argc, char **argv) {
         }
         resynced_prev = resync;
 
-        const bool lane_ok = have_model && ms_sim.lane_probabilities[1] >= 0.3f && ms_sim.lane_probabilities[2] >= 0.3f;
-        const float lane_y = lane_ok ? 0.5f * (ms_sim.lanes[1][0].y + ms_sim.lanes[2][0].y) : 0.0f;
-        std::fprintf(out,
-                     "%.3f,%d,%.2f,%d,%s,%.6f,%.6f,%.6f,%.4f,%.4f,%.3f,%.3f,"
-                     "%d,%d,%d,%d,%d,%.4f,%.5f,%.4f,%d,%d,%.6f,%.3f,%d,%.4f,%.4f\n",
-                     sim_t - route_t0, resync ? 0 : segment, ex.v_kph, r.active ? 1 : 0,
-                     block_reason_name(r.active_block), r.desired_curvature, k_sim, ex.k_rec, a_cmd, a_act, angle_sim,
-                     ex.angle_rec, r.desired_torque, r.apply_torque, ex.apply_rec, ex.driver_torque,
-                     static_cast<int>(ex.active_rec), dy, dpsi, lane_y, lane_ok ? 1 : 0, clamped, k_path,
-                     controller.plan_delay_s(), r.nn_feedforward_used ? 1 : 0, r.feedforward,
-                     controller.road_bank_lat_accel());
+        if (out) {
+            const bool lane_ok =
+                have_model && ms_sim.lane_probabilities[1] >= 0.3f && ms_sim.lane_probabilities[2] >= 0.3f;
+            const float lane_y = lane_ok ? 0.5f * (ms_sim.lanes[1][0].y + ms_sim.lanes[2][0].y) : 0.0f;
+            std::fprintf(out,
+                         "%.3f,%d,%.2f,%d,%s,%.6f,%.6f,%.6f,%.4f,%.4f,%.3f,%.3f,"
+                         "%d,%d,%d,%d,%d,%.4f,%.5f,%.4f,%d,%d,%.6f,%.3f,%d,%.4f,%.4f\n",
+                         sim_t - route_t0, resync ? 0 : segment, ex.v_kph, r.active ? 1 : 0,
+                         block_reason_name(r.active_block), r.desired_curvature, k_sim, ex.k_rec, a_cmd, a_act,
+                         angle_sim, ex.angle_rec, r.desired_torque, r.apply_torque, ex.apply_rec, ex.driver_torque,
+                         static_cast<int>(ex.active_rec), dy, dpsi, lane_y, lane_ok ? 1 : 0, clamped, k_path,
+                         controller.plan_delay_s(), r.nn_feedforward_used ? 1 : 0, r.feedforward,
+                         controller.road_bank_lat_accel());
+        }
         clamped = 0;
     };
 
-    for (size_t a = 1; a < opt.positional.size(); ++a) {
-        EventLogReader reader(opt.positional[a]);
-        if (!reader.ok()) continue;
-        EventRecordHeader rh{};
-        std::vector<char> buf;
-        while (reader.next(&rh, &buf)) {
-            const double rec_t = static_cast<double>(rh.timestamp_ns) * 1e-9;
+    // 레코드는 기록 시각 순으로 읽는다(RouteEvents). 못 연 파일이 있으면 끝에 종료 코드 1이다.
+    RouteEvents events(std::vector<std::string>(opt.positional.begin() + 1, opt.positional.end()));
+    TimeOrderedEvents::Record record;
+    while (events.next(&record)) {
+        const EventRecordHeader &rh = record.header;
+        const std::vector<char> &buf = record.payload;
+        const double rec_t = static_cast<double>(rh.timestamp_ns) * 1e-9;
 
-            if (sim_t > 0.0) {
-                while (sim_t + kDtCtrl <= rec_t) {
-                    sim_t += kDtCtrl;
-                    tick();
-                }
-            }
-
-            // controlsd처럼 학습값을 컨트롤러에 넣는다(스위치는 steering 파라미터가 정한다)
-            if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) && rh.payload_size >= sizeof(LearnerState)) {
-                LearnerState ls{};
-                std::memcpy(&ls, buf.data(), sizeof(ls));
-                LiveLateralParams live;
-                live.use_vehicle = (ls.flags & kLearnerUseVehicle) != 0;
-                live.steer_ratio = ls.steer_ratio;
-                live.stiffness_factor = ls.stiffness_factor;
-                live.angle_offset_deg = ls.angle_offset_deg;
-                live.roll_rad = ls.roll_rad;
-                live.use_torque = (ls.flags & kLearnerUseTorque) != 0;
-                live.lat_accel_factor = ls.lat_accel_factor;
-                live.lat_accel_offset = ls.lat_accel_offset;
-                live.friction = ls.friction;
-                if (opt.torque != nullptr) {
-                    float f = 0, o = 0, r = 0;
-                    if (std::sscanf(opt.torque, "%f,%f,%f", &f, &o, &r) == 3) {
-                        live.use_torque = true;
-                        live.lat_accel_factor = f;
-                        live.lat_accel_offset = o;
-                        live.friction = r;
-                    }
-                }
-                controller.set_live_params(live, (ls.flags & kLearnerVehicleValid) != 0, calibrated);
-                live_now = live;
-            }
-            if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
-                // controlsd와 같은 거름과 파서(apply_can_batch). 시뮬 차는 이 상태에서 ESP12만 가져간다.
-                for_each_recorded_can_frame(buf.data(), buf.size(), [&](const RecordedCanFrame &f) {
-                    if (!is_vehicle_rx_frame(f.flags, f.data_len, f.src)) return;
-                    std::array<uint8_t, 8> data = {};
-                    std::copy_n(f.data, f.data_len, data.begin());
-                    update_vehicle_can_state(&recorded_vehicle, f.address, data, static_cast<uint8_t>(f.data_len),
-                                             static_cast<uint8_t>(f.src), rec_t);
-                });
-            }
-            if (rh.type == static_cast<uint16_t>(RecordType::Localization) &&
-                rh.payload_size >= sizeof(LocalizationState)) {
-                std::memcpy(&localization, buf.data(), sizeof(localization));
-                have_localization = true;
-            }
-            if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && rh.payload_size >= sizeof(ControlState)) {
-                ControlState cs{};
-                std::memcpy(&cs, buf.data(), sizeof(cs));
-                ex.v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
-                ex.k_rec = cs.actual_curvature;
-                ex.angle_rec = cs.steering_angle_deg;
-                ex.driver_torque = cs.driver_torque;
-                ex.apply_rec = cs.apply_torque;
-                ex.active_rec = cs.active;
-            } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
-                ModelState ms{};
-                if (!decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) continue;
-                if (sim_t < 0.0) {
-                    sim_t = rec_t;
-                    route_t0 = rec_t;
-                }
-                calibrated = ms.calibration.status == 1U;
-                ms_sim = ms;
-                // 카메라 오프셋 변경: 모델은 실제 점을 y - 오프셋으로 본다(set_camera_mount)
-                transform_model(ms_sim, dy + opt.camera_shift, dpsi);
-                have_model = true;
-                VehicleCanState planner_vehicle{};
-                target = planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim, active_prev, false);
+        if (sim_t > 0.0) {
+            while (sim_t + kDtCtrl <= rec_t) {
+                sim_t += kDtCtrl;
+                tick();
             }
         }
+
+        // controlsd처럼 학습값을 컨트롤러에 넣는다(스위치는 steering 파라미터가 정한다)
+        LearnerState ls;
+        if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) && read_record(buf, &ls)) {
+            LiveLateralParams live;
+            live.use_vehicle = (ls.flags & kLearnerUseVehicle) != 0;
+            live.steer_ratio = ls.steer_ratio;
+            live.stiffness_factor = ls.stiffness_factor;
+            live.angle_offset_deg = ls.angle_offset_deg;
+            live.roll_rad = ls.roll_rad;
+            live.use_torque = (ls.flags & kLearnerUseTorque) != 0;
+            if (live.use_torque && opt.laf && !opt.torque) ++laf_ignored_learner_states;
+            live.lat_accel_factor = ls.lat_accel_factor;
+            live.lat_accel_offset = ls.lat_accel_offset;
+            live.friction = ls.friction;
+            if (opt.torque) {
+                live.use_torque = true;
+                live.lat_accel_factor = (*opt.torque)[0];
+                live.lat_accel_offset = (*opt.torque)[1];
+                live.friction = (*opt.torque)[2];
+            }
+            controller.set_live_params(live, (ls.flags & kLearnerVehicleValid) != 0);
+            live_now = live;
+        }
+        // controlsd와 같은 거름과 파서. 시뮬 차는 이 상태에서 ESP12만 가져간다.
+        if (rh.type == static_cast<uint16_t>(RecordType::CanRx))
+            apply_recorded_can(buf.data(), buf.size(), rec_t, &recorded_vehicle);
+        if (rh.type == static_cast<uint16_t>(RecordType::Localization) && read_record(buf, &localization))
+            have_localization = true;
+        ControlState cs;
+        if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && read_record(buf, &cs)) {
+            ex.v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
+            ex.k_rec = cs.actual_curvature;
+            ex.angle_rec = cs.steering_angle_deg;
+            ex.driver_torque = cs.driver_torque;
+            ex.apply_rec = cs.apply_torque;
+            ex.active_rec = cs.active;
+        } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
+            ModelState ms{};
+            if (!read_record(buf, &ms)) continue;
+            if (sim_t < 0.0) {
+                sim_t = rec_t;
+                route_t0 = rec_t;
+            }
+            controller.set_calibration_status(ms.calibration.status);  // controlsd(ControlsTick)처럼
+            ms_sim = ms;
+            // 카메라 오프셋 변경: 모델은 실제 점을 y - 오프셋으로 본다(set_camera_mount)
+            transform_model(ms_sim, dy + opt.camera_shift, dpsi);
+            have_model = true;
+            // controlsd처럼 녹화한 CAN의 차량 상태(깜빡이·운전자 토크·사각지대)를 준다. 조향각은 시뮬 차의 것이다.
+            // 예전에는 빈 상태를 줘서 차선 변경·회전 desire가 한 번도 돌지 않았다.
+            VehicleCanState planner_vehicle = recorded_vehicle;
+            planner_vehicle.steering_angle_deg = angle_sim;
+            target =
+                planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim, lat_active_prev, steering_pressed_prev);
+        }
     }
-    std::fclose(out);
+    if (out) std::fclose(out);
+    if (laf_ignored_learner_states > 0)
+        std::fprintf(stderr,
+                     "warning: --laf did not reach the controller in %ld LearnerState records: the recording uses "
+                     "torqued (use --torque to replace the learned factor)\n",
+                     laf_ignored_learner_states);
     if (score_n > 1) {
         const double var = score_sum2 - score_sum * score_sum / static_cast<double>(score_n);
         const double rmse = std::sqrt(score_err2 / static_cast<double>(score_n));
@@ -601,5 +636,5 @@ int main(int argc, char **argv) {
     } else {
         std::printf("n=0 rmse=nan r2=nan\n");
     }
-    return 0;
+    return events.exit_code();
 }

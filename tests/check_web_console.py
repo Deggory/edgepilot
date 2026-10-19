@@ -19,8 +19,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.web_console.backlight import duty_cycle_ns
-from scripts.web_console.bev_stream import BEV_FRAME, BEV_FRAME_MAGIC, bev_frames, bev_layout
+from scripts.web_console.bev_stream import BEV_FRAME, BEV_FRAME_MAGIC, BEV_IDLE_S, bev_frames, bev_layout
 from scripts.web_console.calibration_control import (
     CALIBRATION_RESET_PATH,
     CALIBRATION_SOURCE_STATE,
@@ -84,6 +83,7 @@ from scripts.web_console.process_status import (
     PROCESS_STATE,
     VERSION_MARKER,
     ProcessStatus,
+    process_running,
     read_binary_version,
 )
 from scripts.web_console.shm_channel import IPC_HEADER, IPC_MAGIC, IPC_VERSION, IpcReader, boottime_ns
@@ -173,19 +173,6 @@ def control_payload(**values) -> bytes:
     return bytes(payload)
 
 
-class FakeBacklight:
-    def __init__(self):
-        self.applied = []
-
-    def apply(self, document):
-        self.applied.append(dict(document))
-
-    def status(self):
-        latest = self.applied[-1] if self.applied else {}
-        return {"available": True, "enabled": latest.get("enabled", True),
-                "brightness_percent": latest.get("brightness_percent", 100), "mode": "test", "error": ""}
-
-
 # ------------------------------------------------------------ 파라미터
 class ParamStoreTest(unittest.TestCase):
     def setUp(self):
@@ -193,7 +180,7 @@ class ParamStoreTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.paths = group_paths(self.root / "params")
         documents = {
-            "steering": {"gain": 10, "enabled": True},
+            "steering": {"torque_kp": 1.0, "enabled": True},
             "adaptive_cruise": {"following_time_s": 1.8},
             "recording": {"enabled": False},
             "display": {"enabled": True, "brightness_percent": 100},
@@ -201,27 +188,33 @@ class ParamStoreTest(unittest.TestCase):
         self.paths["steering"].parent.mkdir()
         for group, document in documents.items():
             self.paths[group].write_text(json.dumps(document), encoding="utf-8")
-        self.notified = []
+        self.checked = []  # 실행 여부를 물은 프로세스
 
-        def notify(name):
-            self.notified.append(name)
-            return [123]
+        def running(name):
+            self.checked.append(name)
+            return True
 
-        self.notify = notify
-        self.store = ParamStore(self.paths, notify=notify)
+        self.running = running
+        self.store = ParamStore(self.paths, running=running)
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def test_atomic_single_value_update_signals_the_reader(self):
-        result = self.store.update("steering", {"gain": 12})
-        self.assertEqual(result["notified"], [123])
-        self.assertEqual(self.notified, ["controlsd"])
-        self.assertEqual(self.store.read_group("steering"), {"gain": 12, "enabled": True})
+    def test_atomic_single_value_update_reports_the_reader(self):
+        """파일만 바꾼다(controlsd가 1초 안에 스스로 다시 읽는다). 읽는 프로세스가 도는지만 알린다."""
+        result = self.store.update("steering", {"torque_kp": 1.2})
+        self.assertIs(result["reader_running"], True)
+        self.assertEqual(self.checked, ["controlsd"])
+        self.assertEqual(self.store.read_group("steering"), {"torque_kp": 1.2, "enabled": True})
         self.assertEqual(list(self.paths["steering"].parent.glob("*.tmp")), [])
+        stopped = ParamStore(self.paths, running=lambda name: False).update("steering", {"torque_kp": 1.3})
+        self.assertIs(stopped["reader_running"], False, "controlsd가 없으면 저장만 됐다고 알린다")
+        self.assertEqual(self.store.read_group("steering")["torque_kp"], 1.3)
+        self.assertNotIn("kill", (WEB_CONSOLE / "process_status.py").read_text(encoding="utf-8"), "신호를 보내지 않는다")
 
     def test_card_managed_setting_is_changed_only_through_its_card(self):
-        """전용 카드가 바꾸는 항목(메타데이터 card)은 일반 경로로 받지 않는다. 카드의 API가 받을 조건을 건너뛰지 않게."""
+        """전용 카드가 바꾸는 항목(메타데이터 card)은 일반 경로로 받지 않는다. 카드의 API가 받을 조건을
+        건너뛰지 않게."""
         self.paths["display"].write_text(
             json.dumps({"enabled": True, "brightness_percent": 100, "calibration_use_flow": False}), encoding="utf-8")
         with self.assertRaises(Refusal) as refused:
@@ -238,27 +231,28 @@ class ParamStoreTest(unittest.TestCase):
             with self.assertRaises(Refusal) as refused:
                 self.store.update(group, values)
             self.assertEqual((refused.exception.code, refused.exception.status), (code, status), (group, values))
-        self.assertEqual(self.notified, [])
+        self.assertEqual(self.checked, [])
         self.assertEqual(self.store.read_group("adaptive_cruise"), {"following_time_s": 1.8})
 
     def test_values_must_be_what_the_runtime_loader_reads(self):
-        """런타임 로더(utils_json.cc)는 켜고 끄는 값이 true/false가 아니거나 숫자가 유한하지 않으면 파일을 거부하고, 시작할
-        때 거부하면 controlsd가 뜨지 못한다. 그런 값은 쓰지 않는다. 메타데이터의 범위 밖, step이 정수인 항목의 소수도."""
+        """런타임 로더(utils_json.cc)는 켜고 끄는 값이 true/false가 아니거나 숫자가 유한하지 않으면 파일을
+        거부하고, 시작할 때 거부하면 controlsd가 뜨지 못한다. 그런 값은 쓰지 않는다. 메타데이터의 범위 밖,
+        step이 정수인 항목의 소수도."""
         self.paths["adaptive_cruise"].write_text(json.dumps({"following_time_s": 1.8, "standstill_gap_m": 5}),
                                                  encoding="utf-8")
         self.paths["display"].write_text(json.dumps({"enabled": True, "brightness_percent": 100}), encoding="utf-8")
         cases = (
             ("steering", {"enabled": 1}, "error.param_invalid.boolean"),
             ("steering", {"enabled": None}, "error.param_invalid.boolean"),
-            ("steering", {"gain": True}, "error.param_invalid.number"),       # 메타데이터 없는 키도 숫자만
-            ("steering", {"gain": None}, "error.param_invalid.number"),
-            ("steering", {"gain": float("nan")}, "error.param_invalid.number"),
-            ("steering", {"gain": float("inf")}, "error.param_invalid.number"),
-            ("steering", {"gain": "12"}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": True}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": None}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": float("nan")}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": float("inf")}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": "12"}, "error.param_invalid.number"),
             # strtof의 범위 오류: float 밖의 큰 수, 정규화되지 않는 작은 수, float로 바꿀 수도 없는 정수
-            ("steering", {"gain": 1e39}, "error.param_invalid.number"),
-            ("steering", {"gain": 1e-40}, "error.param_invalid.number"),
-            ("steering", {"gain": 10 ** 400}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": 1e39}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": 1e-40}, "error.param_invalid.number"),
+            ("steering", {"torque_kp": 10 ** 400}, "error.param_invalid.number"),
             ("adaptive_cruise", {"following_time_s": 9.0}, "error.param_invalid.range"),
             ("display", {"brightness_percent": 50.5}, "error.param_invalid.integer"),
         )
@@ -268,12 +262,12 @@ class ParamStoreTest(unittest.TestCase):
                 self.store.update(group, values)
             self.assertEqual((refused.exception.code, refused.exception.status), (code, 400), values)
             self.assertEqual(self.store.read_group(group), before, values)
-        self.store.update("steering", {"gain": 0})  # 0은 범위 오류가 아니다
+        self.store.update("steering", {"torque_kp": 0})  # 0은 범위 오류가 아니다
         self.store.update("adaptive_cruise", {"standstill_gap_m": 5.5})  # step 0.5: 처음 값이 정수여도 소수를 받는다
         self.assertEqual(self.store.read_group("adaptive_cruise")["standstill_gap_m"], 5.5)
         self.store.update("adaptive_cruise", {"following_time_s": 2})
         self.assertEqual(self.store.read_group("adaptive_cruise")["following_time_s"], 2)
-        self.assertEqual(self.notified, ["controlsd"] * 3)
+        self.assertEqual(self.checked, ["controlsd"] * 3)
 
     def test_broken_file_is_a_coded_refusal(self):
         self.paths["recording"].write_text("{", encoding="utf-8")
@@ -281,46 +275,43 @@ class ParamStoreTest(unittest.TestCase):
             self.store.update("recording", {"enabled": True})
         self.assertEqual((refused.exception.code, refused.exception.status), ("error.param_file", 500))
 
-    def test_files_read_by_their_own_process_signal_nobody(self):
-        """recordd·overlayd·modeld는 파일을 스스로 다시 읽는다."""
-        self.assertEqual(self.store.update("recording", {"enabled": True})["notified"], [])
-        self.assertEqual(self.notified, [])
+    def test_groups_without_a_reader_check_nothing(self):
+        """recordd·overlayd·modeld도 파일을 스스로 다시 읽는다. 저장만 됐다는 안내는 controlsd 그룹에만 있다."""
+        self.assertIs(self.store.update("recording", {"enabled": True})["reader_running"], True)
+        self.assertEqual(self.checked, [])
 
-    def test_display_update_applies_hardware_without_signaling(self):
-        backlight = FakeBacklight()
-        store = ParamStore(self.paths, notify=self.notify, backlight=backlight)
-        self.assertEqual(backlight.applied, [{"enabled": True, "brightness_percent": 100}], "applied at start")
-        backlight.applied.clear()
-        result = store.update("display", {"brightness_percent": 35})
-        self.assertEqual(result["notified"], [])
-        self.assertEqual(backlight.applied, [{"enabled": True, "brightness_percent": 35}])
-        self.assertEqual(store.read_group("display")["brightness_percent"], 35)
+    def test_display_update_only_writes_the_file(self):
+        """백라이트는 overlayd만 쓴다: 웹 콘솔은 display.json만 바꾸고 아무에게도 알리지 않는다(overlayd가 1초 안에
+        읽는다). 예전에는 웹 콘솔이 PWM에도 따로 써서 overlayd가 다시 뜨면 화면과 페이지가 어긋났다."""
+        result = self.store.update("display", {"brightness_percent": 35, "enabled": False})
+        self.assertIs(result["reader_running"], True)
+        self.assertEqual(self.checked, [])
+        self.assertEqual(json.loads(self.paths["display"].read_text())["brightness_percent"], 35)
+        self.assertNotIn("backlight", (WEB_CONSOLE / "param_store.py").read_text(encoding="utf-8").lower()
+                         .split('"""', 2)[2], "파라미터 저장은 백라이트를 다루지 않는다")
 
-    def test_display_update_without_backlight_is_refused(self):
-        with self.assertRaises(Refusal) as refused:
-            self.store.update("display", {"brightness_percent": 35})
-        self.assertEqual((refused.exception.code, refused.exception.status), ("error.backlight_unavailable", 503))
-        self.assertEqual(self.store.read_group("display")["brightness_percent"], 100)
-
-    def test_alert_volume_update_leaves_backlight_alone(self):
-        self.paths["display"].write_text(
-            json.dumps({"enabled": True, "brightness_percent": 80, "alert_volume_percent": 70}), encoding="utf-8")
-        backlight = FakeBacklight()
-        store = ParamStore(self.paths, notify=self.notify, backlight=backlight)
-        backlight.applied.clear()
-        result = store.update("display", {"alert_volume_percent": 30})
-        self.assertEqual(result["params"]["alert_volume_percent"], 30)
-        self.assertEqual(backlight.applied, [], "volume is read by overlayd, not the backlight")
-        store.update("display", {"brightness_percent": 60})
-        self.assertEqual(backlight.applied[-1]["brightness_percent"], 60)
-        self.assertEqual(json.loads(self.paths["display"].read_text())["alert_volume_percent"], 30)
-
-    def test_display_pwm_duty_scales_by_board_maximum(self):
-        self.assertEqual(duty_cycle_ns(100), 95_000)
-        self.assertEqual(duty_cycle_ns(51), 48_450)
-        self.assertEqual(duty_cycle_ns(1), 950)
-        self.assertEqual(duty_cycle_ns(0), 0)
-        self.assertEqual(duty_cycle_ns(100, max_percent=100), 100_000)
+    def test_backlight_status_reads_the_pwm(self):
+        """페이지의 백라이트 표시는 sysfs의 실제 값이다. 밝기는 보드 최대치로 나눠 설정 값과 같은 눈금으로 보인다."""
+        from scripts.web_console.backlight import DisplayBacklight
+        with tempfile.TemporaryDirectory() as directory:
+            chip = Path(directory) / "pwmchip0"
+            board = Path(directory) / "board"
+            board.write_text("disp_max_backlight=95\n")
+            missing = DisplayBacklight(pwm_chip=chip, board_file=board).status()
+            self.assertEqual((missing["available"], missing["brightness_percent"]), (False, None))
+            pwm = chip / "pwm3"
+            pwm.mkdir(parents=True)
+            for name, value in (("enable", "1"), ("period", "100000"), ("duty_cycle", "33250")):
+                (pwm / name).write_text(value + "\n")
+            status = DisplayBacklight(pwm_chip=chip, board_file=board).status()
+            self.assertEqual((status["available"], status["enabled"], status["brightness_percent"]), (True, True, 35))
+            (pwm / "duty_cycle").write_text("0\n")
+            self.assertFalse(DisplayBacklight(pwm_chip=chip, board_file=board).status()["enabled"], "duty 0은 꺼짐")
+        # 같은 식으로 쓴다: duty = 주기 x 밝기 x 보드 최대치(maix_display.cc write_backlight)
+        source = cpp(ROOT / "platform" / "maixcam2" / "maix_display.cc")
+        self.assertIn("period * std::clamp(percent, 0.0f, 100.0f) / 100.0f * max_percent / 100.0f", source)
+        self.assertIn('board_config("disp_max_backlight", 95)', source)
+        self.assertIn("DEFAULT_MAX_PERCENT = 95", (WEB_CONSOLE / "backlight.py").read_text(encoding="utf-8"))
 
     def test_runtime_keys_follow_the_defaults(self):
         """빠진 키는 기본값으로 채우고 기본값에서 사라진 키는 지운다. 남은 키의 튜닝은 그대로."""
@@ -329,7 +320,7 @@ class ParamStoreTest(unittest.TestCase):
                             encoding="utf-8")
         self.paths["adaptive_cruise"].write_text(json.dumps({"following_time_s": 2.2, "retired": 1}),
                                                  encoding="utf-8")
-        store = ParamStore(self.paths, {"adaptive_cruise": defaults}, notify=self.notify)
+        store = ParamStore(self.paths, {"adaptive_cruise": defaults}, running=self.running)
         self.assertEqual(store.read_group("adaptive_cruise"),
                          {"following_time_s": 2.2, "deceleration_rate_kph_per_s": 1.5})
         self.assertEqual(store.defaults(), {"adaptive_cruise": {"following_time_s": 1.8,
@@ -339,20 +330,21 @@ class ParamStoreTest(unittest.TestCase):
         """EDGEPILOT_PARAMS_DIR(없으면 params/)와 그 옆의 <이름>.defaults/(업로드 스크립트가 채운다)."""
         defaults = group_paths(self.root / "params.defaults")
         defaults["adaptive_cruise"].parent.mkdir()
+        for group, path in defaults.items():  # 업로드 스크립트는 그룹마다 채운다
+            path.write_text(self.paths[group].read_text(encoding="utf-8"), encoding="utf-8")
         defaults["adaptive_cruise"].write_text(json.dumps({"following_time_s": 1.5, "added": True}), encoding="utf-8")
         with mock.patch.dict(os.environ, {"EDGEPILOT_PARAMS_DIR": str(self.root / "params")}):
-            store = ParamStore(notify=self.notify)
+            store = ParamStore(running=self.running)
         self.assertEqual(store.paths, self.paths)
         self.assertEqual(store.read_group("adaptive_cruise"), {"following_time_s": 1.8, "added": True})
-        self.assertEqual(store.snapshot()["defaults"],
-                         {"adaptive_cruise": {"following_time_s": 1.5, "added": True}})
+        self.assertEqual(store.snapshot()["defaults"]["adaptive_cruise"], {"following_time_s": 1.5, "added": True})
 
     def test_snapshot_has_what_the_page_reads(self):
         snapshot = self.store.snapshot()
         self.assertEqual(set(snapshot), {"groups", "vehicle_tab", "params", "defaults", "metadata", "paths"})
         self.assertEqual(list(snapshot["groups"]), list(PARAM_GROUPS), "tab order")
         for group, spec in snapshot["groups"].items():
-            self.assertEqual(set(spec), {"sections", "notify"}, group)
+            self.assertEqual(set(spec), {"sections", "reader"}, group)
         self.assertEqual(snapshot["paths"]["steering"], str(self.paths["steering"]))
 
 
@@ -370,10 +362,12 @@ class ParamMetadataTest(unittest.TestCase):
             for key, value in params.items():
                 meta = metadata[key]
                 self.assertTrue(meta.get("section"), f"{group}.{key}.section")
-                fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+                fields = ["label", "description", "increase", "decrease"]
+                fields += ["learned_role"] if meta.get("learned") else []
                 for lang, texts in catalogs.items():
                     for field in fields:
-                        self.assertTrue(texts.get(f"param.{group}.{key}.{field}"), f"{lang}: param.{group}.{key}.{field}")
+                        name = f"param.{group}.{key}.{field}"
+                        self.assertTrue(texts.get(name), f"{lang}: {name}")
                     if not meta.get("learned"):
                         self.assertNotIn(f"param.{group}.{key}.learned_role", texts, f"{lang}: {group}.{key}")
                     if meta.get("caution"):
@@ -443,7 +437,8 @@ class ParamMetadataTest(unittest.TestCase):
         steering = PARAM_METADATA["steering"]
         page = (STATIC_DIR / "vehicle_view.js").read_text(encoding="utf-8")
         live = set(re.findall(r"^  (\w+): \{$", re.search(r"const LIVE = \{\n(.*?)\n\};", page, re.S).group(1), re.M))
-        learners = set(re.findall(r"^  (\w+): \{$", re.search(r"const LEARNERS = \{\n(.*?)\n\};", page, re.S).group(1), re.M))
+        learners_block = re.search(r"const LEARNERS = \{\n(.*?)\n\};", page, re.S).group(1)
+        learners = set(re.findall(r"^  (\w+): \{$", learners_block, re.M))
         learned = set()
         for name, spec in VEHICLE_TAB["learners"].items():
             self.assertIn(name, VEHICLE_TAB["sections"])
@@ -465,7 +460,6 @@ class ParamMetadataTest(unittest.TestCase):
             "steering": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
             "adaptive_cruise": ("src/controls/adaptive_cruise.cc", ("kAdaptiveFloats",)),
             "recording": ("src/recording/recordd.cc", ("kRecordingInts",)),
-            # display는 백라이트(backlight.py) 항목도 있어 런타임이 읽는 키만 대조한다
             "display": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
         }
         for group, (source, names) in tables.items():
@@ -477,11 +471,37 @@ class ParamMetadataTest(unittest.TestCase):
                 runtime.update({key: (float(low), float(high)) for key, low, high in row.findall(body.group(1))})
             self.assertTrue(runtime, f"{source}: no rows parsed")
             ui = {key: meta for key, meta in PARAM_METADATA[group].items() if "min" in meta}
-            if group == "display":
-                ui = {key: meta for key, meta in ui.items() if key in runtime}
             self.assertEqual(set(runtime), set(ui), group)
             for key, (low, high) in runtime.items():
                 self.assertEqual((float(ui[key]["min"]), float(ui[key]["max"])), (low, high), f"{group}.{key}")
+
+    def test_params_readme_ranges_match_runtime_clamps(self):
+        """params/README.md의 Range 열이 로더 표(Json*Field)와 같아야 한다: 문서만 보고 넣은 값이 말없이 잘렸다
+        (예전 hold angle 0~180, 로더는 0~84)."""
+        row = re.compile(r'\{"(\w+)",\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?,\s*&\w+::\w+\}')
+        tables = {
+            "steering.json": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
+            "adaptive_cruise.json": ("src/controls/adaptive_cruise.cc", ("kAdaptiveFloats",)),
+            "recording.json": ("src/recording/recordd.cc", ("kRecordingInts",)),
+            "display.json": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
+        }
+        readme = (ROOT / "params" / "README.md").read_text(encoding="utf-8")
+        sections = dict(re.findall(r"^## (\S+\.json)\n(.*?)(?=^## |\Z)", readme, re.S | re.M))
+
+        def number(text):
+            scale = {"k": 1e3, "M": 1e6}.get(text[-1], 1.0)
+            return float(text.rstrip("kM")) * scale
+
+        for name, (source, tables_in_source) in tables.items():
+            text = (ROOT / source).read_text(encoding="utf-8")
+            runtime = {}
+            for table in tables_in_source:
+                body = re.search(table + r"\[\] = \{(.*?)\n\};", text, re.S).group(1)
+                runtime.update({key: (float(low), float(high)) for key, low, high in row.findall(body)})
+            documented = {key: (number(low), number(high)) for key, low, high in
+                          re.findall(r"^\| `(\w+)` \|[^|]*\|[^|]*\| (-?[\d.]+[kM]?) to (-?[\d.]+[kM]?) \|",
+                                     sections[name], re.M)}
+            self.assertEqual(documented, runtime, name)
 
     def test_ui_text_names_no_particular_car(self):
         """다른 차도 붙일 수 있게 화면 문구는 차종을 말하지 않는다. 한글이 바로 붙는 "K7은"도 잡는다."""
@@ -519,7 +539,8 @@ class I18nCatalogTest(unittest.TestCase):
                     self.assertTrue(text.strip(), f"{lang}: {key}")
                     if len(by_count) > 1:
                         self.assertIn("count", placeholders(text), f"{lang}: {key} plural without {{count}}")
-            names = {lang: set().union(*(placeholders(text) for text in by_count.values())) for lang, by_count in forms.items()}
+            names = {lang: set().union(*(placeholders(text) for text in by_count.values()))
+                     for lang, by_count in forms.items()}
             self.assertEqual(names["ko"], names["en"], key)
             self.assertFalse(HANGUL.search(json.dumps(en[key], ensure_ascii=False)), f"en: {key}")
 
@@ -548,7 +569,8 @@ class I18nCatalogTest(unittest.TestCase):
         # 메타데이터에서 나오는 키(param_state.js가 만든다)
         for group, items in PARAM_METADATA.items():
             for key, meta in items.items():
-                fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+                fields = ["label", "description", "increase", "decrease"]
+                fields += ["learned_role"] if meta.get("learned") else []
                 used.update(f"param.{group}.{key}.{field}" for field in fields)
                 used.update(f"toggle.{name}" for name in meta.get("labels", []))
                 used.add(f"section.{meta['section']}")
@@ -564,7 +586,6 @@ class I18nCatalogTest(unittest.TestCase):
             if f"group.{group}.note" in keys:
                 used.add(f"group.{group}.note")
         used.update(f"section.{name}" for name in VEHICLE_TAB["sections"])
-        used.add("section.other")
         # 서버의 코드: Panda 사유·단계·이미지 문제와 거부(Refusal)
         used.update(f"panda.reason.{code}" for code in REASONS)
         used.update(f"panda.step.{code}" for code in STEPS)
@@ -619,7 +640,8 @@ class I18nCatalogTest(unittest.TestCase):
         # CSS가 그리는 글자(content)도 화면 글자다: 문구 묶음에서 data-* 속성으로 받는다(attr())
         for sheet in STATIC_DIR.glob("*.css"):
             code = re.sub(r"/\*.*?\*/", "", sheet.read_text(encoding="utf-8"), flags=re.S)
-            found += [f"{sheet.name}: {value}" for value in re.findall(r"content:\s*([^;}]*)", code) if HANGUL.search(value)]
+            found += [f"{sheet.name}: {value}" for value in re.findall(r"content:\s*([^;}]*)", code)
+                      if HANGUL.search(value)]
         for module in WEB_CONSOLE.glob("*.py"):
             tree = ast.parse(module.read_text(encoding="utf-8"))
             docstrings = {id(node.body[0].value) for node in ast.walk(tree)
@@ -705,6 +727,20 @@ class LearnerStateTest(unittest.TestCase):
         publish(self.path, learner_payload(flags=loaded), seq=6, stamp=123)  # 오래전 상태
         self.assertEqual(monitor.runtime_facts(), {"lateral_nn_loaded": None})
 
+    def test_polled_status_carries_the_runtime_facts(self):
+        """페이지는 폴링 응답의 runtime으로 안내를 갱신한다(param_state.updateRuntime). 페이지를 연 뒤에 controlsd가
+        모델을 읽어도 안내가 따라온다."""
+        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        self.assertEqual(monitor.status()["runtime"], {"lateral_nn_loaded": None})
+        publish(self.path, learner_payload(flags=1 << LEARNER_FLAGS.index("lateral_nn_loaded")), seq=2)
+        self.assertEqual(monitor.status()["runtime"], {"lateral_nn_loaded": True})
+        publish(self.path, learner_payload(flags=0), seq=4, stamp=123)  # 낡은 상태는 모른다(None)
+        self.assertEqual(monitor.status()["runtime"], {"lateral_nn_loaded": None})
+        server = (WEB_CONSOLE / "console_server.py").read_text(encoding="utf-8")
+        self.assertEqual(server.count('"runtime": learners.runtime_facts()'), 3)  # 파라미터와 학습 토크 모델 둘
+        for module in ("lateral_nn_card.js", "vehicle_view.js"):
+            self.assertIn("updateRuntime(", (WEB_CONSOLE / "static" / module).read_text(encoding="utf-8"), module)
+
     def test_monitor_keeps_one_trend_row_per_publish(self):
         monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
         self.assertFalse(monitor.status()["available"])
@@ -716,14 +752,30 @@ class LearnerStateTest(unittest.TestCase):
         self.assertTrue(status["available"])
         self.assertEqual([row[0] for row in monitor.trend()["rows"]], [1.0, 2.0])
         self.assertAlmostEqual(status["trend_row"][7], 4.40, places=5)
-        self.publish(6, timestamp_ns=500_000_000)  # 시각이 거꾸로: 다른 부팅
+
+    def test_monitor_trend_rows_are_a_second_apart_and_cut_by_time(self):
+        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        # 요청마다 sample이 불려도 행은 0.9초 이상 떨어져야 쌓인다
+        for seq, stamp_s in enumerate((1.0, 1.3, 1.6, 2.0, 2.5, 3.1), start=1):
+            self.publish(2 * seq, timestamp_ns=int(stamp_s * 1e9))
+            monitor.sample()
+        self.assertEqual([row[0] for row in monitor.trend()["rows"]], [1.0, 2.0, 3.1])
+        # 10분 창은 행 개수가 아니라 마지막 행의 시각으로 자른다
+        self.publish(20, timestamp_ns=int(602.0 * 1e9))
         monitor.sample()
-        self.assertEqual([row[0] for row in monitor.trend()["rows"]], [0.5])
+        self.assertEqual([row[0] for row in monitor.trend()["rows"]], [2.0, 3.1, 602.0])
 
 
 class LocalizationStateTest(unittest.TestCase):
     def test_layout_matches_cpp(self):
+        """크기만 대조하면 필드 순서가 바뀌어도 모른다: 형식·이름·배열 길이를 C++ 구조체 차례대로 대조한다."""
         self.assertEqual(LOCALIZATION_STATE.size, cpp_size("LocalizationState"))
+        kinds = {"Q": "uint64_t", "I": "uint32_t", "i": "int32_t", "f": "float"}
+        fields = [(kinds[fmt[-1]], name, int(fmt[:-1] or 1)) for name, fmt in LOCALIZATION_FIELDS]
+        body = re.search(r"struct LocalizationState \{(.*?)\n\};", cpp(), re.S).group(1)
+        declared = [(kind, name, int(count or 1)) for kind, name, count in
+                    re.findall(r"(uint64_t|uint32_t|int32_t|float) (\w+)(?:\[(\d+)\])?", body)]
+        self.assertEqual(fields, declared)
         flags = re.findall(r"constexpr uint32_t kLocalization(\w+) = 1U << (\d+);", cpp())
         state_flags = [int(bit) for name, bit in flags if not name.startswith(("Invalid", "CameraGuarded"))]
         input_flags = [int(bit) for name, bit in flags if name.startswith(("Invalid", "CameraGuarded"))]
@@ -762,7 +814,7 @@ class CalibrationControlTest(unittest.TestCase):
         paths = group_paths(root / "params")
         paths["display"].parent.mkdir()
         paths["display"].write_text(json.dumps({"enabled": True, "calibration_use_flow": False}), encoding="utf-8")
-        self.store = ParamStore(paths, notify=lambda name: [])
+        self.store = ParamStore(paths, running=lambda name: True)
         self.calibration = CalibrationControl(self.store, str(self.model), str(self.control), str(self.request))
 
     def tearDown(self):
@@ -785,9 +837,11 @@ class CalibrationControlTest(unittest.TestCase):
         offset = re.search(r"offsetof\(ModelState, calibration\) == (\d+)", cpp())
         self.assertEqual(int(offset.group(1)), MODEL_CALIBRATION_AT)
         self.assertEqual(CALIBRATION_STATE.size, 32)
-        for field, at in (("flow_calibration", MODEL_FLOW_CALIBRATION_AT), ("calibration_source", MODEL_CALIBRATION_SOURCE_AT)):
+        for field, at in (("flow_calibration", MODEL_FLOW_CALIBRATION_AT),
+                          ("calibration_source", MODEL_CALIBRATION_SOURCE_AT)):
             self.assertEqual(int(re.search(rf"offsetof\(ModelState, {field}\) == (\d+)", cpp()).group(1)), at, field)
-        self.assertEqual(FLOW_CALIBRATION_STATE.size, int(re.search(r"sizeof\(FlowCalibrationState\) == (\d+)", cpp()).group(1)))
+        flow_size = int(re.search(r"sizeof\(FlowCalibrationState\) == (\d+)", cpp()).group(1))
+        self.assertEqual(FLOW_CALIBRATION_STATE.size, flow_size)
         self.assertEqual(CALIBRATION_SOURCE_STATE.size,
                          int(re.search(r"sizeof\(CalibrationSourceState\) == (\d+)", cpp()).group(1)))
         for name, bit in (("FlowUsable", 0), ("Pending", 1), ("Ramping", 2)):
@@ -1010,7 +1064,8 @@ class RecordingsTest(unittest.TestCase):
         self.assertEqual((by_name[self.OLD]["complete"], by_name[self.CUT]["complete"]), (True, False))
         self.assertIsNone(by_name[self.CUT]["duration_s"], "끝맺지 못한 것은 길이를 모른다")
         self.assertIsNone(by_name[self.BUSY]["duration_s"])
-        self.assertEqual([by_name[name]["segments"] for name in (self.OLD, self.CUT, self.BUSY, self.NEW)], [2, 3, 2, 0])
+        self.assertEqual([by_name[name]["segments"] for name in (self.OLD, self.CUT, self.BUSY, self.NEW)],
+                         [2, 3, 2, 0])
         # 크기는 할당된 블록: 적어도 파일 크기만큼, 쓰는 중인 것은 SD와 스테이징을 더한다
         self.assertGreaterEqual(by_name[self.OLD]["bytes"], 3 * 5000)
         self.assertGreater(by_name[self.BUSY]["bytes"], by_name[self.NEW]["bytes"])
@@ -1019,11 +1074,13 @@ class RecordingsTest(unittest.TestCase):
 
     def test_reports_recordd_and_the_free_space(self):
         recording = self.recordings.recording()
-        self.assertEqual((recording["available"], recording["active"], recording["storage_blocked"]), (False, False, ""))
+        self.assertEqual((recording["available"], recording["active"], recording["storage_blocked"]),
+                         (False, False, ""))
         publish(self.state_path, RECORD_STATE.pack(boottime_ns(), 1, 1))
         recording = self.recordings.recording()
-        self.assertEqual((recording["available"], recording["stale"], recording["active"], recording["storage_blocked"]),
-                         (True, False, True, "sd_reserve"))
+        self.assertEqual(
+            (recording["available"], recording["stale"], recording["active"], recording["storage_blocked"]),
+            (True, False, True, "sd_reserve"))
         disk = self.recordings.status()["disk"]
         self.assertGreater(disk["total_bytes"], 0)
         self.assertLessEqual(disk["free_bytes"], disk["total_bytes"])
@@ -1043,7 +1100,8 @@ class RecordingsTest(unittest.TestCase):
     def test_delete_refuses_and_deletes_nothing(self):
         cases = (([], "error.recordings_none", 400), ([self.OLD, "../notes"], "error.recording_bad_name", 400),
                  ([self.OLD, "2026-10-16"], "error.recording_bad_name", 400),
-                 ([self.OLD, self.BUSY], "error.recording_busy", 409), ([self.OLD, self.NEW], "error.recording_busy", 409),
+                 ([self.OLD, self.BUSY], "error.recording_busy", 409),
+                 ([self.OLD, self.NEW], "error.recording_busy", 409),
                  ([self.OLD, "2026-01-01--00-00-00-000"], "error.recording_unknown", 404),
                  ([self.OLD, "2026-10-14--00-00-00-000"], "error.recording_unknown", 404))
         for names, code, status in cases:
@@ -1096,7 +1154,8 @@ class PandaUpdateTest(unittest.TestCase):
         self.assertEqual(float(re.search(r"kParkedMaxSpeedKph = ([\d.]+)f;", firmware).group(1)), PARKED_MAX_SPEED_KPH)
         flashable = re.search(r"return (hw_type == kPandaHw\w+(?: \|\| hw_type == kPandaHw\w+)*);", firmware).group(1)
         hw = {name: int(value) for name, value in re.findall(r"kPandaHw(\w+) = (\d+);", protocol)}
-        self.assertEqual(sorted(hw[name] for name in re.findall(r"kPandaHw(\w+)", flashable)), sorted(PANDA_FLASHABLE_HW))
+        self.assertEqual(sorted(hw[name] for name in re.findall(r"kPandaHw(\w+)", flashable)),
+                         sorted(PANDA_FLASHABLE_HW))
 
     def test_image_version_prefers_debug_like_cpp(self):
         """panda_firmware.cc find_version처럼 -DEBUG를 먼저 찾는다(앞쪽에 -RELEASE 꼴이 있어도)."""
@@ -1186,25 +1245,17 @@ class PandaUpdateTest(unittest.TestCase):
 
 # ------------------------------------------------------------ 런타임 상태
 class ProcessStatusTest(unittest.TestCase):
-    def test_layout_matches_manager_and_cpp(self):
-        """manager.py가 쓰는 ManagerState(overlayd도 읽는다)와 웹 콘솔이 읽는 배치가 ipc_messages.h와 같아야 한다."""
-        from scripts import manager
-
+    def test_layout_matches_cpp(self):
+        """웹 콘솔이 읽는 ManagerState(manager.py가 쓰고 overlayd도 읽는다) 배치가 ipc_messages.h와 같아야 한다. manager.py
+        쪽은 check_manager.py가 본다."""
         def constant(name):
             return int(re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F]+|\d+);", cpp()).group(1), 0)
 
-        self.assertEqual(manager.IPC_MAGIC, constant("kIpcMagic"))
-        self.assertEqual(manager.IPC_VERSION, constant("kIpcVersion"))
-        self.assertEqual(manager.MAX_PROCESSES, constant("kMaxProcesses"))
-        self.assertEqual(manager.HEADER_SIZE, cpp_size("IpcHeader"))
-        self.assertEqual(manager.PROCESS.size, cpp_size("ProcessState"))
-        self.assertEqual(manager.MANAGER_STATE_SIZE, cpp_size("ManagerState"))
         self.assertEqual((IPC_MAGIC, IPC_VERSION, IPC_HEADER.size),
                          (constant("kIpcMagic"), constant("kIpcVersion"), cpp_size("IpcHeader")))
-        self.assertEqual((PROCESS_STATE.format, MAX_PROCESSES), (manager.PROCESS.format, manager.MAX_PROCESSES))
-        self.assertLessEqual(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES, manager.MANAGER_STATE_SIZE)
+        self.assertEqual((PROCESS_STATE.size, MAX_PROCESSES), (cpp_size("ProcessState"), constant("kMaxProcesses")))
+        self.assertLessEqual(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES, cpp_size("ManagerState"))
         self.assertIn(f'kManagerStateTopic[] = "{MANAGER_STATE_TOPIC}";', cpp())
-        self.assertIn(f'LatestPublisher("{MANAGER_STATE_TOPIC}"', cpp(ROOT / "scripts" / "manager.py"))
 
     @staticmethod
     def publish_processes(path, entries, stamp=None):
@@ -1212,7 +1263,8 @@ class ProcessStatusTest(unittest.TestCase):
         payload = bytearray(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES)
         MANAGER_STATE_HEAD.pack_into(payload, 0, stamp, len(entries), 0)
         for index, (name, running) in enumerate(entries):
-            PROCESS_STATE.pack_into(payload, MANAGER_STATE_HEAD.size + index * PROCESS_STATE.size, name.encode(), running)
+            at = MANAGER_STATE_HEAD.size + index * PROCESS_STATE.size
+            PROCESS_STATE.pack_into(payload, at, name.encode(), running)
         publish(path, bytes(payload), stamp=stamp)
 
     def test_status_lists_processes_and_goes_stale(self):
@@ -1240,7 +1292,8 @@ class ProcessStatusTest(unittest.TestCase):
             root = Path(directory)
             proc, install = root / "proc", root / "install"
             install.mkdir()
-            for pid, argv0, version in ((101, "./controlsd", "v0.0.4-6-gaaaaaaa"), (102, "./replayd", "v0.0.4-6-gaaaaaaa"),
+            for pid, argv0, version in ((101, "./controlsd", "v0.0.4-6-gaaaaaaa"),
+                                        (102, "./replayd", "v0.0.4-6-gaaaaaaa"),
                                         (103, "/usr/bin/python3", "")):
                 (proc / str(pid)).mkdir(parents=True)
                 (proc / str(pid) / "cmdline").write_bytes(argv0.encode() + b"\0-m\0")
@@ -1260,6 +1313,8 @@ class ProcessStatusTest(unittest.TestCase):
                                        "controlsd": ("v0.0.4-6-gaaaaaaa", "v0.0.4-7-gbbbbbbb-dirty"),
                                        "modeld": (None, "v0.0.4-6-gaaaaaaa"),
                                        "web_console": (None, None)})
+            # 파라미터를 저장할 때 읽는 프로세스가 도는지도 argv[0]의 파일 이름으로 본다
+            self.assertEqual((process_running("controlsd", proc), process_running("modeld", proc)), (True, False))
 
     def test_binary_version_marker(self):
         header = cpp(ROOT / "src" / "common" / "build_version.h")
@@ -1278,51 +1333,6 @@ class ProcessStatusTest(unittest.TestCase):
                 path.write_bytes(content)
                 self.assertEqual(read_binary_version(path), expected, content[:40])
             self.assertIsNone(read_binary_version(Path(directory) / "missing"))
-
-    def test_manager_backs_off_a_crash_loop(self):
-        """빨리 죽기를 거듭하는 프로세스는 세 번까지 1초, 그 뒤 2·4·8·16초에 다시 띄운다. camerad는 늘 1초."""
-        from scripts import manager
-        self.assertEqual([manager.restart_delay("web_console", n) for n in range(10)],
-                         [1.0, 1.0, 1.0, 1.0, 2.0, 4.0, 8.0, 16.0, 16.0, 16.0])
-        self.assertEqual({manager.restart_delay("camerad", n) for n in range(10)}, {1.0})
-
-    def test_manager_does_not_count_its_own_stops(self):
-        """매니저가 멈춘 프로세스(camerad를 따라 내린 overlayd 등)의 종료는 빠른 종료로 세지 않는다."""
-        from scripts import manager
-        spec = manager.ProcSpec("overlayd", ["/bin/true"])
-        state = manager.ProcState(spec, started_monotonic=100.0, quick_exits=3)
-        state.stop_requested = True
-        self.assertEqual(manager.note_exit(state, 102.0), 1.0)
-        self.assertEqual(state.quick_exits, 3)
-        self.assertFalse(state.stop_requested)
-        self.assertEqual(manager.note_exit(state, 102.0), 2.0)  # 스스로 죽으면 센다
-        self.assertEqual(state.quick_exits, 4)
-        state.started_monotonic = 0.0
-        self.assertEqual(manager.note_exit(state, 102.0), 1.0)  # 10초 넘게 살았으면 처음부터
-        self.assertEqual(state.quick_exits, 0)
-
-    def test_manager_trims_a_log_even_when_the_copy_fails(self):
-        """.log.1로 남기지 못해도(공간 부족 등) 로그는 비운다. tmpfs가 차는 것이 더 나쁘다."""
-        from scripts import manager
-        with tempfile.TemporaryDirectory() as directory:
-            log = Path(directory) / "camerad.log"
-            log.write_bytes(b"x" * (manager.LOG_MAX_BYTES + 10))
-            (Path(directory) / "camerad.log.1").mkdir()  # 사본 자리에 디렉터리가 있어 복사가 실패한다
-            m = object.__new__(manager.Manager)
-            m.procs = {"camerad": None}
-            m.log_dir = directory
-            m.trim_logs()
-            self.assertEqual(log.stat().st_size, 0)
-
-    def test_manager_starts_the_package(self):
-        from scripts import manager
-
-        source = cpp(ROOT / "scripts" / "manager.py")
-        self.assertIn('ProcSpec("web_console", [sys.executable, "-m", "web_console"]', source)
-        self.assertIn('installed="web_console/__main__.py"', source)
-        self.assertTrue((ROOT / "scripts" / "web_console" / "__main__.py").is_file())
-        self.assertTrue(hasattr(manager, "ProcSpec"))
-
 
 # ------------------------------------------------------------ BEV
 class BevTest(unittest.TestCase):
@@ -1343,7 +1353,8 @@ class BevTest(unittest.TestCase):
         self.assertEqual((layout["model"]["size"], layout["control"]["size"]), (MODEL_STATE_SIZE, CONTROL_STATE_SIZE))
 
     def test_lead_constants_match_cpp(self):
-        """페이지의 앞차 확률 문턱과 레이더-카메라 거리는 비전 크루즈·출발 알림·HUD와 같은 model_output.h 값이어야 한다."""
+        """페이지의 앞차 확률 문턱과 레이더-카메라 거리는 비전 크루즈·출발 알림·HUD와 같은 model_output.h
+        값이어야 한다."""
         source = cpp(ROOT / "src" / "common" / "model_output.h")
         text = (STATIC_DIR / "bev_data.js").read_text(encoding="utf-8")
         for cpp_name, page_name in (("kLeadProbabilityThreshold", "LEAD_PROBABILITY"),
@@ -1386,7 +1397,8 @@ class BevTest(unittest.TestCase):
         draw = js_object(data, "DRAW")
         self.assertEqual((draw["min"], draw["max"]),
                          (cpp_value(scene, "kMinDrawDistance"), cpp_value(scene, "kMaxDrawDistance")))
-        self.assertEqual(js_value(data, "DRIVE_GEAR"), cpp_value(cpp(ROOT / "src" / "car" / "can_frame.h"), "kGearDrive"))
+        self.assertEqual(js_value(data, "DRIVE_GEAR"),
+                         cpp_value(cpp(ROOT / "src" / "car" / "can_frame.h"), "kGearDrive"))
         # 곡률 호를 그리는 최저 속도(ARC.speed m/s)는 BEV 안내 문구에 km/h로 적혀 있다(문구는 bev.js보다 먼저 뜬다)
         arc_kph = round(js_object(bev, "ARC")["speed"] * 3.6)
         for lang in LANGUAGES:
@@ -1406,8 +1418,49 @@ class BevTest(unittest.TestCase):
         high = float(re.search(r"max_sr_\(([\d.]+) \* c\.steer_ratio\)", learner).group(1))
         self.assertIn(f"s.prior_steer_ratio * {low:g}, 1)", page)
         self.assertIn(f"s.prior_steer_ratio * {high:g}, 1)", page)
-        magic = int(re.search(r"const MAGIC = (0x[0-9a-fA-F]+);", (STATIC_DIR / "bev_data.js").read_text()).group(1), 16)
+        magic_text = re.search(r"const MAGIC = (0x[0-9a-fA-F]+);", (STATIC_DIR / "bev_data.js").read_text()).group(1)
+        magic = int(magic_text, 16)
         self.assertEqual(magic, BEV_FRAME_MAGIC)
+
+    def test_page_gives_up_on_a_silent_board(self):
+        """보드가 말없이 사라지면 페이지가 기다리지 않는다: BEV 스트림은 서버의 빈 프레임 주기(BEV_IDLE_S)보다 넉넉히
+        긴 침묵에서 다시 연결하고, GET에는 시한이 있다(POST·PATCH에는 없다: 늦은 성공을 실패로 알리지 않게)."""
+        data = (STATIC_DIR / "bev_data.js").read_text(encoding="utf-8")
+        silence_ms = int(re.search(r"const STREAM_SILENCE_MS = (\d+);", data).group(1))
+        self.assertGreaterEqual(silence_ms, 2 * BEV_IDLE_S * 1000)
+        self.assertIn("await silenceLimited(reader.read())", data)
+        ui = (STATIC_DIR / "ui.js").read_text(encoding="utf-8")
+        self.assertRegex(ui, r"const GET_TIMEOUT_MS = \d+;")
+        self.assertIn('get: (url, {signal} = {}) => request("GET", url, undefined, signal, GET_TIMEOUT_MS)', ui)
+        self.assertRegex(ui, r'post: \(url, body = \{\}\) => request\("POST", url, body\),')
+        self.assertRegex(ui, r'patch: \(url, body\) => request\("PATCH", url, body\),')
+
+    def test_bev_reads_lead_structs_where_cpp_pins_them(self):
+        """페이지는 ModelState 안의 앞차 구조체를 서버가 알려 준 시작 위치 + 고정 오프셋으로 읽는다. 그 오프셋이
+        ipc_messages.h가 offsetof로 못 박은 자리와 같아야 한다."""
+        pinned = {(name, field): int(at) for name, field, at in
+                  re.findall(r"offsetof\((Lead\w*State), (\w+)\) == (\d+)", cpp())}
+        page = (STATIC_DIR / "bev_data.js").read_text(encoding="utf-8")
+        reads = {
+            ("LeadState", "probability"): r"probability: f32\(lead \+ (\d+)\)",
+            ("LeadState", "x"): r"\bx: f32\(lead \+ (\d+)\)",
+            ("LeadState", "y"): r"\by: f32\(lead \+ (\d+)\)",
+            ("LeadState", "velocity"): r"speed: f32\(lead \+ (\d+)\)",
+            ("LeadState", "acceleration"): r"accel: f32\(lead \+ (\d+)\)",
+            ("LeadFlowState", "valid"): r"u32\(flow \+ (\d+)\)",
+            ("LeadFlowState", "expansion_rate"): r"rate: f32\(flow \+ (\d+)\)",
+            ("LeadFlowState", "lead_x"): r"\bx: f32\(flow \+ (\d+)\)",
+            ("LeadTrackState", "distance_m"): r"\bx: f32\(track \+ (\d+)\)",
+            ("LeadTrackState", "relative_speed_mps"): r"relative: f32\(track \+ (\d+)\)",
+        }
+        for key, pattern in reads.items():
+            found = re.search(pattern, page)
+            self.assertIsNotNone(found, key)
+            self.assertEqual(int(found.group(1)), pinned[key], key)
+        # 0번 자리의 valid는 더하기 없이 읽는다
+        self.assertIn("lead: u32(lead)", page)
+        self.assertIn("track: u32(track)", page)
+        self.assertEqual((pinned[("LeadState", "valid")], pinned[("LeadTrackState", "valid")]), (0, 0))
 
     def test_lane_filter_constants_match_cpp(self):
         """BEV의 차선 필터 사본(lane_filter.js)의 가중·끊김·다시 시작 기준은 플래너의 lane_line_filter와 같아야 한다."""
@@ -1423,7 +1476,8 @@ class BevTest(unittest.TestCase):
             self.assertEqual(ours, value, page_name)
 
     def test_lane_filter_golden_is_shared(self):
-        """C++ 필터가 내는 기준 출력(gtest_lane_line_filter)과 JS 사본이 맞추는 값(check_bev_lane_filter.mjs)이 같아야 한다."""
+        """C++ 필터가 내는 기준 출력(gtest_lane_line_filter)과 JS 사본이 맞추는 값(check_bev_lane_filter.mjs)이
+        같아야 한다."""
         def golden(path):
             text = path.read_text(encoding="utf-8")
             block = re.search(r"GOLDEN BEGIN(.*?)GOLDEN END", text, re.S).group(1)
@@ -1457,6 +1511,12 @@ class BevTest(unittest.TestCase):
         for part, fields in parts.items():
             self.assertLessEqual(fields, set(layout[part]), part)
         self.assertEqual(parts["model"], set(layout["model"]), "ModelState fields are the BEV's alone")
+        # 읽는 함수가 쓰는 필드와 HUD 비트는 모두 NEEDS에 있어야 한다: 빠진 필드는 서버가 몰라도 검사를 지나 위치
+        # undefined(NaN)에서 읽었다
+        for function, part in (("readModel", "model"), ("readControl", "control")):
+            body = re.search(r"function " + function + r"\(at, [^)]*\) \{(.*?)\n\}", text, re.S).group(1)
+            self.assertLessEqual(set(re.findall(r"\bat\.(\w+)", body)), parts[part], function)
+        self.assertEqual(set(re.findall(r'\bflag\("(\w+)"\)', text)), parts["hud_flags"])
 
     def test_stream_sends_new_model_frames_and_idles_without_them(self):
         def fill(path, seq, value, size):

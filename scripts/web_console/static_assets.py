@@ -37,7 +37,8 @@ class StaticAssets:
         except (OSError, ValueError):  # 이름에 NUL 같은 글자(인증 없는 포트)
             return None
         media_type = MEDIA_TYPES.get(path.suffix)
-        if media_type is None or self.root not in path.parents or any(part.startswith(".") for part in Path(name).parts):
+        hidden = any(part.startswith(".") for part in Path(name).parts)
+        if media_type is None or self.root not in path.parents or hidden:
             return None
         # 캐시는 실제 파일로 묶는다. 요청 글자로 묶으면 ./x.js, a//x.js 같은 표기마다 사본이 쌓인다(인증 없는 포트).
         key = path.relative_to(self.root).as_posix()

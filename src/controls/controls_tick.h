@@ -15,7 +15,6 @@
 
 #include "car/vehicle_can.h"
 #include "common/ipc_messages.h"
-#include "common/utils_file.h"
 #include "controls/adaptive_cruise.h"
 #include "controls/control_holds.h"
 #include "controls/control_params.h"
@@ -24,52 +23,12 @@
 #include "learners/lateral_learners.h"
 #include "planning/lateral_planner.h"
 
-#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 
-// controlsd의 런타임 파라미터 두 파일(steering/adaptive_cruise.json)과 코드 고정값(timing). 파일은 한꺼번에
-// 읽고 한꺼번에 바꾼다.
-struct ControlParams {
-    SteeringParams steering;
-    ControlTiming timing;
-    AdaptiveCruiseConfig cruise;
-};
-
-struct ControlParamPaths {
-    std::string steering;
-    std::string cruise;
-};
-
-// 둘 다 읽어야 true. 하나라도 거부되면 params는 그대로이고 error에 사유를 쓴다.
-bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error);
-// 시작·재적용 로그의 꼬리: MDPS 속도 바꿔치기와 비전 크루즈 설정.
-std::string control_params_summary(const ControlParams &params);
-
-// 두 파일을 stat으로 감시하고, 바뀌었거나 SIGHUP이 오면 둘을 다시 읽는다. 하나라도 거부되면 둘 다
-// 이전 값을 유지한다.
-class ControlParamsWatcher {
-public:
-    ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now);
-
-    // 새로 적용할 값. 바뀐 게 없거나 거부됐으면(로그를 남긴다) 비어 있다.
-    std::optional<ControlParams> poll(std::chrono::steady_clock::time_point now, bool reload_requested,
-                                      const ControlParams &current);
-    unsigned generation() const { return generation_; }
-
-private:
-    void stamp();
-
-    ControlParamPaths paths_;
-    FileStamp steering_stamp_;
-    FileStamp cruise_stamp_;
-    std::chrono::steady_clock::time_point next_check_;
-    unsigned generation_ = 1;
-};
-
-// engage/disengage/거부 이벤트 id와 전이 로그. id는 0을 건너뛰어 HUD가 새 이벤트를 구분한다.
+// 결합·해제·거부 이벤트 id와 전이 로그. id는 0을 건너뛰어 HUD가 새 이벤트를 구분한다.
 struct EngageEvents {
     uint32_t engage_id = 0;
     uint32_t disengage_id = 0;
@@ -109,13 +68,14 @@ public:
     void apply_params(const ControlParams &params);
     // 학습한 토크 모델(docs/lateral-nn.md). controlsd와 재생 도구가 시작할 때 한 번 준다.
     void set_lateral_nn(std::shared_ptr<const LateralNnModel> model) { controller_.set_lateral_nn(std::move(model)); }
-    // 수신 CAN 묶음. 100 ms보다 오래된 묶음은 버리고 false다.
-    bool on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s);
+    // 수신 CAN 묶음. now_ns는 묶음을 큐에서 꺼낸 직후의 시각이다. 100 ms보다 오래됐거나 now_ns보다 늦은 시각의
+    // 묶음은 버리고 false다(틱 시작 시각으로 재면 그 틱에 들어온 새 묶음이 미래 시각이 되어 버려진다).
+    bool on_can_batch(const CanBatch &batch, uint64_t now_ns, double now_s);
     // 새 모델 상태. 이번 틱 차량 상태와 직전 틱 결과(vEgo·실제 곡률·active)로 플래너를 돌린다.
     void on_model(const ModelState &model);
     void on_panda(const PandaState &panda_state) { panda_state_ = panda_state; }
-    // lagd 지연과 paramsd·torqued의 locationd 입력.
-    void on_localization(const LocalizationRead &localization, uint64_t can_now_ns, double now_s);
+    // lagd 지연과 paramsd·torqued의 locationd 입력. 나이는 상태를 읽은 직후의 시각(read_ns)으로 잰다.
+    void on_localization(const LocalizationRead &localization, double now_s);
 
     // 컨트롤러·알림·크루즈를 돌려 이번 틱의 ControlState(timestamp_ns 제외)를 만든다. 보낼 프레임은
     // result().frames, 보낼지는 result().should_send다.
@@ -126,6 +86,8 @@ public:
     // 학습 파일 쓰기가 실패했다(BackgroundWriter::failures가 늘었다). kLearnerRetryS 뒤 두 파일을 내용이 같아도 다시
     // 내놓는다. 그대로 두면 주차 중처럼 내용이 바뀌지 않는 동안 실패한 파일을 다시 쓰지 않는다.
     void learner_write_failed(double now_s);
+    // 끝낼 때: 마지막 저장 뒤 바뀐 학습값(paramsd 60초·torqued 12초 주기 사이의 것). locationd처럼 끝낼 때도 남긴다.
+    LearnerOutputs final_learner_outputs();
 
     const LateralControlResult &result() const { return last_result_; }
     const PandaGateOutput &panda() const { return panda_; }
@@ -166,6 +128,7 @@ private:
     bool model_updated_ = false;
     int control_frame_ = 0;
     uint32_t last_logged_alert_event_id_ = 0;
+    uint64_t logged_nonfinite_ticks_ = 0;  // 로그에 남긴 토크 0(유한하지 않은 입력) 틱 수
     // 마지막으로 저장하라고 넘긴(처음에는 시작 때 읽은) 학습 파일 내용. 같은 내용은 다시 쓰지 않는다: 주차 중에도
     // torqued가 88 KB를 12초마다 SD에 다시 쓰고 있었다(상류는 주행 중에만 돈다). 쓰기가 실패하면
     // learner_write_failed가 비우고 다시 내놓게 한다(locationd의 lagd 저장과 같다).

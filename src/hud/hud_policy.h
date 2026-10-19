@@ -2,7 +2,7 @@
 #define HUD_POLICY_H
 
 // overlayd가 그리기 밖에서 정하는 것: 프레임마다 울릴 알림음, 터치로 여닫는 카드, 깜빡이 애니메이션
-// 단계, 진단 카드의 차선 위치 평활. 화면·스피커·터치 장치 없이 돌아 호스트에서 시험한다.
+// 단계, 길 위 차선 안 위치 눈금의 평활. 화면·스피커·터치 장치 없이 돌아 호스트에서 시험한다.
 
 #include "common/ipc_messages.h"
 #include "hud/alert_tones.h"
@@ -10,21 +10,23 @@
 
 #include <cstdint>
 
-// overlayd가 울리는 제어 이벤트 알림. 열거 순서가 같은 프레임 안의 우선순위다.
-enum class HudAlert { none, unable, engage, disengage, signal_changed };
+// 한 프레임에 울린 알림. 앞의 넷은 controlsd 제어 이벤트(열거 순서가 같은 프레임 안의 우선순위다),
+// take_control은 해제 예고나 조향 한계가 켜진 순간, unavailable은 가용 → 불가용 천이다.
+enum class HudSound { none, unable, engage, disengage, signal_changed, take_control, unavailable };
 
-// controlsd 이벤트 카운터 → 이 프레임에 울릴 알림 하나. 신선한 제어 스냅샷에만
+struct HudSoundDecision {
+    HudSound sound = HudSound::none;
+    uint32_t event_id = 0;  // 제어 이벤트 알림의 id
+};
+
+// controlsd 이벤트 카운터 → 이 프레임에 울릴 제어 이벤트 알림 하나. 신선한 제어 스냅샷에만
 // 부른다. overlayd가 독립적으로 재시작될 수 있으므로 첫 스냅샷은 사용자 이벤트가
 // 아니라 기준값이고, controlsd 재시작으로 카운터가 줄어들면 기준값을 다시 잡는다.
-// 거부 > engage > disengage > 출발 순으로 새 이벤트 하나만 고르고, 같은 프레임의
+// 거부 > 결합 > 해제 > 출발 순으로 새 이벤트 하나만 고르고, 같은 프레임의
 // 나머지는 다음 프레임에 잡힌다. 출발은 표시 중인 알림 유형이 있을 때만 소비한다.
 class HudAlertEvents {
 public:
-    struct Decision {
-        HudAlert alert = HudAlert::none;
-        uint32_t event_id = 0;
-    };
-    Decision update(const ControlState &control, DepartureAlertType departure_type);
+    HudSoundDecision update(const ControlState &control, DepartureAlertType departure_type);
 
 private:
     // 기준값을 (다시) 잡은 프레임이면 true.
@@ -37,24 +39,13 @@ private:
     uint32_t last_departure_ = 0;
 };
 
-// 한 프레임에 울린 알림. 앞의 넷은 제어 이벤트(HudAlert와 같은 값), take_control은 해제 예고나
-// 조향 한계가 켜진 순간, unavailable은 가용 → 불가용 천이다.
-enum class HudSound { none, unable, engage, disengage, signal_changed, take_control, unavailable };
-
-struct HudSoundDecision {
-    HudSound sound = HudSound::none;
-    uint32_t event_id = 0;  // 제어 이벤트 알림의 id
-};
-
-// 로그 이름("unable", "take_control", ...). none이면 "none".
-const char *hud_sound_name(HudSound sound);
 // 낼 소리. 해제 예고·조향 한계는 거부와 같은 소리다. none이면 AlertSoundId::count.
 AlertSoundId hud_sound_id(HudSound sound);
 
 // 한 프레임에 알림음 하나를 고른다. 제어 이벤트가 먼저이고, 해제 예고·조향 한계가 켜지는 순간은
 // 그 프레임에 이벤트가 울렸으면 다음 프레임으로 미룬다. 가용 → 불가용 천이에도 울리는데(active
 // 천이는 정차 부근 path 깜빡임마다 울리므로 소리내지 않는다), 같은 프레임에 다른 알림이 울렸으면
-// 넘긴다. 첫 프레임의 가용 상태는 기준값이다. engage 거부는 HUD 토스트(engage_reject_label)도
+// 넘긴다. 첫 프레임의 가용 상태는 기준값이다. 결합 거부는 HUD 토스트(engage_reject_label)도
 // 3초 띄운다.
 class HudAlertPolicy {
 public:
@@ -99,8 +90,8 @@ private:
     uint64_t network_card_until_ns_ = 0;
 };
 
-// 진단 카드의 차선 안 위치를 모델 프레임마다 다듬는다(20 Hz에서 0.5초 시간 상수, 숫자 떨림). raw가
-// NaN이면(차선을 놓침) 비우고, 다시 잡으면 그 값에서 시작한다.
+// 길 위 차선 안 위치 눈금(draw_lane_position)의 오프셋을 모델 프레임마다 다듬는다(20 Hz에서 0.5초 시간 상수,
+// 눈금과 cm 숫자의 떨림). raw가 NaN이면(차선을 놓침) 비우고, 다시 잡으면 그 값에서 시작한다.
 float smooth_lane_center_offset(float smoothed, float raw);
 
 #endif

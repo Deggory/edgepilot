@@ -16,10 +16,10 @@ export function formatValue(value, meta) {
 // 항목 하나의 편집기. card가 있으면 저장하는 동안 그 카드를 흐리게 하고 끝나면 잠깐 테를 칠한다. onSaved는 저장이
 // 끝날 때마다(실패해도) 불린다. refresh()는 스냅샷 값으로 다시 그린다.
 // 저장하는 동안 컨트롤을 막지 않는다: 그동안 고른 값은 마지막 것 하나만 기억했다가 이어서 저장한다(빨리 누른 −/+를
-// 버리지 않고, 저장 요청과 다시 읽기 신호도 몰아서 한 번).
+// 버리지 않고, 저장 요청도 몰아서 한 번).
 export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) {
   const meta = metaFor(group, key);
-  const notify = params().groups[group].notify;
+  const reader = params().groups[group].reader;
   const status = el("span.param-status");
   const modifiedBadge = el("span.badge.warn", {text: t("params.changed"), title: t("params.changed_title")});
   const resetButton = el("button.link-button", {type: "button", text: t("params.reset")});
@@ -47,12 +47,11 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
     saving = true;
     card?.classList.add("busy");
     status.className = "param-status";
-    status.textContent = t("params.applying");
+    status.textContent = t("params.saving");
     try {
-      const {notified} = await saveParam(group, key, next);
-      const waiting = notify && !notified.length;
-      status.className = `param-status ${waiting ? "warn" : "good"}`;
-      status.textContent = waiting ? t("params.saved_not_running", {process: notify}) : t("params.applied", {time: clock()});
+      const {readerRunning} = await saveParam(group, key, next);
+      status.className = `param-status ${readerRunning ? "good" : "warn"}`;
+      status.textContent = readerRunning ? t("params.saved", {time: clock()}) : t("params.saved_not_running", {process: reader});
       if (card) {
         card.classList.add("saved");
         window.setTimeout(() => card.classList.remove("saved"), 900);
@@ -60,7 +59,7 @@ export function paramEditor(group, key, {card = null, onSaved = () => {}} = {}) 
     } catch (error) {
       queued = undefined;  // 받지 않았으면 이어서 고른 값도 버린다
       status.className = "param-status bad";
-      status.textContent = t("params.apply_failed");
+      status.textContent = t("params.not_saved");
       toast(t("params.save_failed", {label: meta.label, error: error.message}), {failed: true});
     }
     saving = false;
@@ -145,7 +144,7 @@ export function paramCard(group, key) {
         el("div.param-key",
           {},
           el("code", {text: key}),
-          fallback === undefined ? null : el("span", {text: ` · ${t("params.default", {value: formatValue(fallback, meta)})}`}))),
+          el("span", {text: ` · ${t("params.default", {value: formatValue(fallback, meta)})}`}))),
       editor.modifiedBadge,
       meta.unit ? el("span.param-unit", {text: meta.unit}) : null),
     helpText(meta.description),

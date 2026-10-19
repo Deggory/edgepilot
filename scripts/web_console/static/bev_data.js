@@ -22,6 +22,8 @@ const HEADER = 16;
 const TRAJECTORY = 33;
 // openpilot T_IDXS: 차가 각 계획 점에 있게 되는 시각, s
 const T_IDXS = Array.from({length: TRAJECTORY}, (_, i) => 10 * (i / (TRAJECTORY - 1)) ** 2);
+// openpilot X_IDXS(float32, model_output.h model_x_idx): 차선·도로 경계 점의 앞 거리, m. ModelState는 그 점의 y, z만 싣는다
+const X_IDXS = Array.from({length: TRAJECTORY}, (_, i) => Math.fround(192 * (i / (TRAJECTORY - 1)) ** 2));
 const RADAR_TO_CAMERA = 1.52;           // model_output.h kRadarToCameraDistanceM (check_web_console.py)
 const LEAD_PROBABILITY = 0.5;           // model_output.h kLeadProbabilityThreshold (check_web_console.py)
 export const LANE_SURE = 0.5;           // 차로 폭을 재려면 두 자차 차선선 모두 이만큼 확실해야 한다(bev.js도 쓴다)
@@ -40,14 +42,17 @@ export const LEAD_HISTORY_S = 20;
 const TREND = {half: 2, jump: 4, points: 60, edge: 0.1};
 const MODEL_STALE_S = 0.5, CONTROL_STALE_S = 1.0;
 const RETRY_MS = [500, 5000];
+// 스트림이 이만큼 조용하면 끊긴 것으로 보고 다시 연결한다. 서버는 모델이 멈춰도 1초마다 보내므로
+// (bev_stream.BEV_IDLE_S) 조용하다는 것은 보드나 연결이 사라졌다는 뜻이다. 그대로 기다리면 화면이 '정상'으로 멈췄다.
+const STREAM_SILENCE_MS = 3000;
 // 이 페이지가 읽는 필드. 그중 하나라도 위치를 알려 주지 않는 서버는 페이지보다 오래됐거나 새것이다
 const NEEDS = {
   model: ["size", "capture_timestamp_ns", "model_timestamp_ns", "valid", "plan", "lanes", "lane_probabilities", "road_edges", "road_edge_stds",
           "lead", "gas_press_probs", "lead_flow", "lead_track"],
-  control: ["size", "timestamp_ns", "enabled", "engaged", "active", "left_blinker", "right_blinker", "gear",
+  control: ["size", "timestamp_ns", "enabled", "engaged", "active", "steering_fault", "left_blinker", "right_blinker", "gear",
             "desired_curvature", "actual_curvature",
             "normalized_output", "departure_alert_type", "green_light_alert_armed", "hud_flags", "ego_speed_kph"],
-  hud_flags: ["Laneless", "SteerPaused", "BrakeLights"],
+  hud_flags: ["Laneless", "SoftDisabling", "SteerPaused", "BrakeLights"],
 };
 
 
@@ -70,6 +75,11 @@ function linePoints(xs, ys, reach, speeds = null) {
     last = x;
   }
   return points;
+}
+
+// offset에 있는 IpcLanePoint(y, z) 배열을 X_IDXS 위의 x와 y로.
+function lanePointsAt(view, offset) {
+  return [X_IDXS, Array.from({length: TRAJECTORY}, (_, i) => view.getFloat32(offset + 8 * i, true))];
 }
 
 // offset에 있는 IpcPoint 배열의 x와 y.
@@ -103,7 +113,7 @@ function readModel(at, bytes) {
   const planEnd = f32(at.plan + 12 * (TRAJECTORY - 1));
   const reach = Number.isFinite(planEnd) ? clamp(planEnd, DRAW.min, DRAW.max) : DRAW.max;
   const speeds = planSpeeds(view, at.plan);
-  const lines = [0, 1, 2, 3].map((i) => pointsAt(view, at.lanes + 12 * TRAJECTORY * i));
+  const lines = [0, 1, 2, 3].map((i) => lanePointsAt(view, at.lanes + 8 * TRAJECTORY * i));
   const lanes = lines.map(([xs, ys], i) => ({probability: f32(at.lane_probabilities + 4 * i), points: linePoints(xs, ys, reach)}));
   const lead = at.lead, flow = at.lead_flow, track = at.lead_track;
   return {
@@ -116,7 +126,7 @@ function readModel(at, bytes) {
     gas: Array.from({length: 6}, (_, i) => f32(at.gas_press_probs + 4 * i)),
     lanes, reach,
     egoLines: [lines[1], lines[2]],     // 차선선 필터(BevStream)에 넣을 자차 차선선의 모델 점
-    edges: [0, 1].map((i) => ({std: f32(at.road_edge_stds + 4 * i), points: polyline(view, at.road_edges + 12 * TRAJECTORY * i, reach)})),
+    edges: [0, 1].map((i) => ({std: f32(at.road_edge_stds + 4 * i), points: linePoints(...lanePointsAt(view, at.road_edges + 8 * TRAJECTORY * i), reach)})),
     laneWidth: laneWidth(lanes, lines[1][1], lines[2][1]),
     lead: u32(lead)
       ? {probability: f32(lead + 4), x: f32(lead + 8), y: f32(lead + 12), speed: f32(lead + 16), accel: f32(lead + 20)} : null,
@@ -141,7 +151,9 @@ function readControl(at, flags, bytes) {
   return {
     stamp: view.getBigUint64(at.timestamp_ns, true),
     enabled: u32(at.enabled) !== 0, engaged: u32(at.engaged) !== 0, active: u32(at.active) !== 0,
-    laneless: flag("Laneless"), paused: flag("SteerPaused"), changing: flag("LaneChanging"), braking: flag("BrakeLights"),
+    // HUD가 빨강으로 그리는 상태: 조향 결함, 3초 뒤 해제 예고
+    alarm: u32(at.steering_fault) !== 0 || flag("SoftDisabling"),
+    laneless: flag("Laneless"), paused: flag("SteerPaused"), braking: flag("BrakeLights"),
     output: f32(at.normalized_output), speedKph: f32(at.ego_speed_kph),
     desired: f32(at.desired_curvature), actual: f32(at.actual_curvature),
     alert: u32(at.departure_alert_type), armed: u32(at.green_light_alert_armed) !== 0,
@@ -150,10 +162,19 @@ function readControl(at, flags, bytes) {
   };
 }
 
+// 스트림 조각 하나를 STREAM_SILENCE_MS까지만 기다린다. 넘으면 오류로 끝내고, loop가 응답을 닫고 다시 연결한다.
+function silenceLimited(read) {
+  let timer;
+  const silence = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(t("bev.silent", {seconds: STREAM_SILENCE_MS / 1000}))), STREAM_SILENCE_MS);
+  });
+  return Promise.race([read, silence]).finally(() => clearTimeout(timer));
+}
+
 const ageOf = (now, stamp) => stamp ? Number(now - stamp) / 1e9 : Infinity;
 
 // controlsd가 없거나 낡았을 때 scene()이 쓰는 제어 상태(readControl의 꼴)
-const NO_CONTROL = {enabled: false, engaged: false, active: false, laneless: false, paused: false, changing: false,
+const NO_CONTROL = {enabled: false, engaged: false, active: false, alarm: false, laneless: false, paused: false,
                     braking: false, output: 0, speedKph: NaN, desired: NaN, actual: NaN, alert: 0,
                     armed: false, drive: false};
 
@@ -167,7 +188,8 @@ const NO_CONTROL = {enabled: false, engaged: false, active: false, laneless: fal
 //     것), flow {relative: -x · rate (m/s, 광류에서)} 또는 null} 또는 null
 //   leads [{t s, x, v (모델의 것), flow, fx, fv (앞차 추적의 것), trend, level, segment}, ...]: 앞차 카드의
 //     최근 LEAD_HISTORY_S, 거리는 자차 범퍼 기준. BevStream이 채운다(BevStream.addLead)
-//   state {enabled, engaged, active, steering, laneless, output}, speedKph (controlsd가 없으면 NaN)
+//   state {enabled, engaged, active, alarm (조향 결함이나 해제 예고), steering, laneless, output}, speedKph
+//   (controlsd가 없으면 NaN)
 //   curvature {desired, actual} (1/m, controlsd처럼 +가 오른쪽), controlsd가 없으면 null
 //   blinkers {left, right} (둘 다면 비상등), controlsd가 없으면 null. controlsd는 램프가 마지막으로 깜박인
 //   뒤 0.5 s 동안 각각을 켜 두므로, 램프가 깜박이는 동안 켜진 채로 있다
@@ -197,8 +219,8 @@ function scene(model, control, now, history = []) {
                   speed: track ? (Number.isFinite(speed) ? speed + track.relative : lead.speed) : lead.speed,
                   ttc: relative !== null && relative < -0.1 ? Math.max(0, x) / -relative : Infinity,
                   tracked: !!track, raw, flow: flow ? {relative: -flow.x * flow.rate} : null} : null,
-    state: {enabled: c.enabled, engaged: c.engaged, active: c.active, steering: c.active && !c.paused, laneless: c.laneless,
-            changing: c.changing, output: c.output},
+    state: {enabled: c.enabled, engaged: c.engaged, active: c.active, alarm: c.alarm, steering: c.active && !c.paused,
+            laneless: c.laneless, output: c.output},
     speedKph: c.speedKph,
     curvature: Number.isFinite(c.desired) && Number.isFinite(c.actual) ? {desired: c.desired, actual: c.actual} : null,
     blinkers: live ? {left: live.left, right: live.right} : null,
@@ -303,7 +325,7 @@ export class BevStream {
   async read(reader, run) {
     let pending = new Uint8Array(0);
     for (;;) {
-      const {value, done} = await reader.read();
+      const {value, done} = await silenceLimited(reader.read());
       if (done || run !== this.run) return;
       pending = pending.length ? concat(pending, value) : value;
       let at = 0;

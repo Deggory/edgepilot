@@ -11,16 +11,6 @@ constexpr uint64_t kRejectLabelNs = 3000000000ULL;
 constexpr uint64_t kTurnSignalStepNs = 50000000ULL;
 constexpr uint64_t kNetworkCardNs = 10000000000ULL;
 
-const char *engage_block_text(const char *block) {
-    if (!block || block[0] == '\0') return "NOT READY";
-    const char *label = engage_block_label(block);
-    return label ? label : block;
-}
-
-static_assert(static_cast<int>(HudSound::unable) == static_cast<int>(HudAlert::unable) &&
-                  static_cast<int>(HudSound::signal_changed) == static_cast<int>(HudAlert::signal_changed),
-              "control event sounds share HudAlert's values");
-
 }  // namespace
 
 bool HudAlertEvents::baseline(const ControlState &control) {
@@ -38,47 +28,26 @@ bool HudAlertEvents::baseline(const ControlState &control) {
     return true;
 }
 
-HudAlertEvents::Decision HudAlertEvents::update(const ControlState &control, DepartureAlertType departure_type) {
-    Decision decision;
-    if (baseline(control)) return decision;
+HudSoundDecision HudAlertEvents::update(const ControlState &control, DepartureAlertType departure_type) {
+    if (baseline(control)) return {};
     if (control.engage_reject_event_id != 0 && control.engage_reject_event_id != last_reject_) {
         last_reject_ = control.engage_reject_event_id;
-        return {HudAlert::unable, last_reject_};
+        return {HudSound::unable, last_reject_};
     }
     if (control.engage_event_id != 0 && control.engage_event_id != last_engage_) {
         last_engage_ = control.engage_event_id;
-        return {HudAlert::engage, last_engage_};
+        return {HudSound::engage, last_engage_};
     }
     if (control.disengage_event_id != 0 && control.disengage_event_id != last_disengage_) {
         last_disengage_ = control.disengage_event_id;
-        return {HudAlert::disengage, last_disengage_};
+        return {HudSound::disengage, last_disengage_};
     }
     if (departure_type != DepartureAlertType::none && control.departure_alert_event_id != 0 &&
         control.departure_alert_event_id != last_departure_) {
         last_departure_ = control.departure_alert_event_id;
-        return {HudAlert::signal_changed, last_departure_};
+        return {HudSound::signal_changed, last_departure_};
     }
-    return decision;
-}
-
-const char *hud_sound_name(HudSound sound) {
-    switch (sound) {
-        case HudSound::unable:
-            return "unable";
-        case HudSound::engage:
-            return "engage";
-        case HudSound::disengage:
-            return "disengage";
-        case HudSound::signal_changed:
-            return "signal_changed";
-        case HudSound::take_control:
-            return "take_control";
-        case HudSound::unavailable:
-            return "unavailable";
-        case HudSound::none:
-            break;
-    }
-    return "none";
+    return {};
 }
 
 AlertSoundId hud_sound_id(HudSound sound) {
@@ -104,15 +73,11 @@ AlertSoundId hud_sound_id(HudSound sound) {
 HudSoundDecision HudAlertPolicy::update(const ControlState &control, bool control_fresh, const PandaState &panda,
                                         bool panda_fresh, uint64_t now_ns, HudState *hud) {
     HudSoundDecision decision;
-    HudAlertEvents::Decision event;
-    if (control_fresh) event = events_.update(control, hud->departure_alert_type);
-    if (event.alert != HudAlert::none) {
-        decision = {static_cast<HudSound>(event.alert), event.event_id};
-        if (event.alert == HudAlert::unable) {
-            std::snprintf(hud->engage_reject_label, sizeof(hud->engage_reject_label), "%s",
-                          engage_block_text(control.engage_reject_block));
-            reject_label_until_ns_ = now_ns + kRejectLabelNs;
-        }
+    if (control_fresh) decision = events_.update(control, hud->departure_alert_type);
+    if (decision.sound == HudSound::unable) {
+        std::snprintf(hud->engage_reject_label, sizeof(hud->engage_reject_label), "%s",
+                      engage_block_label(control.engage_reject_block));
+        reject_label_until_ns_ = now_ns + kRejectLabelNs;
     }
     if (now_ns >= reject_label_until_ns_) hud->engage_reject_label[0] = '\0';
 

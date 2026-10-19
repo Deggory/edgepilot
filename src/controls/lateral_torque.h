@@ -4,6 +4,7 @@
 // openpilot latcontrol_torque(v0.11)의 C++ 이식.
 
 #include <cmath>
+#include <cstdint>
 
 #include "controls/control_params.h"
 
@@ -28,23 +29,40 @@ struct LiveLateralParams {
 
 class TorqueController {
 public:
-    // openpilot LatControlTorque와 같은 형태로 조향 토크를 계산한다.
-    // active: 상류 CC.latActive. 거짓이면 토크 0을 내고 PID 상태를 지운다(상류 #24606은 적분기를 남기지만
-    // 폐루프 재생에서 정차 뒤 차선 오차를 키워 지운다, update 참고). 요청 버퍼와 저크 필터는 늘 갱신한다.
-    // lat_delay_s: 조향 지연(상류 LatControlTorque.update의 lat_delay). 요청 버퍼에서 이만큼 전의
-    // 요청을 지금 측정과 비교한다. 컨트롤러는 경로를 읽는 지연과 같은 값(lagd 사용 중이면 추정값,
-    // 아니면 steer_actuator_delay)을 넘긴다.
-    // nn_feedforward_torque: 학습한 토크 모델(LateralNnModel)의 피드포워드(제어 부호, steer_max로 나눈 토크).
-    // nn_weight(0..1)만큼 선형 피드포워드(목표 횡가속, 편향, 롤·편경사, 마찰)와 섞는다: 1이면 모델에 곡선(|목표 횡가속|
-    // 0.2→0.6 m/s²)에서만 선형의 마찰 보상을 더한 값(nn_curve_friction이 거짓이면 모델만: 마찰 몫을 빼지 않고 배운
-    // 모델). nn_curve_gain(모델 파일 curve_gain)은 같은 곡선 범위와 30→50 km/h에서 모델 출력을 (1 + 이것)배로 키운다.
-    // NaN이거나 무게가 0이면 선형만. 켜고 끌 때 피드포워드가 건너뛰지 않게 호출자가 무게를 천천히 바꾼다. PID는
-    // 그대로 횡가속 공간에서 돈다.
-    int update(bool active, float speed_mps, float desired_curvature, float steering_angle_deg, bool steering_pressed,
-               bool steer_limited_by_safety, const SteeringParams &params, float lat_delay_s,
-               float yaw_rate_rad_s = 0.0f, bool yaw_rate_valid = false, float road_bank_lat_accel = 0.0f,
-               const LiveLateralParams &live = LiveLateralParams{}, float nn_feedforward_torque = NAN,
-               float nn_weight = 1.0f, bool nn_curve_friction = true, float nn_curve_gain = 0.0f);
+    // update의 측정과 요청(틱마다). 기본값은 학습값·편경사가 없고 운전자가 핸들을 잡지 않은 상태다.
+    struct Inputs {
+        // 상류 CC.latActive. 거짓이면 토크 0을 내고 PID 상태를 지운다(상류 #24606은 적분기를 남기지만 폐루프
+        // 재생에서 정차 뒤 차선 오차를 키워 지운다, update 참고). 요청 버퍼와 저크 필터는 늘 갱신한다.
+        bool active = false;
+        float speed_mps = 0.0f;
+        float desired_curvature = 0.0f;
+        float steering_angle_deg = 0.0f;
+        bool steering_pressed = false;
+        bool steer_limited_by_safety = false;
+        // 조향 지연(상류 LatControlTorque.update의 lat_delay). 요청 버퍼에서 이만큼 전의 요청을 지금 측정과
+        // 비교한다. 컨트롤러는 경로를 읽는 지연과 같은 값(lagd 사용 중이면 추정값, 아니면 steer_actuator_delay)을
+        // 넘긴다.
+        float lat_delay_s = 0.0f;
+        float yaw_rate_rad_s = 0.0f;
+        bool yaw_rate_valid = false;
+        float road_bank_lat_accel = 0.0f;
+        LiveLateralParams live{};
+    };
+    // 학습한 토크 모델(LateralNnModel)의 피드포워드(제어 부호, steer_max로 나눈 토크)와 섞는 법. weight(0..1)만큼
+    // 선형 피드포워드(목표 횡가속, 편향, 롤·편경사, 마찰)와 섞는다: 1이면 모델에 곡선(|목표 횡가속| 0.2→0.6 m/s²)에서만
+    // 선형의 마찰 보상을 더한 값(curve_friction이 거짓이면 모델만: 마찰 몫을 빼지 않고 배운 모델). curve_gain(모델 파일
+    // curve_gain)은 같은 곡선 범위와 30→50 km/h에서 모델 출력을 (1 + 이것)배로 키운다. NaN이거나 무게가 0이면 선형만.
+    // 켜고 끌 때 피드포워드가 건너뛰지 않게 호출자가 무게를 천천히 바꾼다.
+    struct NnFeedforward {
+        float torque = NAN;
+        float weight = 1.0f;
+        bool curve_friction = true;
+        float curve_gain = 0.0f;
+    };
+
+    // openpilot LatControlTorque와 같은 형태로 조향 토크를 계산한다. PID는 횡가속 공간에서 돈다.
+    int update(const Inputs &in, const SteeringParams &params, const NnFeedforward &nn);
+    int update(const Inputs &in, const SteeringParams &params) { return update(in, params, NnFeedforward()); }
 
     // 조향각이 만드는 곡률(차량 모델: 학습 SR·강성·오프셋·롤 포함, 제어 부호). estimate_actual_curvature의
     // 각도 경로와 같은 식이고 로그용 값을 건드리지 않는다. 컨트롤러의 조향각 상한이 쓴다.
@@ -80,6 +98,8 @@ public:
     bool nn_feedforward_used() const { return nn_feedforward_used_; }
     // PID 적분항(횡가속도 공간, 상류 LateralTorqueState.i)
     float integral() const { return i_; }
+    // 유한하지 않은 입력(오차·피드포워드·이득) 때문에 토크 0을 낸 틱 수(처음부터 센다)
+    uint64_t nonfinite_ticks() const { return nonfinite_ticks_; }
     float actual_curvature() const { return actual_curvature_; }
     // 조향각 차량 모델 곡률(제어가 쓰는 실제 곡률)과 ESP12 요레이트 곡률(주행 로그용).
     float actual_curvature_vm() const { return actual_curvature_vm_; }
@@ -125,6 +145,7 @@ private:
     float feedforward_ = 0.0f;
     float friction_torque_ = 0.0f;
     bool nn_feedforward_used_ = false;
+    uint64_t nonfinite_ticks_ = 0;
     float actual_curvature_ = 0.0f;
     float actual_curvature_vm_ = 0.0f;
     float actual_curvature_yaw_ = 0.0f;

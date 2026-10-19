@@ -22,7 +22,7 @@ export function el(spec, attributes = {}, ...children) {
   return node;
 }
 
-export function svg(tag, attributes = {}) {
+function svg(tag, attributes = {}) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, String(value));
   return node;
@@ -192,8 +192,8 @@ export function pollJson(url, intervalMs, onData, onError) {
 // 서버 상태 하나를 intervalMs마다 읽어 그리는 상태 카드(Panda 펌웨어, 학습 토크 모델). render(data)가 {badges,
 // children}을 돌려준다. 읽지 못하면 어느 카드나 같은 모양(liveCard.fail)이다. show(data)는 요청의 응답을 곧바로 그릴
 // 때, redraw()는 다른 항목이 바뀌어 마지막 상태를 다시 그릴 때 쓴다(읽지 못한 뒤에는 옛 상태로 덮지 않는다).
-export function pollingCard(title, {url, intervalMs, render, control = null, actions = []}) {
-  const card = liveCard(title, {control, actions});
+export function pollingCard(title, {url, intervalMs, render, actions = []}) {
+  const card = liveCard(title, {actions});
   let latest = null;
   const show = data => {
     latest = data;
@@ -305,17 +305,41 @@ export function confirmAction(lines) {
 }
 
 // ------------------------------------------------------------ API
-async function request(method, url, body, signal) {
-  const response = await fetch(url, {
-    method,
-    signal,
-    cache: "no-store",
-    headers: body === undefined ? {} : {"Content-Type": "application/json"},
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(errorText(data.detail) || response.statusText || `HTTP ${response.status}`);
-  return data;
+// GET의 시한. 보드가 말없이 사라지면(전원, Wi-Fi) 응답이 오지 않아 폴링이 멈추고 화면은 마지막 값을 정상처럼 보였다.
+// POST·PATCH에는 두지 않는다: 서버가 처리했는데 늦게 답하면 실패로 알리게 된다.
+const GET_TIMEOUT_MS = 10000;
+
+async function request(method, url, body, signal, timeoutMs = 0) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, {once: true});
+  let timedOut = false;
+  const timer = timeoutMs ? window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs) : null;
+  try {
+    const response = await fetch(url, {
+      method,
+      signal: controller.signal,
+      cache: "no-store",
+      headers: body === undefined ? {} : {"Content-Type": "application/json"},
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await response.json().catch(error => {
+      if (timedOut) throw error;  // 본문을 받다가 시한이 지났다
+      return {};
+    });
+    if (!response.ok) throw new Error(errorText(data.detail) || response.statusText || `HTTP ${response.status}`);
+    return data;
+  } catch (error) {
+    if (timedOut) throw new Error(t("common.no_response", {seconds: timeoutMs / 1000}));
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 // 서버가 받지 않은 이유: 문구 키({code, 자리 값}, 예: 결합 중이라 거부) 또는 글자. FastAPI의 검사 오류(목록)는
@@ -326,7 +350,7 @@ function errorText(detail) {
 }
 
 export const api = {
-  get: (url, {signal} = {}) => request("GET", url, undefined, signal),
+  get: (url, {signal} = {}) => request("GET", url, undefined, signal, GET_TIMEOUT_MS),
   post: (url, body = {}) => request("POST", url, body),
   patch: (url, body) => request("PATCH", url, body),
 };

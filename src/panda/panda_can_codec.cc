@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
+#include <utility>
 
 namespace {
 
@@ -47,35 +47,10 @@ void append_packet_bytes(std::vector<uint8_t> *dest, const uint8_t *src, size_t 
 
 }  // namespace
 
-bool panda_can_is_valid_data_len(uint8_t len) { return len_to_dlc(len) != 0xff; }
-
-bool panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames, std::vector<uint8_t> *out, std::string *error) {
-    if (!out) {
-        set_error(error, "output buffer is null");
-        return false;
-    }
+void panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames, std::vector<uint8_t> *out) {
     out->clear();
-
     for (const PandaCanFrame &frame : frames) {
-        if (frame.address > kPandaCanMaxAddress) {
-            set_error(error, "CAN address exceeds panda 29-bit address range");
-            return false;
-        }
-        if (frame.bus > kPandaCanMaxTxBus) {
-            set_error(error, "CAN bus is outside panda TX bus range");
-            return false;
-        }
-        if (frame.returned || frame.rejected) {
-            set_error(error, "returned/rejected CAN flags are RX-only");
-            return false;
-        }
-
         const uint8_t dlc = len_to_dlc(frame.data_len);
-        if (dlc == 0xff) {
-            set_error(error, "CAN data length is not representable by panda DLC");
-            return false;
-        }
-
         uint8_t header[kCanPacketHeadSize] = {};
         const uint8_t extended = frame.address >= 0x800U ? 1U : 0U;
         const uint32_t word_4b = (frame.address << 3) | (extended << 2);
@@ -85,58 +60,53 @@ bool panda_can_pack_buffer(const std::vector<PandaCanFrame> &frames, std::vector
         append_packet_bytes(out, header, sizeof(header));
         append_packet_bytes(out, frame.data, frame.data_len);
     }
-    return true;
 }
 
-bool panda_can_unpack_buffer(const uint8_t *data, int size, std::vector<uint8_t> *recv_buf,
+bool panda_can_unpack_stream(const uint8_t *data, int size, bool complete, PandaRxStream *stream,
                              std::vector<PandaCanFrame> *frames, std::string *error) {
-    if (!data || !recv_buf || !frames) {
-        set_error(error, "null unpack argument");
-        return false;
-    }
-    if (size < 0) {
-        set_error(error, "negative USB buffer size");
-        return false;
-    }
-
-    recv_buf->clear();
     frames->clear();
+    std::vector<uint8_t> buffer = std::move(stream->pending);
+    stream->pending.clear();
     for (int i = 0; i < size; i += kUsbPacketMaxSize) {
-        const uint8_t expected_counter = static_cast<uint8_t>(i / kUsbPacketMaxSize);
-        if (data[i] != expected_counter) {
+        if (data[i] != stream->next_counter) {
             set_error(error, "malformed CAN USB packet counter");
+            *stream = PandaRxStream{};
             return false;
         }
+        ++stream->next_counter;
         const int chunk_len = std::min(kUsbPacketMaxSize, size - i);
-        recv_buf->insert(recv_buf->end(), &data[i + 1], &data[i + chunk_len]);
+        buffer.insert(buffer.end(), &data[i + 1], &data[i + chunk_len]);
     }
 
     size_t pos = 0;
-    while (pos < recv_buf->size()) {
-        if (pos + kCanPacketHeadSize > recv_buf->size()) {
-            set_error(error, "truncated CAN packet header");
+    while (pos < buffer.size()) {
+        const size_t left = buffer.size() - pos;
+        const uint8_t header0 = buffer[pos];
+        const uint8_t data_len = kDlcToLen[(header0 >> 4) & 0xfU];
+        if (left < static_cast<size_t>(kCanPacketHeadSize) + data_len) {
+            if (!complete) {
+                // 잘린 읽기: 걸쳐 있는 CAN 패킷의 뒤쪽은 다음 읽기의 첫 패킷에 온다
+                stream->pending.assign(buffer.begin() + static_cast<std::ptrdiff_t>(pos), buffer.end());
+                break;
+            }
+            set_error(error, left < static_cast<size_t>(kCanPacketHeadSize) ? "truncated CAN packet header"
+                                                                            : "truncated CAN packet payload");
+            *stream = PandaRxStream{};
             return false;
         }
-
-        const uint8_t header0 = (*recv_buf)[pos];
-        const uint8_t dlc = (header0 >> 4) & 0xfU;
-        const uint8_t data_len = kDlcToLen[dlc];
-        if (pos + kCanPacketHeadSize + data_len > recv_buf->size()) {
-            set_error(error, "truncated CAN packet payload");
-            return false;
-        }
-
-        const uint32_t word_4b = read_le32(recv_buf->data() + pos + 1);
+        const uint32_t word_4b = read_le32(buffer.data() + pos + 1);
         PandaCanFrame frame;
         frame.bus = (header0 >> 1) & 0x7U;
         frame.address = word_4b >> 3;
         frame.rejected = (word_4b & 0x1U) != 0;
         frame.returned = (word_4b & 0x2U) != 0;
         frame.data_len = data_len;
-        std::copy_n(recv_buf->data() + pos + kCanPacketHeadSize, data_len, frame.data);
+        std::copy_n(buffer.data() + pos + kCanPacketHeadSize, data_len, frame.data);
         frames->push_back(frame);
 
         pos += kCanPacketHeadSize + data_len;
     }
+    // 전송이 끝났으면 다음 읽기는 새 전송이다(펌웨어가 카운터를 0으로 되돌린다)
+    if (complete) stream->next_counter = 0;
     return true;
 }

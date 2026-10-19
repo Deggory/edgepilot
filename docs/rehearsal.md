@@ -52,7 +52,9 @@ flowchart TB
   CPU never touches pixels.
 - **CAN and panda state:** publishes the recorded `CanRx` batches and
   `PandaState` on the same timeline, into the queues `pandad` feeds (and the
-  recorder's CAN log queue).
+  recorder's CAN log queue). It reads them as it goes, in recorded-time order
+  (0.5 s reorder window), from the last event chunk that starts more than 2 s
+  before the start, so its memory does not grow with the route.
 - **Transmit:** `controlsd`'s send requests are **not transmitted**; they go to
   the send log only, so a rehearsal is always shadow.
 - Timestamps are rewritten to the current time; recorded times only set the
@@ -83,9 +85,12 @@ A clip is a directory with `segments/NNN/` and `events/NNN.bin` from one route:
   replays the CAN that falls inside the video's time. Take the chunks whose CAN
   times cover the clip's frames, usually the same number and the next two late
   in a route.
-- **Keep it short.** `replayd` holds the clip's CAN and panda records in memory,
-  about 34 MB per event chunk. Linux has 447 MB, so two segments with three
-  event chunks fit.
+- **Keep it short anyway.** `replayd` no longer holds the CAN and panda records
+  in memory (before 2026-10-19 it held about 34 MB per event chunk, so a clip
+  had to fit in the 447 MB of RAM). Long clips still tied up the hardware
+  decoder's memory: on 2026-10-15 a three-segment rehearsal ended in a VDEC
+  allocation failure and a reboot. Two segments, with `drop_caches` and
+  `compact_memory` before each run, have been safe.
 - **Symlinks are enough.** A clip can link to the route on the SD card. The
   video is read at about 1 MB/s. A copy in tmpfs (`/tmp`) also costs RAM, about
   90 MB per segment with its chunk.

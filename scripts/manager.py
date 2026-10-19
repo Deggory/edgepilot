@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """MaixCAM2(AX630C) 보드 런타임 감시자. 프로세스를 시작 순서대로 띄우고(camerad가 VI와
 AX 공용 풀을 연 뒤 overlayd) 죽으면 다시 띄우며(10초 안에 거듭 죽으면 최대 16초까지 늦춘다), 1초마다
-managerState를 /dev/shm에
-낸다. 어떤 프로세스를 띄울지는 EDGEPILOT_ENABLE_CONTROL·EDGEPILOT_ENABLE_PANDA·
-EDGEPILOT_ENABLE_WEB_CONSOLE이 정한다. EDGEPILOT_REPLAY_ROUTE(+ _START, _DURATION 초)를 주면 카메라와
-판다 대신 그 녹화 route를 재생하는 리허설 모드로 돈다(replayd가 camerad 자리를 맡는다).
+managerState를 /dev/shm에 낸다. 어떤 프로세스를 띄울지는 EDGEPILOT_ENABLE_CONTROL·EDGEPILOT_ENABLE_PANDA·
+EDGEPILOT_ENABLE_WEB_CONSOLE이 정한다. EDGEPILOT_REPLAY_ROUTE(+ _START, _DURATION 초)를 주면 카메라와 판다 대신 그
+녹화 route를 재생하는 리허설 모드로 돈다(replayd가 camerad 자리를 맡는다).
 
 시작 전에 보드 UI 런처와 그 앱을 멈춘다(CPU 약 30%를 쓰고 카메라·화면과 겹친다,
 EDGEPILOT_STOP_LAUNCHER=0이면 그대로 둔다). USB-C 역할은 EDGEPILOT_USB_ROLE(host|device)이 있으면
-그대로 고정하고, 없으면 pandad를 띄울 때만 호스트로 바꿨다가 끝낼 때 되돌린다. EDGEPILOT_LOG_DIR를 주면(부팅 서비스 edgepilot.service) 자식의 출력을
-그 디렉터리의 <이름>.log에 남기고 LOG_MAX_BYTES를 넘으면 <이름>.log.1로 하나 남긴 뒤 비운다(tmpfs에 두어
-SD에 쓰지 않는다). 주지 않으면 터미널로 그대로 나온다.
+그대로 고정하고, 없으면 pandad를 띄울 때만 호스트로 바꿨다가 끝낼 때 되돌린다.
+EDGEPILOT_LOG_DIR를 주면(부팅 서비스 edgepilot.service) 자식의 출력을 그 디렉터리의 <이름>.log에 남기고
+LOG_MAX_BYTES를 넘으면 <이름>.log.1로 하나 남긴 뒤 비운다(tmpfs에 두어 SD에 쓰지 않는다). 주지 않으면
+터미널로 그대로 나온다.
 
 사용: python3 manager.py [supercombo.axmodel]   (모델 기본값은 설치 디렉터리의
 models/supercombo.axmodel, EDGEPILOT_MODEL로도 바꿀 수 있다)
@@ -44,6 +44,10 @@ LOG_MAX_BYTES = 1 << 20
 # 된다. camerad가 다시 뜰 때마다 이 프로세스들도 camerad가 자리 잡은 뒤에 다시 띄운다.
 CAMERA = "camerad"
 CAMERA_DEPENDENTS = ("overlayd", "recordd")
+# 멈추라고(SIGTERM) 한 뒤 SIGKILL까지 기다리는 시간. 끝낼 때 recordd는 tmpfs 스테이징에 남은 녹화를 SD로 옮긴 뒤
+# 끝나므로 더 기다린다. edgepilot.service의 TimeoutStopSec(10초)이 매니저 전체를 SIGKILL하기 전에 끝나야 한다.
+STOP_TIMEOUT_S = 3.0
+RECORDD_STOP_TIMEOUT_S = 8.0
 CAMERA_SETTLE_S = 1.5
 # camerad가 크래시(신호)로 죽으면 VI/IVPS 그룹과 AX 풀을 풀지 못한 채 남아서, 다른 프로세스
 # (modeld 등)가 AX를 쥐고 있는 한 새 camerad가 VI를 열지 못한다. 그때와 시작 직후 연달아
@@ -103,24 +107,18 @@ class LatestPublisher:
         ))
 
     def _init_header_if_needed(self):
-        try:
-            magic, version, capacity, _, seq, ts, size, _ = self._read_header()
-        except struct.error:
-            magic = version = capacity = seq = ts = size = 0
+        magic, version, capacity, *_ = self._read_header()
         if magic != IPC_MAGIC or version != IPC_VERSION or capacity != self.payload_size:
             self._write_header(0, 0, 0)
 
     def publish(self, payload: bytes):
-        if len(payload) > self.payload_size:
-            raise ValueError("payload too large")
-        magic, version, capacity, reserved0, seq, ts, size, reserved1 = self._read_header()
-        if seq & 1:
+        """payload는 payload_size 그대로다."""
+        _, _, _, _, seq, ts, size, _ = self._read_header()
+        if seq & 1:  # 쓰다가 죽은 이전 매니저
             seq += 1
         self._write_header(seq + 1, ts, size)
         self.map.seek(HEADER_SIZE)
         self.map.write(payload)
-        if len(payload) < self.payload_size:
-            self.map.write(b"\x00" * (self.payload_size - len(payload)))
         self._write_header(seq + 2, now_ns(), len(payload))
 
     def close(self):
@@ -179,14 +177,9 @@ def prepare_board(run_pandad: bool) -> Optional[str]:
         # 런처가 띄운 앱(예: 카메라 앱)이 남아 있으면 카메라·NPU를 쥐고 있다.
         subprocess.run(["pkill", "-TERM", "-f", "^/maixapp/apps/"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if not os.path.exists(USB_ROLE_FILE):
-        return None
     # EDGEPILOT_USB_ROLE(host|device)를 주면 그 역할로 두고 끝낼 때 되돌리지 않는다(부팅 서비스는
     # host: 차에서 판다를 USB-C 호스트로 붙인다). 없으면 pandad가 뜰 때만 host로 바꾸고 되돌린다.
     fixed = os.environ.get("EDGEPILOT_USB_ROLE", "").strip().lower()
-    if fixed and fixed not in ("host", "device"):
-        print(f"manager: ignoring EDGEPILOT_USB_ROLE={fixed!r} (host or device)", flush=True)
-        fixed = ""
     wanted = fixed or ("host" if run_pandad else "")
     if not wanted:
         return None
@@ -299,14 +292,9 @@ class Manager:
                     os.remove(path + ".1")
                 except OSError:
                     pass
-            try:
-                os.truncate(path, 0)
-            except OSError:
-                pass
+            os.truncate(path, 0)
 
     def start_proc(self, state: ProcState):
-        if not os.path.exists(state.spec.cmd[0]):
-            raise FileNotFoundError(f"{state.spec.cmd[0]} not found")
         log = open(self.log_path(state.spec.name), "ab") if self.log_dir else None
         try:
             state.proc = subprocess.Popen(
@@ -324,16 +312,25 @@ class Manager:
               f"cmd={' '.join(state.spec.cmd)}",
               flush=True)
 
-    def stop_all(self, timeout_s: float = 3.0):
+    def stop_all(self, timeout_s: float = STOP_TIMEOUT_S, recordd_timeout_s: Optional[float] = None):
+        """모두 SIGTERM을 보내고 timeout_s 뒤에도 남은 것은 SIGKILL한다. recordd_timeout_s를 주면 recordd만 그만큼
+        기다린다: 끝낼 때 recordd는 tmpfs 스테이징에 남은 녹화를 SD로 옮긴 뒤 끝난다(전원을 끄면 tmpfs가 사라진다)."""
         for state in self.procs.values():
             self.terminate_proc(state, signal.SIGTERM)
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if all(not state.running() for state in self.procs.values()):
+        start = time.monotonic()
+
+        def deadline(state: ProcState) -> float:
+            wait = recordd_timeout_s if recordd_timeout_s is not None and state.spec.name == "recordd" else timeout_s
+            return start + wait
+
+        while True:
+            now = time.monotonic()
+            for state in self.procs.values():
+                if state.running() and now >= deadline(state):
+                    self.terminate_proc(state, signal.SIGKILL)
+            if all(not state.running() or now >= deadline(state) for state in self.procs.values()):
                 break
             time.sleep(0.1)
-        for state in self.procs.values():
-            self.terminate_proc(state, signal.SIGKILL)
 
     def restart_all(self):
         """모두 내린 뒤 감시 루프가 시작 순서대로(camerad 먼저) 다시 띄우게 한다."""
@@ -362,10 +359,9 @@ class Manager:
 
     def publish_state(self):
         timestamp = now_ns()
-        payload = struct.pack("<QII", timestamp, min(len(self.procs), MAX_PROCESSES), 0)
-        for state in list(self.procs.values())[:MAX_PROCESSES]:
-            proc_name = state.spec.name.encode("ascii")[:15].ljust(16, b"\x00")
-            payload += PROCESS.pack(proc_name, 1 if state.running() else 0)
+        payload = struct.pack("<QII", timestamp, len(self.procs), 0)
+        for state in self.procs.values():  # 이름은 15자 안이고 16s가 NUL로 채운다
+            payload += PROCESS.pack(state.spec.name.encode("ascii"), 1 if state.running() else 0)
         payload += b"\x00" * (MANAGER_STATE_SIZE - len(payload))
         self.manager_state.publish(payload)
 
@@ -387,7 +383,8 @@ class Manager:
                 continue
             self.start_proc(state)
             time.sleep(0.3)
-            # camerad가 자리 잡았으면 다음 차례보다 먼저 띄운다: 시작 순서가 끝날 때까지 기다리면 LCD가 0.6초 늦게 켜진다
+            # camerad가 자리 잡았으면 다음 차례보다 먼저 띄운다: 시작 순서가 끝날 때까지 기다리면 LCD가
+            # 0.6초 늦게 켜진다
             while waiting and self.camera_settled():
                 self.start_proc(waiting.pop(0))
                 time.sleep(0.3)
@@ -440,7 +437,8 @@ class Manager:
 
             time.sleep(SUPERVISE_INTERVAL_S)
 
-        self.stop_all()
+        # 끝낼 때(systemctl stop, reboot)는 recordd가 스테이징에 남은 녹화를 SD로 옮길 시간을 준다
+        self.stop_all(recordd_timeout_s=RECORDD_STOP_TIMEOUT_S)
         self.publish_state()
         self.manager_state.close()
         restore_usb_role(self.previous_usb_role)

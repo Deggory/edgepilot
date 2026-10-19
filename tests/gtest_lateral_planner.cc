@@ -5,7 +5,7 @@
 #include "common/ipc_messages.h"
 #include "common/model_output.h"
 #include "controls/control_params.h"
-#include "controls/lateral_controller.h"
+#include "controls/drive_helpers.h"
 #include "planning/lateral_planner.h"
 
 #include <gtest/gtest.h>
@@ -28,7 +28,6 @@ TEST(LateralPlanner, LanelessUsesPlanYawLikeUpstream) {
         ms.valid = 1;
         for (int i = 0; i < kTrajectorySize; ++i) {
             const float t = model_t_idx(i);
-            ms.model_t[i] = t;
             ms.plan[i] = {v * t, lateral_offset, 0.0f};
             ms.plan_yaw[i] = kappa * v * t;
             ms.plan_yaw_rate[i] = kappa * v;
@@ -59,8 +58,6 @@ TEST(LateralPlanner, LaneChangeFollowsUpstreamDesireHelper) {
     ms.valid = 1;
     for (int i = 0; i < kTrajectorySize; ++i) {
         const float t = model_t_idx(i);
-        ms.model_t[i] = t;
-        ms.lane_t[i] = t;
         ms.plan[i] = {v * t, 0.0f, 0.0f};
     }
     ms.desire_state[0] = 1.0f;
@@ -104,8 +101,6 @@ TEST(LateralPlanner, SlowBlinkerGivesNoDesire) {
     const float v = 5.0f;  // 18 km/h < 30
     for (int i = 0; i < kTrajectorySize; ++i) {
         const float t = model_t_idx(i);
-        ms.model_t[i] = t;
-        ms.lane_t[i] = t;
         ms.plan[i] = {v * t, 0.0f, 0.0f};
     }
     for (int l = 0; l < 4; ++l) ms.lane_probabilities[l] = 0.9f;
@@ -141,11 +136,9 @@ TEST(LateralPlanner, PathOffsetOnlyShiftsLanePath) {
         ms.valid = 1;
         for (int i = 0; i < kTrajectorySize; ++i) {
             const float t = model_t_idx(i);
-            ms.model_t[i] = t;
-            ms.lane_t[i] = t;
             ms.plan[i] = {v * t, 0.0f, 0.0f};
-            ms.lanes[1][i] = {v * t, -1.75f, 0.0f};
-            ms.lanes[2][i] = {v * t, 1.75f, 0.0f};
+            ms.lanes[1][i] = {-1.75f, 0.0f};
+            ms.lanes[2][i] = {1.75f, 0.0f};
         }
         ms.lane_probabilities[1] = ms.lane_probabilities[2] = lane_prob;
         ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;
@@ -165,6 +158,39 @@ TEST(LateralPlanner, PathOffsetOnlyShiftsLanePath) {
 // Lane 모드에서 차선이 안 보이면(교차로) laneless 모드와 같은 openpilot 메인 계산으로 목표를 낸다:
 // plan 위치가 직진이어도 plan yaw가 곡률 κ를 말하면 목표는 κ다. 차선을 잃는 순간에는 한 프레임에
 // 바꾸지 않고 0.5초에 걸쳐 섞는다.
+// 깜빡이만 켠 단계(PreLaneChange)는 차선을 빼지 않으므로, 차선이 약하면 평소처럼 모델 경로로 대체한다. 차선을
+// 실제로 빼는 단계(변경 중)에서만 대체하지 않는다. 예전에는 깜빡이를 켜면 대체가 꺼져 약한 차선이 경로에 섞였다.
+TEST(LateralPlanner, BlinkerAloneKeepsTheModelPathFallback) {
+    const float v = 15.0f;  // 54 km/h: 차선 변경 속도 위
+    ModelState ms{};
+    ms.valid = 1;
+    for (int i = 0; i < kTrajectorySize; ++i) {
+        const float t = model_t_idx(i);
+        ms.plan[i] = {v * t, 0.0f, 0.0f};
+        ms.plan_yaw[i] = 0.01f * v * t;
+        ms.plan_yaw_rate[i] = 0.01f * v;
+        ms.lanes[1][i] = {-1.75f, 0.0f};
+        ms.lanes[2][i] = {1.75f, 0.0f};
+    }
+    ms.lane_probabilities[1] = ms.lane_probabilities[2] = 0.25f;  // 약한 차선
+    ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;
+    ms.desire_state[0] = 1.0f;
+    SteeringParams steering;
+    LateralPlanner planner(steering);
+    VehicleCanState vehicle{};
+    LateralTarget r;
+    for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    ASSERT_TRUE(r.laneless_mode) << "약한 차선이면 모델 경로";
+    vehicle.left_blinker = true;
+    for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    EXPECT_EQ(r.lane_change_state, 1);
+    EXPECT_TRUE(r.laneless_mode) << "깜빡이만으로는 대체를 끄지 않는다";
+    vehicle.driver_torque = 300;  // 왼쪽으로 밀어 변경을 시작한다
+    r = planner.update(ms, vehicle, v, 0.0f, true, true);
+    EXPECT_EQ(r.lane_change_state, 2);
+    EXPECT_FALSE(r.laneless_mode) << "변경 중에는 대체하지 않는다";
+}
+
 TEST(LateralPlanner, LaneModeFallbackMatchesLaneless) {
     const float v = 6.0f;
     const float kappa = 0.02f;
@@ -173,13 +199,11 @@ TEST(LateralPlanner, LaneModeFallbackMatchesLaneless) {
         ms.valid = 1;
         for (int i = 0; i < kTrajectorySize; ++i) {
             const float t = model_t_idx(i);
-            ms.model_t[i] = t;
-            ms.lane_t[i] = t;
             ms.plan[i] = {v * t, 0.0f, 0.0f};  // 위치는 직진
             ms.plan_yaw[i] = kappa * v * t;    // yaw는 κ로 회전
             ms.plan_yaw_rate[i] = kappa * v;
-            ms.lanes[1][i] = {v * t, -1.75f, 0.0f};
-            ms.lanes[2][i] = {v * t, 1.75f, 0.0f};
+            ms.lanes[1][i] = {-1.75f, 0.0f};
+            ms.lanes[2][i] = {1.75f, 0.0f};
         }
         ms.lane_probabilities[1] = ms.lane_probabilities[2] = lane_prob;
         ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;
@@ -212,6 +236,52 @@ TEST(LateralPlanner, LaneModeFallbackMatchesLaneless) {
     EXPECT_LT(max_step, 0.25f * kappa) << "인계는 한 프레임에 넘어가지 않는다";
 }
 
+// 상류와 다르게 둔 차선 확률 보정: 폭 밴드를 [4.5, 5.5] m로 올렸고(상류 [4, 5], 국내 분기구간의 4.2~5.0 m 폭),
+// std 컷오프를 0.4로 늦췄으며(상류 0.3), 유효 확률은 초당 2까지만 바뀐다(모델 경로 대체가 한 프레임에 뒤집히지 않게).
+TEST(LateralPlanner, LaneProbabilityAdjustmentsDifferFromUpstream) {
+    const float v = 20.0f;
+    const auto model_for = [&](float half_width, float std, float prob) {
+        ModelState ms{};
+        ms.valid = 1;
+        for (int i = 0; i < kTrajectorySize; ++i) {
+            const float t = model_t_idx(i);
+            ms.plan[i] = {v * t, 0.0f, 0.0f};
+            ms.lanes[1][i] = {-half_width, 0.0f};
+            ms.lanes[2][i] = {half_width, 0.0f};
+        }
+        ms.lane_probabilities[1] = ms.lane_probabilities[2] = prob;
+        ms.lane_stds[1] = ms.lane_stds[2] = std;
+        ms.desire_state[0] = 1.0f;
+        return ms;
+    };
+    // 또렷한 차선(폭 3.5 m, std 0.05)으로 Lane 모드에 자리 잡은 뒤 model로 바뀌었을 때 차선을 따르는가
+    const auto lane_mode_after = [&](const ModelState &model) {
+        LateralPlanner planner{SteeringParams{}};
+        LateralTarget r;
+        for (int i = 0; i < 40; ++i)
+            r = planner.update(model_for(1.75f, 0.05f, 0.9f), VehicleCanState{}, v, 0.0f, true, false);
+        for (int i = 0; i < 40; ++i) r = planner.update(model, VehicleCanState{}, v, 0.0f, true, false);
+        return !r.laneless_mode;
+    };
+    EXPECT_TRUE(lane_mode_after(model_for(2.4f, 0.05f, 0.9f))) << "4.8 m 폭은 차선을 따른다(상류는 0.2배라 대체)";
+    EXPECT_FALSE(lane_mode_after(model_for(2.8f, 0.05f, 0.9f))) << "5.6 m는 차선이 아니다";
+    EXPECT_TRUE(lane_mode_after(model_for(1.75f, 0.3f, 0.9f))) << "std 0.3은 0.4배(0.36, 상류는 0)";
+    EXPECT_FALSE(lane_mode_after(model_for(1.75f, 0.4f, 0.9f)));
+
+    // 확률이 0.9에서 0으로 떨어져도 유효 확률이 초당 2로 내려와 0.3 밑에서야(0.3초 뒤) 대체한다
+    LateralPlanner planner{SteeringParams{}};
+    LateralTarget r;
+    for (int i = 0; i < 40; ++i)
+        r = planner.update(model_for(1.75f, 0.05f, 0.9f), VehicleCanState{}, v, 0.0f, true, false);
+    ASSERT_FALSE(r.laneless_mode);
+    int frames = 0;
+    while (!r.laneless_mode && frames < 40) {
+        r = planner.update(model_for(1.75f, 0.05f, 0.0f), VehicleCanState{}, v, 0.0f, true, false);
+        ++frames;
+    }
+    EXPECT_EQ(frames, 6) << "0.9에서 한 프레임 0.1씩: 여섯 번째 프레임에 0.3 밑";
+}
+
 // lane_path_weight는 Lane 모드 MPC가 차선 중심에서 벗어난 위치를 되돌리는 세기다. 차가 차선 중심에서
 // 0.3 m 오른쪽에 있으면 가중치 3이 1보다 왼쪽(음) 곡률을 더 크게 요구한다.
 TEST(LateralPlanner, LanePathWeightStrengthensCentering) {
@@ -221,11 +291,9 @@ TEST(LateralPlanner, LanePathWeightStrengthensCentering) {
         ms.valid = 1;
         for (int i = 0; i < kTrajectorySize; ++i) {
             const float t = model_t_idx(i);
-            ms.model_t[i] = t;
-            ms.lane_t[i] = t;
             ms.plan[i] = {v * t, 0.0f, 0.0f};
-            ms.lanes[1][i] = {v * t, -2.05f, 0.0f};  // 차가 차선 중심보다 0.3 m 오른쪽
-            ms.lanes[2][i] = {v * t, 1.45f, 0.0f};
+            ms.lanes[1][i] = {-2.05f, 0.0f};  // 차가 차선 중심보다 0.3 m 오른쪽
+            ms.lanes[2][i] = {1.45f, 0.0f};
         }
         ms.lane_probabilities[1] = ms.lane_probabilities[2] = 0.99f;
         ms.lane_stds[1] = ms.lane_stds[2] = 0.05f;

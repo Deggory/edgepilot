@@ -105,6 +105,9 @@ bool PandaClient::connect(const std::string &serial) {
     if (version_len > 0) firmware_version_.assign(version, strnlen(version, static_cast<size_t>(version_len)));
     comms_healthy_ = true;
     consecutive_malformed_rx_ = 0;
+    rx_stream_ = PandaRxStream{};
+    // 읽지 않는 동안 쌓인 수신 큐(몇 초 묵은 프레임)는 버린다. 그대로 두면 지금 시각의 묶음으로 발행된다.
+    control_write(kPandaRequestCanClear, kPandaCanClearRxQueue, 0);
     return true;
 }
 
@@ -126,6 +129,7 @@ void PandaClient::close() {
     health_packet_version_ = 0;
     can_packet_version_ = 0;
     comms_healthy_ = true;
+    rx_stream_ = PandaRxStream{};
 }
 
 bool PandaClient::control_write(uint8_t request, uint16_t value, uint16_t index, unsigned timeout_ms) {
@@ -150,13 +154,15 @@ bool PandaClient::control_read(uint8_t request, uint16_t value, uint16_t index, 
     return err == length;
 }
 
-int PandaClient::bulk_read(uint8_t endpoint, uint8_t *data, int length, unsigned timeout_ms) {
+int PandaClient::bulk_read(uint8_t endpoint, uint8_t *data, int length, unsigned timeout_ms, bool *timed_out) {
+    if (timed_out) *timed_out = false;
     if (!dev_handle_) return 0;
     int transferred = 0;
     const int err = libusb_bulk_transfer(dev_handle_, endpoint, data, length, &transferred, timeout_ms);
     if (err == LIBUSB_ERROR_TIMEOUT) {
-        // libusb는 요청한 버퍼의 일부를 옮긴 뒤 시간 초과를 돌려줄 수 있다. 옮긴 바이트는 Panda CAN
-        // 스트림의 올바른 앞부분이다.
+        // libusb는 요청한 버퍼의 일부를 옮긴 뒤 시간 초과를 돌려줄 수 있다. 옮긴 바이트는 펌웨어 전송의 앞부분이고,
+        // 나머지는 다음 읽기에 이어서 온다(unpack_can_buffer가 잇는다). 받을 것이 없는 시간 초과는 오류가 아니다.
+        if (timed_out) *timed_out = true;
         return transferred;
     }
     if (err == LIBUSB_ERROR_OVERFLOW) {
@@ -221,53 +227,29 @@ bool PandaClient::send_heartbeat(bool engaged) {
     return control_write(kPandaRequestHeartbeat, engaged ? 1 : 0, 0, 100);
 }
 
-bool PandaClient::get_health(PandaHealth *health) {
-    if (!health) return false;
-    PandaHealthPacket packet{};
-    {
-        std::lock_guard<std::recursive_mutex> lock(mutex_);
-        if (!control_read(kPandaRequestHealth, 0, 0, &packet, sizeof(packet), 100)) return false;
-    }
-    health->uptime = packet.uptime_pkt;
-    health->voltage = packet.voltage_pkt;
-    health->current = packet.current_pkt;
-    health->can_rx_errs = packet.can_rx_errs_pkt;
-    health->can_send_errs = packet.can_send_errs_pkt;
-    health->can_fwd_errs = packet.can_fwd_errs_pkt;
-    health->gmlan_send_errs = packet.gmlan_send_errs_pkt;
-    health->faults = packet.faults_pkt;
-    health->ignition_line = packet.ignition_line_pkt;
-    health->ignition_can = packet.ignition_can_pkt;
-    health->controls_allowed = packet.controls_allowed_pkt;
-    health->gas_interceptor_detected = packet.gas_interceptor_detected_pkt;
-    health->car_harness_status = packet.car_harness_status_pkt;
-    health->usb_power_mode = packet.usb_power_mode_pkt;
-    health->safety_mode = packet.safety_mode_pkt;
-    health->safety_param = packet.safety_param_pkt;
-    health->fault_status = packet.fault_status_pkt;
-    health->power_save_enabled = packet.power_save_enabled_pkt;
-    health->heartbeat_lost = packet.heartbeat_lost_pkt;
-    health->alternative_experience = packet.alternative_experience_pkt;
-    health->blocked_msg_cnt = packet.blocked_msg_cnt_pkt;
-    health->interrupt_load = packet.interrupt_load;
+bool PandaClient::get_health(PandaHealthPacket *health) {
+    PandaHealthPacket packet{};  // 실패하면 health를 건드리지 않는다
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!control_read(kPandaRequestHealth, 0, 0, &packet, sizeof(packet), 100)) return false;
+    *health = packet;
     return true;
 }
 
 bool PandaClient::receive(std::vector<PandaCanFrame> *frames, int timeout_ms) {
-    if (!frames) return false;
     frames->clear();
-    uint8_t data[kRecvSize] = {};
+    uint8_t data[kRecvSize];  // 받은 recv바이트만 읽으므로 0으로 채우지 않는다(10 ms마다 16 KB)
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    const int recv = bulk_read(kCanRxEndpoint, data, sizeof(data), static_cast<unsigned>(timeout_ms));
+    bool timed_out = false;
+    const int recv = bulk_read(kCanRxEndpoint, data, sizeof(data), static_cast<unsigned>(timeout_ms), &timed_out);
     if (recv <= 0) return comms_healthy_;
     if (recv == kRecvSize) std::fprintf(stderr, "panda: receive buffer full\n");
-    return unpack_can_buffer(data, recv, frames);
+    return unpack_can_buffer(data, recv, !timed_out, frames);
 }
 
 PandaSendResult PandaClient::send(const std::vector<PandaCanFrame> &frames, uint64_t not_after_ns,
                                   uint64_t *started_ns) {
     std::vector<uint8_t> packed;
-    if (!frames.empty() && !pack_can_buffer(frames, &packed)) return PandaSendResult::Failed;
+    panda_can_pack_buffer(frames, &packed);
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!configured_ || !dev_handle_) return PandaSendResult::NotReady;
     const uint64_t now = monotonic_now_ns();
@@ -282,13 +264,12 @@ PandaSendResult PandaClient::send(const std::vector<PandaCanFrame> &frames, uint
     return PandaSendResult::Sent;
 }
 
-bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, std::vector<PandaCanFrame> *frames) {
+bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, bool complete, std::vector<PandaCanFrame> *frames) {
     std::string error;
-    if (!panda_can_unpack_buffer(data, size, &recv_buf_, frames, &error)) {
+    if (!panda_can_unpack_stream(data, size, complete, &rx_stream_, frames, &error)) {
         ++malformed_rx_batches_;
         ++consecutive_malformed_rx_;
         std::fprintf(stderr, "panda: dropping malformed CAN USB batch: %s\n", error.c_str());
-        recv_buf_.clear();
         frames->clear();
         if (consecutive_malformed_rx_ >= kMaxConsecutiveMalformedRx) {
             comms_healthy_ = false;
@@ -297,14 +278,5 @@ bool PandaClient::unpack_can_buffer(const uint8_t *data, int size, std::vector<P
         return true;
     }
     consecutive_malformed_rx_ = 0;
-    return true;
-}
-
-bool PandaClient::pack_can_buffer(const std::vector<PandaCanFrame> &frames, std::vector<uint8_t> *out) {
-    std::string error;
-    if (!panda_can_pack_buffer(frames, out, &error)) {
-        std::fprintf(stderr, "panda: %s\n", error.c_str());
-        return false;
-    }
     return true;
 }

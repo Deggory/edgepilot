@@ -7,7 +7,7 @@ using namespace model_output_layout;
 
 namespace {
 
-float sigmoid_impl(float x) { return 1.0f / (1.0f + std::exp(-x)); }
+float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 void softmax(const float *input, float *output, int size) {
     const float max_value = *std::max_element(input, input + size);
@@ -22,15 +22,35 @@ void softmax(const float *input, float *output, int size) {
 
 }  // namespace
 
-float ModelOutputParser::sigmoid(float x) { return sigmoid_impl(x); }
+void compute_lane_t(const float plan_x[kTrajectorySize], float lane_t[kTrajectorySize]) {
+    std::fill_n(lane_t, kTrajectorySize, NAN);
+    lane_t[0] = 0.0f;
+    for (int xidx = 1, tidx = 0; xidx < kTrajectorySize; ++xidx) {
+        for (int next_tid = tidx + 1; next_tid < kTrajectorySize && plan_x[next_tid] < model_x_idx_double(xidx);
+             ++next_tid) {
+            ++tidx;
+        }
+        if (tidx == kTrajectorySize - 1) {
+            lane_t[xidx] = model_t_idx(kTrajectorySize - 1);
+            break;
+        }
+
+        const double current_x = plan_x[tidx];
+        const double next_x = plan_x[tidx + 1];
+        // 정차 부근의 양자화된 plan은 knot이 뒤로 뛴다. 보정 없이 두면 p가
+        // 발산하거나 NaN이 되어 lane_t가 비단조가 된다. p를 [0,1]로 묶으면
+        // lane_t는 항상 두 knot 시각 사이에 들어가 단조성이 보장된다.
+        const double span = next_x - current_x;
+        const double p = span > 0.0 ? std::clamp((model_x_idx_double(xidx) - current_x) / span, 0.0, 1.0) : 1.0;
+        lane_t[xidx] = static_cast<float>(p * model_t_idx_double(tidx + 1) + (1.0 - p) * model_t_idx_double(tidx));
+    }
+}
 
 bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *lead, float *probability) const {
-    if (!valid || !lead) return false;
-    const int idx = std::max(0, std::min(kLeadMhpSelection - 1, time_idx));
-    const float global_prob = global_probabilities[idx];
+    const float global_prob = global_probabilities[time_idx];
     if (global_prob < min_probability) return false;
 
-    *lead = predictions[idx].points[0];
+    *lead = predictions[time_idx].points[0];
     if (probability) *probability = global_prob;
     return true;
 }
@@ -41,10 +61,6 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
     output.valid = raw.size() >= static_cast<size_t>(kModelOutputFloats);
     if (!output.valid) return output;
 
-    // 단일 가설이라 고를 것이 없다. 확률은 0.9.4 소비자 호환용으로 1.
-    output.plan.valid = true;
-    output.plan.best_index = 0;
-    output.plan.probability = 1.0f;
     for (int i = 0; i < kTrajectorySize; ++i) {
         const int mean_base = kPlanOffset + i * kPlanWidth;
         output.plan.points[i] = {
@@ -60,7 +76,6 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
         ParsedLaneLine &line = output.lanes[lane];
         const int prob_idx = kLaneProbOffset + lane * 2 + 1;
         const int std_base = kLaneOffset + kLaneLineSize + lane * kTrajectorySize * 2;
-        line.valid = true;
         line.probability = sigmoid(raw[prob_idx]);
         line.std = std::exp(raw[std_base]);
         const int base = kLaneOffset + lane * kTrajectorySize * 2;
@@ -75,7 +90,6 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
 
     for (int edge = 0; edge < 2; ++edge) {
         ParsedRoadEdge &road_edge = output.road_edges[edge];
-        road_edge.valid = true;
         const int std_base = kRoadEdgeOffset + kRoadEdgeMeanSize + edge * kTrajectorySize * 2;
         road_edge.std = std::exp(raw[std_base]);
         const int base = kRoadEdgeOffset + edge * kTrajectorySize * 2;
@@ -88,7 +102,6 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
         }
     }
 
-    output.leads.valid = true;
     for (int sel = 0; sel < kLeadMhpSelection; ++sel) {
         const int base = kLeadOffset + sel * kLeadTrajLen * kLeadElementSize;
         for (int i = 0; i < kLeadTrajLen; ++i) {
@@ -108,7 +121,6 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
         output.meta.brake_press[i] = sigmoid(raw[kMetaOffset + kMetaBrakePressIndex + i * kMetaPressStride]);
     }
 
-    output.has_pose = true;
     const float *pose_src = raw.data() + kPoseOffset;
     for (int i = 0; i < 3; ++i) {
         output.pose.trans[i] = pose_src[i];

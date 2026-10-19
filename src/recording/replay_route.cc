@@ -42,12 +42,13 @@ std::vector<uint8_t> read_file(const std::string &path) {
 
 bool read_frame_index(const std::string &seg_dir, FrameIndex *out) {
     const std::vector<uint8_t> index = read_file(seg_dir + "/frames.bin");
-    if (!out || index.size() < sizeof(FrameIndexHeader)) return false;
+    if (index.size() < sizeof(FrameIndexHeader)) return false;
     FrameIndexHeader header;
     std::memcpy(&header, index.data(), sizeof(header));
     // header_size가 파일보다 크면(깨진 머리) 아래 레코드 수 계산이 size_t로 넘친다
-    if (!is_frame_index_magic(header.magic) || header.record_size != sizeof(FrameIndexRecord) ||
-        header.header_size < sizeof(FrameIndexHeader) || header.header_size > index.size())
+    if (std::memcmp(header.magic, kFrameIndexMagic, 8) != 0 || header.version != kRecordingVersion ||
+        header.record_size != sizeof(FrameIndexRecord) || header.header_size < sizeof(FrameIndexHeader) ||
+        header.header_size > index.size())
         return false;
     const size_t count = (index.size() - header.header_size) / sizeof(FrameIndexRecord);
     if (count == 0) return false;
@@ -74,34 +75,58 @@ ReplayRoute::ReplayRoute(const std::string &dir) {
         }
         segments.push_back(segment);
     }
-    std::vector<char> payload;
-    for (const std::string &path : numbered_entries(dir + "/events", ".bin")) {
-        EventLogReader reader(path);
-        EventRecordHeader h{};
-        while (reader.next(&h, &payload)) {
-            const auto type = static_cast<RecordType>(h.type);
-            if (type == RecordType::CanRx || type == RecordType::PandaState)
-                events.push_back({h.timestamp_ns, type, std::vector<uint8_t>(payload.begin(), payload.end())});
-        }
-    }
-    std::stable_sort(events.begin(), events.end(),
-                     [](const Event &a, const Event &b) { return a.timestamp_ns < b.timestamp_ns; });
 }
 ReplayRoute::~ReplayRoute() {
     for (Segment &s : segments)
         if (s.file) std::fclose(s.file);
 }
 
+ReplayEvents::ReplayEvents(const std::string &route_dir, uint64_t from_ns) : from_ns_(from_ns) {
+    std::vector<std::string> paths = numbered_entries(route_dir + "/events", ".bin");
+    // 청크는 시각 순이다. 첫 레코드가 from_ns - kLeadNs 이전인 마지막 청크부터 읽는다: 레코드는 파일에 늦어도
+    // 0.5초 안에 쓰이므로 그 앞 청크에 from_ns 이후의 레코드는 없다.
+    size_t first = 0;
+    EventRecordHeader header{};
+    std::vector<char> payload;
+    for (size_t i = 0; i < paths.size(); ++i) {
+        EventLogReader reader(paths[i]);
+        if (!reader.next(&header, &payload)) continue;
+        if (header.timestamp_ns + kLeadNs > from_ns) break;
+        first = i;
+    }
+    paths.erase(paths.begin(), paths.begin() + static_cast<std::ptrdiff_t>(first));
+    chunks_ = paths.size();
+    stream_ = std::make_unique<TimeOrderedEvents>(std::move(paths));
+    // 끊긴 꼬리와 읽지 못한 청크를 알린다(진행 표시 줄이 \r로 끝나므로 새 줄에서)
+    stream_->on_file_end = [](const std::string &path, const EventLogReader &reader) {
+        report_event_file_end(path, reader, "\nreplayd: ");
+    };
+}
+
+const ReplayEvents::Event *ReplayEvents::peek() {
+    while (!have_ && stream_->next(&current_)) {
+        const auto type = static_cast<RecordType>(current_.header.type);
+        have_ =
+            (type == RecordType::CanRx || type == RecordType::PandaState) && current_.header.timestamp_ns >= from_ns_;
+    }
+    return have_ ? &current_ : nullptr;
+}
+
+bool read_h264_frame(FILE *file, uint64_t header_bytes, uint64_t offset, uint32_t size, bool keyframe,
+                     bool segment_first, std::vector<uint8_t> *out) {
+    const uint64_t begin = keyframe && segment_first ? 0 : offset;
+    const uint64_t prefix = keyframe && !segment_first ? header_bytes : 0;
+    out->resize(prefix + (offset + size - begin));
+    if (prefix) {
+        std::fseek(file, 0, SEEK_SET);
+        if (std::fread(out->data(), 1, prefix, file) != prefix) return false;
+    }
+    std::fseek(file, static_cast<long>(begin), SEEK_SET);
+    return std::fread(out->data() + prefix, 1, out->size() - prefix, file) == out->size() - prefix;
+}
+
 bool ReplayRoute::read_frame(const VideoFrame &frame, std::vector<uint8_t> *out) {
     Segment &s = segments[frame.segment];
     if (!s.file && !(s.file = std::fopen(s.video_path.c_str(), "rb"))) return false;
-    const uint64_t begin = frame.keyframe ? (frame.segment_first ? 0 : frame.offset) : frame.offset;
-    const uint64_t prefix = frame.keyframe && !frame.segment_first ? s.header_bytes : 0;
-    out->resize(prefix + (frame.offset + frame.size - begin));
-    if (prefix) {
-        std::fseek(s.file, 0, SEEK_SET);
-        if (std::fread(out->data(), 1, prefix, s.file) != prefix) return false;
-    }
-    std::fseek(s.file, static_cast<long>(begin), SEEK_SET);
-    return std::fread(out->data() + prefix, 1, out->size() - prefix, s.file) == out->size() - prefix;
+    return read_h264_frame(s.file, s.header_bytes, frame.offset, frame.size, frame.keyframe, frame.segment_first, out);
 }

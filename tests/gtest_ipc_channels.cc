@@ -1,5 +1,6 @@
 // CanQueue: 공유 메모리 CAN 링 큐. 가득 참, 순서, 생산자 재열기·reset, 신선도 판정, 생길 수 없는 인덱스 복구.
 // futex 대기: 발행되면 깨고, 깨우지 않는 예전 빌드 생산자에는 폴링으로 내려갔다가 깨우는 생산자가 오면 돌아온다.
+// LatestChannel: 쓰는 동안 읽어도 찢어진 스냅샷을 내지 않는다(FrameRing 슬롯도 같다).
 // Subscription: 헤더가 맞지 않는 채널에는 붙지 않는다.
 #include "common/ipc_channels.h"
 #include "common/utils_time.h"
@@ -17,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -117,114 +119,6 @@ TEST(CanQueue, PopWaitWakesOnPushAndTimesOut) {
     EXPECT_LT(woke_ns, 25'000'000ULL) << "push하면 곧바로 깬다";
 }
 
-// 깨우지 않는 예전 빌드의 발행자(seq만 바꾼다)라도 read_new는 대기 상한(100 ms) 안에 받고, 그 뒤로는 폴링으로 바로 받는다.
-// 마지막 값만 남는 채널이라 발행자는 읽는 쪽이 다 받을 때까지 30 ms마다 계속 쓴다.
-TEST(LatestChannel, WriterThatDoesNotWakeFallsBackToPolling) {
-    const std::string name = "/ep_latest_old_" + std::to_string(getpid());
-    struct Unlink {
-        const std::string &name;
-        ~Unlink() { shm_unlink(name.c_str()); }
-    } cleanup{name};
-    LatestChannel publisher, subscriber;
-    ASSERT_TRUE(publisher.open(name.c_str(), sizeof(uint64_t), true));
-    ASSERT_TRUE(subscriber.open(name.c_str(), sizeof(uint64_t), false));
-    RawMap raw(name, sizeof(IpcHeader) + sizeof(uint64_t));
-    ASSERT_TRUE(raw.ok());
-    auto *header = static_cast<IpcHeader *>(raw.data);
-    auto *payload = reinterpret_cast<uint8_t *>(header + 1);
-
-    std::atomic<bool> stop{false};
-    struct Joiner {
-        std::atomic<bool> &stop;
-        std::thread thread;
-        ~Joiner() {
-            stop = true;
-            if (thread.joinable()) thread.join();
-        }
-    } writer{stop, std::thread([&] {
-                 while (!stop) {
-                     std::this_thread::sleep_for(std::chrono::milliseconds(30));
-                     const uint64_t stamp = monotonic_now_ns();
-                     const uint64_t seq = header->seq.load();
-                     header->seq.store(seq + 1);
-                     std::memcpy(payload, &stamp, sizeof(stamp));
-                     header->payload_size.store(sizeof(stamp));
-                     header->seq.store(seq + 2);  // wake는 그대로, FUTEX_WAKE도 없다
-                 }
-             })};
-    uint64_t seq = 0, stamp = 0, worst_after_first = 0;
-    for (int i = 0; i < 8; ++i) {
-        const bool got = subscriber.read_new(&seq, &stamp, sizeof(stamp), 3000);
-        EXPECT_TRUE(got) << i;
-        if (!got) break;
-        const uint64_t latency = monotonic_now_ns() - stamp;
-        EXPECT_LT(latency, 300'000'000ULL) << "frame " << i << " waited past the 100 ms cap";
-        if (i >= 2) worst_after_first = std::max(worst_after_first, latency);
-    }
-    EXPECT_LT(worst_after_first, 20'000'000ULL) << "after the first timeout the reader polls";
-
-    // 깨우는 발행자로 바뀌면(새 빌드로 다시 뜸) 폴링을 그만두고 futex 대기로 돌아간다.
-    stop = true;
-    writer.thread.join();
-    subscriber.read_new(&seq, &stamp, sizeof(stamp), 0);  // 멈추기 전에 쓴 값은 버린다
-    testing::internal::CaptureStderr();
-    std::thread waker([&] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
-        const uint64_t v = 7;
-        publisher.publish(&v, sizeof(v));
-    });
-    EXPECT_TRUE(subscriber.read_new(&seq, &stamp, sizeof(stamp), 3000));
-    waker.join();
-    EXPECT_EQ(stamp, 7u);
-    // 다음 대기가 깨움 단어가 움직인 것을 보고 futex로 돌아간다.
-    EXPECT_FALSE(subscriber.read_new(&seq, &stamp, sizeof(stamp), 20));
-    const std::string log = testing::internal::GetCapturedStderr();
-#if defined(__linux__)
-    EXPECT_NE(log.find("producer wakes again"), std::string::npos) << log;
-#endif
-}
-
-// 깨우지 않는 예전 빌드의 생산자(write_seq만 올린다)라도 pop_wait는 상한 안에 받고 그 뒤로는 폴링으로 바로 받는다.
-TEST(CanQueue, ProducerThatDoesNotWakeFallsBackToPolling) {
-    const std::string name = "/ep_canq_old_" + std::to_string(getpid());
-    struct Unlink {
-        const std::string &name;
-        ~Unlink() { shm_unlink(name.c_str()); }
-    } cleanup{name};
-    CanQueue owner, consumer;
-    ASSERT_TRUE(owner.open(name.c_str(), 4, true));
-    owner.reset();
-    ASSERT_TRUE(consumer.open(name.c_str(), 4, false));
-    RawMap raw(name, sizeof(CanQueueHeader) + 4 * sizeof(CanBatch));
-    ASSERT_TRUE(raw.ok());
-    auto *header = static_cast<CanQueueHeader *>(raw.data);
-    auto *slots = reinterpret_cast<CanBatch *>(header + 1);
-
-    constexpr int kBatches = 8;
-    std::thread writer([&] {
-        for (int i = 0; i < kBatches; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(30));
-            const uint64_t w = header->write_seq.load();
-            slots[w % 4].timestamp_ns = monotonic_now_ns();
-            slots[w % 4].valid = 1;
-            slots[w % 4].count = 0;
-            header->write_seq.store(w + 1);  // wake는 그대로
-        }
-    });
-    const std::unique_ptr<CanBatch> got(new CanBatch);
-    uint64_t worst_after_first = 0;
-    for (int i = 0; i < kBatches; ++i) {
-        const bool popped = consumer.pop_wait(got.get(), 3'000'000'000ULL);
-        EXPECT_TRUE(popped) << i;
-        if (!popped) break;
-        const uint64_t latency = monotonic_now_ns() - got->timestamp_ns;
-        EXPECT_LT(latency, 300'000'000ULL) << "batch " << i << " waited past the 100 ms cap";
-        if (i >= 2) worst_after_first = std::max(worst_after_first, latency);
-    }
-    writer.join();
-    EXPECT_LT(worst_after_first, 20'000'000ULL) << "after the first timeout the consumer polls";
-}
-
 // 생길 수 없는 인덱스(읽기 > 쓰기, 칸 수보다 큰 차이)를 본 pop은 큐를 비워 생산자가 다시 넣을 수 있게 한다. 그대로 두면
 // push가 계속 실패하고 pop_wait는 잠들지 못한다.
 TEST(CanQueue, PopClearsImpossibleIndices) {
@@ -244,9 +138,9 @@ TEST(CanQueue, PopClearsImpossibleIndices) {
 
     header->read_seq.store(7);
     header->write_seq.store(3);
-    EXPECT_FALSE(producer.push(batch_for(1))) << "an impossible queue looks full to the producer";
+    EXPECT_FALSE(producer.push(batch_for(1))) << "있을 수 없는 큐는 생산자에게 가득 찬 것으로 보인다";
     EXPECT_FALSE(consumer.pop(got.get()));
-    ASSERT_TRUE(producer.push(batch_for(2))) << "pop cleared the queue";
+    ASSERT_TRUE(producer.push(batch_for(2))) << "pop이 큐를 비웠다";
     ASSERT_TRUE(consumer.pop(got.get()));
     EXPECT_EQ(got->frames[0].address, 2u);
 
@@ -390,6 +284,122 @@ TEST(Subscription, StaleHeaderIsNotAttached) {
     ASSERT_TRUE(subscription.attach(name.c_str())) << "초기화된 채널에 붙기";
     ASSERT_TRUE(subscription.poll()) << "새 스냅샷";
     ASSERT_EQ(subscription.latest().value, 9u);
+}
+
+// 프레임 링: 슬롯의 seqlock과 frame_id로 덮어쓰인 슬롯을 거른다. 하드웨어 대신 힙 버퍼를 슬롯으로 붙인다.
+TEST(FrameRing, CopiesOnlyTheAskedFrameAndSeesOverwrites) {
+    const std::string name = "/ep_ring_" + std::to_string(getpid());
+    struct Unlink {
+        const std::string &name;
+        ~Unlink() { shm_unlink(name.c_str()); }
+    } cleanup{name};
+    constexpr unsigned kW = 16, kH = 8, kSlots = 2;
+    std::vector<std::vector<uint8_t>> slots(kSlots, std::vector<uint8_t>(kW * kH * 3 / 2));
+    FrameRing producer, consumer;
+    ASSERT_TRUE(producer.open(true, kW, kH, kSlots, name.c_str()));
+    ASSERT_TRUE(consumer.open(false, kW, kH, kSlots, name.c_str()));
+    ASSERT_EQ(consumer.frame_bytes(), slots[0].size());
+    for (unsigned i = 0; i < kSlots; ++i) {
+        producer.attach_slot(i, slots[i].data());
+        consumer.attach_slot(i, slots[i].data());
+    }
+    std::vector<uint8_t> out(slots[0].size());
+    EXPECT_FALSE(consumer.copy_slot(0, 0, out.data(), out.size())) << "아직 쓰지 않은 슬롯";
+
+    producer.begin_write(1);
+    std::fill(slots[1].begin(), slots[1].end(), 7);
+    producer.end_write(1, 7);
+    ASSERT_TRUE(consumer.copy_slot(1, 7, out.data(), out.size()));
+    EXPECT_EQ(out, slots[1]);
+    EXPECT_FALSE(consumer.copy_slot(1, 6, out.data(), out.size())) << "다른 프레임이 들어 있는 슬롯";
+    EXPECT_FALSE(consumer.copy_slot(1, 7, out.data(), out.size() - 1)) << "크기가 다른 버퍼";
+
+    // 하드웨어가 직접 읽을 때: 읽는 동안 덮어쓰였으면 read_still_valid가 거짓이다
+    uint64_t seq = 0;
+    ASSERT_TRUE(consumer.read_begin(1, 7, &seq));
+    producer.begin_write(1);
+    EXPECT_FALSE(consumer.read_begin(1, 7, &seq)) << "쓰는 중인 슬롯은 읽기를 시작하지 않는다";
+    producer.end_write(1, 9);
+    EXPECT_FALSE(consumer.read_still_valid(1, 7, seq)) << "읽는 사이 다음 프레임이 들어왔다";
+    EXPECT_FALSE(consumer.copy_slot(1, 7, out.data(), out.size()));
+}
+
+// 동시성: 생산자가 슬롯을 계속 덮어쓰는 동안 소비자가 복사한 프레임은 언제나 한 프레임 전체다(찢어진 복사가 없다)
+TEST(FrameRing, ConcurrentCopiesAreNeverTorn) {
+    const std::string name = "/ep_ring_race_" + std::to_string(getpid());
+    struct Unlink {
+        const std::string &name;
+        ~Unlink() { shm_unlink(name.c_str()); }
+    } cleanup{name};
+    constexpr unsigned kW = 64, kH = 32;
+    std::vector<uint8_t> slot(kW * kH * 3 / 2);
+    FrameRing producer, consumer;
+    ASSERT_TRUE(producer.open(true, kW, kH, 1, name.c_str()));
+    ASSERT_TRUE(consumer.open(false, kW, kH, 1, name.c_str()));
+    producer.attach_slot(0, slot.data());
+    consumer.attach_slot(0, slot.data());
+    std::atomic<uint64_t> latest{0};
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        for (uint64_t id = 1; !stop; ++id) {
+            producer.begin_write(0);
+            for (uint8_t &b : slot) {
+                // 쓰는 중에 소비자가 읽을 수 있게 한 바이트씩 원자적으로 쓴다(데이터 경합은 seqlock이 거른다)
+                reinterpret_cast<std::atomic<uint8_t> &>(b).store(static_cast<uint8_t>(id), std::memory_order_relaxed);
+            }
+            producer.end_write(0, id);
+            latest.store(id, std::memory_order_release);
+            // 카메라처럼 프레임 사이에 틈을 둔다(실제로는 50 ms). 틈이 없으면 계측 빌드(ASan)처럼 느린 곳에서는 모든
+            // 복사가 다음 쓰기와 겹쳐 성공한 복사가 하나도 없었다.
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    });
+    std::vector<uint8_t> out(slot.size());
+    unsigned copies = 0, torn = 0;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+    while (std::chrono::steady_clock::now() < until) {
+        const uint64_t id = latest.load(std::memory_order_acquire);
+        if (id == 0 || !consumer.copy_slot(0, id, out.data(), out.size())) continue;
+        ++copies;
+        if (std::any_of(out.begin(), out.end(), [&](uint8_t b) { return b != static_cast<uint8_t>(id); })) ++torn;
+    }
+    stop = true;
+    writer.join();
+    EXPECT_GT(copies, 0u);
+    EXPECT_EQ(torn, 0u);
+}
+
+// LatestChannel의 seqlock: 발행 도중 읽으면 실패하고, 읽은 스냅샷은 늘 한 번의 발행 그대로다
+TEST(LatestChannel, ConcurrentReadsAreNeverTorn) {
+    const std::string name = "/ep_latest_race_" + std::to_string(getpid());
+    struct Unlink {
+        const std::string &name;
+        ~Unlink() { shm_unlink(name.c_str()); }
+    } cleanup{name};
+    constexpr size_t kBytes = 4096;
+    LatestChannel producer, consumer;
+    ASSERT_TRUE(producer.open(name.c_str(), kBytes, true));
+    ASSERT_TRUE(consumer.open(name.c_str(), kBytes, false));
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        std::vector<uint8_t> payload(kBytes);
+        for (uint32_t n = 1; !stop; ++n) {
+            std::fill(payload.begin(), payload.end(), static_cast<uint8_t>(n));
+            producer.publish(payload.data(), payload.size());
+        }
+    });
+    std::vector<uint8_t> out(kBytes);
+    unsigned reads = 0, torn = 0;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+    while (std::chrono::steady_clock::now() < until) {
+        if (!consumer.read(out.data(), out.size())) continue;
+        ++reads;
+        if (std::any_of(out.begin(), out.end(), [&](uint8_t b) { return b != out[0]; })) ++torn;
+    }
+    stop = true;
+    writer.join();
+    EXPECT_GT(reads, 0u);
+    EXPECT_EQ(torn, 0u);
 }
 
 }  // namespace

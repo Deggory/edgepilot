@@ -43,8 +43,6 @@ bool poll_until_done(LateralNnSelector &selector, Clock::time_point *now,
     return false;
 }
 
-}  // namespace
-
 TEST(LateralNnPath, NameRule) {
     EXPECT_TRUE(valid_lateral_nn_name("k7_hev_v3"));
     EXPECT_TRUE(valid_lateral_nn_name("Car-2.1"));
@@ -127,3 +125,5 @@ TEST(LateralNnSelector, NoSelectionMeansNoModel) {
     EXPECT_FALSE(selector.last_error().empty());
     EXPECT_NE(read_text_file(dir.root + "/status.json").find(R"("loaded": "")"), std::string::npos);
 }
+
+}  // namespace

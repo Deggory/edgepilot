@@ -7,12 +7,15 @@
 //            보정을 돌리지 않는다).
 //   --leads  프레임마다 "번호 시각(s) 유효 확률 x y roll pitch yaw 카메라높이 오프셋"(녹화 ModelState에서).
 //            없으면 앞차를 따라가지 않는다.
-// 출력: "window <끝 프레임> <yaw°> <pitch°> <회전°> <점> <맞는 점> <추정 yaw°> <추정 pitch°> <블록>",
-//       "lead <프레임> <확대율 1/s> <맞는 점> <점> <x m>" 줄들과 "summary ..." 한 줄.
+// 출력: "window <끝 frame_id> <yaw°> <pitch°> <회전°> <점> <맞는 점> <추정 yaw°> <추정 pitch°> <블록>",
+//       "lead <프레임 번호> <확대율 1/s> <맞는 점> <점> <x m>" 줄들과 "summary ..." 한 줄. 프레임 번호는
+//       frames.bin 순서이고, 추적기에는 modeld처럼 녹화된 카메라 frame_id와 촬영 시각을 준다(녹화에서 빠진
+//       프레임 자리에서는 광류가 이어지지 않는다).
 #include "common/app_config.h"
 #include "maixcam2/maix_cmm.h"
+#include "maixcam2/maix_ive_flow.h"
 #include "maixcam2/maix_vdec.h"
-#include "model/flow_worker.h"
+#include "model/flow_tracker.h"
 #include "recording/recording_format.h"
 #include "recording/replay_route.h"
 
@@ -20,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -31,37 +35,41 @@ constexpr double kDeg = 57.29577951308232;
 }  // namespace
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
+    const auto usage = [&] {
         std::fprintf(stderr, "usage: %s <segment_dir> [--open frames.txt] [--leads leads.txt]\n", argv[0]);
         return 2;
-    }
+    };
+    if (argc < 2) return usage();
     const std::string seg = argv[1];
     std::set<long> open_frames;
     bool all_open = true;
     std::map<long, std::pair<double, LeadFlowInput>> leads;
-    for (int i = 2; i + 1 < argc; i += 2) {
-        if (std::string(argv[i]) == "--open") {
+    // 모르는 옵션, 값이 없는 옵션, 읽지 못하는 파일은 오류다. 예전에는 말없이 건너뛰어 모든 프레임을 곧은 길로 봤다.
+    for (int i = 2; i < argc; i += 2) {
+        const std::string option = argv[i];
+        if (i + 1 >= argc || (option != "--open" && option != "--leads")) return usage();
+        FILE *f = std::fopen(argv[i + 1], "r");
+        if (!f) {
+            std::fprintf(stderr, "cannot read %s\n", argv[i + 1]);
+            return 1;
+        }
+        if (option == "--open") {
             all_open = false;
-            if (FILE *f = std::fopen(argv[i + 1], "r")) {
-                long v;
-                while (std::fscanf(f, "%ld", &v) == 1) open_frames.insert(v);
-                std::fclose(f);
-            }
-        } else if (std::string(argv[i]) == "--leads") {
-            if (FILE *f = std::fopen(argv[i + 1], "r")) {
-                long frame;
-                double t;
-                int valid;
-                LeadFlowInput in;
-                while (std::fscanf(f, "%ld %lf %d %f %f %f %f %f %f %f %f", &frame, &t, &valid, &in.probability, &in.x,
-                                   &in.y, &in.rpy[0], &in.rpy[1], &in.rpy[2], &in.camera_height_m,
-                                   &in.camera_offset_m) == 11) {
-                    in.valid = valid != 0;
-                    leads[frame] = {t, in};
-                }
-                std::fclose(f);
+            long v;
+            while (std::fscanf(f, "%ld", &v) == 1) open_frames.insert(v);
+        } else {
+            long frame;
+            double t;
+            int valid;
+            LeadFlowInput in;
+            while (std::fscanf(f, "%ld %lf %d %f %f %f %f %f %f %f %f", &frame, &t, &valid, &in.probability, &in.x,
+                               &in.y, &in.rpy[0], &in.rpy[1], &in.rpy[2], &in.camera_height_m,
+                               &in.camera_offset_m) == 11) {
+                in.valid = valid != 0;
+                leads[frame] = {t, in};
             }
         }
+        std::fclose(f);
     }
     FrameIndex index;
     if (!read_frame_index(seg, &index)) {
@@ -81,7 +89,7 @@ int main(int argc, char **argv) {
     VideoDecoder decoder(w, h);  // AX_SYS_Init
     const AppConfig config = AppConfig::from_env_defaults();
     const FlowIntrinsics k{config.input_warp_fx, config.input_warp_fy, config.input_warp_cx, config.input_warp_cy};
-    FlowTracker tracker(k, w, h);
+    FlowTracker tracker(k, w, h, std::make_unique<IveFlow>(w, h));
     // 원본 단은 복사하지 않으므로(LK가 이전 프레임을 그대로 읽는다) 링처럼 버퍼 둘을 번갈아 쓴다. NV12로 잡고
     // UV는 회색으로 둔다(VPP가 NV12를 읽는다).
     CmmBlock slots[2];
@@ -103,16 +111,9 @@ int main(int argc, char **argv) {
         while (!have) {
             if (sent < count && sent < got + 24) {
                 const FrameIndexRecord &r = recs[sent];
-                const bool key = (r.flags & 1U) != 0;
-                const uint64_t begin = key ? (sent == 0 ? 0 : r.file_offset) : r.file_offset;
-                const uint64_t prefix = key && sent != 0 ? prefix_bytes : 0;
-                packet.resize(prefix + (r.file_offset + r.packet_size - begin));
-                bool ok = true;
-                if (prefix)
-                    ok = std::fseek(video, 0, SEEK_SET) == 0 && std::fread(packet.data(), 1, prefix, video) == prefix;
-                ok = ok && std::fseek(video, static_cast<long>(begin), SEEK_SET) == 0 &&
-                     std::fread(packet.data() + prefix, 1, packet.size() - prefix, video) == packet.size() - prefix;
-                if (!ok || !decoder.send(packet.data(), packet.size(), r.capture_timestamp_ns, 200)) {
+                if (!read_h264_frame(video, prefix_bytes, r.file_offset, r.packet_size, (r.flags & 1U) != 0, sent == 0,
+                                     &packet) ||
+                    !decoder.send(packet.data(), packet.size(), r.capture_timestamp_ns, 200)) {
                     std::fprintf(stderr, "feeding frame %zu failed\n", sent);
                     return 1;
                 }
@@ -124,8 +125,9 @@ int main(int argc, char **argv) {
                 return 1;
             }
         }
-        const long frame = static_cast<long>(got++);
-        FlowGateInput gate;  // 녹화의 ControlState 대신: 열린 프레임은 곧은 고속 주행으로 둔다
+        const FrameIndexRecord &rec = recs[got];
+        const long frame = static_cast<long>(got++);  // frames.bin 순서(--open·--leads 파일과 출력의 번호)
+        FlowGateInput gate;                           // 녹화의 ControlState 대신: 열린 프레임은 곧은 고속 주행으로 둔다
         if (all_open || open_frames.count(frame)) {
             gate.v_ego = 25.0f;
             gate.vehicle_fresh = true;
@@ -134,8 +136,10 @@ int main(int argc, char **argv) {
         job.y_phys = slots[frame % 2].phys;
         job.y_virt = slots[frame % 2].virt;
         job.stride = w;
-        job.frame_id = static_cast<uint64_t>(frame);
-        job.t_s = 0.05 * static_cast<double>(frame);
+        // modeld처럼 카메라 frame_id와 촬영 시각을 준다: 녹화에서 빠진 프레임 자리를 이어진 프레임으로 보면, 보드가
+        // 버렸을 창(이어지지 않은 LK 추적)까지 계산했다.
+        job.frame_id = rec.frame_id;
+        job.t_s = static_cast<double>(rec.capture_timestamp_ns) * 1e-9;
         job.gate = gate;
         if (const auto it = leads.find(frame); it != leads.end()) {
             job.t_s = it->second.first;

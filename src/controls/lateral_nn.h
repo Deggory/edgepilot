@@ -3,7 +3,8 @@
 
 // 학습한 조향 토크 모델(피드포워드). 학습은 별도 저장소 nnlc가 한다(docs/lateral-nn.md).
 // - 모델 파일: 형식 "edgepilot-lateral-nn" 버전 1(JSON). 입력 이름·창 정의·정규화·망 가중치·시험 벡터를 담는다.
-// - 입력은 응답 시각 t + lag 기준 궤적(원래 단위). 학습은 실제로 일어난 궤적, 운용은 목표 궤적을 넣는다.
+// - 입력은 응답 시각 t + lag 기준 궤적(원래 단위). 운용은 목표 궤적을 넣는다. 학습은 모델 파일의 training.inputs가
+//   말한다: v3은 실제로 일어난 궤적, v4는 그 틱에 컨트롤러가 만들었을 운용 입력이다.
 // - 출력은 지금 보낼 토크(제어 부호: 오른쪽이 양수, steer_max로 나눈 값)이고 output_clip 안이다.
 
 #include <algorithm>
@@ -80,8 +81,9 @@ private:
 // - la(δ), 조향각(δ): 지금부터 δ초 뒤의 목표 값. δ ≥ 0이면 호출자가 준 함수(계획 궤적)로, δ < 0이면 쌓아 둔 지난 틱의
 //   지금 값으로 채운다(막 시작해 이력이 모자라면 가장 오래된 값).
 // - jerk: 응답 시각 앞뒤 ±0.05 s 목표 la의 중앙차분(학습 쪽 series.py와 같다).
-// - v: 지금 속도(학습도 표본 시각의 속도). roll: 모든 창이 지금 값이다(미래 롤은 모른다).
-// - long: 지금 종가속(학습은 응답 시각의 값이다).
+// - v: 지금 속도(학습도 표본 시각의 속도). roll: 편경사 추정의 횡가속 / g(학습 열 roll = bank / g. paramsd 롤과
+//   부호가 반대다). 모든 창이 지금 값이다(미래 롤은 모른다).
+// - long: 지금 종가속(v3 학습은 응답 시각의 값, v4는 지금 값이다).
 class LateralNnInputs {
 public:
     void push(float la_now, float angle_now);
@@ -89,7 +91,7 @@ public:
 
     // la_at, angle_at: float(float delta_s)로 부를 수 있는 것(람다). 템플릿이라 매 틱 std::function 할당이 없다.
     template <class LaAt, class AngleAt>
-    float evaluate(const LateralNnModel &model, float speed_mps, float roll_rad, float long_accel_mps2,
+    float evaluate(const LateralNnModel &model, float speed_mps, float bank_over_g, float long_accel_mps2,
                    const LaAt &la_at, const AngleAt &angle_at);
 
     // 마지막 evaluate가 만든 입력(시험용)
@@ -108,7 +110,7 @@ private:
 };
 
 template <class LaAt, class AngleAt>
-float LateralNnInputs::evaluate(const LateralNnModel &model, float speed_mps, float roll_rad, float long_accel_mps2,
+float LateralNnInputs::evaluate(const LateralNnModel &model, float speed_mps, float bank_over_g, float long_accel_mps2,
                                 const LaAt &la_at, const AngleAt &angle_at) {
     const LateralNnSpec &s = model.spec();
     const auto la = [&](float delta) { return delta >= 0.0f ? la_at(delta) : history(la_, delta); };
@@ -122,9 +124,9 @@ float LateralNnInputs::evaluate(const LateralNnModel &model, float speed_mps, fl
     put(speed_mps);
     put(la(t));
     put((la(t + 0.05f) - la(t - 0.05f)) / 0.1f);
-    put(roll_rad);
+    put(bank_over_g);
     for (double o : s.la_offsets) put(la(t + static_cast<float>(o)));
-    for (size_t i = 0; i < s.roll_offsets.size(); ++i) put(roll_rad);
+    for (size_t i = 0; i < s.roll_offsets.size(); ++i) put(bank_over_g);
     for (LateralNnSpec::Extra e : s.extra) put(e == LateralNnSpec::Extra::Angle ? angle(t) : long_accel_mps2);
     for (double o : s.angle_offsets) put(angle(t + static_cast<float>(o)));
     input_count_ = std::min(n, kLateralNnMaxWidth);

@@ -12,16 +12,15 @@ constexpr float kReachedRad = 1e-6f;
 
 }  // namespace
 
+// status 2는 kFlowMinBlocks 이상의 블록 중앙값 평균이다(유한한 값만 블록이 된다).
 bool CalibrationSourceSelector::flow_usable(const FlowCalibrationState &flow, float max_spread) {
     const float rpy[3] = {0.0f, flow.pitch, flow.yaw};
-    return flow.status == 2 && flow.estimate_blocks >= static_cast<uint32_t>(kFlowMinBlocks) &&
-           std::isfinite(flow.pitch) && std::isfinite(flow.yaw) && flow.sd_pitch <= max_spread &&
-           flow.sd_yaw <= max_spread && OnlineCalibrator::rpy_within_limits(rpy);
+    return flow.status == 2 && flow.sd_pitch <= max_spread && flow.sd_yaw <= max_spread &&
+           OnlineCalibrator::rpy_within_limits(rpy);
 }
 
 void CalibrationSourceSelector::update(const float pose_rpy[3], const FlowCalibrationState &flow, bool requested_flow,
                                        bool engaged, float dt_s) {
-    requested_ = requested_flow;
     if (!initialized_ || (requested_flow != active_ && !engaged)) active_ = requested_flow;
     // 쓰는 중이면 느슨한 문턱으로 계속 쓰고, 아니면 엄한 문턱을 넘고 해제 상태(또는 시작)일 때만 쓰기 시작한다
     const bool usable = flow_applied_ ? flow_usable(flow, kMaxFlowSpreadStayRad) : flow_usable(flow);

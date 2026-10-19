@@ -213,7 +213,9 @@ renders.
 - **Checking.** `tools/docs/render_mermaid.py` draws every diagram in the given
   files with mermaid-cli in Docker, and reports any that fail or come out wider
   than the column. It leaves a PNG of each in `build-docs/`; look at them, since
-  a diagram can render and still be tangled.
+  a diagram can render and still be tangled. The image version is pinned
+  (12.0.1, what the diagrams were checked with), so a new Mermaid release does
+  not change the verdicts; when you raise it, draw every diagram again.
 
 ## Versions
 

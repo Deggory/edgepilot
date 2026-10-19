@@ -64,12 +64,9 @@ struct HyundaiLkasCommand {
     bool cut_steer_temp = false;
     bool sys_warning = false;
     int sys_state = 0;
-    bool left_lane = false;
-    bool right_lane = false;
     int left_lane_depart = 0;
     int right_lane_depart = 0;
     int lkas_msg_count = 0;
-    bool ldws_fix = false;
 };
 
 HyundaiLkas11Values decode_lkas11(const std::array<uint8_t, 8> &data);

@@ -147,7 +147,7 @@ bool gauss_newton(double p[5], const std::vector<double> &x1, const std::vector<
 FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy, const float *end_xy, int n) {
     FlowSolution out;
     out.points = n;
-    if (n < kMinPoints || k.fx <= 0.0 || k.fy <= 0.0) return out;
+    if (n < kMinPoints) return out;
     {
         std::vector<float> moved(static_cast<size_t>(n));
         for (int i = 0; i < n; ++i)
@@ -200,7 +200,7 @@ FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy
 int pick_flow_corners(const int16_t *response, int width, int height, int scale, int row_offset, double quality,
                       int max_points, float *xy) {
     constexpr int kCell = 8, kBorder = 3, kMinDist2 = 25;
-    if (!response || width < kCell || height < kCell || max_points <= 0) return 0;
+    if (width < kCell || height < kCell || max_points <= 0) return 0;
     const int gw = width / kCell, gh = height / kCell;
     std::vector<int> best_v(static_cast<size_t>(gw) * gh, -1), best_i(static_cast<size_t>(gw) * gh, -1);
     int vmax = 0;
@@ -288,14 +288,13 @@ FlowBlocks FlowCalibrator::blocks() const {
 }
 
 void FlowCalibrator::add(const FlowSolution &window, int tracks, uint64_t end_frame_id) {
-    if (!window.valid) return;
     state_.window_frame_id = end_frame_id;
     state_.window_yaw = static_cast<float>(window.yaw);
     state_.window_pitch = static_cast<float>(window.pitch);
     state_.window_rotation = static_cast<float>(window.rotation);
     state_.window_parallax = static_cast<float>(window.parallax);
-    state_.window_tracks = static_cast<uint32_t>(std::max(tracks, 0));
-    state_.window_inliers = static_cast<uint32_t>(std::max(window.inliers, 0));
+    state_.window_tracks = static_cast<uint32_t>(tracks);
+    state_.window_inliers = static_cast<uint32_t>(window.inliers);
     ++state_.windows;
     block_yaw_.push_back(state_.window_yaw);
     block_pitch_.push_back(state_.window_pitch);

@@ -9,8 +9,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
-#include <vector>
 
 namespace {
 
@@ -49,7 +47,6 @@ double path_heading_at(const std::array<std::array<double, 3>, kTrajectorySize> 
 
     const double dx = path[next][0] - path[previous][0];
     const double dy = path[next][1] - path[previous][1];
-    if (!std::isfinite(dx) || !std::isfinite(dy)) return 0.0;
     const double safe_dx = std::fabs(dx) < 1e-3 ? std::copysign(1e-3, dx == 0.0 ? 1.0 : dx) : dx;
     return std::atan2(dy, safe_dx);
 }
@@ -85,17 +82,21 @@ public:
     // v_ego와 곡률은 직전 프레임 뒤 자차 움직임이다.
     void parse(const ModelState &model, double v_ego, double curvature) {
         const double t_s = static_cast<double>(model.capture_timestamp_ns) * 1e-9;
-        std::array<float, kTrajectorySize> left_x{}, right_x{}, left{}, right{};
+        // 차선 점의 앞 거리는 X_IDXS 격자이고, 그 점에 plan이 닿는 시각(lane_t)은 plan에서 나온다
+        std::array<float, kTrajectorySize> plan_x{}, lane_t{}, lane_x{}, left{}, right{};
         for (int i = 0; i < kTrajectorySize; ++i) {
-            lane_t_[i] = model.lane_t[i];
-            lane_x_[i] = model.lanes[1][i].x;
-            left_x[i] = model.lanes[1][i].x;
-            right_x[i] = model.lanes[2][i].x;
+            plan_x[i] = model.plan[i].x;
+            lane_x[i] = model_x_idx(i);
             left[i] = model.lanes[1][i].y;
             right[i] = model.lanes[2][i].y;
         }
-        left_filter_.update(t_s, left_x.data(), left.data(), v_ego, curvature, left.data());
-        right_filter_.update(t_s, right_x.data(), right.data(), v_ego, curvature, right.data());
+        compute_lane_t(plan_x.data(), lane_t.data());
+        for (int i = 0; i < kTrajectorySize; ++i) {
+            lane_t_[i] = lane_t[i];
+            lane_x_[i] = lane_x[i];
+        }
+        left_filter_.update(t_s, lane_x.data(), left.data(), v_ego, curvature, left.data());
+        right_filter_.update(t_s, lane_x.data(), right.data(), v_ego, curvature, right.data());
         for (int i = 0; i < kTrajectorySize; ++i) {
             left_y_[i] = left[i];
             right_y_[i] = right[i];
@@ -194,7 +195,8 @@ public:
 
     // 랜리스 전환 판정값. 블렌드와 같은 유효 확률을 써서 두 판정이 어긋나지 않게 한다.
     double mean_effective_probability() const { return (left_prob_eff_ + right_prob_eff_) * 0.5; }
-    // 로그/분석용 관측값 노출. left_prob()/right_prob()는 보정 전 모델 원값이다.
+    // 로그/분석용 관측값 노출. left_prob()/right_prob()는 폭·std 보정 전의 값이다: 모델 확률에 차선 변경·회전
+    // 페이드(scale_near_probability)를 곱한 것.
     double near_left_y() const { return left_y_[0]; }
     double near_right_y() const { return right_y_[0]; }
     double lane_width() const { return lane_width_; }
@@ -301,15 +303,13 @@ struct LateralPlanner::Impl {
     LateralTarget update(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
                          bool lat_active, bool steering_pressed) {
         LateralTarget target;
-        if (!model.valid) return target;
-
         lane_planner.parse(model, v_ego, measured_curvature);
         update_desire(model, vehicle, v_ego, lat_active, steering_pressed);
         std::array<std::array<double, 3>, kTrajectorySize> path{};
         std::array<double, kTrajectorySize> path_t{};
         for (int i = 0; i < kTrajectorySize; ++i) {
             path[i] = {model.plan[i].x, model.plan[i].y, model.plan[i].z};
-            path_t[i] = model.model_t[i];
+            path_t[i] = model_t_idx(i);
         }
 
         lane_planner.update_probabilities(v_ego);
@@ -340,8 +340,6 @@ struct LateralPlanner::Impl {
         fill_lane_observations(&target);
         target.lane_d_prob = static_cast<float>(use_model_path ? 0.0 : lane_planner.d_prob());
         target.target_y_m = static_cast<float>(references.y[1]);
-        target.heading_rad = static_cast<float>(mpc.nodes()[0].psi);
-        target.curvature = static_cast<float>(mpc.nodes()[0].curvature);
         fill_desire(&target);
         for (int i = 0; i < kLateralControlN; ++i) {
             target.psis[i] = static_cast<float>(mpc.nodes()[i].psi);
@@ -356,8 +354,6 @@ struct LateralPlanner::Impl {
                 target.psis[i] = mix(target.psis[i], model_target.psis[i]);
                 target.curvatures[i] = mix(target.curvatures[i], model_target.curvatures[i]);
             }
-            target.heading_rad = mix(target.heading_rad, model_target.heading_rad);
-            target.curvature = mix(target.curvature, model_target.curvature);
             target.target_y_m = mix(target.target_y_m, model_target.target_y_m);
         }
         return target;
@@ -382,20 +378,19 @@ struct LateralPlanner::Impl {
     // 그쪽으로 옮긴다.
     bool update_path_source() {
         const double lane_probability = lane_planner.mean_effective_probability();
-        bool use_model_path = false;
-        const bool lane_change_off = desire_helper.lane_change_state() == LaneChangeState::Off;
-        if (lane_probability < 0.3 && lane_change_off) {
-            use_model_path = true;
+        // 차선을 실제로 빼는 변경 단계(Starting, Finishing)에서는 모델 경로로 빠지지 않는다: 그동안 차선 확률을 줄여
+        // 0.3 밑으로 떨어지기 때문이다. 깜빡이만 켠 단계(PreLaneChange)는 차선을 빼지 않으므로 평소 규칙을 따른다
+        // (예전에는 이 단계에서도 대체를 꺼, 차선이 약한 출구 분기에서 깜빡이를 켜면 약한 차선이 경로에 섞였다).
+        // 복귀 문턱을 openpilot의 0.5에서 0.4로 내렸다. 교차로 후 차선 재획득이 빨라지고, 진입(0.3)과의 밴드가 남아
+        // 채터링은 없다.
+        const LaneChangeState lane_change = desire_helper.lane_change_state();
+        if (lane_change == LaneChangeState::Starting || lane_change == LaneChangeState::Finishing)
+            laneless_buffer = false;
+        else if (lane_probability < 0.3)
             laneless_buffer = true;
-            // 복귀 문턱을 openpilot의 0.5에서 0.4로 내렸다. 교차로 후 차선
-            // 재획득이 빨라지고, 진입(0.3)과의 밴드가 남아 채터링은 없다.
-        } else if (lane_probability > 0.4 && laneless_buffer && lane_change_off) {
+        else if (lane_probability > 0.4)
             laneless_buffer = false;
-        } else if (laneless_buffer && lane_change_off) {
-            use_model_path = true;
-        } else if (!lane_change_off) {
-            laneless_buffer = false;
-        }
+        const bool use_model_path = laneless_buffer;
         // 모델 경로 구간(교차로처럼 차선이 안 보일 때)은 laneless 모드와 같은 openpilot
         // 메인 계산(plan_yaw_target)으로 목표를 낸다. 예전에는 모델 경로 위치를 Lane MPC로 따라갔는데,
         // 경로를 "지금 속도 x 시간" 거리에서 읽고 MPC가 곡률 변화를 눌러 25 km/h 아래에서 laneless보다
@@ -468,12 +463,11 @@ struct LateralPlanner::Impl {
         const double speed = std::max<double>(v_ego, kMinSpeed);
         std::array<double, kTrajectorySize> t{}, yaw{}, yaw_rate{}, y{};
         for (int i = 0; i < kTrajectorySize; ++i) {
-            t[i] = model.model_t[i];
+            t[i] = model_t_idx(i);  // 고정된 증가 시각 격자
             yaw[i] = model.plan_yaw[i];
             yaw_rate[i] = model.plan_yaw_rate[i];
             y[i] = model.plan[i].y;
         }
-        make_monotonic(t.data(), t.size());
         LateralTarget target;
         for (int i = 0; i < kLateralControlN; ++i) {
             const double ti = model_t_idx_double(i);
@@ -487,8 +481,6 @@ struct LateralPlanner::Impl {
         fill_lane_observations(&target);
         target.lane_d_prob = 0.0f;
         target.target_y_m = static_cast<float>(interp(model_t_idx_double(1), t.data(), y.data(), t.size()));
-        target.heading_rad = target.psis[0];
-        target.curvature = target.curvatures[0];
         fill_desire(&target);
         return target;
     }

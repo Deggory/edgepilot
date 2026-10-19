@@ -76,11 +76,12 @@ TEST(HudState, AlertCardPriority) {
     idle.lane_change = 1;
     EXPECT_TRUE(hud_select_alert(idle, true).empty()) << "조향 쉼과 차선 변경 대기는 활성일 때만";
     idle.soft_disabling = true;
-    EXPECT_EQ(hud_select_alert(idle, true).detail, "Disengaging") << "모르는 사유";
+    std::snprintf(idle.active_block, sizeof(idle.active_block), "calibration_invalid");
+    EXPECT_EQ(hud_select_alert(idle, true).detail, "CALIB INVALID") << "해제 예고 사유";
     idle.soft_disabling = false;
     idle.controller_active = true;
     idle.steer_paused_by_driver = true;
-    EXPECT_EQ(hud_select_alert(idle, true).detail, "Resumes on the planned curve or below 15\xb0");
+    EXPECT_EQ(hud_select_alert(idle, true).detail, "Resumes on the plan or below 15\xb0");
 }
 
 TEST(HudState, ControlStateMapping) {
@@ -111,11 +112,9 @@ TEST(HudState, ControlStateMapping) {
     ASSERT_EQ(hud.apply_torque, 0);
     ASSERT_EQ(hud.departure_alert_type, DepartureAlertType::none);
     ASSERT_STREQ(hud.active_block, "control_stale");
-    // engage 차단 라벨은 아는 사유에만 있다
-    ASSERT_NE(engage_block_label("panda_not_ready"), nullptr);
+    // 결합 차단 라벨: 표에 없는 이름(다른 빌드의 controlsd)은 그대로
     ASSERT_STREQ(engage_block_label("panda_not_ready"), "PANDA NOT READY");
-    ASSERT_EQ(engage_block_label("no_such_reason"), nullptr);
-    ASSERT_EQ(engage_block_label(""), nullptr);
+    ASSERT_STREQ(engage_block_label("no_such_reason"), "no_such_reason");
     for (const BlockReasonRow &row : kBlockReasons) {
         if (row.reason == BlockReason::None) continue;
         const char *label = engage_block_label(row.name);
@@ -193,7 +192,6 @@ TEST(HudState, LearnerAndLaneMapping) {
 
     ParsedModelOutput output;
     output.valid = true;
-    output.lanes[1].valid = output.lanes[2].valid = true;
     output.lanes[1].probability = output.lanes[2].probability = 0.9f;
     output.lanes[1].points[0].y = -1.70f;  // 왼쪽 선
     output.lanes[2].points[0].y = 1.86f;   // 오른쪽 선

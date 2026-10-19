@@ -36,12 +36,16 @@ def resample(t, values, grid):
 
 
 def align(t_ref, v_ref, t_new, v_new):
-    """t_new에 더하면 속도 곡선이 기준과 맞는 시간 차(s)."""
+    """t_new에 더하면 속도 곡선이 기준과 맞는 시간 차(s)와 그때의 평균 |속도 차|. 짧은 쪽 곡선을 긴 쪽 위에서
+    밀어 본다: 리허설이 원본보다 길면(앞뒤에 더 녹화된 구간) 예전에는 탐색 범위가 비어 시간 차 0을 말없이 냈다."""
+    if t_new[-1] - t_new[0] > t_ref[-1] - t_ref[0]:
+        lag, err = align(t_new, v_new, t_ref, v_ref)
+        return -lag, err
     dt = 0.05
     grid_new = np.arange(t_new[0], t_new[-1], dt)
     sn = resample(t_new, v_new, grid_new)
     best = (np.inf, 0.0)
-    lags = np.arange(t_ref[0] - grid_new[0], t_ref[-1] - grid_new[-1], dt)
+    lags = np.arange(t_ref[0] - grid_new[0], t_ref[-1] - grid_new[-1] + dt / 2, dt)
     for lag in lags:
         sr = resample(t_ref, v_ref, grid_new + lag)
         err = np.mean(np.abs(sr - sn))

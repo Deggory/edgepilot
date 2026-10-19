@@ -7,15 +7,20 @@
 #include "car/can_frame.h"
 #include "common/ipc_messages.h"
 #include "common/model_output.h"
+#include "common/utils_file.h"
 #include "controls/control_holds.h"
 #include "controls/controls_tick.h"
 #include "localization/lateral_lag.h"
 
 #include <gtest/gtest.h>
+#include <stdlib.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <string>
 
 namespace {
 
@@ -25,6 +30,7 @@ struct K7Inputs {
     bool door_open = false;
     float brake_stroke_mm = 0.0f;
     bool wheel_speed = true;  // WHL_SPD11을 보낼지
+    int driver_torque = 0;    // MDPS12 CR_Mdps_StrColTq
 };
 
 void add_frame(CanBatch *batch, uint32_t address, uint8_t bus, const std::array<uint8_t, 8> &data,
@@ -50,7 +56,7 @@ CanBatch k7_batch(const K7Inputs &in, uint64_t now_ns) {
     d = {};
     add_frame(&batch, kHyundaiSas11Address, kMdpsBus, d);
     d = {};
-    set_signal_le(&d, 0, 11, 1024);  // 운전자 토크 0
+    set_signal_le(&d, 0, 11, static_cast<uint32_t>(1024 + in.driver_torque));
     add_frame(&batch, kHyundaiMdps12Address, kMdpsBus, d);
     d = {};
     set_signal_le(&d, 0, 11, 1023);   // 횡가속 0
@@ -85,7 +91,6 @@ ModelState straight_model(uint64_t now_ns) {
     model.valid = 1;
     model.capture_timestamp_ns = now_ns;
     model.model_timestamp_ns = now_ns;
-    model.plan_probability = 0.9f;
     model.calibration.status = 1;
     for (int i = 0; i < kTrajectorySize; ++i) model.plan[i].x = 2.0f * static_cast<float>(i + 1);
     return model;
@@ -124,7 +129,7 @@ public:
             tick_.on_can_batch(k7_batch(in, now_ns_), now_ns_, now_s);
             if (ticks_++ % 5 == 0) tick_.on_model(straight_model(now_ns_));
             tick_.on_panda(panda_state(now_ns_, panda_allows));
-            tick_.on_localization(LocalizationRead{}, now_ns_, now_s);
+            tick_.on_localization(LocalizationRead{}, now_s);
             state = tick_.step(now_s, now_ns_);
             tick_.update_learners(now_s);
         }
@@ -187,7 +192,7 @@ TEST(ControlsTick, FailedLearnerWritesAreRetried) {
         vehicle_writes += out.vehicle_json ? 1 : 0;
         torque_writes += out.torque_cache ? 1 : 0;
     }
-    ASSERT_EQ(vehicle_writes + torque_writes, 0) << "nothing changed, nothing written";
+    ASSERT_EQ(vehicle_writes + torque_writes, 0) << "바뀐 것이 없으면 쓰지 않는다";
 
     const double failed_at = now_s;
     tick.learner_write_failed(failed_at);
@@ -200,7 +205,7 @@ TEST(ControlsTick, FailedLearnerWritesAreRetried) {
     }
     EXPECT_EQ(vehicle_writes, 1);
     EXPECT_EQ(torque_writes, 1);
-    EXPECT_LE(torque_retried_at, failed_at + 12.0 + 0.02) << "retried within 12 s";
+    EXPECT_LE(torque_retried_at, failed_at + 12.0 + 0.02) << "12 s 안에 다시 시도한다";
 }
 
 TEST(ControlsTick, EngagesOnSetAndDisengagesWhenADoorOpens) {
@@ -224,6 +229,33 @@ TEST(ControlsTick, EngagesOnSetAndDisengagesWhenADoorOpens) {
     ASSERT_EQ(state.engaged, 0) << "문 열림은 즉시 해제한다";
     ASSERT_EQ(state.active, 0);
     ASSERT_EQ(state.disengage_event_id, 1);
+}
+
+// lagd(locationd)는 controlsd의 핸들 조작·포화 판정을 hud_flags로 받는다(상류 lagd의 입력). 비트 15는 늘 켜서 옛
+// 녹화와 가린다.
+TEST(ControlsTick, ControlStateCarriesTheLagdInputs) {
+    Drive drive;
+    K7Inputs in;
+    ControlState state = drive.run(0.5, in);
+    EXPECT_TRUE(state.hud_flags & kHudFlagLagInputs);
+    EXPECT_FALSE(state.hud_flags & (kHudFlagSteeringPressed | kHudFlagLatSaturated));
+    in.driver_torque = 300;
+    state = drive.run(0.1, in);
+    EXPECT_TRUE(state.hud_flags & kHudFlagSteeringPressed) << "설정 문턱을 넘는 운전자 토크";
+    EXPECT_EQ(state.driver_torque, 300);
+    in.driver_torque = 0;
+    state = drive.run(0.1, in);
+    EXPECT_FALSE(state.hud_flags & kHudFlagSteeringPressed);
+}
+
+// 끝낼 때는 마지막 저장 뒤 바뀐 학습값만 내놓고, 그대로면 아무것도 내놓지 않는다
+TEST(ControlsTick, FinalLearnerOutputsOnlyWhatChanged) {
+    ControlsTick tick(Drive::laneless_params(), false, std::string(), std::string(), 1);
+    const LearnerOutputs first = tick.final_learner_outputs();
+    ASSERT_TRUE(first.vehicle_json.has_value()) << "시작 때 읽은 파일이 없으니 처음 것은 새 내용이다";
+    const LearnerOutputs again = tick.final_learner_outputs();
+    EXPECT_FALSE(again.vehicle_json.has_value()) << "방금 낸 것과 같다";
+    EXPECT_FALSE(again.torque_cache.has_value());
 }
 
 TEST(ControlsTick, PandaRefusalRejectsEngageAfterTheGrace) {
@@ -266,6 +298,18 @@ TEST(ControlsTick, CruiseSpeedGoesStaleAfterHalfASecond) {
 
 // locationd 상태를 읽다가 쓰기와 겹친 틱(read 거짓, state는 읽다 만 값)은 상류 SubMaster처럼 마지막으로
 // 온전히 읽은 값을 쓴다. 그 틱에 lagd 지연을 버리면 토크 요청 버퍼를 읽는 위치가 바뀌어 토크가 튄다.
+// CAN 묶음의 신선도는 꺼낸 시각으로 잰다: 그 시각보다 늦은 시각의 묶음은 버리므로, controlsd는 틱 시작 시각이
+// 아니라 꺼낸 직후의 시각을 넘긴다(틱 안에 들어온 묶음을 버리던 문제)
+TEST(ControlsTick, CanBatchFreshnessUsesThePopTime) {
+    ControlParams params;
+    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    const uint64_t stamp = 5'000'000'000ULL;
+    const CanBatch batch = k7_batch(K7Inputs{}, stamp);
+    EXPECT_FALSE(tick.on_can_batch(batch, stamp - 1'000'000ULL, 5.0)) << "꺼내기 전 시각에는 미래 묶음이다";
+    EXPECT_TRUE(tick.on_can_batch(batch, stamp + 2'000'000ULL, 5.0)) << "꺼낸 직후의 시각이면 받는다";
+    EXPECT_FALSE(tick.on_can_batch(batch, stamp + 101'000'000ULL, 5.0)) << "100 ms가 지나면 낡았다";
+}
+
 TEST(ControlsTick, TornLocalizationReadKeepsTheLastLagEstimate) {
     ControlParams params;
     params.steering.use_live_delay = true;
@@ -276,18 +320,18 @@ TEST(ControlsTick, TornLocalizationReadKeepsTheLastLagEstimate) {
     good.state.timestamp_ns = good.read_ns - 50'000'000ULL;
     good.state.lateral_delay_s = 0.3f;
     good.state.lag_status = static_cast<uint32_t>(LateralLagStatus::Estimated);
-    tick.on_localization(good, good.read_ns, 10.0);
+    tick.on_localization(good, 10.0);
     ASSERT_FLOAT_EQ(tick.controller().plan_delay_s(), 0.3f);
 
     LocalizationRead torn;
     torn.open = true;
     torn.read_ns = good.read_ns + 10'000'000ULL;
     torn.state.lateral_delay_s = 0.6f;  // 읽다 만 값
-    tick.on_localization(torn, torn.read_ns, 10.01);
+    tick.on_localization(torn, 10.01);
     ASSERT_FLOAT_EQ(tick.controller().plan_delay_s(), 0.3f) << "못 읽은 틱은 마지막 값을 쓴다";
 
     torn.read_ns = good.state.timestamp_ns + 2'100'000'000ULL;
-    tick.on_localization(torn, torn.read_ns, 12.1);
+    tick.on_localization(torn, 12.1);
     ASSERT_FLOAT_EQ(tick.controller().plan_delay_s(), params.steering.steer_actuator_delay)
         << "마지막 값도 2초가 지나면 낡았다";
 }
@@ -352,14 +396,12 @@ ModelState lane_model(uint64_t now_ns) {
     ModelState model;
     model.valid = 1;
     model.capture_timestamp_ns = model.model_timestamp_ns = now_ns;
-    model.plan_probability = 0.9f;
     model.calibration.status = 1;
     for (int i = 0; i < kTrajectorySize; ++i) {
         const float t = model_t_idx(i);
-        model.model_t[i] = model.lane_t[i] = t;
         model.plan[i] = {v * t, 0.0f, 0.0f};
-        model.lanes[1][i] = {v * t, -1.75f, 0.0f};
-        model.lanes[2][i] = {v * t, 1.75f, 0.0f};
+        model.lanes[1][i] = {-1.75f, 0.0f};
+        model.lanes[2][i] = {1.75f, 0.0f};
     }
     model.lane_probabilities[1] = model.lane_probabilities[2] = 0.99f;
     model.lane_stds[1] = model.lane_stds[2] = 0.05f;
@@ -367,7 +409,7 @@ ModelState lane_model(uint64_t now_ns) {
     return model;
 }
 
-// 웹 콘솔·SIGHUP으로 다시 읽은 파라미터는 다음 모델 프레임부터 플래너에 들어간다(apply_params → 플래너).
+// 웹 콘솔에서 바꿔 다시 읽은 파라미터는 다음 모델 프레임부터 플래너에 들어간다(apply_params → 플래너).
 TEST(ControlsTick, ReloadedParamsReachThePlanner) {
     ControlParams params;
     ControlsTick tick(params, false, std::string(), std::string(), 1);
@@ -376,12 +418,38 @@ TEST(ControlsTick, ReloadedParamsReachThePlanner) {
         tick.on_model(lane_model(now_ns));
         tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
     }
-    ASSERT_FALSE(tick.target().laneless_mode) << "settled lanes give a lane-mode plan";
+    ASSERT_FALSE(tick.target().laneless_mode) << "차선이 자리 잡으면 Lane 모드로 계획한다";
     params.steering.laneless_mode = true;
     tick.apply_params(params);
     tick.on_model(lane_model(now_ns));
     tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
-    EXPECT_TRUE(tick.target().laneless_mode) << "the first frame after the reload plans laneless";
+    EXPECT_TRUE(tick.target().laneless_mode) << "다시 읽은 뒤 첫 프레임부터 Laneless로 계획한다";
+}
+
+// 파라미터 파일은 감시자가 1초마다 보는 것으로만 다시 읽힌다: 웹 콘솔은 임시 파일 + rename으로 쓰고 알리지 않는다.
+// 1초가 되기 전에는 보지 않고, 바뀐 뒤 처음 확인에서 읽으며(빠진 키는 지금 값 그대로), 그다음 확인은 바뀐 게 없다.
+TEST(ControlsTick, ParamWatcherPicksUpAnAtomicRewriteWithinASecond) {
+    char dir_template[] = "/tmp/edgepilot_params_XXXXXX";
+    ASSERT_NE(mkdtemp(dir_template), nullptr);
+    const std::string dir = dir_template;
+    const ControlParamPaths paths{dir + "/steering.json", dir + "/adaptive_cruise.json"};
+    ASSERT_TRUE(write_file_atomic(paths.steering, read_text_file("params/steering.json")));
+    ASSERT_TRUE(write_file_atomic(paths.cruise, read_text_file("params/adaptive_cruise.json")));
+    ControlParams params;
+    std::string error;
+    ASSERT_TRUE(load_control_params(paths, &params, &error)) << error;
+    const auto start = std::chrono::steady_clock::now();
+    ControlParamsWatcher watcher(paths, start);
+
+    ASSERT_TRUE(write_file_atomic(paths.steering, "{\"torque_kp\": 1.25}\n"));
+    EXPECT_FALSE(watcher.poll(start + std::chrono::milliseconds(500), params)) << "1초가 되기 전에는 보지 않는다";
+    const auto reloaded = watcher.poll(start + std::chrono::seconds(1), params);
+    ASSERT_TRUE(reloaded) << "rename으로 바뀐 파일을 1초 확인에서 읽는다";
+    EXPECT_FLOAT_EQ(reloaded->steering.torque_kp, 1.25f);
+    EXPECT_FLOAT_EQ(reloaded->steering.steer_ratio, params.steering.steer_ratio) << "빠진 키는 지금 값 그대로";
+    EXPECT_EQ(watcher.generation(), 2U);
+    EXPECT_FALSE(watcher.poll(start + std::chrono::seconds(2), *reloaded)) << "그다음 확인은 바뀐 게 없다";
+    std::filesystem::remove_all(dir);
 }
 
 // 새 모델의 플랜은 그 모델을 받은 틱의 step이 바로 쓴다(예전 작업 스레드는 한 틱 늦어, 이 틱에는 직전

@@ -66,10 +66,7 @@ class CalibrationControl:
 
     def use_flow(self) -> bool:
         """설정 파일의 보정 출처. modeld가 다시 읽기 전(1초 안)에도 페이지가 고른 값을 보이게 파일에서 읽는다."""
-        try:
-            return bool(self.store.read_group(SOURCE_GROUP).get(SOURCE_KEY, False))
-        except Refusal:
-            return False
+        return self.store.read_group(SOURCE_GROUP)[SOURCE_KEY]
 
     def status(self) -> Dict[str, Any]:
         latest = self.model.read_payload()
@@ -84,7 +81,8 @@ class CalibrationControl:
         payload = latest[2]
         pose = unpack_fields(CALIBRATION_STATE, CALIBRATION_FIELDS, payload, MODEL_CALIBRATION_AT)
         flow = unpack_fields(FLOW_CALIBRATION_STATE, FLOW_CALIBRATION_FIELDS, payload, MODEL_FLOW_CALIBRATION_AT)
-        source = unpack_fields(CALIBRATION_SOURCE_STATE, CALIBRATION_SOURCE_FIELDS, payload, MODEL_CALIBRATION_SOURCE_AT)
+        source = unpack_fields(CALIBRATION_SOURCE_STATE, CALIBRATION_SOURCE_FIELDS, payload,
+                               MODEL_CALIBRATION_SOURCE_AT)
         result.update({
             "status": status_name(CALIBRATION_STATUS, pose["status"]),
             "valid_blocks": pose["valid_blocks"],
@@ -119,5 +117,5 @@ class CalibrationControl:
         여기서도 받지 않는다."""
         if self.engaged():
             raise Refusal("error.calibration_source_engaged")
-        self.store.update(SOURCE_GROUP, {SOURCE_KEY: bool(use_flow)}, allow_managed=True)
+        self.store.update(SOURCE_GROUP, {SOURCE_KEY: use_flow}, allow_managed=True)
         return self.status()

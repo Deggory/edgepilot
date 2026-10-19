@@ -1,9 +1,12 @@
 """MaixCAM2 녹화로 만드는 master 코어용 캘리브레이션·평가 데이터.
 
-샘플은 모두 보드에서 런타임이 코어에 넣는 것과 똑같다: 녹화된 H.264 프레임(1280x720)을 기기 워프
-(tools/model/model_warp.py, src/common/app_config.h의 MaixCAM2 내부 파라미터, 녹화에 담긴 보정)에
-통과시킨 것(녹화에 담긴 카메라 장착도 쓴다), 타워별 5프레임 이미지 이력(t-4와 t), controlsd가 보낸 desire 펄스(src/model/model_temporal.h:
-상승 에지, 100틱을 25로 max-pool), fp32 코어를 순서대로 돌려 얻은 코어 자신의 96틱 hidden-state 이력.
+샘플은 보드에서 런타임이 코어에 넣는 것을 가깝게 따른다: 녹화된 H.264 프레임(1280x720)을 기기 워프
+(tools/model/model_warp.py, src/common/app_config.h의 MaixCAM2 내부 파라미터)에 통과시킨 것, 타워별 5프레임
+이미지 이력(t-4와 t), controlsd가 보낸 desire 펄스(src/model/model_temporal.h와 같은 desire_step: 상승 에지, 회전이
+끝나면 회전 펄스 지우기, 100틱을 25로 max-pool), fp32 코어를 순서대로 돌려 얻은 코어 자신의 96틱 hidden-state 이력.
+런타임과 다른 점: 보정과 카메라 장착은 그 구간 녹화의 중앙값 하나를 쓴다(보드는 프레임마다 그때 값). 워프는 CPU
+대체 경로의 포팅이고 보드 기본은 GDC다(docs/verification.md가 둘의 차이를 잰다). H.264를 다시 풀어 얻은 프레임이라
+보드가 본 원본 프레임과도 압축만큼 다르다.
 
   make_m2_data.py calib <spec.json> <out_dir>
       Pulsar2 캘리브레이션 세트(<out_dir>/<tensor>.tar 안의 NNNN.npy, batch 축이 있는 float32).
@@ -28,11 +31,10 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
-import onnxruntime as ort
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import recording_reader as rr  # noqa: E402
-from model_warp import CAMERA_HEIGHT_M, WarpPair, maixcam2_intrinsics  # noqa: E402
+from model_warp import WarpPair, maixcam2_intrinsics  # noqa: E402
 
 # src/common/app_config.h: MaixCAM2 1920x1080 내부 파라미터를 1280x720 AI 스트림에 맞춰 스케일했다
 INTRINSICS = maixcam2_intrinsics(1280, 720)
@@ -41,7 +43,7 @@ TENSORS = ("input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic
 
 
 def recorded(route_dir: Path):
-    """ControlState(시각, desire)와 모든 ModelState의 보정, 카메라 장착(v7부터, 그 전은 기본값)."""
+    """ControlState(시각, desire)와 모든 ModelState의 보정, 카메라 장착."""
     cs_t, cs_des, m_t, rpy, mount = [], [], [], [], []
     for path in rr.route_event_files(route_dir):
         for rec in rr.iter_event_records(path):
@@ -50,15 +52,11 @@ def recorded(route_dir: Path):
                 cs_t.append(c["timestamp_ns"] * 1e-9)
                 cs_des.append(int(c["desire"]))
             elif rec.type == rr.RECORD_MODEL_STATE:
-                lay = rec.model_layout()
-                m_t.append(np.frombuffer(rec.payload, "<u8", 1, lay["capture_timestamp_ns"])[0] * 1e-9)
-                cal = np.frombuffer(rec.payload, rr.CALIBRATION_STATE, 1, lay["calibration"])[0]
+                model = rec.model_state()
+                m_t.append(model["capture_timestamp_ns"] * 1e-9)
+                cal = model["calibration"]
                 rpy.append(np.array([cal["roll"], cal["pitch"], cal["yaw"]], np.float32))
-                if "camera_offset_m" in lay:
-                    mount.append((np.frombuffer(rec.payload, "<f4", 1, lay["camera_offset_m"])[0],
-                                  np.frombuffer(rec.payload, "<f4", 1, lay["camera_height_m"])[0]))
-                else:
-                    mount.append((0.0, CAMERA_HEIGHT_M))
+                mount.append(rec.camera_mount())
     return np.array(cs_t), np.array(cs_des), np.array(m_t), np.array(rpy), np.array(mount)
 
 
@@ -84,13 +82,7 @@ def run_stream(sess, route_dir: Path, seg_dirs: list[Path]):
         road.append(med)
         wide.append(sbig)
         j = min(np.searchsorted(cs_t - t_first, t), len(cs_t) - 1)
-        cur = np.zeros(8, np.float32)
-        if cs_des[j] > 0:
-            cur[cs_des[j]] = 1.0
-        pulse = np.where(cur - prev > 0.99, cur, 0.0).astype(np.float32)
-        prev = cur
-        desire = np.roll(desire, -1, 0)
-        desire[-1] = pulse
+        desire, prev = desire_step(desire, prev, int(cs_des[j]))
         feed = {
             "input_imgs": np.concatenate([road[0], road[-1]])[None].astype(np.float32),
             "big_input_imgs": np.concatenate([wide[0], wide[-1]])[None].astype(np.float32),
@@ -104,7 +96,24 @@ def run_stream(sess, route_dir: Path, seg_dirs: list[Path]):
         feat[-1] = out[FEAT:FEAT + 512]
 
 
+def desire_step(history: np.ndarray, prev: np.ndarray, desire: int) -> tuple[np.ndarray, np.ndarray]:
+    """desire 이력 [100, 8] 한 틱: 상승 에지 펄스, 회전 desire(1, 2)가 아니면 이력의 회전 펄스 지우기, 밀고 넣기.
+    src/model/model_temporal.h의 push_desire_pulse와 같은 규칙이다(check_recording_reader가 대조한다)."""
+    cur = np.zeros(8, np.float32)
+    if desire > 0:
+        cur[desire] = 1.0
+    pulse = np.where(cur - prev > 0.99, cur, 0.0).astype(np.float32)
+    history = history.copy()
+    if desire not in (1, 2):
+        history[:, 1:3] = 0.0
+    history = np.roll(history, -1, 0)
+    history[-1] = pulse
+    return history, cur
+
+
 def session(core: str):
+    import onnxruntime as ort  # 시험(check_recording_reader)이 desire_step만 읽을 수 있게 여기서 읽는다
+
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
     return ort.InferenceSession(str(Path(core).expanduser()), opts)

@@ -17,7 +17,6 @@ constexpr uint32_t kHyundaiEEms11Address = 881;     // 0x371
 constexpr uint32_t kHyundaiElectGearAddress = 882;  // 0x372
 constexpr uint32_t kHyundaiCgw1Address = 1345;      // 0x541
 constexpr uint32_t kHyundaiCgw2Address = 1363;      // 0x553
-constexpr uint32_t kHyundaiLca11Address = 1419;     // 0x58b
 constexpr uint32_t kHyundaiTpms11Address = 1427;    // 0x593
 constexpr uint32_t kHyundaiAhb1Address = 352;       // 0x160, HEV 전자식 브레이크 부스터(iBAU)
 

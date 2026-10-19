@@ -54,7 +54,7 @@ default (`EDGEPILOT_PANDA_TX=1`). Every setting can be overridden with its
 environment variable; see [Runtime options](runtime-options.md).
 
 Stop it with Ctrl-C or `SIGTERM`: children get `SIGTERM`, then `SIGKILL` after
-3 s.
+3 s; `recordd` gets 8 s to move the rest of the recording to the SD card.
 
 ### Boot autostart
 
@@ -196,7 +196,7 @@ The processes are described in the order data passes through them.
   match the openpilot master core contract
 - runs on every frame (20 Hz): the GDC (`AX_IVPS_Dewarp`, perspective) warps
   the ring slot directly from its physical address into the two 512x256 model
-  views; `EDGEPILOT_WARP_CPU=1` selects the CPU warp instead
+  views
 - checks after the warp that the slot was not overwritten; a torn frame is
   dropped before it enters the image and feature queues
 - runs the NPU, parses the output, updates online calibration, feeds the
@@ -212,7 +212,7 @@ The processes are described in the order data passes through them.
   the UART4 pins
 - publishes batches of raw samples to `/dev/shm/edgepilot_imu` every 100 ms.
   The axes are the chip's and the gyro bias is not removed; `recordd` records
-  them as `Imu` records (`recording_reader.read_route_imu`)
+  them as `Imu` records (`recording_reader.EventRecord.imu_samples`)
 - feeds `locationd`, whose pose filter gives paramsd and torqued their yaw
   rate and roll (`use_locationd_learner_inputs` in `params/steering.json`) and
   whose lagd estimate can set the steering delay (`use_live_delay`). Without
@@ -227,10 +227,20 @@ The processes are described in the order data passes through them.
 - runs the openpilot locationd pose filter on the IMU batches, the model's
   camera odometry (`ModelState` pose) and `controlState`, and the lagd
   steering-delay estimate (`src/localization/localization_pipeline.*`)
+- leaves out of lagd the moments the driver holds the wheel or the controller
+  is saturated, as `controlsd` decides them (its pressed threshold and
+  hysteresis, the 0.4 s saturation timer) and passes them in
+  `controlState.hud_flags`, like openpilot's `steeringPressed` and
+  `lateralControlState.saturated`; for recordings made before 2026-10-19, which
+  lack these flags, it falls back to a 150 driver-torque threshold and the
+  instant output limit
 - publishes `LocalizationState` to `/dev/shm/edgepilot_localization`; with no
   IMU input it publishes nothing and waits
 - saves the lagd estimate to `params/live_delay.json` every 60 s and on exit,
-  and resumes it at start when `steer_actuator_delay` is unchanged
+  and resumes it at start, as openpilot's lagd does, unless the file is from
+  another cache version, its status is invalid, or its estimate or block count
+  is out of range; such a file is deleted. A changed `steer_actuator_delay`
+  does not discard it
 - is not started in rehearsal mode
 
 ### `controlsd` (K7 controller)
@@ -292,8 +302,8 @@ The processes are described in the order data passes through them.
 
 - drives the LCD: the camera on VO video layer 0 and the HUD on the graphic
   layer (`/dev/fb0`), composed by the hardware for the 480x640 panel
-- redraws the HUD at up to 20 Hz, reads the touchscreen, turns the backlight on
-  and plays the alert sounds
+- redraws the HUD at up to 20 Hz, reads the touchscreen, sets the backlight
+  from `display.json` and plays the alert sounds
 - see [HUD](hud.md)
 
 ### `recordd`
@@ -391,8 +401,8 @@ VPP call. That fifth process is typically a tool run while the runtime is up.
 
 Camera frames never go through the small-message IPC. The frame ring's pixels
 live in camerad's CMM blocks and are read by physical address: the GDC in
-`modeld` and IVPS in `overlayd` and `recordd` read the slot directly, and a CPU
-reader (the CPU warp fallback) maps it uncached. Only the ring header and
+`modeld` and IVPS in `overlayd` and `recordd` read the slot directly, and the
+flow worker maps it uncached to read the lead's points. Only the ring header and
 per-frame metadata are in `/dev/shm`. This keeps the split runtime close to
 openpilot's process boundaries without paying the cost of Cap'n Proto/cereal.
 
@@ -446,14 +456,15 @@ behind a seqlock; a queue holds up to 64 CAN batches in order. In rehearsal,
 | `edgepilot_panda_state` | `PandaState` | latest | `pandad` | `controlsd`, `overlayd`, `recordd` |
 | `edgepilot_imu` | `ImuBatch` | latest | `imud` | `locationd`, `recordd` |
 | `edgepilot_localization` | `LocalizationState` | latest | `locationd` | `controlsd`, `overlayd`, `recordd`, web console |
-| `edgepilot_record_state` | `RecordState` | latest | `recordd` | `overlayd` |
+| `edgepilot_record_state` | `RecordState` | latest | `recordd` | `overlayd`, web console (recording files card) |
 | `edgepilot_manager_state` | `ManagerState` | latest | `manager.py` | `overlayd`, web console |
 
 The layouts are in `src/common/ipc_messages.h`, the channels in
-`src/common/ipc_channels.h`. Three plain files sit beside them:
-`edgepilot_panda_status.json` (`pandad` to the web console), and
-`edgepilot_panda_flash` and `edgepilot_calibration_reset` (the web console to
-`pandad` and `modeld`).
+`src/common/ipc_channels.h`. Four plain files sit beside them:
+`edgepilot_panda_status.json` (`pandad` to the web console),
+`edgepilot_lateral_nn_status.json` (`controlsd` to the web console: which
+learned torque model it loaded, or why not), and `edgepilot_panda_flash` and
+`edgepilot_calibration_reset` (the web console to `pandad` and `modeld`).
 
 ## Related
 

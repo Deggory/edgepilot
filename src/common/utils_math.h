@@ -16,24 +16,16 @@ inline int clamp_int(float value, int lo, int hi) {
 
 inline int clamp_int(int value, int lo, int hi) { return std::min(std::max(value, lo), hi); }
 
-// openpilot interp: 단조 증가 xp에 대한 구간 선형 보간. 범위 밖은 끝값.
+// openpilot interp: 강한 단조 증가 xp에 대한 구간 선형 보간. 범위 밖은 끝값, NaN이면 마지막 값. fp는 xp와 길이가
+// 같다.
 inline float interp(float x, std::initializer_list<float> xp, std::initializer_list<float> fp) {
     const auto xs = xp.begin();
     const auto fs = fp.begin();
     const size_t n = xp.size();
-    if (n == 0 || fp.size() != n) return 0.0f;
     if (x <= xs[0]) return fs[0];
     if (x >= xs[n - 1]) return fs[n - 1];
-    for (size_t idx = 1; idx < n; ++idx) {
-        if (x <= xs[idx]) {
-            const float low_x = xs[idx - 1];
-            const float high_x = xs[idx];
-            const float low_y = fs[idx - 1];
-            const float high_y = fs[idx];
-            if (high_x - low_x < 1e-6f && low_x - high_x < 1e-6f) return high_y;
-            return low_y + (x - low_x) * (high_y - low_y) / (high_x - low_x);
-        }
-    }
+    for (size_t i = 1; i < n; ++i)
+        if (x <= xs[i]) return fs[i - 1] + (x - xs[i - 1]) * (fs[i] - fs[i - 1]) / (xs[i] - xs[i - 1]);
     return fs[n - 1];
 }
 

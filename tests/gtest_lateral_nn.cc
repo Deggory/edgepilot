@@ -3,6 +3,7 @@
 // 그리고 토크 제어기·횡제어기가 스위치·조향 상태·속도에 따라 모델 피드포워드를 쓰고 PID와 같은 곡률 한계를 지키는지.
 #include "car/vehicle_can.h"
 #include "common/json_value.h"
+#include "common/lateral_nn_path.h"
 #include "common/utils_file.h"
 #include "controls/control_params.h"
 #include "controls/lateral_controller.h"
@@ -19,6 +20,31 @@
 #include <vector>
 
 namespace {
+
+// 토크 제어기 입력: 앞쪽 다섯과 편경사·학습값. 핸들 조작·안전 한계·요레이트는 기본값(없음)이다.
+TorqueController::Inputs torque_in(bool active, float speed_mps, float curvature, float angle_deg, float delay_s,
+                                   float bank = 0.0f, const LiveLateralParams &live = LiveLateralParams{}) {
+    TorqueController::Inputs in;
+    in.active = active;
+    in.speed_mps = speed_mps;
+    in.desired_curvature = curvature;
+    in.steering_angle_deg = angle_deg;
+    in.lat_delay_s = delay_s;
+    in.road_bank_lat_accel = bank;
+    in.live = live;
+    return in;
+}
+
+// 학습한 토크 모델의 피드포워드와 섞는 법
+TorqueController::NnFeedforward nn_ff(float torque, float weight = 1.0f, bool curve_friction = true,
+                                      float curve_gain = 0.0f) {
+    TorqueController::NnFeedforward nn;
+    nn.torque = torque;
+    nn.weight = weight;
+    nn.curve_friction = curve_friction;
+    nn.curve_gain = curve_gain;
+    return nn;
+}
 
 constexpr const char *kModelPath = "models/lateral_nn/k7_hev_v3.json";  // 시험은 레포 루트에서 돈다
 
@@ -68,11 +94,7 @@ int feature_index(const LateralNnModel &model, const std::string &name) {
 VehicleCanState ready_vehicle(double t = 1.0, float speed_kph = 60.0f) {
     VehicleCanState vehicle;
     vehicle.has_lkas11_seed = vehicle.has_clu11_seed = vehicle.has_mdps12_seed = true;
-    for (double *time :
-         {&vehicle.lkas11_time_s, &vehicle.clu11_time_s, &vehicle.sas11_time_s, &vehicle.esp12_time_s,
-          &vehicle.mdps12_time_s, &vehicle.tcs13_time_s, &vehicle.tcs15_time_s, &vehicle.e_ems11_time_s,
-          &vehicle.elect_gear_time_s, &vehicle.whl_spd11_time_s, &vehicle.cgw1_time_s, &vehicle.cgw2_time_s})
-        *time = t;
+    stamp_received_messages(&vehicle, t);
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = speed_kph;
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = speed_kph;
     vehicle.cluster_speed_raw = speed_kph * 1.05f;
@@ -82,7 +104,7 @@ VehicleCanState ready_vehicle(double t = 1.0, float speed_kph = 60.0f) {
 
 LateralPath usable_path() {
     LateralPath path;
-    path.left_valid = path.right_valid = path.usable_for_steering = true;
+    path.usable_for_steering = true;
     path.point_count = 30;
     path.reach_m = 60.0f;
     return path;
@@ -114,8 +136,6 @@ LateralControlResult drive(const std::shared_ptr<LateralNnModel> &model, const L
     return result;
 }
 
-}  // namespace
-
 TEST(LateralNnModel, RepositoryModelLoadsWithItsTestVectors) {
     // 불러오기가 파일의 시험 벡터를 이 계산으로 다시 내 보고 받는다
     const auto model = repository_model();
@@ -123,11 +143,16 @@ TEST(LateralNnModel, RepositoryModelLoadsWithItsTestVectors) {
     EXPECT_EQ(model->input_count(), 33U);
 }
 
+// 라이브러리 모델: 런타임과 웹 콘솔이 고를 수 있는 이름(lateral_nn_path.h의 규칙)의 .json
+bool library_model(const std::filesystem::path &path) {
+    return path.extension() == ".json" && valid_lateral_nn_name(path.stem().string());
+}
+
 TEST(LateralNnModel, EveryLibraryModelLoads) {
     // 웹 콘솔에서 고를 수 있는 모델(models/lateral_nn/<차종>_v<버전>.json)은 모두 제 시험 벡터대로 읽힌다
     int count = 0;
     for (const auto &entry : std::filesystem::directory_iterator("models/lateral_nn")) {
-        if (entry.path().extension() != ".json") continue;
+        if (!library_model(entry.path())) continue;
         ++count;
         LateralNnModel model;
         std::string error;
@@ -249,8 +274,6 @@ TEST(LateralNnInputs, PastOffsetsReadTheHistory) {
     EXPECT_NEAR(x[feature_index(*model, "jerk")], 1.0f, 1e-4f);
 }
 
-namespace {
-
 // 모델 파일 하나의 input_tests를 운용 입력으로 다시 만들어 본다(MatchTheTrainingCode)
 void check_input_tests(const std::string &path) {
     SCOPED_TRACE(path);
@@ -290,14 +313,12 @@ void check_input_tests(const std::string &path) {
     }
 }
 
-}  // namespace
-
 TEST(LateralNnInputs, MatchTheTrainingCode) {
     // 모델 파일의 input_tests: 학습 코드(nnlc dataset.rows)가 합성 궤적에서 만든 입력. 운용 입력(지난 값은 이력, 앞의
     // 값은 계획 궤적)으로 같은 입력이 나와야 한다. 이름은 그대로인데 뜻이 바뀐 학습 변경(저크 창, 시각 기준 등)을 잡는다.
     // 라이브러리의 모델마다 본다.
     for (const auto &entry : std::filesystem::directory_iterator("models/lateral_nn")) {
-        if (entry.path().extension() == ".json") check_input_tests(entry.path().string());
+        if (library_model(entry.path())) check_input_tests(entry.path().string());
     }
 }
 
@@ -329,8 +350,7 @@ TEST(TorqueController, NnFeedforwardReplacesTheLinearFeedforward) {
         params.torque_friction = friction;
         TorqueController controller;
         for (int i = 0; i < 50; ++i)
-            controller.update(true, 20.0f, 0.0004f, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
-                              LiveLateralParams{}, nn);
+            controller.update(torque_in(true, 20.0f, 0.0004f, -3.0f, 0.3f, 0.1f), params, nn_ff(nn));
         return std::make_tuple(controller.feedforward(), controller.nn_feedforward_used(),
                                controller.normalized_output());
     };
@@ -355,8 +375,7 @@ TEST(TorqueController, NnFeedforwardKeepsTheFrictionInCurves) {
         params.torque_friction = friction;
         TorqueController controller;
         for (int i = 0; i < 50; ++i)
-            controller.update(true, 20.0f, curvature, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
-                              LiveLateralParams{}, nn);
+            controller.update(torque_in(true, 20.0f, curvature, -3.0f, 0.3f, 0.1f), params, nn_ff(nn));
         return controller.feedforward();
     };
     const float laf = SteeringParams{}.torque_lat_accel_factor;
@@ -374,8 +393,7 @@ TEST(TorqueController, NnFeedforwardKeepsTheFrictionInCurves) {
 TEST(TorqueController, NnWeightBlendsTheTwoFeedforwards) {
     const auto ff = [](float nn, float weight) {
         TorqueController controller;
-        controller.update(true, 20.0f, 0.002f, -3.0f, false, false, SteeringParams{}, 0.3f, 0.0f, false, 0.1f,
-                          LiveLateralParams{}, nn, weight);
+        controller.update(torque_in(true, 20.0f, 0.002f, -3.0f, 0.3f, 0.1f), SteeringParams{}, nn_ff(nn, weight));
         return std::make_pair(controller.feedforward(), controller.nn_feedforward_used());
     };
     const float linear = ff(NAN, 1.0f).first;
@@ -452,6 +470,65 @@ TEST(LateralController, SwitchingBlendsOverOneSecond) {
     for (int k = 0; k < 90; ++k) EXPECT_TRUE(tick().nn_feedforward_used) << k;
     for (int k = 0; k < 20; ++k) tick();
     EXPECT_FALSE(tick().nn_feedforward_used);
+}
+
+// 학습 데이터에서 뺀 차선 변경·회전(desire)과 깜빡이 동안에는 1초에 걸쳐 선형 피드포워드로 돌아가고, 끝나면 다시
+// 1초에 걸쳐 모델로 간다(조향은 이어진다)
+TEST(LateralController, LaneChangesAndBlinkersUseTheLinearFeedforward) {
+    const auto model = repository_model();
+    LateralControllerConfig config;
+    config.force_engaged = true;
+    config.steering_params.nn_feedforward = true;
+    LateralController controller(config);
+    controller.set_lateral_nn(model);
+    int i = 0;
+    const auto tick = [&](bool blinker, int desire) {
+        const double t = 1.0 + 0.01 * i;
+        VehicleCanState vehicle = ready_vehicle(t);
+        vehicle.left_blinker = blinker;
+        LateralTarget target = curve_target(0.003f);
+        target.desire = desire;
+        return controller.update(usable_path(), target, vehicle, t, i++);
+    };
+    for (int k = 0; k < 150; ++k) ASSERT_TRUE(tick(false, 0).nn_feedforward_used || k < 2);
+    LateralControlResult r;
+    for (int k = 0; k < 150; ++k) r = tick(true, 0);
+    EXPECT_TRUE(r.lat_active);
+    EXPECT_FALSE(r.nn_feedforward_used) << "깜빡이";
+    for (int k = 0; k < 150; ++k) r = tick(false, 0);
+    EXPECT_TRUE(r.nn_feedforward_used) << "끝나면 다시 모델";
+    for (int k = 0; k < 150; ++k) r = tick(false, 3);
+    EXPECT_FALSE(r.nn_feedforward_used) << "차선 변경 desire";
+}
+
+// 모델의 roll 입력은 편경사 추정 / g다(학습 열 roll = extract_lateral_dataset의 bank / g). paramsd 롤은 부호가
+// 반대라, 컨트롤러가 그것을 넣으면 학습과 어긋난다.
+TEST(LateralController, ModelRollInputIsTheBankOverG) {
+    const auto model = repository_model();
+    LateralControllerConfig config;
+    config.force_engaged = true;
+    config.steering_params.nn_feedforward = true;
+    LateralController controller(config);
+    controller.set_lateral_nn(model);
+    for (int i = 0; i < 300; ++i) {  // 곧은 길에서 횡가속 0.6 m/s²: 편경사 추정이 쌓인다
+        const double t = 1.0 + 0.01 * i;
+        VehicleCanState vehicle = ready_vehicle(t);
+        vehicle.lat_accel_valid = vehicle.yaw_rate_valid = true;
+        vehicle.lat_accel_mps2 = 0.6f;
+        controller.update(usable_path(), curve_target(0.0f), vehicle, t, i);
+    }
+    const float bank = controller.road_bank_lat_accel();
+    ASSERT_GT(std::fabs(bank), 0.1f);
+    const std::vector<float> inputs = controller.lateral_nn_inputs();
+    const std::vector<std::string> names = model->spec().names();
+    ASSERT_EQ(inputs.size(), names.size());
+    int rolls = 0;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (names[i].rfind("roll", 0) != 0) continue;
+        EXPECT_FLOAT_EQ(inputs[i], bank / 9.81f) << names[i];
+        ++rolls;
+    }
+    EXPECT_GT(rolls, 0);
 }
 
 TEST(LateralController, SwappingModelsKeepsTheBlend) {
@@ -531,8 +608,8 @@ TEST(TorqueController, CurveGainRaisesTheModelInCurvesAtSpeed) {
             params.torque_friction = 0.0f;
             TorqueController controller;
             for (int i = 0; i < 50; ++i)
-                controller.update(true, speed_mps, curvature, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.0f,
-                                  LiveLateralParams{}, 0.2f, 1.0f, true, gain);
+                controller.update(torque_in(true, speed_mps, curvature, -3.0f, 0.3f), params,
+                                  nn_ff(0.2f, 1.0f, true, gain));
             return controller.feedforward();
         };
         return ff(0.3f) / ff(0.0f);
@@ -552,8 +629,8 @@ TEST(TorqueController, CurveFrictionOnlyForFrictionFreeModels) {
             params.torque_friction = friction;
             TorqueController controller;
             for (int i = 0; i < 50; ++i)
-                controller.update(true, 20.0f, 0.002f, -3.0f, false, false, params, 0.3f, 0.0f, false, 0.1f,
-                                  LiveLateralParams{}, 0.2f, 1.0f, curve_friction);
+                controller.update(torque_in(true, 20.0f, 0.002f, -3.0f, 0.3f, 0.1f), params,
+                                  nn_ff(0.2f, 1.0f, curve_friction));
             return controller.feedforward();
         };
         return ff(0.2f) - ff(0.0f);
@@ -585,3 +662,5 @@ TEST(LateralController, AddsCurveFrictionByTheModelsTarget) {
     EXPECT_GT(std::fabs(ff(friction_free, 0.2f) - ff(friction_free, 0.0f)), 1e-3f);
     EXPECT_FLOAT_EQ(ff(sent_torque, 0.2f), ff(sent_torque, 0.0f));
 }
+
+}  // namespace

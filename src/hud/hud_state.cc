@@ -9,9 +9,8 @@
 #include <limits>
 
 const char *engage_block_label(const char *block) {
-    if (!block || block[0] == '\0') return nullptr;
     const BlockReason reason = block_reason_from_name(block);
-    return reason == BlockReason::Count ? nullptr : block_reason_label(reason);
+    return reason == BlockReason::Count ? block : block_reason_label(reason);
 }
 
 HudAlertCard hud_select_alert(const HudState &hud, bool model_ok) {
@@ -20,17 +19,14 @@ HudAlertCard hud_select_alert(const HudState &hud, bool model_ok) {
                   hud.vehicle_fresh ? "OK" : "--", hud.panda_connected ? "OK" : "--");
     if (hud.engage_reject_label[0] != '\0')
         return {"UNABLE TO ENGAGE", hud.engage_reject_label, HudAlertLevel::caution};
-    if (hud.soft_disabling) {
-        const char *label = engage_block_label(hud.active_block);
-        return {"TAKE CONTROL", label ? label : "Disengaging", HudAlertLevel::critical};
-    }
+    if (hud.soft_disabling) return {"TAKE CONTROL", engage_block_label(hud.active_block), HudAlertLevel::critical};
     if (hud.steering_fault) return {"STEERING FAULT", links, HudAlertLevel::critical};
     if (hud.panda_faults != 0) return {"PANDA FAULT", links, HudAlertLevel::critical};
     if (hud.controller_active && hud.steer_paused)
-        return {"STEERING PAUSED",
-                hud.steer_paused_by_driver ? "Resumes on the planned curve or below 15\xb0"
-                                           : "Wheel past 85\xb0, resumes below it",
-                HudAlertLevel::caution};
+        return {
+            "STEERING PAUSED",
+            hud.steer_paused_by_driver ? "Resumes on the plan or below 15\xb0" : "Wheel past 85\xb0, resumes below it",
+            HudAlertLevel::caution};
     if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", HudAlertLevel::caution};
     if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, HudAlertLevel::caution};
     if (hud.controller_active && hud.lane_change == 1) {
@@ -47,63 +43,62 @@ HudAlertCard hud_select_alert(const HudState &hud, bool model_ok) {
 
 // ---- 공유 상태 → HUD 상태 ----
 
+// 낡은 스냅샷은 빈 스냅샷(모든 값 0)으로 읽는다.
 void hud_apply_panda_state(const PandaState &panda, bool fresh, HudState *hud) {
-    hud->panda_connected = fresh && panda.connected != 0;
-    hud->panda_healthy = fresh && panda.comms_healthy != 0;
-    hud->panda_faults = fresh ? panda.faults : 0;
+    static const PandaState kStale{};
+    const PandaState &p = fresh ? panda : kStale;
+    hud->panda_connected = p.connected != 0;
+    hud->panda_healthy = p.comms_healthy != 0;
+    hud->panda_faults = p.faults;
 }
 
-void hud_apply_control_state(const ControlState &c, bool fresh, HudState *hud) {
-    hud->controller_enabled = fresh && c.enabled != 0;
-    hud->controller_engaged = fresh && c.engaged != 0;
-    hud->controller_active = fresh && c.active != 0;
-    hud->laneless_mode = fresh && (c.hud_flags & kHudFlagLaneless) != 0;
-    hud->vehicle_fresh = fresh && c.vehicle_fresh != 0;
-    hud->steering_fault = fresh && c.steering_fault != 0;
-    hud->left_blinker = fresh && c.left_blinker != 0;
-    hud->right_blinker = fresh && c.right_blinker != 0;
-    hud->cruise_active = fresh && c.cruise_active != 0;
-    hud->brake_hold = fresh && (c.hud_flags & kHudFlagBrakeHold) != 0;
-    hud->soft_disabling = fresh && (c.hud_flags & kHudFlagSoftDisabling) != 0;
-    hud->steer_saturated = fresh && (c.hud_flags & kHudFlagSteerSaturated) != 0;
-    const uint32_t flags = fresh ? c.hud_flags : 0U;
+void hud_apply_control_state(const ControlState &control, bool fresh, HudState *hud) {
+    static const ControlState kStale{};
+    const ControlState &c = fresh ? control : kStale;
+    hud->controller_enabled = c.enabled != 0;
+    hud->controller_engaged = c.engaged != 0;
+    hud->controller_active = c.active != 0;
+    hud->vehicle_fresh = c.vehicle_fresh != 0;
+    hud->steering_fault = c.steering_fault != 0;
+    hud->left_blinker = c.left_blinker != 0;
+    hud->right_blinker = c.right_blinker != 0;
+    hud->cruise_active = c.cruise_active != 0;
+    const uint32_t flags = c.hud_flags;
+    hud->laneless_mode = (flags & kHudFlagLaneless) != 0;
+    hud->brake_hold = (flags & kHudFlagBrakeHold) != 0;
+    hud->soft_disabling = (flags & kHudFlagSoftDisabling) != 0;
+    hud->steer_saturated = (flags & kHudFlagSteerSaturated) != 0;
     hud->lane_change = flags & kHudFlagLaneChanging ? 2 : flags & kHudFlagLaneChangePending ? 1 : 0;
     hud->lane_change_direction = flags & kHudFlagLaneChangeRight ? 1 : -1;
     hud->steer_paused = (flags & kHudFlagSteerPaused) != 0;
     hud->steer_paused_by_driver = (flags & kHudFlagSteerPausedByDriver) != 0;
-    hud->gear = fresh ? c.gear : 0;
-    hud->cluster_speed_kph = fresh ? c.cluster_speed_kph : 0.0f;
-    hud->ego_speed_kph = fresh ? c.ego_speed_kph : 0.0f;
-    hud->cruise_max_speed_kph = fresh ? c.cruise_max_speed_kph : 0.0f;
-    hud->cruise_command_speed_kph = fresh ? c.cruise_command_speed_kph : 0.0f;
-    hud->radar_lead_valid = fresh && c.radar_lead_valid != 0;
-    hud->radar_lead_distance_m = fresh ? c.radar_lead_distance_m : 0.0f;
-    hud->radar_lead_relative_speed_mps = fresh ? c.radar_lead_relative_speed_mps : 0.0f;
-    hud->departure_alert_type =
-        fresh ? static_cast<DepartureAlertType>(c.departure_alert_type) : DepartureAlertType::none;
-    hud->green_light_alert_armed = fresh && c.green_light_alert_armed != 0;
-    hud->tpms_valid = fresh && c.tpms_valid != 0;
-    hud->tpms_unit = fresh ? static_cast<int>(c.tpms_unit) : 0;
-    hud->tpms_pressure_fl = fresh ? c.tpms_pressure_fl : 0.0f;
-    hud->tpms_pressure_fr = fresh ? c.tpms_pressure_fr : 0.0f;
-    hud->tpms_pressure_rl = fresh ? c.tpms_pressure_rl : 0.0f;
-    hud->tpms_pressure_rr = fresh ? c.tpms_pressure_rr : 0.0f;
-    hud->tpms_warning = fresh && c.tpms_warning != 0;
-    hud->steering_angle_deg = fresh ? c.steering_angle_deg : 0.0f;
-    hud->normalized_output = fresh ? c.normalized_output : 0.0f;
-    hud->desired_torque = fresh ? c.desired_torque : 0;
-    hud->apply_torque = fresh ? c.apply_torque : 0;
-    // steer_max는 panda가 강제하는 고정값이라 런타임에서 바뀌지 않는다(control_params.h).
-    // 녹화로 확인한 부호: apply_torque 양수 = 왼쪽 조향(조향각·모델 plan과 같은 방향).
-    hud->steer_torque_fraction =
-        fresh ? std::clamp(static_cast<float>(c.apply_torque) / static_cast<float>(SteeringParams{}.steer_max), -1.0f,
-                           1.0f)
-              : 0.0f;
-    hud->driver_torque = fresh ? c.driver_torque : 0;
-    hud->driver_torque_fraction =
-        fresh ? std::clamp(static_cast<float>(c.driver_torque) / static_cast<float>(SteeringParams{}.steer_max), -1.0f,
-                           1.0f)
-              : 0.0f;
+    hud->gear = c.gear;
+    hud->cluster_speed_kph = c.cluster_speed_kph;
+    hud->ego_speed_kph = c.ego_speed_kph;
+    hud->cruise_max_speed_kph = c.cruise_max_speed_kph;
+    hud->cruise_command_speed_kph = c.cruise_command_speed_kph;
+    hud->radar_lead_valid = c.radar_lead_valid != 0;
+    hud->radar_lead_distance_m = c.radar_lead_distance_m;
+    hud->radar_lead_relative_speed_mps = c.radar_lead_relative_speed_mps;
+    hud->departure_alert_type = static_cast<DepartureAlertType>(c.departure_alert_type);
+    hud->green_light_alert_armed = c.green_light_alert_armed != 0;
+    hud->tpms_valid = c.tpms_valid != 0;
+    hud->tpms_unit = static_cast<int>(c.tpms_unit);
+    hud->tpms_pressure_fl = c.tpms_pressure_fl;
+    hud->tpms_pressure_fr = c.tpms_pressure_fr;
+    hud->tpms_pressure_rl = c.tpms_pressure_rl;
+    hud->tpms_pressure_rr = c.tpms_pressure_rr;
+    hud->tpms_warning = c.tpms_warning != 0;
+    hud->steering_angle_deg = c.steering_angle_deg;
+    hud->normalized_output = c.normalized_output;
+    hud->desired_torque = c.desired_torque;
+    hud->apply_torque = c.apply_torque;
+    hud->driver_torque = c.driver_torque;
+    // steer_max는 panda가 강제하는 고정값이라 런타임에서 바뀌지 않는다(control_params.h). 운전자 토크는 이를 넘기도
+    // 한다(녹화). 녹화로 확인한 부호: apply_torque 양수 = 왼쪽 조향(조향각·모델 plan과 같은 방향).
+    const float steer_max = static_cast<float>(SteeringParams{}.steer_max);
+    hud->steer_torque_fraction = std::clamp(static_cast<float>(c.apply_torque) / steer_max, -1.0f, 1.0f);
+    hud->driver_torque_fraction = std::clamp(static_cast<float>(c.driver_torque) / steer_max, -1.0f, 1.0f);
     std::snprintf(hud->active_block, sizeof(hud->active_block), "%s", fresh ? c.active_block : "control_stale");
 }
 
@@ -119,9 +114,11 @@ void hud_apply_model_state(const ModelState &model, bool fresh, HudState *hud) {
 }
 
 void hud_apply_record_state(const RecordState &record, bool fresh, HudState *hud) {
-    hud->recording = fresh && record.active != 0;
-    hud->storage_full = fresh && record.storage_blocked == kStorageBlockedSdReserve;
-    hud->storage_slow = fresh && record.storage_blocked == kStorageBlockedStaging;
+    static const RecordState kStale{};
+    const RecordState &r = fresh ? record : kStale;
+    hud->recording = r.active != 0;
+    hud->storage_full = r.storage_blocked == kStorageBlockedSdReserve;
+    hud->storage_slow = r.storage_blocked == kStorageBlockedStaging;
 }
 
 void hud_apply_learner_state(const LearnerState &learner, bool fresh, HudState *hud) {
@@ -152,14 +149,13 @@ void hud_apply_localization_state(const LocalizationState &localization, bool fr
 float lane_center_offset_m(const ParsedModelOutput &output) {
     constexpr float kMinProbability = 0.5f;
     const ParsedLaneLine &left = output.lanes[1], &right = output.lanes[2];
-    if (!output.valid || !left.valid || !right.valid || left.probability < kMinProbability ||
-        right.probability < kMinProbability)
+    if (!output.valid || left.probability < kMinProbability || right.probability < kMinProbability)
         return std::numeric_limits<float>::quiet_NaN();
     return (left.points[0].y + right.points[0].y) / 2.0f;
 }
 
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok, HudState *hud) {
-    const unsigned total = fresh ? std::min<unsigned>(manager.process_count, kMaxProcesses) : 0;
+    const unsigned total = fresh ? manager.process_count : 0;
     unsigned running = 0;
     for (unsigned i = 0; i < total; ++i) running += manager.processes[i].running ? 1U : 0U;
     hud->services_healthy = fresh && total >= 3 && running == total && model_ok;
@@ -170,41 +166,19 @@ void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model
 ParsedModelOutput parsed_from_model_state(const ModelState &state) {
     ParsedModelOutput parsed;
     parsed.valid = state.valid != 0;
-    parsed.plan.valid = parsed.valid;
-    parsed.plan.best_index = state.best_plan;
-    parsed.plan.probability = state.plan_probability;
     for (int i = 0; i < kTrajectorySize; ++i) {
         parsed.plan.points[i] = {state.plan[i].x, state.plan[i].y, state.plan[i].z};
-        parsed.plan.yaw[i] = state.plan_yaw[i];
-        parsed.plan.yaw_rate[i] = state.plan_yaw_rate[i];
         for (int lane = 0; lane < 4; ++lane) {
-            parsed.lanes[lane].valid = parsed.valid;
             parsed.lanes[lane].probability = state.lane_probabilities[lane];
-            parsed.lanes[lane].std = state.lane_stds[lane];
-            parsed.lanes[lane].points[i] = {
-                state.lanes[lane][i].x,
-                state.lanes[lane][i].y,
-                state.lanes[lane][i].z,
-            };
+            parsed.lanes[lane].points[i] = {model_x_idx(i), state.lanes[lane][i].y, state.lanes[lane][i].z};
         }
         for (int edge = 0; edge < 2; ++edge) {
-            parsed.road_edges[edge].valid = parsed.valid;
             parsed.road_edges[edge].std = state.road_edge_stds[edge];
-            parsed.road_edges[edge].points[i] = {
-                state.road_edges[edge][i].x,
-                state.road_edges[edge][i].y,
-                state.road_edges[edge][i].z,
-            };
+            parsed.road_edges[edge].points[i] = {model_x_idx(i), state.road_edges[edge][i].y,
+                                                 state.road_edges[edge][i].z};
         }
     }
-    for (int i = 0; i < kDesireLen; ++i) parsed.meta.desire_state[i] = state.desire_state[i];
-    for (int i = 0; i < kMetaPressHorizons; ++i) {
-        parsed.meta.gas_press[i] = state.gas_press_probs[i];
-        parsed.meta.brake_press[i] = state.brake_press_probs[i];
-    }
-
     if (state.lead.valid) {
-        parsed.leads.valid = true;
         parsed.leads.global_probabilities[0] = state.lead.probability;
         parsed.leads.predictions[0].points[0] = {
             state.lead.x,
@@ -212,16 +186,6 @@ ParsedModelOutput parsed_from_model_state(const ModelState &state) {
             state.lead.velocity,
             state.lead.acceleration,
         };
-    }
-
-    parsed.has_pose = state.pose.valid != 0;
-    if (parsed.has_pose) {
-        for (int i = 0; i < 3; ++i) {
-            parsed.pose.trans[i] = state.pose.trans[i];
-            parsed.pose.rot[i] = state.pose.rot[i];
-            parsed.pose.trans_std[i] = state.pose.trans_std[i];
-            parsed.pose.rot_std[i] = state.pose.rot_std[i];
-        }
     }
     return parsed;
 }

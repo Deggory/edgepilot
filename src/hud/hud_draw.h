@@ -52,9 +52,13 @@ constexpr int kTorqueBarW = 240;
 constexpr int kTorqueBarH = 6;
 constexpr int kAlertH = 76;
 constexpr int kAlertMinW = 320;
+constexpr int kAlertTextPad = 56;        // 알림 카드 폭 = 제목·설명 중 넓은 것 + 이 값(왼쪽 색 막대와 양쪽 여백)
+constexpr float kAlertArrowGap = 18.0f;  // 알림 제목 끝에서 방향 화살표 가운데까지
+constexpr float kAlertArrowW = 14.0f;
 constexpr int kRowH = 19;  // 카드 안 이름·값 줄 간격
 // 아래 모서리 카드(TPMS, 카메라 보정)와 보정 위 학습 카드. 모서리 카드는 위가 알림 카드, 아래가
-// 토크 바와 맞는다. 알림 카드는 둘 사이(640 − 2·(14 + 126 + 8) = 344)에 들어간다.
+// 토크 바와 맞는다. 알림 카드는 둘 사이(640 − 2·(14 + 126 + 8) = 344)에 들어가므로 제목·설명은 288 px까지다
+// (gtest_hud_canvas가 모든 문구를 잰다).
 constexpr int kCornerCardW = 126;
 constexpr int kCornerCardH = kAlertH + kGap + kTorqueBarH;
 constexpr int kStatusTouchW = 190;  // 상태 알약을 누른 것으로 보는 오른쪽 위 영역(손가락만큼 넉넉하게)

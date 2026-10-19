@@ -4,8 +4,6 @@
 #include "ax_sys_api.h"
 #include "maix_app.hpp"
 
-#include <linux/videodev2.h>
-
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -22,8 +20,7 @@ struct MaixCamera::Impl {
     VI &vi_ref() { return *vi_ptr; }
 };
 
-MaixCamera::MaixCamera(int width, int height, int fps, bool nv12)
-    : impl_(new Impl), width_(width), height_(height), nv12_(nv12) {
+MaixCamera::MaixCamera(int width, int height, int fps) : impl_(new Impl), width_(width), height_(height) {
     if (impl_->sys.init() != maix::err::ERR_NONE) throw std::runtime_error("AX SYS init failed");
     impl_->vi_ptr.reset(new VI());
     VI &vi = impl_->vi_ref();
@@ -50,9 +47,9 @@ MaixCamera::MaixCamera(int width, int height, int fps, bool nv12)
 
     impl_->channel = vi.get_unused_channel();
     if (impl_->channel < 0) throw std::runtime_error("no free VI channel");
-    const AX_IMG_FORMAT_E format = nv12 ? AX_FORMAT_YUV420_SEMIPLANAR : AX_FORMAT_YUV420_SEMIPLANAR_VU;
     // fit=2는 MaixCDK 기본(센서 전체 화각을 비율 유지로 채움). 16:9 센서라 크롭이 없다.
-    if (vi.add_channel(impl_->channel, width, height, format, fps, 3, false, false, 2) != maix::err::ERR_NONE)
+    if (vi.add_channel(impl_->channel, width, height, AX_FORMAT_YUV420_SEMIPLANAR, fps, 3, false, false, 2) !=
+        maix::err::ERR_NONE)
         throw std::runtime_error("AX VI add_channel failed");
 
     // 센서 자체를 요청 fps로 돌린다(AX_ISP_SetSnsAttr). ISP_RUN 스레드의 CPU는 센서
@@ -89,8 +86,6 @@ MaixCamera::~MaixCamera() {
     impl_->sys.deinit();
 }
 
-uint32_t MaixCamera::fourcc() const { return nv12_ ? V4L2_PIX_FMT_NV12 : V4L2_PIX_FMT_NV21; }
-
 bool MaixCamera::read_to(unsigned long long dst_phys, int timeout_ms, uint64_t *age_us, uint64_t *pop_age_us) {
     Frame *frame = impl_->vi_ptr->pop(impl_->channel, timeout_ms);
     if (!frame) return false;
@@ -101,7 +96,7 @@ bool MaixCamera::read_to(unsigned long long dst_phys, int timeout_ms, uint64_t *
     AX_VIDEO_FRAME_T dst = {};
     dst.u32Width = width_;
     dst.u32Height = height_;
-    dst.enImgFormat = nv12_ ? AX_FORMAT_YUV420_SEMIPLANAR : AX_FORMAT_YUV420_SEMIPLANAR_VU;
+    dst.enImgFormat = AX_FORMAT_YUV420_SEMIPLANAR;
     dst.u32PicStride[0] = dst.u32PicStride[1] = width_;
     dst.u64PhyAddr[0] = dst_phys;
     dst.u64PhyAddr[1] = dst_phys + static_cast<AX_U64>(width_) * height_;

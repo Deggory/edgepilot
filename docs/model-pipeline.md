@@ -51,20 +51,19 @@ model is compiled for one core.
 slot's metadata (`roadAiFrame`). `modeld` reads the newest slot on every frame
 (20 Hz) and counts the frames it missed.
 
-- **Zero copy.** When the slot is in CMM and the GDC warp can take the frame
-  (NV12 at the size the GDC was set up for, `EDGEPILOT_WARP_CPU` unset), the GDC
-  reads the slot straight from its physical address.
-- **Copy.** Otherwise the slot is copied out, through an uncached mapping of the
-  CMM slot, for the CPU warp.
+The frame's timestamp is the sensor's hardware PTS, about 24 ms before the
+frame reaches the ring, so the plan's age counts from the capture. When the
+PTS is missing or more than 200 ms old, `camerad` stamps the ring time instead.
 
-A seqlock on the slot tells whether `camerad` overwrote it during the read.
+The GDC warp reads the slot straight from its physical address (no copy). A
+seqlock on the slot tells whether `camerad` overwrote it during the read.
 Such a frame is dropped before it enters any queue
 ([Temporal inputs](#temporal-inputs)).
 
 Before the model runs, `modeld` also:
 
 - reads `controlsd`'s `ControlState` for the desire and the ego speed;
-- on the zero-copy path, hands the slot's Y plane to the flow worker, which
+- hands the slot's Y plane to the flow worker, which
   measures the camera mount and the lead's expansion rate
   ([Flow calibration](flow-calibration.md), [Lead flow](lead-flow.md));
 - publishes the slot's metadata on `recordFrame`, so `recordd` records the frame
@@ -90,13 +89,11 @@ flowchart TB
     rpy["calibration rpy<br>pose or flow calibrator"] --> h
     mount["camera mount<br>offset and height"] --> h
     h --> gdc["GDC warp<br>two 512x256 NV12 views"]
-    h -.-> cpu["CPU warp<br>fallback"]
-    gdc --> yuv6["YUV6 planes<br>6 x 128x256 per view"]
-    cpu --> yuv6
+    gdc --> yuv6["YUV6 planes<br>6 x 128x256 per view"
     classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
     classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
-    class h,gdc,cpu,yuv6 pixel
+    class h,gdc,yuv6 pixel
     class rpy compute
     class camcal,override,k,mount proc
 ```
@@ -110,17 +107,17 @@ would look to the model like the car moving sideways.
 The warp is followed by packing into the YUV6 plane order
 (`Y00, Y10, Y01, Y11, U, V`) at 128x256.
 
-- **GDC (default).** `platform/maixcam2/maix_gdc_warp.*` runs `AX_IVPS_Dewarp`
-  in perspective mode, reading the ring slot straight from its physical address
-  and producing two 512x256 NV12 views, then unpacks them into the newest
-  history slot. Against the CPU warp, Y differs by at most 1 LSB and U/V by
-  0.4 LSB on average; on a replay the plan lateral offset at 2 s against the
-  fp32 host reference differs by 0.0005 m.
-- **CPU (`EDGEPILOT_WARP_CPU=1`, NV21 frames, or GDC unavailable).**
-  `src/model/model_input_transform.*` fuses the homography sampling with YUV6
-  packing through compact fixed-point lookup tables (12-bit weights). The wide
-  tower is warped on the second core. The ring slot is mapped uncached for this
-  path. It is much slower (~23 ms for both towers) and meant for diagnostics.
+`platform/maixcam2/maix_gdc_warp.*` runs `AX_IVPS_Dewarp` in perspective mode,
+reading the ring slot straight from its physical address and producing two
+512x256 NV12 views, then unpacks them into the newest history slot with NEON
+(`src/model/yuv6_pack.h`, 16 columns at a time; a byte loop took about 6 times
+as long). `src/model/model_input_transform.*` builds the two homographies. The
+GDC must come up: without it `modeld` exits and the manager restarts it.
+Against the CPU warp that earlier builds carried (openpilot's OpenCL
+interpolation in fixed point), Y differed by at most 1 LSB and U/V by 0.4 LSB on
+average; on a replay the plan lateral offset at 2 s against the fp32 host
+reference differed by 0.0005 m. Replay (`EDGEPILOT_REPLAY_NV12`) copies each
+frame into a CMM buffer that the GDC reads.
 
 The calibration service updates the warp's rpy after every frame, matching
 openpilot's `cameraOdometry -> liveCalibration -> modeld` loop, so each frame
@@ -183,8 +180,9 @@ Every queue has the newest entry last and shifts one slot per frame:
 - desire: rising-edge pulses at 20 Hz over 100 ticks, max-pooled 4:1 into the
   25x8 input
 - features: the last 96 ticks of the 512-float hidden state; the model sees
-  every 4th slot. This frame's output is pushed after the run, so the model
-  sees its own output from the next frame on
+  every 4th slot, 0 to 92. This frame's output is pushed after the run into
+  the last slot, 95, so the model first sees it four frames later, when it
+  reaches slot 92
 - images: the last 5 frames per tower; the model sees the oldest (t-4) and the
   newest (t)
 
@@ -223,12 +221,13 @@ traffic_convention  [1, 2]             float   constant (right-hand traffic)
 The heads are separate outputs, with the plan split into motion, orientation,
 and std parts (`tools/model/axmodel/split_outputs.py`), so each gets its own
 quantisation range; `src/model/model_output_assembly.h` puts them back into the
-2576-float layout below. `modeld` also accepts a single `[1, 2576]` output.
+2576-float layout below. (The earlier single `[1, 2576]` output shared one
+quantisation scale across every head and made the steering wobble; it is no
+longer accepted.)
 
 At load `modeld` checks each input's name, element count, dtype and buffer
-size, and each output's element count and dtype (by name for the split
-outputs). It refuses any other model, so a mismatched axmodel fails loudly
-instead of being misparsed.
+size, and each output's element count and dtype by name. It refuses any other
+model, so a mismatched axmodel fails loudly instead of being misparsed.
 
 ## Model output
 
@@ -276,8 +275,8 @@ from. The last two floats are not used.
 ## Related
 
 - [Runtime](runtime.md): the processes around `modeld` and what they cost
-- [Runtime options](runtime-options.md): `EDGEPILOT_WARP_CPU`,
-  `EDGEPILOT_PROFILE`, the camera mount and the other switches
+- [Runtime options](runtime-options.md): `EDGEPILOT_PROFILE`, the camera mount
+  and the other switches
 - [Camera intrinsics](camera-intrinsics.md): measuring the camera matrix with
   `camcal`
 - [Flow calibration](flow-calibration.md): the optical-flow source of the

@@ -2,6 +2,9 @@
 
 #include "common/utils_json.h"
 
+#include <cstdio>
+#include <utility>
+
 float SteeringParams::center_to_front_m() const { return wheelbase_m * center_to_front_ratio; }
 
 namespace {
@@ -43,24 +46,19 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
     {"lane_change_min_speed_kph", 0.0f, 80.0f, &SteeringParams::lane_change_min_speed_kph},
 };
 
+// 파라미터 파일을 stat하는 간격. 웹 콘솔에서 바꾼 값도 이 확인으로 1초 안에 적용된다. 제어 스레드에서 SD를 자주
+// 보지 않게 1초로 둔다.
+constexpr int kParamPollIntervalMs = 1000;
+
 }  // namespace
 
 bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error) {
-    if (!params) return false;
     return load_json_param_file(
         path,
-        [params](const std::string &text) {
-            // 2026-09-24 이전 raw 표기. 조용히 기본값으로 떨어지지 않게 거부한다.
-            for (const char *key : {"torque_max_lat_accel_raw", "torque_kp_raw", "torque_kf_raw", "torque_ki_raw",
-                                    "torque_friction_raw"}) {
-                if (text.find(std::string("\"") + key + "\"") != std::string::npos)
-                    throw std::runtime_error(std::string(key) +
-                                             " was replaced by torque_lat_accel_factor/"
-                                             "torque_kp/torque_ki/torque_friction");
-            }
-            parse_json_fields(text, kSteeringBools, params);
-            parse_json_fields(text, kSteeringInts, params);
-            parse_json_fields(text, kSteeringFloats, params);
+        [params](const JsonValue &root) {
+            parse_json_fields(root, kSteeringBools, params);
+            parse_json_fields(root, kSteeringInts, params);
+            parse_json_fields(root, kSteeringFloats, params);
         },
         error);
 }
@@ -73,4 +71,59 @@ std::string first_steering_param_difference(const SteeringParams &a, const Steer
     for (const auto &field : kSteeringFloats)
         if (a.*field.member != b.*field.member) return field.key;
     return "";
+}
+
+bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error) {
+    ControlParams candidate = *params;
+    std::string load_error;
+    if (!load_steering_params_json(paths.steering, &candidate.steering, &load_error)) {
+        if (error) *error = "steering " + paths.steering + ": " + load_error;
+        return false;
+    }
+    if (!load_adaptive_cruise_params_json(paths.cruise, &candidate.cruise, &load_error)) {
+        if (error) *error = "adaptive cruise " + paths.cruise + ": " + load_error;
+        return false;
+    }
+    *params = candidate;
+    return true;
+}
+
+std::string control_params_summary(const ControlParams &params) {
+    char text[160];
+    std::snprintf(text, sizeof(text), "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs decel=%.1fkph/s",
+                  params.steering.mdps_speed_spoof_kph, params.cruise.enabled ? 1U : 0U, params.cruise.standstill_gap_m,
+                  params.cruise.following_time_s, params.cruise.deceleration_rate_kph_per_s);
+    return text;
+}
+
+ControlParamsWatcher::ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now)
+    : paths_(std::move(paths)), next_check_(now + std::chrono::milliseconds(kParamPollIntervalMs)) {
+    stamp();
+}
+
+std::optional<ControlParams> ControlParamsWatcher::poll(std::chrono::steady_clock::time_point now,
+                                                        const ControlParams &current) {
+    if (now < next_check_) return std::nullopt;
+    next_check_ = now + std::chrono::milliseconds(kParamPollIntervalMs);
+    const FileStamp steering = file_stamp(paths_.steering);
+    const FileStamp cruise = file_stamp(paths_.cruise);
+    const bool changed = steering != steering_stamp_ || cruise != cruise_stamp_;
+    if (!changed) return std::nullopt;
+    steering_stamp_ = steering;
+    cruise_stamp_ = cruise;
+    ControlParams candidate = current;
+    std::string error;
+    if (!load_control_params(paths_, &candidate, &error)) {
+        std::fprintf(stderr, "controlsd: params reload rejected: %s\n", error.c_str());
+        return std::nullopt;
+    }
+    ++generation_;
+    std::fprintf(stderr, "controlsd: params reloaded generation=%u %s\n", generation_,
+                 control_params_summary(candidate).c_str());
+    return candidate;
+}
+
+void ControlParamsWatcher::stamp() {
+    steering_stamp_ = file_stamp(paths_.steering);
+    cruise_stamp_ = file_stamp(paths_.cruise);
 }

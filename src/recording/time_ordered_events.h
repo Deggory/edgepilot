@@ -20,7 +20,7 @@ public:
     struct Record {
         EventRecordHeader header{};
         std::vector<char> payload;
-        uint32_t version = 0;  // 그 파일의 녹화 버전(페이로드 해석에 쓴다)
+        size_t file = 0;  // 그 파일이 paths에서 몇 번째인가
     };
 
     explicit TimeOrderedEvents(std::vector<std::string> paths, uint64_t window_ns = 500'000'000ULL)
@@ -63,7 +63,7 @@ private:
             }
             Pending pending;
             if (reader_->ok() && reader_->next(&pending.record.header, &pending.record.payload)) {
-                pending.record.version = reader_->version();
+                pending.record.file = file_;
                 pending.timestamp_ns = pending.record.header.timestamp_ns;
                 pending.sequence = sequence_++;
                 newest_ns_ = std::max(newest_ns_, pending.timestamp_ns);

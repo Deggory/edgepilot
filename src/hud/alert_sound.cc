@@ -13,7 +13,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 
 extern char **environ;
 
@@ -49,10 +48,6 @@ bool write_all(int fd, const int16_t *data, size_t samples) {
 
 AlertSound::AlertSound() : pcm_(env_string("EDGEPILOT_ALERT_PCM", "plughw:0,1")) {
     if (!env_flag("EDGEPILOT_ALERT_SOUND", true)) return;
-    if (access("/usr/bin/aplay", X_OK) != 0) {
-        std::fprintf(stderr, "alert sound: /usr/bin/aplay not found, sounds off\n");
-        return;
-    }
     // aplay가 죽어 파이프가 끊겨도 프로세스가 SIGPIPE로 끝나지 않게 한다(write가 EPIPE를 돌려준다).
     signal(SIGPIPE, SIG_IGN);
     set_volume_percent(env_float("EDGEPILOT_ALERT_VOLUME", 70.0f));
@@ -69,12 +64,10 @@ AlertSound::~AlertSound() {
     stop_player();
 }
 
-void AlertSound::set_volume_percent(float percent) {
-    if (std::isfinite(percent)) volume_ = std::clamp(percent, 0.0f, 100.0f) / 100.0f;
-}
+void AlertSound::set_volume_percent(float percent) { volume_ = std::clamp(percent, 0.0f, 100.0f) / 100.0f; }
 
 void AlertSound::play(AlertSoundId id) {
-    if (enabled_ && id != AlertSoundId::count) pending_ = static_cast<int>(id);
+    if (enabled_) pending_ = static_cast<int>(id);
 }
 
 bool AlertSound::start_player() {

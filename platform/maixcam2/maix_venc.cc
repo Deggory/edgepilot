@@ -1,12 +1,8 @@
 #include "maixcam2/maix_venc.h"
 
-#include "ax_ivps_api.h"
-#include "ax_pool_type.h"
-#include "ax_sys_api.h"
 #include "ax_venc_api.h"
+#include "maixcam2/maix_frames.h"
 
-#include <cstdio>
-#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -15,28 +11,6 @@ namespace {
 constexpr VENC_CHN kChannel = 0;
 constexpr AX_U32 kPoolBlocks = 6;              // 인코더 입력 FIFO(4) + 복사 중 1 + 여유 1
 constexpr unsigned kPoolRebuildFailures = 20;  // camerad 재시작으로 풀이 무효가 되면 다시 만든다
-
-AX_POOL make_pool(AX_U64 block_size) {
-    AX_POOL_CONFIG_T cfg = {};
-    cfg.MetaSize = 512;
-    cfg.BlkCnt = kPoolBlocks;
-    cfg.BlkSize = block_size;
-    cfg.CacheMode = AX_POOL_CACHE_MODE_NONCACHE;
-    std::strcpy(reinterpret_cast<char *>(cfg.PartitionName), "anonymous");
-    return AX_POOL_CreatePool(&cfg);
-}
-
-AX_VIDEO_FRAME_T nv12(int w, int h, AX_U64 phys) {
-    AX_VIDEO_FRAME_T f = {};
-    f.u32Width = w;
-    f.u32Height = h;
-    f.enImgFormat = AX_FORMAT_YUV420_SEMIPLANAR;
-    f.u32PicStride[0] = f.u32PicStride[1] = w;
-    f.u64PhyAddr[0] = phys;
-    f.u64PhyAddr[1] = phys + static_cast<AX_U64>(w) * h;
-    f.u32FrameSize = static_cast<AX_U32>(static_cast<size_t>(w) * h * 3 / 2);
-    return f;
-}
 
 }  // namespace
 
@@ -49,7 +23,6 @@ struct VideoEncoder::Impl {
     bool config_sent = false;
     std::vector<uint8_t> config;   // 파라미터 세트 (Annex B)
     std::vector<uint8_t> payload;  // 파라미터 세트를 뺀 프레임
-    bool ivps = false, venc = false, channel = false, receiving = false;
 };
 
 VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : impl_(new Impl) {
@@ -59,13 +32,11 @@ VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : i
     m.frame_bytes = static_cast<AX_U64>(width) * height * 3 / 2;
     if (AX_SYS_Init() != 0) throw std::runtime_error("AX_SYS_Init failed");
     if (AX_IVPS_Init() != 0) throw std::runtime_error("AX_IVPS_Init failed");
-    m.ivps = true;
 
     AX_VENC_MOD_ATTR_T mod = {};
     mod.enVencType = AX_VENC_VIDEO_ENCODER;
     mod.stModThdAttr.u32TotalThreadNum = 1;
     if (AX_VENC_Init(&mod) != 0) throw std::runtime_error("AX_VENC_Init failed");
-    m.venc = true;
 
     AX_VENC_CHN_ATTR_T attr = {};
     attr.stVencAttr.enType = PT_H264;
@@ -95,20 +66,18 @@ VideoEncoder::VideoEncoder(int width, int height, int fps, unsigned bitrate) : i
     cbr.s32IntraQpDelta = -2;
     attr.stGopAttr.enGopMode = AX_VENC_GOPMODE_NORMALP;
     if (AX_VENC_CreateChn(kChannel, &attr) != 0) throw std::runtime_error("AX_VENC_CreateChn failed");
-    m.channel = true;
     AX_VENC_RECV_PIC_PARAM_T recv = {};
     recv.s32RecvPicNum = -1;
     if (AX_VENC_StartRecvFrame(kChannel, &recv) != 0) throw std::runtime_error("AX_VENC_StartRecvFrame failed");
-    m.receiving = true;
 }
 
+// 생성자를 끝낸 뒤에만 불린다(던지면 recordd가 끝난다). 풀만 처음 쓸 때 만든다.
 VideoEncoder::~VideoEncoder() {
-    Impl &m = *impl_;
-    if (m.receiving) AX_VENC_StopRecvFrame(kChannel);
-    if (m.channel) AX_VENC_DestroyChn(kChannel);
-    if (m.venc) AX_VENC_Deinit();
-    if (m.pool != AX_INVALID_POOLID) AX_POOL_DestroyPool(m.pool);
-    if (m.ivps) AX_IVPS_Deinit();
+    AX_VENC_StopRecvFrame(kChannel);
+    AX_VENC_DestroyChn(kChannel);
+    AX_VENC_Deinit();
+    if (impl_->pool != AX_INVALID_POOLID) AX_POOL_DestroyPool(impl_->pool);
+    AX_IVPS_Deinit();
 }
 
 bool VideoEncoder::submit(unsigned long long src_phys, uint64_t frame_id,
@@ -118,20 +87,17 @@ bool VideoEncoder::submit(unsigned long long src_phys, uint64_t frame_id,
     // 만든 풀은 무효가 된다.
     if (m.pool == AX_INVALID_POOLID || m.copy_failures >= kPoolRebuildFailures) {
         if (m.pool != AX_INVALID_POOLID) AX_POOL_DestroyPool(m.pool);
-        m.pool = make_pool(m.frame_bytes);
+        m.pool = make_noncache_pool(m.frame_bytes, kPoolBlocks);
         m.copy_failures = 0;
         if (m.pool == AX_INVALID_POOLID) return false;
     }
     const AX_BLK block = AX_POOL_GetBlock(m.pool, m.frame_bytes, nullptr);
     if (block == AX_INVALID_BLOCKID) return false;  // 인코더가 입력을 다 쥐고 있다
 
-    AX_VIDEO_FRAME_T src = nv12(m.width, m.height, src_phys);
-    AX_VIDEO_FRAME_T dst = nv12(m.width, m.height, AX_POOL_Handle2PhysAddr(block));
+    AX_VIDEO_FRAME_T src = nv12_frame(src_phys, m.width, m.height);
+    AX_VIDEO_FRAME_T dst = nv12_frame(AX_POOL_Handle2PhysAddr(block), m.width, m.height);
     dst.u32BlkId[0] = block;
-    AX_IVPS_CROP_RESIZE_ATTR_T resize = {};
-    resize.eSclType = AX_IVPS_SCL_TYPE_AUTO;
-    resize.eSclInput = AX_IVPS_SCL_INPUT_SHARE;
-    resize.tAspectRatio.eMode = AX_IVPS_ASPECT_RATIO_STRETCH;
+    AX_IVPS_CROP_RESIZE_ATTR_T resize = stretch_resize();
     const bool copied = AX_IVPS_CropResizeTdp(&src, &dst, &resize) == 0;
     m.copy_failures = copied ? 0 : m.copy_failures + 1;
     bool sent = false;

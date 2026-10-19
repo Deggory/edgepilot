@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <initializer_list>
 #include <limits>
 
 class PoseKalman {
@@ -34,6 +35,11 @@ public:
     static constexpr int kAccelBias = 15;
 
     enum class Kind { Gyro, Accel, CameraTranslation, CameraRotation };
+    struct Observation {
+        Kind kind;
+        Vec3 z;
+        Vec3 r;
+    };
 
     static Vec initial_x();
     static Mat initial_p();
@@ -45,7 +51,12 @@ public:
     void init(const Vec &x, const Mat &p, double t = std::numeric_limits<double>::quiet_NaN());
     // t 시각의 관측을 넣는다. 필터 시각보다 max_rewind_s 넘게 과거면 false.
     // 과거 관측은 되감아 넣고 뒤의 관측을 다시 적용한다.
-    bool predict_and_observe(double t, Kind kind, const Vec3 &z, const Vec3 &r);
+    bool predict_and_observe(double t, Kind kind, const Vec3 &z, const Vec3 &r) {
+        return predict_and_observe(t, {Observation{kind, z, r}});
+    }
+    // 같은 시각의 관측 여럿(카메라 회전과 이동)을 차례로 넣는다. 하나씩 넣는 것과 결과가 비트까지 같고, 과거 관측이면
+    // 되감기는 한 번이다(locationd 필터 작업의 78%가 되감고 다시 적용하는 일이었다).
+    bool predict_and_observe(double t, std::initializer_list<Observation> observations);
 
     const Vec &x() const { return x_; }
     const Mat &p() const { return p_; }
@@ -114,7 +125,7 @@ public:
         car_speed_t_ = t;
         car_speed_valid_ = valid;
     }
-    // 온라인 캘리브레이션 rpy(보정 → 기기 회전)
+    // 온라인 보정 rpy(보정 좌표 → 기기 회전)
     void handle_calibration(const double rpy[3]);
     // IMU 외부 회전(칩 축을 기기 축으로 바꾼 뒤, 기기 ← IMU) rpy(rad). 기본값은 보드 실측
     // (kDefaultImuExtrinsicRpy). 검사는 0으로 두고 칩 축만 본다.

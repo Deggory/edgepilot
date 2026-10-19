@@ -135,12 +135,12 @@ re-engaged the stock cruise after the driver had braked.
 ## Body signals
 
 CGW1's two-bit B-CAN signals use 3 for a B-CAN signal timeout
-(`svrs_dl3_can_v6.dbc`). These are the blinkers, the hazards, the driver's door
-and the seatbelt. `decode_cgw1()` reads a timeout as the safe value:
+(`svrs_dl3_can_v6.dbc`). edgepilot reads the blinkers, the driver's door and
+the seatbelt among them. `decode_cgw1()` reads a timeout as the safe value:
 
 | Signal | A timeout reads as | Why |
 | --- | --- | --- |
-| blinkers, hazards | off | on would start a lane-change or turn desire |
+| blinkers | off | on would start a lane-change or turn desire |
 | driver's door | open | blocks engaging |
 | seatbelt | unlatched | blocks engaging |
 
@@ -179,7 +179,11 @@ python3 tools/control/export_can_fixture.py <route>/events/003.bin drive.can
 ./build-host/bin/gtest_lateral_controller drive.can
 ```
 
-The 60.001 s K7 YG HEV fixture holds 43,273 CAN records. The expected result
+The exporter keeps only the frames the car sent, as `controlsd` reads them: it
+leaves out the Panda's echoes of edgepilot's own frames, CAN FD lengths and
+virtual buses, since the fixture has no flags to tell them apart. The
+60.001 s K7 YG HEV fixture held 43,273 CAN records with the echoes, before
+2026-10-19. The expected result
 is 5,970 messages each for bus-0 `LKAS11`, bus-1 `LKAS11` and bus-2 `MDPS12`,
 plus 2,985 bus-1 `CLU11` messages. The replay also checks frame lengths, active
 ticks, torque bounds, and the desired curvature against the openpilot

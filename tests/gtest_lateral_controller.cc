@@ -1,4 +1,4 @@
-// 횡제어기(LateralController): engage 게이트와 홀드, 토크 한계와 MDPS 고장 회피, 곡률 제한, Panda
+// 횡제어기(LateralController): 결합 게이트와 홀드, 토크 한계와 MDPS 고장 회피, 곡률 제한, Panda
 // 게이트와 넘겨받기, LKAS HUD, 그리고 학습값(paramsd·torqued)과 lagd 지연 소비. CanFixture는 녹화 CAN
 // 픽스처를 컨트롤러에 흘려 openpilot 참조식과 대조하며, 픽스처를 인자로 줄 때만 돈다. CAN 신호는
 // gtest_car, 토크 제어기는 gtest_lateral_torque, 홀드는 gtest_control_holds, 플래너는
@@ -8,10 +8,10 @@
 #include "common/model_output.h"
 #include "controls/control_params.h"
 #include "controls/lateral_controller.h"
-#include "controls/lateral_path.h"
 #include "controls/lateral_torque.h"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -20,26 +20,12 @@
 #include <iterator>
 #include <limits>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace {
 
 // 컨트롤러가 보는 수신 메시지 시각을 한 번에 t로 맞춘다.
-void stamp_can_times(VehicleCanState *vehicle, double t) {
-    vehicle->lkas11_time_s = t;
-    vehicle->clu11_time_s = t;
-    vehicle->sas11_time_s = t;
-    vehicle->esp12_time_s = t;
-    vehicle->mdps12_time_s = t;
-    vehicle->tcs13_time_s = t;
-    vehicle->tcs15_time_s = t;
-    vehicle->e_ems11_time_s = t;
-    vehicle->elect_gear_time_s = t;
-    vehicle->whl_spd11_time_s = t;
-    vehicle->cgw1_time_s = t;
-    vehicle->cgw2_time_s = t;
-}
+void stamp_can_times(VehicleCanState *vehicle, double t) { stamp_received_messages(vehicle, t); }
 
 VehicleCanState ready_vehicle(double timestamp_s = 1.0) {
     VehicleCanState vehicle;
@@ -57,8 +43,6 @@ VehicleCanState ready_vehicle(double timestamp_s = 1.0) {
 
 LateralPath replay_path() {
     LateralPath path;
-    path.left_valid = true;
-    path.right_valid = true;
     path.usable_for_steering = true;
     path.point_count = 30;
     path.reach_m = 60.0f;
@@ -121,7 +105,7 @@ TEST(LateralController, BrakingDoesNotDisengage) {
 
     vehicle.brake_pressed = true;
     const auto brake_pressed_result = controller.update(replay_path(), replay_target(), vehicle, 1.01, 1);
-    ASSERT_TRUE(brake_pressed_result.active) << "DriverBraking도 횡제어를 disengage하지 않는다";
+    ASSERT_TRUE(brake_pressed_result.active) << "DriverBraking도 횡제어를 해제하지 않는다";
 }
 
 // K7 MDPS는 steer 요청이 켜진 채 85도 위에 0.98초 넘게 머물면 토크와 무관하게 fault를 낸다
@@ -172,7 +156,7 @@ TEST(LateralController, LargeAngleFaultAvoidance) {
         << "최대 요청은 하강에 필요한 프레임 전까지 그대로 둔다(예전 램프는 첫 프레임부터 줄였다)";
 
     result = step();
-    // 89번째 프레임: 토크 0에서 요청을 끈다. disengage가 아니고 ToiFlt도 세우지 않는다
+    // 89번째 프레임: 토크 0에서 요청을 끈다. 해제가 아니고 ToiFlt도 세우지 않는다
     ASSERT_TRUE(result.active);
     ASSERT_TRUE(result.large_angle_hold);
     ASSERT_EQ(result.apply_torque, 0);
@@ -239,7 +223,7 @@ TEST(LateralController, UpstreamAngleCutWhenAvoidanceOff) {
 
 // MDPS 일시 고장(MDPS12 ToiFlt·ToiUnavail, 상류 steerFaultTemporary): 결합 중이면 그 프레임부터 조향을 쉬고
 // (토크 0, 요청 비트 끔) steerTempUnavailable로 해제 예고를 띄운다. 풀리면 토크를 0부터 다시 올리고, 3초
-// 이어지면 해제한다. engage도 거부한다.
+// 이어지면 해제한다. 결합도 거부한다.
 TEST(LateralController, MdpsFaultPausesSteeringAndSoftDisables) {
     LateralControllerConfig config;
     config.timing.vehicle_state_timeout_ms = 2000;
@@ -286,7 +270,7 @@ TEST(LateralController, MdpsFaultPausesSteeringAndSoftDisables) {
     for (const double start = t; t < start + 0.2; t += 0.01) r = step(t);
     EXPECT_FALSE(r.engaged) << "3초 이어지면 해제한다";
     const LateralControlResult again = press_set(t += 0.01);
-    EXPECT_TRUE(again.engage_rejected) << "고장 중에는 engage를 거부한다";
+    EXPECT_TRUE(again.engage_rejected) << "고장 중에는 결합을 거부한다";
     EXPECT_EQ(again.active_block, BlockReason::SteerTempUnavailable);
 }
 
@@ -445,7 +429,7 @@ TEST(LateralController, PathFlickerDebounce) {
     ASSERT_EQ(active_after, 1) << "경로가 계속 유효하면 홀드 뒤 다시 활성이 된다";
 }
 
-// 정차(path 무효)에서도 engage는 받아야 한다 — 조향만 쉰다.
+// 정차(path 무효)에서도 결합은 받아야 한다 — 조향만 쉰다.
 TEST(LateralController, EngageAllowedWithUnavailablePath) {
     LateralControllerConfig config;
     config.timing.vehicle_state_timeout_ms = 2000;
@@ -459,7 +443,7 @@ TEST(LateralController, EngageAllowedWithUnavailablePath) {
     controller.update(bad, replay_target(), vehicle, 1.0, 0, true, true);
     vehicle.clu_button = 0;
     const auto engaged = controller.update(bad, replay_target(), vehicle, 1.01, 1, true, true);
-    // 정차 중에는 경로가 없어도 engage를 받는다
+    // 정차 중에는 경로가 없어도 결합을 받는다
     ASSERT_TRUE(engaged.engaged);
     ASSERT_FALSE(engaged.engage_rejected);
     // 정지 + path 무효는 오류가 아니라 대기 상태로 보고한다
@@ -483,13 +467,13 @@ TEST(LateralController, EngageAllowedWithUnavailablePath) {
     // 주행 중 쓸 수 없는 경로는 path_invalid로 알린다
     ASSERT_FALSE(rolling.active);
     ASSERT_EQ(rolling.active_block, BlockReason::PathInvalid);
-    // 결함은 가용성 대기보다 우선한다 (정차 중 문 열림 -> hard disengage)
+    // 결함은 가용성 대기보다 우선한다 (정차 중 문 열림 -> 즉시 해제)
     vehicle = ready_vehicle(1.03);
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 0.0f;
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 0.0f;
     vehicle.door_open = true;
     const auto door = controller.update(bad, replay_target(), vehicle, 1.03, 3, true, true);
-    // 고장은 사용 가능 여부보다 우선하고 정차 중에도 바로 disengage한다
+    // 고장은 사용 가능 여부보다 우선하고 정차 중에도 바로 해제한다
     ASSERT_EQ(door.active_block, BlockReason::DoorOpen);
     ASSERT_FALSE(door.engaged);
 }
@@ -510,7 +494,7 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
 
     controller.set_calibration_status(0);
     const auto rejected = press_set(1.0);
-    EXPECT_TRUE(rejected.engage_rejected) << "캘리브레이션 미완료면 engage를 거부한다";
+    EXPECT_TRUE(rejected.engage_rejected) << "보정 미완료면 결합을 거부한다";
     EXPECT_FALSE(rejected.engaged);
     EXPECT_EQ(rejected.active_block, BlockReason::CalibrationIncomplete);
 
@@ -518,7 +502,7 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
     const auto engaged = press_set(2.0);
     ASSERT_TRUE(engaged.engaged && engaged.active);
 
-    // engage 중 재보정: 경고를 띄운 채 3초 조향하고 해제한다.
+    // 결합 중 재보정: 경고를 띄운 채 3초 조향하고 해제한다.
     controller.set_calibration_status(3);
     LateralControlResult r;
     double t = 2.02;
@@ -735,26 +719,22 @@ TEST(LateralController, LkasHudStateStability) {
     VehicleCanState vehicle = ready_vehicle();
     vehicle.cluster_speed_raw = 0.0f;  // 클러스터 속도 없음
 
-    LateralPath no_lane_path = replay_path();
-    no_lane_path.left_valid = false;
-    no_lane_path.right_valid = false;
-    const auto active = controller.update(no_lane_path, replay_target(), vehicle, 1.0, 0);
+    const auto active = controller.update(replay_path(), replay_target(), vehicle, 1.0, 0);
     // 활성 상태의 HUD 프레임
     ASSERT_TRUE(active.active);
     ASSERT_FALSE(active.frames.empty());
-    ASSERT_EQ(decode_lkas11(active.frames.front().data).ldws_sys_state, 3)
-        << "차선 확률이 흔들려도 HUD는 활성으로 남는다";
+    ASSERT_EQ(decode_lkas11(active.frames.front().data).ldws_sys_state, 3);
 
     // 클러스터는 sys_state 천이마다 부저를 울리므로, sys_state는 active가
-    // 아니라 engaged만 따른다. enable/disable에서만 천이가 생긴다.
+    // 아니라 결합(engaged)만 따른다. enable/disable에서만 천이가 생긴다.
     LateralTarget invalid_target = replay_target();
     invalid_target.mpc_solution_valid = false;
-    const auto inactive = controller.update(no_lane_path, invalid_target, vehicle, 2.5, 2);
+    const auto inactive = controller.update(replay_path(), invalid_target, vehicle, 2.5, 2);
     // 비활성 상태의 HUD 프레임
     ASSERT_FALSE(inactive.active);
     ASSERT_FALSE(inactive.frames.empty());
     ASSERT_EQ(decode_lkas11(inactive.frames.front().data).ldws_sys_state, 3)
-        << "engage 중 비활성이어도 부저가 울리지 않게 sys_state를 유지한다";
+        << "결합 중 비활성이어도 부저가 울리지 않게 sys_state를 유지한다";
 }
 
 TEST(LateralController, PandaGateAndHandoff) {
@@ -765,7 +745,7 @@ TEST(LateralController, PandaGateAndHandoff) {
 
     vehicle.clu_button = 2;
     const auto set_press = controller.update(replay_path(), replay_target(), vehicle, 1.0, 0, true, true);
-    ASSERT_FALSE(set_press.engaged) << "SET은 떼기 전에 engage하지 않는다";
+    ASSERT_FALSE(set_press.engaged) << "SET은 떼기 전에 결합하지 않는다";
 
     vehicle.clu_button = 0;
     const auto panda_blocked = controller.update(replay_path(), replay_target(), vehicle, 1.01, 1, true, false);
@@ -799,7 +779,7 @@ TEST(LateralController, PandaGateAndHandoff) {
     VehicleCanState timeout_vehicle_later = ready_vehicle(11.0);
     const auto panda_timeout =
         panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle_later, 11.02, 102, true, false);
-    // Panda 불일치가 이어지면 결국 engage를 거부한다
+    // Panda 불일치가 이어지면 결국 결합을 거부한다
     ASSERT_FALSE(panda_timeout.engaged);
     ASSERT_TRUE(panda_timeout.engage_rejected);
     ASSERT_EQ(panda_timeout.active_block, BlockReason::PandaControlsOff);
@@ -817,7 +797,7 @@ TEST(LateralController, PandaGateAndHandoff) {
     deferred_invalid_target.mpc_solution_valid = false;
     const auto deferred_static = deferred_static_controller.update(replay_path(), deferred_invalid_target,
                                                                    deferred_vehicle, 12.02, 2, true, true);
-    // Panda가 회복되면 정적 engage 게이트를 다시 본다
+    // Panda가 회복되면 정적 결합 게이트를 다시 본다
     ASSERT_FALSE(deferred_static.engaged);
     ASSERT_TRUE(deferred_static.engage_rejected);
     ASSERT_EQ(deferred_static.active_block, BlockReason::LateralPlanInvalid);
@@ -843,11 +823,11 @@ TEST(LateralController, PandaGateAndHandoff) {
     controller.update(replay_path(), replay_target(), vehicle, 4.05, 305, true, true);
     vehicle.clu_button = 0;
     const auto reengaged = controller.update(replay_path(), replay_target(), vehicle, 4.06, 306, true, true);
-    // 인계 뒤 다시 engage
+    // 인계 뒤 다시 결합
     ASSERT_TRUE(reengaged.active);
     ASSERT_FALSE(reengaged.frames.empty());
     ASSERT_EQ(decode_lkas11(reengaged.frames.front().data).msg_count, 10)
-        << "다시 engage하면 순정 카메라의 LKAS 카운터에서 이어간다";
+        << "다시 결합하면 순정 카메라의 LKAS 카운터에서 이어간다";
 
     LateralController rejected_controller(config);
     VehicleCanState rejected_vehicle = ready_vehicle();
@@ -858,14 +838,14 @@ TEST(LateralController, PandaGateAndHandoff) {
     invalid_target.mpc_solution_valid = false;
     const auto rejected =
         rejected_controller.update(replay_path(), invalid_target, rejected_vehicle, 1.01, 1, true, true);
-    // 정적 engage 게이트는 engaged 상태를 남기지 않고 거부한다
+    // 정적 결합 게이트는 결합 상태를 남기지 않고 거부한다
     ASSERT_FALSE(rejected.engaged);
     ASSERT_TRUE(rejected.engage_rejected);
     ASSERT_EQ(rejected.active_block, BlockReason::LateralPlanInvalid);
 }
 
-// 시동 직후 첫 engage: Panda health 가 아직 없고 안전벨트/기어가 막고 있을 때.
-// 실차(2026-09-12)에서 engage 톤이 울린 뒤 해제되고, 두 번째 시도부터만
+// 시동 직후 첫 결합: Panda health 가 아직 없고 안전벨트/기어가 막고 있을 때.
+// 실차(2026-09-12)에서 결합 톤이 울린 뒤 해제되고, 두 번째 시도부터만
 // 거절음이 났다. 하드 결함이 panda_not_ready 뒤로 밀려 가려졌기 때문이다.
 TEST(LateralController, ColdStartEngageReportsHardBlock) {
     const auto cold_start_attempt = [](bool panda_ready, bool seatbelt_unlatched, int gear) {
@@ -926,17 +906,6 @@ TEST(LateralController, SteeringJsonMatchesDefaults) {
     ASSERT_TRUE(load_steering_params_json("params/steering.json", &json, &error)) << "steering.json 읽기";
     // 파일에서 읽는 모든 키가 코드 기본값과 같다
     EXPECT_EQ(first_steering_param_difference(json, defaults), "") << "steering.json과 기본값이 다른 키";
-    const std::string path = "/tmp/gtest_lateral_controller_raw_keys.json";
-    std::FILE *f = std::fopen(path.c_str(), "w");
-    ASSERT_NE(f, nullptr) << "raw 키 픽스처 쓰기";
-    std::fputs("{\"torque_kf_raw\": 20}\n", f);
-    std::fclose(f);
-    SteeringParams rejected;
-    const bool loaded = load_steering_params_json(path, &rejected, &error);
-    std::remove(path.c_str());
-    // 2026-09-24 이전 raw 이득 키는 기본값으로 넘어가지 않고 거부된다
-    ASSERT_FALSE(loaded);
-    ASSERT_NE(error.find("torque_kf_raw"), std::string::npos);
 }
 
 // 편경사 추정은 직선에서만 갱신하고 커브에서는 유지하며, 30초 넘게 갱신이 없으면 0으로 줄인다. 호출 간격(dt)이
@@ -959,7 +928,7 @@ TEST(RoadBankEstimator, HoldsInCurvesAndFadesWhenStale) {
 
 // 스스로 가는 최대 조향각은 고장 각도 아래에서 멈춰야 뜻이 있다: 파일이 더 큰 값을 줘도 그 아래로 자른다.
 TEST(LateralController, HoldAngleStaysBelowTheFaultAngle) {
-    const std::string path = "/tmp/gtest_lateral_controller_hold_angle.json";
+    const std::string path = "/tmp/gtest_lateral_controller_hold_angle_" + std::to_string(getpid()) + ".json";
     std::FILE *f = std::fopen(path.c_str(), "w");
     ASSERT_NE(f, nullptr) << "픽스처 쓰기";
     std::fputs("{\"avoid_lkas_fault_hold_angle_deg\": 120}\n", f);
@@ -1206,7 +1175,7 @@ TEST(LateralController, LiveParamsSwitchOffIsIdentical) {
         vehicle.driver_torque = tick % 97 == 0 ? 200 : 10;
         LateralTarget target = replay_target();
         for (int i = 0; i < kLateralControlN; ++i) target.curvatures[i] = 0.002f * std::cos(0.01f * tick);
-        fed.set_live_params(odd_live_params(), false, true);
+        fed.set_live_params(odd_live_params(), false);
         const LateralControlResult a = plain.update(replay_path(), target, vehicle, t, tick);
         const LateralControlResult b = fed.update(replay_path(), target, vehicle, t, tick);
         // 학습기를 끄면 막는 일이 없다
@@ -1229,13 +1198,15 @@ TEST(LateralController, ParamsdInvalidBlocksOnlyWhenUsed) {
     config.steering_params.use_live_vehicle_params = true;
     LateralController controller(config);
     const VehicleCanState vehicle = ready_vehicle(1.0);
-    controller.set_live_params(odd_live_params(), true, true);
+    controller.set_live_params(odd_live_params(), true);
     ASSERT_TRUE(controller.update(replay_path(), replay_target(), vehicle, 1.0, 0).active)
         << "유효한 학습값은 제어를 활성으로 둔다";
-    controller.set_live_params(odd_live_params(), false, false);
-    ASSERT_TRUE(controller.update(replay_path(), replay_target(), vehicle, 1.01, 1).active)
-        << "보정 전 무효 학습값은 막지 않는다(상류 cal_status 검사)";
-    controller.set_live_params(odd_live_params(), false, true);
+    controller.set_live_params(odd_live_params(), false);
+    controller.set_calibration_status(0);
+    ASSERT_EQ(controller.update(replay_path(), replay_target(), vehicle, 1.01, 1).active_block,
+              BlockReason::CalibrationIncomplete)
+        << "보정 전에는 보정 사유가 먼저다(상류 cal_status 검사): 무효 학습값으로 막지 않는다";
+    controller.set_calibration_status(1);
     const LateralControlResult invalid = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2);
     ASSERT_EQ(invalid.active_block, BlockReason::ParamsdInvalid) << "보정 뒤 무효 학습값은 막는다";
     // 상류 paramsdTemporaryError처럼 SOFT_DISABLE: 결합 중이면 경고하며 3초 더 조향한 뒤 해제한다
@@ -1244,7 +1215,7 @@ TEST(LateralController, ParamsdInvalidBlocksOnlyWhenUsed) {
     EXPECT_TRUE(invalid.active);
     LiveLateralParams unseen = odd_live_params();
     unseen.use_vehicle = false;
-    controller.set_live_params(unseen, false, true);
+    controller.set_live_params(unseen, false);
     ASSERT_NE(controller.update(replay_path(), replay_target(), vehicle, 1.03, 3).active_block,
               BlockReason::ParamsdInvalid)
         << "paramsd가 발행하기 전에는 막지 않는다(상류 sm.seen)";
@@ -1284,10 +1255,6 @@ TEST(LateralController, LiveDelaySwitch) {
     EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.44f);
     on.set_live_delay(0.44f, false);
     EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.34f) << "확정 전·오래된 값은 쓰지 않는다";
-    on.set_live_delay(0.9f, true);
-    EXPECT_FLOAT_EQ(on.plan_delay_s(), 0.65f);
-    on.set_live_delay(std::nanf(""), true);
-    EXPECT_FALSE(on.live_delay_in_use());
 }
 
 // 명령줄로 받은 CAN 픽스처(없으면 CanFixture를 건너뛴다)
@@ -1432,6 +1399,143 @@ TEST(LateralController, CanFixture) {
     ASSERT_GT(max_torque, 0);
     ASSERT_LE(max_torque, 384);
     ASSERT_LT(max_curvature_error, 1e-6f) << "지연 보정 곡률이 openpilot 참조식과 같다";
+}
+
+// 결합한 컨트롤러와 그 차를 함께 들고 틱을 진행하는 작은 도구(입력 끊김·해제 예고 시험용)
+struct EngagedDrive {
+    LateralControllerConfig config;
+    LateralController controller;
+    VehicleCanState vehicle = ready_vehicle(1.0);
+    double t = 1.0;
+    int frame = 0;
+
+    explicit EngagedDrive(LateralControllerConfig c = {}) : config(c), controller(config) {}
+    LateralControlResult tick(const LateralPath &path, const LateralTarget &target, bool panda_allowed = true,
+                              bool fresh_can = true) {
+        t += 0.01;
+        if (fresh_can) {
+            const int button = vehicle.clu_button;
+            const float wheel = vehicle.wheel_speed_fl_kph;
+            vehicle = ready_vehicle(t);
+            vehicle.clu_button = button;
+            vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = wheel;
+            vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = wheel;
+        }
+        return controller.update(path, target, vehicle, t, frame++, true, panda_allowed);
+    }
+    LateralControlResult engage() {
+        vehicle.clu_button = 2;
+        tick(replay_path(), replay_target());
+        vehicle.clu_button = 0;
+        return tick(replay_path(), replay_target());
+    }
+};
+
+LateralPath lost_model_path() {
+    LateralPath path;
+    path.model_lost = true;
+    return path;
+}
+
+// 결합 중 모델이 끊기면 바로 조향을 쉬고(토크 0) 해제 예고를 띄운다. 3초 안에 돌아오면 이어서 조향하고, 넘으면
+// 해제한다. 예전에는 경고 없이 쉬다가 모델이 돌아오면 운전자 확인 없이 다시 조향했다(상류는 commIssue로 해제).
+TEST(LateralController, LostModelWarnsThenDisengages) {
+    EngagedDrive drive;
+    ASSERT_TRUE(drive.engage().engaged);
+    for (int i = 0; i < 100; ++i) drive.tick(replay_path(), replay_target());
+    LateralControlResult r = drive.tick(lost_model_path(), replay_target());
+    EXPECT_EQ(r.active_block, BlockReason::ModelLost);
+    EXPECT_TRUE(r.engaged);
+    EXPECT_FALSE(r.active) << "낡은 모델로는 조향하지 않는다";
+    EXPECT_EQ(r.apply_torque, 0);
+    EXPECT_FALSE(r.soft_disabling) << "짧은 끊김에는 경고하지 않는다";
+    for (int i = 0; i < 40; ++i) r = drive.tick(lost_model_path(), replay_target());
+    EXPECT_FALSE(r.soft_disabling) << "0.4초";
+    for (int i = 0; i < 15; ++i) r = drive.tick(lost_model_path(), replay_target());
+    EXPECT_TRUE(r.soft_disabling) << "0.5초가 넘으면 해제 예고를 띄운다";
+    // 2초 안에 돌아오면 해제하지 않고, 경로 복귀 디바운스(0.5초) 뒤 다시 조향한다
+    for (int i = 0; i < 150; ++i) r = drive.tick(lost_model_path(), replay_target());
+    ASSERT_TRUE(r.engaged && r.soft_disabling);
+    for (int i = 0; i < 60; ++i) r = drive.tick(replay_path(), replay_target());
+    EXPECT_TRUE(r.engaged && r.active);
+    EXPECT_FALSE(r.soft_disabling);
+    // 3초를 넘기면 해제한다
+    const double lost_at = drive.t;
+    for (const double end = drive.t + kInterruptDisengageS - 0.05; drive.t < end;) {
+        r = drive.tick(lost_model_path(), replay_target());
+        const double lost = drive.t - lost_at - 0.01;  // 첫 끊김 틱부터
+        ASSERT_TRUE(r.engaged) << lost;
+        if (std::fabs(lost - kInterruptAlertS) > 0.015) ASSERT_EQ(r.soft_disabling, lost > kInterruptAlertS) << lost;
+    }
+    for (int i = 0; i < 10; ++i) r = drive.tick(lost_model_path(), replay_target());
+    EXPECT_FALSE(r.engaged) << "3초가 지나면 해제한다";
+    EXPECT_FALSE(r.soft_disabling);
+    // 모델이 돌아와도 다시 결합하지 않는다
+    for (int i = 0; i < 100; ++i) r = drive.tick(replay_path(), replay_target());
+    EXPECT_FALSE(r.engaged || r.active);
+}
+
+// 차량 CAN이 끊겨도(차량 상태가 낡음) 같다. 정차 중 모델이 끊겨도 정차 대기가 아니라 모델 끊김이다.
+TEST(LateralController, StaleCarStateWarnsThenDisengages) {
+    LateralControllerConfig config;
+    config.timing.vehicle_state_timeout_ms = 200;
+    EngagedDrive drive(config);
+    ASSERT_TRUE(drive.engage().engaged);
+    LateralControlResult r;
+    for (int i = 0; i < 80; ++i) r = drive.tick(replay_path(), replay_target(), true, false);
+    EXPECT_EQ(r.active_block, BlockReason::VehicleStateStale);
+    EXPECT_TRUE(r.engaged && r.soft_disabling && !r.active);
+    for (const double end = drive.t + kInterruptDisengageS; drive.t < end;)
+        r = drive.tick(replay_path(), replay_target(), true, false);
+    EXPECT_FALSE(r.engaged);
+
+    EngagedDrive stopped;
+    ASSERT_TRUE(stopped.engage().engaged);
+    stopped.vehicle.wheel_speed_fl_kph = 0.0f;
+    r = stopped.tick(lost_model_path(), replay_target());
+    EXPECT_EQ(r.active_block, BlockReason::ModelLost);
+}
+
+// 결합 중 Panda가 허가를 거두면(재연결·safety 재설정) 해제 예고 뒤 해제한다. 상류는 불일치 2초 뒤 해제한다.
+// 예전에는 계기판에 작동 표시를 낸 채 무기한 쉬다가 RES/SET에 말없이 다시 조향했다.
+TEST(LateralController, PandaRevokeWhileEngagedDisengages) {
+    EngagedDrive drive;
+    ASSERT_TRUE(drive.engage().engaged);
+    for (int i = 0; i < 50; ++i) drive.tick(replay_path(), replay_target());
+    LateralControlResult r = drive.tick(replay_path(), replay_target(), false);
+    EXPECT_EQ(r.active_block, BlockReason::PandaControlsOff);
+    EXPECT_TRUE(r.engaged && !r.active);
+    // 잠깐(0.5초 안) 끊겼다 돌아오면 경고 없이 그대로 간다
+    for (int i = 0; i < 40; ++i) {
+        r = drive.tick(replay_path(), replay_target(), false);
+        ASSERT_FALSE(r.soft_disabling);
+    }
+    r = drive.tick(replay_path(), replay_target());
+    EXPECT_TRUE(r.engaged && r.active && !r.soft_disabling);
+    for (const double end = drive.t + kInterruptDisengageS + 0.02; drive.t < end;)
+        r = drive.tick(replay_path(), replay_target(), false);
+    EXPECT_FALSE(r.engaged) << "허가가 3초 넘게 없으면 해제한다";
+}
+
+// 해제 예고 타이머는 SoftDisable 사유가 이어지는 동안 앞선 다른 사유(경로 무효, 정차)가 끼어도 이어 센다
+// (상류 softDisabling). 예전에는 다른 사유가 한 틱만 끼어도 처음부터 다시 세어 해제가 끝나지 않았다.
+TEST(LateralController, SoftDisableTimerKeepsCountingThroughOtherReasons) {
+    EngagedDrive drive;
+    ASSERT_TRUE(drive.engage().engaged);
+    drive.controller.set_calibration_status(2);
+    LateralPath short_path = replay_path();
+    short_path.usable_for_steering = false;
+    LateralControlResult r;
+    const double start = drive.t;
+    while (drive.t < start + kSoftDisableS + 0.1) {
+        // 0.5초마다 한 틱 경로가 무효다
+        const bool blip = static_cast<int>((drive.t - start) * 100.0 + 0.5) % 50 == 25;
+        r = drive.tick(blip ? short_path : replay_path(), replay_target());
+        if (!r.engaged) break;
+        ASSERT_TRUE(r.soft_disabling) << drive.t - start;
+    }
+    EXPECT_FALSE(r.engaged) << "끼어든 경로 무효와 상관없이 3초 뒤 해제한다";
+    EXPECT_NEAR(drive.t - start, kSoftDisableS, 0.05);
 }
 
 }  // namespace

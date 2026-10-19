@@ -186,7 +186,8 @@ python3 run_axmodel_assembled.py <model.axmodel> <input_dir> <out.bin>
 It runs the model open loop and writes each frame's output as the 2576 floats
 of the original layout. A split build is reassembled the way
 `src/model/model_output_assembly.h` does it, so single-output and split builds
-are compared with the same measures against `ref.npy`.
+are compared with the same measures against `ref.npy` (the runtime takes only
+split builds).
 
 Compare a new build against the shipped one on the same inputs before replacing
 it. The shipped build was calibrated on an earlier sample set that is no longer

@@ -1,11 +1,14 @@
 // 광류 보정기의 하드웨어 무관 부분: 이동 방향 풀이(알려진 장면을 투영한 합성 점), 코너 고르기, 곧은 길
-// 조건, 블록 집계. IVE 부분은 보드에서 녹화를 재생해 확인한다(diagnostics/flow_calibration_replay).
+// 조건, 블록 집계, 그리고 가짜 엔진으로 FlowTracker의 프레임 잇기와 버림. IVE 부분은 보드에서 녹화를 재생해
+// 확인한다(diagnostics/flow_calibration_replay).
 #include "model/flow_calibration.h"
+#include "model/flow_tracker.h"
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <random>
 #include <vector>
 
@@ -191,7 +194,6 @@ TEST(FlowCalibratorTest, BlockMediansAndStatus) {
             const double yaw = (i == 3) ? 5.0 : -0.1 * (blk + 1);
             cal.add(window(yaw, -1.0), 120, frame += 9);
         }
-        cal.add(FlowSolution{}, 0, frame + 1);  // valid가 아니면 무시한다
         EXPECT_EQ(cal.state().blocks, static_cast<uint32_t>(blk + 1));
         EXPECT_EQ(cal.state().status, blk + 1 >= kFlowMinBlocks ? 2U : 1U);
     }
@@ -307,6 +309,120 @@ TEST(FlowCalibratorTest, CountsRejectedWindows) {
     EXPECT_NEAR(cal.state().window_parallax, 0.3, 1e-6);
     cal.reset();
     EXPECT_EQ(cal.state().rejected_windows, 0U);
+}
+
+// 가짜 광류 엔진: 띠 안 격자에 코너 봉우리를 두고, 점은 주점 둘레로 한 프레임에 1%씩 퍼진다(정면으로 곧게 가는
+// 카메라). 풀이는 이동 방향 yaw 0·pitch 0을 낸다. push·track을 실패시키거나 센다.
+class FakeFlowEngine : public FlowEngine {
+public:
+    explicit FakeFlowEngine(int width) : width_(width), response_(static_cast<size_t>(width / 2) * kBandRows, 0) {
+        for (int y = 8; y < kBandRows - 8; y += 12)
+            for (int x = 8; x < width / 2 - 8; x += 12) response_[static_cast<size_t>(y) * (width / 2) + x] = 1000;
+    }
+    bool push(unsigned long long, int) override {
+        ++pushes;
+        return push_ok;
+    }
+    const int16_t *corner_response() override { return response_.data(); }
+    bool track(const float *xy, int n, float *out_xy, uint8_t *ok, bool backward) override {
+        ++tracks;
+        const double scale = backward ? 1.0 / 1.01 : 1.01;
+        for (int i = 0; i < n; ++i) {
+            out_xy[2 * i] = static_cast<float>(kK.cx + (xy[2 * i] - kK.cx) * scale);
+            out_xy[2 * i + 1] = static_cast<float>(kK.cy + (xy[2 * i + 1] - kK.cy) * scale);
+            ok[i] = 1;
+        }
+        return true;
+    }
+    int width() const override { return width_; }
+    const char *pyramid_engine() const override { return "fake"; }
+
+    bool push_ok = true;
+    int pushes = 0;
+    int tracks = 0;
+
+private:
+    int width_;
+    std::vector<int16_t> response_;
+};
+
+struct TrackerRig {
+    FakeFlowEngine *engine = nullptr;
+    std::unique_ptr<FlowTracker> tracker;
+    TrackerRig() {
+        auto fake = std::make_unique<FakeFlowEngine>(1280);
+        engine = fake.get();
+        tracker = std::make_unique<FlowTracker>(kK, 1280, 720, std::move(fake));
+    }
+    // 곧고 빠른 프레임 하나. valid가 거짓이면 링 슬롯이 그동안 덮어써진 것이다.
+    void frame(uint64_t id, bool valid = true, float v_ego = 25.0f) {
+        FlowFrame f;
+        f.y_phys = 0x1000;
+        f.stride = 1280;
+        f.frame_id = id;
+        f.t_s = 0.05 * static_cast<double>(id);
+        f.gate.v_ego = v_ego;
+        f.gate.vehicle_fresh = true;
+        f.still_valid = [valid] { return valid; };
+        tracker->process(f);
+    }
+};
+
+// 이어진 프레임으로 창 하나(8걸음)를 끝내고 이동 방향을 낸다
+TEST(FlowTrackerTest, ConsecutiveFramesFinishAWindow) {
+    TrackerRig rig;
+    for (uint64_t id = 1; id <= 1 + kFlowWindowSteps; ++id) rig.frame(id);
+    const FlowTracker::Stats &s = rig.tracker->stats();
+    EXPECT_EQ(s.windows_done, 1u);
+    EXPECT_EQ(s.windows_lost, 0u);
+    EXPECT_EQ(s.frames, static_cast<uint64_t>(1 + kFlowWindowSteps));
+    EXPECT_EQ(rig.engine->tracks, kFlowWindowSteps) << "앞차가 없으면 걸음마다 한 번만 따라간다";
+    const FlowCalibrationState st = rig.tracker->calibrator().state();
+    EXPECT_EQ(st.windows, 1u);
+    // 풀이의 정밀도는 FlowSolve가 본다. 여기서는 띠 안 점만으로도 정면(0.3° 안)이 나오는지만 본다
+    EXPECT_NEAR(st.window_yaw, 0.0, 0.005);
+    EXPECT_NEAR(st.window_pitch, 0.0, 0.005);
+}
+
+// frame_id가 이어지지 않으면 진행 중인 창을 버리고 그 프레임에서 새로 시작한다(한 걸음 이동이 한계를 넘을 수
+// 있다). 녹화를 재생하는 도구도 이 규칙을 따르도록 녹화된 frame_id를 준다.
+TEST(FlowTrackerTest, AFrameGapDropsTheWindow) {
+    TrackerRig rig;
+    for (uint64_t id = 1; id <= 4; ++id) rig.frame(id);
+    rig.frame(6);
+    EXPECT_EQ(rig.tracker->stats().windows_lost, 1u);
+    for (uint64_t id = 7; id < 6 + kFlowWindowSteps; ++id) rig.frame(id);
+    EXPECT_EQ(rig.tracker->stats().windows_done, 0u) << "새 창은 6번에서 시작했다";
+    rig.frame(6 + kFlowWindowSteps);
+    EXPECT_EQ(rig.tracker->stats().windows_done, 1u);
+}
+
+// 링 슬롯이 덮어써진 프레임과 엔진이 실패한 프레임은 그 걸음을 버리고, 다음 프레임은 이어지지 않은 것으로 본다
+TEST(FlowTrackerTest, OverwrittenOrFailedFramesAreDropped) {
+    TrackerRig rig;
+    for (uint64_t id = 1; id <= 3; ++id) rig.frame(id);
+    rig.frame(4, false);
+    EXPECT_EQ(rig.tracker->stats().windows_lost, 1u);
+    for (uint64_t id = 5; id <= 7; ++id) rig.frame(id);
+    rig.engine->push_ok = false;
+    rig.frame(8);
+    EXPECT_EQ(rig.tracker->stats().windows_lost, 2u);
+    rig.engine->push_ok = true;
+    for (uint64_t id = 9; id <= 9 + kFlowWindowSteps; ++id) rig.frame(id);
+    EXPECT_EQ(rig.tracker->stats().windows_done, 1u);
+    EXPECT_EQ(rig.tracker->stats().frames, 3u + 3u + 1u + kFlowWindowSteps) << "실패한 두 프레임은 세지 않는다";
+}
+
+// 곧은 길이 아니고 앞차도 없으면 엔진을 부르지 않고, 열린 창은 버린다
+TEST(FlowTrackerTest, ClosedGateLeavesTheEngineIdle) {
+    TrackerRig rig;
+    rig.frame(1, true, 0.0f);
+    rig.frame(2, true, 0.0f);
+    EXPECT_EQ(rig.engine->pushes, 0);
+    for (uint64_t id = 3; id <= 5; ++id) rig.frame(id);
+    rig.frame(6, true, 0.0f);
+    EXPECT_EQ(rig.tracker->stats().windows_lost, 1u);
+    EXPECT_EQ(rig.engine->pushes, 3);
 }
 
 }  // namespace

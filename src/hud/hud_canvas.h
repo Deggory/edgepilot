@@ -5,7 +5,7 @@
 // 4개 부표본 행이 지나는 구간만 쌓아 칠하므로(안티앨리어싱) 일이 덮인 넓이에 비례하고, 합성은
 // 나눗셈 대신 역수 표를 쓴다. 그린 자리는 버퍼 행마다 가로 칸 비트(damage)로 남겨, 같은 버퍼를
 // 다시 받으면 그 칸만 지운다. 그리는 쪽은 늘 가로 화면 좌표를 쓰고, 버퍼가 세로 패널 방향이면
-// 캔버스가 좌표를 옮긴다(HudOrientation). OpenCV가 필요 없다.
+// 캔버스가 좌표를 옮긴다(transpose). OpenCV가 필요 없다.
 
 #include "hud/hud_font.h"
 
@@ -29,21 +29,13 @@ constexpr uint32_t hud_fade(uint32_t color, float scale) {
 
 enum class HudAlign { left, center, right };
 
-// 화면 좌표(가로 width x height)를 버퍼 화소로 옮기는 법. 세로 패널에 바로 쓰는 버퍼는 transpose
-// (버퍼 행 = 화면 x)이고, 보드 disp_flip/disp_mirror만큼 버퍼 축을 뒤집는다. 기본은 그대로.
-struct HudOrientation {
-    bool transpose = false;
-    bool flip_x = false;  // 버퍼 열을 거꾸로
-    bool flip_y = false;  // 버퍼 행을 거꾸로
-};
-
 class HudCanvas {
 public:
-    // width·height는 화면(가로) 크기, stride는 버퍼 행 바이트. coverage는 버퍼 한 행 너비 이상의
-    // 작업 공간(그릴 때마다 비워 둔다). damage는 이 버퍼의 행마다 그린 가로 칸(폭/16 이상, 최소
-    // 64 px)의 비트로, 버퍼와 함께 이어 쓴다.
+    // width·height는 화면(가로) 크기, stride는 버퍼 행 바이트. transpose면 버퍼가 세로 패널 방향이다(버퍼 행 =
+    // 화면 x, 버퍼 열 = 화면 y). coverage는 버퍼 한 행 너비 이상의 작업 공간(그릴 때마다 비워 둔다). damage는 이
+    // 버퍼의 행마다 그린 가로 칸(폭/16 이상, 최소 32 px)의 비트로, 버퍼와 함께 이어 쓴다.
     HudCanvas(void *pixels, int width, int height, int stride_bytes, std::vector<uint16_t> &coverage,
-              std::vector<uint16_t> &damage, HudOrientation orientation = {});
+              std::vector<uint16_t> &damage, bool transpose = false);
 
     int width() const { return width_; }
     int height() const { return height_; }
@@ -53,7 +45,7 @@ public:
     // 전부 지운다(처음 받은 버퍼).
     void clear(bool only_damaged);
     void fill_rect(int x, int y, int w, int h, uint32_t color);
-    // 모서리만 다각형으로 칠한다. 좌표가 모두 정수면 모서리 사이 곧은 행은 fill_rect로 바로
+    // 모서리만 다각형으로 칠한다. 좌표가 모두 정수면 모서리 사이 곧은 부분은 fill_rect로 바로
     // 칠한다(카드·칩 대부분).
     void fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color);
     // 다각형(짝홀 규칙)을 칠한다. 도로 띠처럼 먼 쪽을 흐리게 하려면 fade_far를 쓰는데, 화면
@@ -81,10 +73,10 @@ private:
     int buffer_w_;  // 버퍼
     int buffer_h_;
     int stride_;
-    HudOrientation orientation_;
+    bool transpose_;
     std::vector<uint16_t> &coverage_;  // 한 행의 부표본 커버리지 합(0..256)
     std::vector<uint16_t> &damage_;    // 행마다 그린 칸 비트
-    int tile_shift_ = 6;               // 칸 폭 = 1 << tile_shift_
+    int tile_shift_ = 5;               // 칸 폭 = 1 << tile_shift_
 };
 
 #endif

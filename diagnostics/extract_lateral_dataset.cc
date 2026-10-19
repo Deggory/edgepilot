@@ -10,9 +10,8 @@
 #include "controls/lateral_torque.h"
 #include "controls/road_bank.h"
 #include "recorded_vehicle_can.h"
-#include "recording/recorded_model_state.h"
 #include "recording/recording_format.h"
-#include "recording/time_ordered_events.h"
+#include "route_events.h"
 
 #include <algorithm>
 #include <cmath>
@@ -62,7 +61,7 @@ int main(int argc, char **argv) {
                  "des_curv,act_curv,des_la,"
                  "la_p03,la_p06,la_p10,la_p15,"
                  "roll_p03,roll_p06,roll_p10,roll_p15,model_age,"
-                 "toi_active,steer_fault,blinker,eps_out_tq\n");
+                 "toi_active,steer_fault,blinker,eps_out_tq,nn_ff\n");
 
     const SteeringParams params;  // steer_max 384 (실차 설정과 동일)
     const float torque_scale = static_cast<float>(kTorqueOutputSign) / static_cast<float>(params.steer_max);
@@ -76,14 +75,9 @@ int main(int argc, char **argv) {
     double route_start_s = -1.0;
     uint64_t rows = 0;
 
-    TimeOrderedEvents events(std::vector<std::string>(argv + 2, argv + argc));
-    // 8-19 route처럼 tmpfs가 차서 끊긴 파일은 0으로 채워진 구간이 남는다. 리더는 재동기화하지 않고 거기서 끝낸다.
-    events.on_file_end = [](const std::string &path, const EventLogReader &reader) {
-        if (!reader.ok())
-            std::fprintf(stderr, "skip %s: not an event file\n", path.c_str());
-        else if (reader.truncated())
-            std::fprintf(stderr, "%s: truncated at %lld bytes\n", path.c_str(), reader.truncated_at());
-    };
+    // 8-19 route처럼 tmpfs가 차서 끊긴 파일은 0으로 채워진 구간이 남는다. 리더는 재동기화하지 않고 거기서 끝내고
+    // RouteEvents가 알린다. 창은 예전 그대로 0.5초다(데이터셋 CSV가 바뀌지 않게).
+    RouteEvents events(std::vector<std::string>(argv + 2, argv + argc), 500'000'000ULL);
     TimeOrderedEvents::Record record;
     while (events.next(&record)) {
         const EventRecordHeader &rh = record.header;
@@ -96,8 +90,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        if (rh.type == static_cast<uint16_t>(RecordType::ModelState) &&
-            decode_recorded_model_state(buf.data(), rh.payload_size, record.version, &model)) {
+        if (rh.type == static_cast<uint16_t>(RecordType::ModelState) && read_record(buf, &model)) {
             have_model = model.valid != 0;
             model_time_s = now_s;
             continue;
@@ -131,11 +124,10 @@ int main(int argc, char **argv) {
             float grid[kTrajectorySize];
             float yaw[kTrajectorySize];
             float plan_roll[kTrajectorySize];
-            const bool grid_valid = model.model_t[kTrajectorySize - 1] > 0.0f;
             // v5 녹화에는 plan orientation이 없다. 요각은 plan 위치의 중앙차분으로,
             // 롤은 0으로 대신한다(전진 0.5 m 미만이면 heading이 무의미해 0).
             for (int i = 0; i < kTrajectorySize; ++i) {
-                grid[i] = grid_valid ? model.model_t[i] : model_t_idx(i);
+                grid[i] = model_t_idx(i);
                 const int prev = std::max(0, i - 1), next = std::min(kTrajectorySize - 1, i + 1);
                 const float dx = model.plan[next].x - model.plan[prev].x;
                 const float dy = model.plan[next].y - model.plan[prev].y;
@@ -165,7 +157,7 @@ int main(int argc, char **argv) {
                      "%.7f,%.7f,%.4f,"
                      "%.4f,%.4f,%.4f,%.4f,"
                      "%.5f,%.5f,%.5f,%.5f,%.3f,"
-                     "%d,%d,%d,%d\n",
+                     "%d,%d,%d,%d,%d\n",
                      now_s - route_start_s, v, cs.active, cs.desire, cs.active_block[0] ? cs.active_block : "-",
                      cs.steering_angle_deg, cs.driver_torque, cs.apply_torque,
                      static_cast<float>(cs.apply_torque) * torque_scale,
@@ -174,11 +166,12 @@ int main(int argc, char **argv) {
                      cs.desired_curvature, cs.actual_curvature, des_la, future_la[0], future_la[1], future_la[2],
                      future_la[3], future_roll[0], future_roll[1], future_roll[2], future_roll[3], model_age,
                      mdps_fresh && mdps.toi_active ? 1 : 0, vehicle.steer_fault_temporary ? 1 : 0,
-                     vehicle.left_blinker || vehicle.right_blinker ? 1 : 0, mdps_fresh ? mdps.output_torque : 0);
+                     vehicle.left_blinker || vehicle.right_blinker ? 1 : 0, mdps_fresh ? mdps.output_torque : 0,
+                     (cs.hud_flags & kHudFlagNnFeedforward) != 0 ? 1 : 0);
         ++rows;
     }
 
     std::fclose(out);
     std::fprintf(stderr, "%s: %llu rows\n", argv[1], static_cast<unsigned long long>(rows));
-    return 0;
+    return events.exit_code();
 }

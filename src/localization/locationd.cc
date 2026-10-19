@@ -11,7 +11,6 @@
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
 #include "common/utils_file.h"
-#include "common/utils_json.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
 #include "localization/localization_pipeline.h"
@@ -38,10 +37,7 @@ int main() {
     log_build_version("locationd");
 
     LateralLagConfig lag_config;
-    float actuator_delay = 0.0f;
-    if (parse_json_float_value(read_text_file(param_path("steering.json")), "steer_actuator_delay", &actuator_delay) &&
-        actuator_delay > 0.0f && actuator_delay < 1.0f)
-        lag_config.initial_lag = actuator_delay;
+    apply_steering_initial_lag(read_text_file(param_path("steering.json")), &lag_config);
     LocalizationPipeline pipeline(lag_config);
 
     const std::string lag_path = param_path("live_delay.json");

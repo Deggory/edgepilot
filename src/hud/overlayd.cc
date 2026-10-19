@@ -14,16 +14,14 @@
 #include "maixcam2/maix_display.h"
 #include "maixcam2/maix_touch.h"
 
-#include <linux/videodev2.h>
 #include <signal.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
-#include <string>
 
 // MaixCAM2 HUD. LCD의 VO 하드웨어 레이어 둘을 쓴다: 카메라 프레임 링의 최신 프레임은
 // 비디오 레이어 0(IVPS로 가운데 4:3을 640x480에), HUD는 렌더러가 640x480 화면 좌표로
@@ -70,7 +68,6 @@ public:
     explicit HudDisplay(const AppConfig &config) : profile_(config.profile) {
         // 차선 투영도 모델 워프와 같은 카메라 파라미터를 쓴다(EDGEPILOT_CAMERA_INTRINSICS).
         projection_set_camera_intrinsics(config.camera_fx, config.camera_fy, config.camera_cx, config.camera_cy);
-        default_projection_ = make_projection_state(config.manual_roll, config.manual_pitch, config.manual_yaw);
     }
 
     int run() {
@@ -109,7 +106,6 @@ public:
                 hud_.overlay_fps = static_cast<float>(overlay_frames_ / seconds);
                 hud_.model_fps = static_cast<float>(model_updates_ / seconds);
                 system_monitor_.sample(&hud_);
-                refresh_hud_state();
                 pending_redraw_ = true;
                 char profile_text[64] = "";
                 if (profile_)
@@ -133,14 +129,10 @@ public:
 private:
     // 최신 카메라 프레임을 화면 레이어 0에 올린다. 영상은 가운데 4:3을 IVPS로 잘라
     // 비율을 지키고, 투영(projection.cc)도 같은 영역을 640x480 화면에 담는다.
-    bool update_preview() {
+    void update_preview() {
         RoadAiFrame meta;
-        if (!frame_sub_.read_new(&last_frame_seq_, &meta, sizeof(meta), 0)) return false;
-        if (!frame_ring_.valid() && !frame_ring_.open(false)) return false;
-        if (meta.slot >= frame_ring_.slot_count()) {
-            ++errors_;
-            return false;
-        }
+        if (!frame_sub_.read_new(&last_frame_seq_, &meta, sizeof(meta), 0)) return;
+        if (!frame_ring_.valid() && !frame_ring_.open(false)) return;
         const uint64_t start = profile_ ? monotonic_now_ns() : 0;
         const unsigned long long phys = frame_ring_.slot_phys(meta.slot);
         // IVPS가 CMM 슬롯을 직접 읽는다(복사 없음). 읽는 동안 camerad가 슬롯을
@@ -149,15 +141,13 @@ private:
         const bool shown =
             phys != 0 && frame_ring_.read_begin(meta.slot, meta.frame_id, &seq) &&
             display_.show_video_phys(phys, static_cast<int>(meta.width), static_cast<int>(meta.height),
-                                     meta.format == V4L2_PIX_FMT_NV21,
                                      [&] { return frame_ring_.read_still_valid(meta.slot, meta.frame_id, seq); });
         if (!shown) {
             ++errors_;
-            return false;
+            return;
         }
         if (profile_) present_stats_.add(monotonic_now_ns() - start);
         ++preview_frames_;
-        return true;
     }
 
     // HUD를 세로 패널 방향 그림판에 화면 좌표(640x480)로 그리고(캔버스가 transpose), 바뀐 칸만
@@ -165,25 +155,30 @@ private:
     void draw_overlay() {
         const uint64_t draw_start = profile_ ? monotonic_now_ns() : 0;
         const MaixDisplay::OverlayBuffer buffer = display_.begin_overlay();
-        if (!buffer.pixels) {
-            ++errors_;
-            return;
-        }
         const HudTarget target{buffer.pixels, static_cast<uint32_t>(kOutW), static_cast<uint32_t>(kOutH),
-                               static_cast<uint32_t>(buffer.stride),
-                               HudOrientation{true, buffer.flip_x, buffer.flip_y}};
-        renderer_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{},
-                       have_model_state_ ? latest_projection_ : default_projection_, hud_);
-        if (!display_.end_overlay(renderer_.last_damage().data(), renderer_.last_tile_shift())) ++errors_;
+                               static_cast<uint32_t>(buffer.stride), true};
+        // 모델 상태가 없으면 출력이 무효라 투영을 쓰는 장면은 그리지 않는다
+        renderer_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{}, latest_projection_, hud_);
+        display_.end_overlay(renderer_.last_damage().data(), renderer_.last_tile_shift());
         if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
         ++overlay_frames_;
     }
 
-    // 웹 기기 설정: 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다(시작 때 읽은 값은 소리 없이). HUD 진단
-    // 카드는 설정이 아니라 화면 왼쪽 열을 눌러 켜고 끈다(overlayd가 다시 시작하면 꺼진다).
-    // 카메라 장착 오프셋은 modeld가 그 프레임에 쓴 값을 ModelState로 받는다(projection_from_model_state).
+    // 웹 기기 설정: 백라이트는 overlayd만 쓴다(웹 콘솔은 파일만 쓴다). camerad가 다시 뜰 때마다 overlayd도 다시
+    // 뜨므로 시작할 때 켠 /boot/configs 밝기를 곧바로 이 값으로 바꾼다(예전에는 밤에 꺼 둔 백라이트가 다시
+    // 켜졌다). 알림음 크기는 바뀌면 적용하고 확인음을 한 번 낸다(시작 때 읽은 값은 소리 없이). HUD 진단 카드는
+    // 설정이 아니라 화면 왼쪽 열을 눌러 켜고 끈다(overlayd가 다시 시작하면 꺼진다). 카메라 장착 오프셋은 modeld가
+    // 그 프레임에 쓴 값을 ModelState로 받는다(projection_from_model_state).
     void apply_device_settings(uint64_t now_ns) {
         if (!device_settings_file_.poll(now_ns, &device_settings_)) return;
+        const float brightness = device_settings_.brightness_percent;
+        if (std::isfinite(brightness)) {
+            const bool on = device_settings_.display_enabled;
+            if (display_.set_backlight(on, brightness))
+                std::fprintf(stderr, "\noverlayd: backlight %s %.0f%%\n", on ? "on" : "off", brightness);
+            else
+                std::fprintf(stderr, "\noverlayd: cannot set the backlight\n");
+        }
         const float percent = device_settings_.alert_volume_percent;
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
@@ -298,7 +293,7 @@ private:
                 std::fprintf(stderr, "overlayd: alert=unavailable\n");
                 break;
             default:
-                std::fprintf(stderr, "overlayd: alert=%s event=%u\n", hud_sound_name(decision.sound),
+                std::fprintf(stderr, "overlayd: alert=%s event=%u\n", alert_sound_name(hud_sound_id(decision.sound)),
                              decision.event_id);
                 break;
         }
@@ -328,7 +323,6 @@ private:
 
     ParsedModelOutput latest_output_{};
     ProjectionState latest_projection_{};
-    ProjectionState default_projection_{};
     bool have_model_state_ = false;
     bool pending_redraw_ = true;
     unsigned errors_ = 0;

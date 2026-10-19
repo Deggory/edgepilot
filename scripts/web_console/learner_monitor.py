@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import collections
 import math
-import sys
 import threading
+import time
 from typing import Any, Dict
 
 from .shm_channel import IpcReader, flag_names, freshness, struct_layout, topic_path, unpack_fields
@@ -33,6 +33,8 @@ LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
     "localizer_inputs", "torque_partly_restored", "lateral_nn_loaded",
 )
 LEARNER_HISTORY_S = 600
+# 추이 행 사이의 최소 간격. 1초 스레드 말고 요청도 sample을 불러서, 새 발행마다 행을 쌓으면 10분 창이 3~5분만 남았다.
+LEARNER_TREND_STEP_S = 0.9
 LEARNER_MAX_AGE_S = 2.0  # controlsd는 약 20 Hz로 낸다
 GRAVITY = 9.81
 
@@ -95,25 +97,31 @@ def learner_trend_row(state: Dict[str, Any]) -> list[float]:
     ]
 
 
+def runtime_facts_of(state: Dict[str, Any] | None) -> Dict[str, Any]:
+    """파라미터 안내가 보는 런타임 사실(param_metadata.RUNTIME_FACTS). state가 None이면(controlsd 상태가 없거나 낡음)
+    값이 None이다."""
+    return {"lateral_nn_loaded": bool(state["flags"]["lateral_nn_loaded"]) if state else None}
+
+
 class LearnerMonitor:
     """1초마다 최신 학습 상태를 읽어 10분 추이를 남긴다. 탭을 늦게 열어도 추이가 보인다."""
 
     def __init__(self, reader: LearnerStateReader | None = None):
         self.reader = reader or LearnerStateReader()
         self.lock = threading.Lock()
-        self.history: collections.deque = collections.deque(maxlen=LEARNER_HISTORY_S)
+        self.history: collections.deque = collections.deque()  # 개수가 아니라 시각으로 자른다
         self._last_seq: int | None = None
-        self._stop = threading.Event()
 
     def sample(self) -> tuple[int, int, Dict[str, Any]] | None:
         with self.lock:
             latest = self.reader.read()
             if latest is not None and latest[0] != self._last_seq:
                 self._last_seq = latest[0]
-                row = learner_trend_row(latest[2])
-                if self.history and row[0] < self.history[-1][0]:
-                    self.history.clear()  # 시각이 거꾸로 갔다(다른 부팅의 상태 파일)
-                self.history.append(row)
+                row = learner_trend_row(latest[2])  # 시각은 부팅마다 새로 시작하고 /dev/shm·웹 콘솔도 같이 새로 뜬다
+                if not self.history or row[0] - self.history[-1][0] >= LEARNER_TREND_STEP_S:
+                    self.history.append(row)
+                    while row[0] - self.history[0][0] > LEARNER_HISTORY_S:
+                        self.history.popleft()
             return latest
 
     def trend(self) -> Dict[str, Any]:
@@ -121,26 +129,21 @@ class LearnerMonitor:
             return {"rows": list(self.history), "window_s": LEARNER_HISTORY_S}
 
     def start(self) -> None:
+        """1초마다 읽는 스레드(프로세스와 함께 끝난다). 읽기 오류는 read_payload가 None으로 바꾼다."""
         def run() -> None:
-            reported = ""
-            while not self._stop.wait(1.0):
-                try:
-                    self.sample()
-                except Exception as exc:  # 한 번 못 읽었다고 추이를 멈추지 않는다
-                    if str(exc) != reported:
-                        reported = str(exc)
-                        print(f"web_console: learner monitor: {exc!r}", file=sys.stderr)
+            while True:
+                time.sleep(1.0)
+                self.sample()
 
         threading.Thread(target=run, name="learner-monitor", daemon=True).start()
 
-    def stop(self) -> None:
-        self._stop.set()
-
     def status(self) -> Dict[str, Any]:
+        """학습 상태와 추이 한 점, 런타임 사실(runtime). 페이지는 폴링할 때마다 runtime으로 안내를 갱신한다."""
         latest = self.sample()
         result: Dict[str, Any] = freshness(latest[1] if latest else None, LEARNER_MAX_AGE_S)
         if latest is not None:
             result.update(state=latest[2], trend_row=learner_trend_row(latest[2]))
+        result["runtime"] = runtime_facts_of(latest[2] if latest is not None and not result["stale"] else None)
         return result
 
     def fresh_state(self) -> Dict[str, Any] | None:
@@ -149,9 +152,7 @@ class LearnerMonitor:
         return latest[2] if latest is not None and not freshness(latest[1], LEARNER_MAX_AGE_S)["stale"] else None
 
     def runtime_facts(self) -> Dict[str, Any]:
-        """파라미터 안내가 보는 런타임 사실(param_metadata.RUNTIME_FACTS). controlsd 상태가 없거나 낡으면 None이다."""
-        state = self.fresh_state()
-        return {"lateral_nn_loaded": bool(state["flags"]["lateral_nn_loaded"]) if state else None}
+        return runtime_facts_of(self.fresh_state())
 
 
 class LocalizationReader(IpcReader):

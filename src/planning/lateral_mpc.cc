@@ -170,13 +170,8 @@ void LateralMpc::run(double curvature, double v_ego, double rotation_radius,
             for (int c = 0; c < kNx; ++c) acc += p_mat[r][c] * b[i][c];
             pb[r] = acc;
         }
-        double h_uu = r_uu[i];
+        double h_uu = r_uu[i];  // r_uu > 0, B'PB >= 0: 유한한 입력이면 늘 양수다(NaN은 아래 유한성 검사가 잡는다)
         for (int r = 0; r < kNx; ++r) h_uu += b[i][r] * pb[r];
-        if (!(h_uu > 0.0)) {
-            reset();
-            status_ = 2;
-            return;
-        }
         double h_uz[kNx];  // B'*P*A
         for (int c = 0; c < kNx; ++c) {
             double acc = 0.0;

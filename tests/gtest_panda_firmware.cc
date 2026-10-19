@@ -68,8 +68,6 @@ long const_int(const std::string &path, const std::string &name) {
     return std::stol(match[1].str());
 }
 
-}  // namespace
-
 TEST(PandaFirmware, ParsesASignedImage) {
     PandaImage image;
     std::string error;
@@ -272,3 +270,5 @@ TEST(PandaProtocol, ConstantsMatchTheFirmwareSources) {
     EXPECT_NE(source("board/flasher.h").find("\\xde\\xad\\xd0\\x0d"), std::string::npos);
     EXPECT_NE(source("board/stm32fx/llflash.h").find("if (sector != 0 && sector < 12 && unlocked)"), std::string::npos);
 }
+
+}  // namespace

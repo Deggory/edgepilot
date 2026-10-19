@@ -86,22 +86,16 @@ void update_brake_pressed(VehicleCanState *state) {
 Sas11Values decode_sas11(const std::array<uint8_t, 8> &data) {
     Sas11Values values;
     values.steering_angle_deg = static_cast<float>(sign_extend(get_signal_le(data.data(), 0, 16), 16)) * 0.1f;
-    values.steering_rate_deg = static_cast<float>(get_signal_le(data.data(), 16, 8)) * 4.0f;
     return values;
 }
 
 Mdps12Values decode_mdps12(const std::array<uint8_t, 8> &data) {
     Mdps12Values values;
-    values.driver_torque_raw_signal = static_cast<int>(get_signal_le(data.data(), 0, 11));
     // openpilot CR_Mdps_StrColTq (factor 1, offset -1024)와 같은 스케일이다.
-    values.driver_torque = values.driver_torque_raw_signal - 1024;
+    values.driver_torque = static_cast<int>(get_signal_le(data.data(), 0, 11)) - 1024;
     values.toi_unavailable = get_signal_le(data.data(), 12, 1) != 0;
     values.toi_active = get_signal_le(data.data(), 13, 1) != 0;
     values.toi_fault = get_signal_le(data.data(), 14, 1) != 0;
-    values.fail_state = get_signal_le(data.data(), 15, 1) != 0;
-    values.msg_count = static_cast<int>(get_signal_le(data.data(), 16, 8));
-    values.checksum = static_cast<int>(get_signal_le(data.data(), 24, 8));
-    values.sensor_error = get_signal_le(data.data(), 37, 1) != 0;
     values.output_torque = static_cast<int>(get_signal_le(data.data(), 52, 12)) - 2048;
     return values;
 }
@@ -109,17 +103,15 @@ Mdps12Values decode_mdps12(const std::array<uint8_t, 8> &data) {
 Esp12Values decode_esp12(const std::array<uint8_t, 8> &data) {
     Esp12Values values;
     const float yaw_rate_deg_s = static_cast<float>(get_signal_le(data.data(), 40, 13)) * 0.01f - 40.95f;
-    values.yaw_rate_deg_s = yaw_rate_deg_s;
     values.yaw_rate_rad_s = yaw_rate_deg_s * 0.017453292519943295f;
     values.yaw_rate_valid = get_signal_le(data.data(), 54, 1) == 0;
     // ESP12 LAT_ACCEL도 YAW_RATE처럼 제어 관례와 부호가 반대다. 2026-08-25
     // 실차 344샘플 회귀: 실측 = -1.022 x (curveYaw*v^2) + 0.158. 반전해 저장.
     values.lat_accel_mps2 = -(static_cast<float>(get_signal_le(data.data(), 0, 11)) * 0.01f - 10.23f);
     values.lat_accel_valid = get_signal_le(data.data(), 12, 1) == 0;
-    // 부호 관례 미검증(로그 전용). LAT처럼 반대일 수 있으니 제어에 쓰기 전 실측할 것.
+    // 학습 토크 모델의 입력(long)이다. 학습 데이터(extract_lateral_dataset)도 이 값을 그대로 쓰므로 부호를 바꾸면
+    // 모델을 다시 학습해야 한다. 물리 부호(가속이 +인지)는 실측하지 않았다.
     values.long_accel_mps2 = static_cast<float>(get_signal_le(data.data(), 13, 11)) * 0.01f - 10.23f;
-    values.long_accel_valid = get_signal_le(data.data(), 25, 1) == 0;
-    values.brake_pressure_bar = static_cast<float>(get_signal_le(data.data(), 26, 12)) * 0.1f;
     return values;
 }
 
@@ -188,11 +180,9 @@ Cgw1Values decode_cgw1(const std::array<uint8_t, 8> &data) {
     Cgw1Values values;
     values.driver_door_open = get_signal_le(data.data(), 8, 2) != 0;
     values.passenger_door_open = get_signal_le(data.data(), 35, 1) != 0;
-    values.front_door_open = values.driver_door_open || values.passenger_door_open;
     values.seatbelt_unlatched = get_signal_le(data.data(), 10, 2) != 1;
     values.left_blinker = get_signal_le(data.data(), 19, 2) == 1;
     values.right_blinker = get_signal_le(data.data(), 62, 2) == 1;
-    values.hazard = get_signal_le(data.data(), 33, 2) == 1;
     return values;
 }
 
@@ -200,14 +190,6 @@ Cgw2Values decode_cgw2(const std::array<uint8_t, 8> &data) {
     Cgw2Values values;
     values.rear_right_door_open = get_signal_le(data.data(), 23, 1) != 0;
     values.rear_left_door_open = get_signal_le(data.data(), 24, 1) != 0;
-    values.rear_door_open = values.rear_left_door_open || values.rear_right_door_open;
-    return values;
-}
-
-Lca11Values decode_lca11(const std::array<uint8_t, 8> &data) {
-    Lca11Values values;
-    values.left_blindspot = get_signal_le(data.data(), 8, 2) != 0;
-    values.right_blindspot = get_signal_le(data.data(), 16, 2) != 0;
     return values;
 }
 
@@ -336,7 +318,7 @@ void apply_elect_gear(VehicleCanState *state, const std::array<uint8_t, 8> &data
     state->elect_gear_time_s = now_s;
 }
 
-// CGW1: 앞문, 안전벨트, 깜빡이, 비상등. 깜빡이는 점멸 사이에도 켜진 것으로 보도록
+// CGW1: 앞문, 안전벨트, 깜빡이. 깜빡이는 점멸 사이에도 켜진 것으로 보도록
 // kBlinkerHoldSeconds 동안 유지한다.
 void apply_cgw1(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
     const Cgw1Values cgw = decode_cgw1(data);
@@ -348,7 +330,6 @@ void apply_cgw1(VehicleCanState *state, const std::array<uint8_t, 8> &data, doub
     if (cgw.right_blinker) state->right_blinker_until_s = now_s + kBlinkerHoldSeconds;
     state->left_blinker = now_s < state->left_blinker_until_s;
     state->right_blinker = now_s < state->right_blinker_until_s;
-    state->hazard = cgw.hazard;
     state->cgw1_time_s = now_s;
 }
 
@@ -358,12 +339,6 @@ void apply_cgw2(VehicleCanState *state, const std::array<uint8_t, 8> &data, doub
     state->rear_right_door_open = cgw.rear_right_door_open;
     update_door_open(state);
     state->cgw2_time_s = now_s;
-}
-
-void apply_lca11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double) {
-    const Lca11Values lca = decode_lca11(data);
-    state->left_blindspot = lca.left_blindspot;
-    state->right_blindspot = lca.right_blindspot;
 }
 
 void apply_tpms11(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
@@ -404,37 +379,30 @@ constexpr CanMessage kCanMessages[] = {
     {kHyundaiElectGearAddress, bus_bit(kPowertrainBus), 8, apply_elect_gear},
     {kHyundaiCgw1Address, bus_bit(kPowertrainBus), 8, apply_cgw1},
     {kHyundaiCgw2Address, bus_bit(kPowertrainBus), 8, apply_cgw2},
-    {kHyundaiLca11Address, bus_bit(kPowertrainBus), 8, apply_lca11},
     {kHyundaiTpms11Address, bus_bit(kPowertrainBus), 6, apply_tpms11},
 };
 
 }  // namespace
 
+// 호출자가 is_vehicle_rx_frame으로 거른 프레임(버스 0~7)만 온다.
 void update_vehicle_can_state(VehicleCanState *state, uint32_t address, const std::array<uint8_t, 8> &data,
                               uint8_t length, uint8_t bus, double now_s) {
-    if (!state) return;
     for (const CanMessage &message : kCanMessages) {
         if (message.address != address) continue;
-        if (bus < 8 && (message.buses & bus_bit(bus)) != 0 && length >= message.min_length)
-            message.apply(state, data, now_s);
+        if ((message.buses & bus_bit(bus)) != 0 && length >= message.min_length) message.apply(state, data, now_s);
         return;
     }
 }
 
 bool vehicle_state_fresh(const VehicleCanState &state, double now_s, double timeout_s) {
-    return signal_time_fresh(state.lkas11_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.clu11_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.sas11_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.mdps12_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.tcs13_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.tcs15_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.e_ems11_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.elect_gear_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.cgw1_time_s, now_s, timeout_s) &&
-           signal_time_fresh(state.cgw2_time_s, now_s, timeout_s) &&
-           // 휠 속도는 제어의 모든 속도 임계값 기준이다. 낡으면 대체하지 않고
-           // 제어를 막는다(vehicle_speed_kph는 NaN을 돌려준다).
-           signal_time_fresh(state.whl_spd11_time_s, now_s, timeout_s);
+    for (double VehicleCanState::*time : kRequiredMessageTimes)
+        if (!signal_time_fresh(state.*time, now_s, timeout_s)) return false;
+    return true;
+}
+
+void stamp_received_messages(VehicleCanState *state, double now_s) {
+    for (double VehicleCanState::*time : kRequiredMessageTimes) state->*time = now_s;
+    state->esp12_time_s = now_s;
 }
 
 bool seed_frames_ready(const VehicleCanState &state) {
@@ -459,34 +427,17 @@ float cruise_set_speed_kph(const VehicleCanState &state) {
     return state.estimated_cruise_set_speed_valid ? state.estimated_cruise_set_speed_kph : 0.0f;
 }
 
+// CLU11 값은 부호 없는 정수 해석이다
 float cluster_speed_kph(const VehicleCanState &state) {
-    if (!std::isfinite(state.cluster_speed_raw) || state.cluster_speed_raw < 0.0f) {
-        return 0.0f;
-    }
     return state.cluster_speed_raw * (state.speed_unit_mph ? kMphToKph : 1.0f);
 }
 
+// 바퀴 속도는 14비트 부호 없는 정수 해석이라 낡았는지만 본다. 낡으면 클러스터 속도로 대체하지 않는다. 도메인이
+// 달라(저속에서 1.2배) 조용히 단위가 바뀌면 최소 조향 속도 게이트가 뒤집힌다.
 float vehicle_speed_kph(const VehicleCanState &state, double now_s, double timeout_s) {
-    const bool wheel_speed_fresh = signal_time_fresh(state.whl_spd11_time_s, now_s, timeout_s);
-    const float wheel_speeds[] = {
-        state.wheel_speed_fl_kph,
-        state.wheel_speed_fr_kph,
-        state.wheel_speed_rl_kph,
-        state.wheel_speed_rr_kph,
-    };
-    if (wheel_speed_fresh) {
-        bool wheel_speed_valid = true;
-        float wheel_speed_sum = 0.0f;
-        for (const float speed_kph : wheel_speeds) {
-            wheel_speed_valid = wheel_speed_valid && std::isfinite(speed_kph) && speed_kph >= 0.0f;
-            wheel_speed_sum += speed_kph;
-        }
-        if (wheel_speed_valid) return wheel_speed_sum * 0.25f;
-    }
-
-    // 클러스터 속도로 대체하지 않는다. 도메인이 달라(저속에서 1.2배) 조용히
-    // 단위가 바뀌면 최소 조향 속도 게이트가 뒤집힌다.
-    return std::numeric_limits<float>::quiet_NaN();
+    if (!signal_time_fresh(state.whl_spd11_time_s, now_s, timeout_s)) return std::numeric_limits<float>::quiet_NaN();
+    return (state.wheel_speed_fl_kph + state.wheel_speed_fr_kph + state.wheel_speed_rl_kph + state.wheel_speed_rr_kph) *
+           0.25f;
 }
 
 bool vehicle_standstill(const VehicleCanState &state) {

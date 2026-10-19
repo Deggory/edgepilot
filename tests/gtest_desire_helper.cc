@@ -72,20 +72,6 @@ TEST(DesireHelper, LaneChangeStartsWhenTheDriverPushesTowardTheBlinker) {
     ASSERT_EQ(helper.desire(), Desire::None);
 }
 
-TEST(DesireHelper, BlindSpotHoldsTheStart) {
-    DesireHelper helper;
-    VehicleCanState vehicle = with_blinker(1);
-    run(&helper, 1, vehicle, open_road());
-    vehicle.driver_torque = -300;
-    vehicle.right_blindspot = true;
-    run(&helper, 20, vehicle, open_road());
-    ASSERT_EQ(helper.lane_change_state(), LaneChangeState::PreLaneChange) << "사각지대 차가 있으면 기다린다";
-    vehicle.right_blindspot = false;
-    run(&helper, 1, vehicle, open_road(0.9));
-    ASSERT_EQ(helper.lane_change_state(), LaneChangeState::Starting);
-    ASSERT_EQ(helper.desire(), Desire::LaneChangeRight);
-}
-
 TEST(DesireHelper, ChangeTurnsOffAfterTenSeconds) {
     DesireHelper helper;
     run(&helper, 1, with_blinker(-1), open_road());
@@ -113,6 +99,13 @@ TEST(DesireHelper, RoadEdgeBlocksUntilItClears) {
     run(&cleared, 1, with_blinker(1), open_road());
     ASSERT_EQ(cleared.lane_change_state(), LaneChangeState::PreLaneChange)
         << "경계가 사라지면 깜빡이를 다시 켜지 않아도 시작한다";
+
+    // 경계가 한 프레임만 끊긴 것이었다: 기다리는 동안 경계가 돌아오면 다시 막고, 밀어도 시작하지 않는다
+    run(&cleared, 1, with_blinker(1), edge);
+    EXPECT_EQ(cleared.lane_change_state(), LaneChangeState::Off);
+    run(&cleared, 3, with_blinker(1, -300), edge);  // 오른쪽(경계 쪽)으로 민다
+    EXPECT_EQ(cleared.lane_change_state(), LaneChangeState::Off) << "경계 쪽으로 시작하지 않는다";
+    EXPECT_EQ(cleared.desire(), Desire::None);
 }
 
 // 깜빡이 한 번에 차선 변경은 한 번이다: 끝난 뒤 깜빡이를 켜 둔 채 다시 밀어도 시작하지 않고(램프·회전 출구에서
@@ -268,6 +261,29 @@ TEST(DesireHelper, TurnDesireFollowsTheWheel) {
     run(&opposite, 3, wrong, open_road(), 5.0f);
     ASSERT_FALSE(opposite.turning());
     ASSERT_EQ(opposite.desire(), Desire::None);
+}
+
+// 깜빡이를 켠 채 15초 넘게 돌면(둥근 길) 회전 desire를 거두고, 핸들이 돌아오거나 깜빡이를 끌 때까지 다시 주지 않는다
+TEST(DesireHelper, TurnDesireEndsAfterFifteenSeconds) {
+    DesireHelper helper;
+    VehicleCanState vehicle = with_blinker(-1);
+    vehicle.steering_angle_deg = 90.0f;
+    run(&helper, 1, vehicle, open_road(), 5.0f);
+    ASSERT_TRUE(helper.turning());
+    int frames = 1;
+    while (helper.turning() && frames < 1000) {
+        run(&helper, 1, vehicle, open_road(), 5.0f);
+        ++frames;
+    }
+    EXPECT_NEAR(frames * 0.05, 15.05, 0.06);
+    run(&helper, 100, vehicle, open_road(), 5.0f);
+    EXPECT_FALSE(helper.turning()) << "그대로 돌고 있어도 다시 주지 않는다";
+    EXPECT_EQ(helper.desire(), Desire::None);
+    vehicle.steering_angle_deg = 5.0f;  // 핸들이 돌아왔다
+    run(&helper, 1, vehicle, open_road(), 5.0f);
+    vehicle.steering_angle_deg = 90.0f;
+    run(&helper, 1, vehicle, open_road(), 5.0f);
+    EXPECT_TRUE(helper.turning()) << "새로 돌기 시작하면 다시 회전이다";
 }
 
 }  // namespace

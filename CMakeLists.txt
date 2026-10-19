@@ -5,6 +5,8 @@ project(edgepilot LANGUAGES C CXX)
 option(EDGEPILOT_BUILD_DIAGNOSTICS "Build the host unit tests and diagnostic tools" OFF)
 option(EDGEPILOT_BUILD_PANDA "Build optional panda USB/CAN bridge" ON)
 option(EDGEPILOT_BUILD_RUNTIME "Build AX630C runtime binaries" ON)
+option(EDGEPILOT_WERROR "Treat compiler warnings in edgepilot code as errors" OFF)
+option(EDGEPILOT_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer (host tests)" OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,6 +26,16 @@ set(AX_LIB_DIR "/opt/lib" CACHE PATH "AX630C runtime library directory to link a
 set(AX_RPATH "/opt/lib" CACHE PATH "where the board keeps libax_engine/libax_sys at run time")
 
 set(PROJECT_WARNINGS -Wall -Wextra)
+# 경고가 없는 지금 상태를 고정할 때(-DEDGEPILOT_WERROR=ON). 외부 코드(SDK·googletest)는 이 목록을 쓰지 않는다.
+if(EDGEPILOT_WERROR)
+  list(APPEND PROJECT_WARNINGS -Werror)
+endif()
+# 메모리·정의되지 않은 동작 검사(-DEDGEPILOT_SANITIZE=ON). 호스트 시험을 이것으로 돌린다: 보드의 SDK 라이브러리는
+# 계측되지 않는다.
+if(EDGEPILOT_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+  add_link_options(-fsanitize=address,undefined)
+endif()
 set(PROJECT_LOCAL_INCLUDES
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
@@ -121,9 +133,9 @@ endif()
 add_subdirectory(src)
 
 if(EDGEPILOT_BUILD_DIAGNOSTICS)
-  # 단위 테스트는 호스트에서만 빌드·실행한다. 교차 빌드에는 gtest를 링크할 pthread도,
-  # 테스트를 돌릴 곳도 없다. enable_testing()은 루트에 있어야 ctest가 하위 폴더를 찾는다.
-  if(NOT CMAKE_CROSSCOMPILING)
+  # 단위 테스트는 호스트 빌드(런타임 끔)에서만 빌드·실행한다. 보드 빌드는 도커 안의 arm64 네이티브 빌드라
+  # 교차 빌드로 보이지 않아, 런타임을 켰는지로 가른다. enable_testing()은 루트에 있어야 ctest가 하위 폴더를 찾는다.
+  if(NOT EDGEPILOT_BUILD_RUNTIME)
     enable_testing()
     add_subdirectory(tests)
   endif()

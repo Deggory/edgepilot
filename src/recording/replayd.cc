@@ -3,9 +3,9 @@
 // 차에서와 똑같이 돈다.
 //  - 영상: segments/NNN/road.h264를 프레임 인덱스로 한 프레임씩 VDEC에
 //    넣고, 디코딩된 프레임을 IVPS로 프레임 링 슬롯(CMM)에 복사해 roadAiFrame을 낸다.
-//  - CAN·판다 상태: events/NNN.bin의 CanRx와 PandaState를 같은 시간축으로 판다 채널에
-//    낸다(pandad처럼 CAN은 녹화용 로그 큐에도 넣는다). controlsd의 송신 요청은 보내지
-//    않고 송신 로그로만 넘긴다(recordd가 기록한다).
+//  - CAN·판다 상태: events/NNN.bin의 CanRx와 PandaState를 기록 시각 순으로 흘려 읽어(ReplayEvents, route를
+//    메모리에 올리지 않는다) 같은 시간축으로 판다 채널에 낸다(pandad처럼 CAN은 녹화용 로그 큐에도
+//    넣는다). controlsd의 송신 요청은 보내지 않고 송신 로그로만 넘긴다(recordd가 기록한다).
 // 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
 // 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지)
 #include "common/build_version.h"
@@ -19,14 +19,11 @@
 #include "recording/recording_format.h"
 #include "recording/replay_route.h"
 
-#include <linux/videodev2.h>
 #include <signal.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -58,8 +55,7 @@ int main(int argc, char *argv[]) {
         if (first == route.frames.size()) throw std::runtime_error("no keyframe after start");
         const uint64_t t0 = route.frames[first].capture_ns;
         const uint64_t t_end = duration_s > 0 ? t0 + static_cast<uint64_t>(duration_s * 1e9) : UINT64_MAX;
-        size_t next_event = 0;
-        while (next_event < route.events.size() && route.events[next_event].timestamp_ns < t0) ++next_event;
+        ReplayEvents events(route_dir, t0);
 
         LatestChannel frame_pub, panda_pub;
         FrameRing ring;
@@ -80,13 +76,14 @@ int main(int argc, char *argv[]) {
             ring.set_slot_phys(i, slots[i].phys);
             ring.attach_slot(i, slots[i].virt);
         }
-        std::fprintf(stderr, "replayd: %s from %.1f s (%zu frames, %zu CAN/panda events), %ux%u\n", route_dir.c_str(),
-                     (t0 - route_start) / 1e9, route.frames.size() - first, route.events.size() - next_event,
+        std::fprintf(stderr, "replayd: %s from %.1f s (%zu frames, CAN/panda events from %zu chunks), %ux%u\n",
+                     route_dir.c_str(), (t0 - route_start) / 1e9, route.frames.size() - first, events.chunks(),
                      route.width, route.height);
 
         const uint64_t base = monotonic_now_ns() + 200000000ULL;  // 소비자가 붙을 여유
         auto due = [&](uint64_t recorded_ns) { return base + (recorded_ns - t0); };
         std::vector<uint8_t> packet;
+        CanBatch rx, tx;  // 한 배치가 21.5 KB라 1 kHz 루프 밖에 둔다
         uint64_t frame_id = 0, sent = 0, decode_errors = 0, can_batches = 0, tx_batches = 0;
         uint64_t dropped_outputs = 0, last_output_ns = monotonic_now_ns();
         size_t next_frame = first;
@@ -115,7 +112,6 @@ int main(int argc, char *argv[]) {
                     meta.slot = slot;
                     meta.width = route.width;
                     meta.height = route.height;
-                    meta.format = V4L2_PIX_FMT_NV12;
                     frame_pub.publish(&meta, sizeof(meta));
                     ++window_frames;
                     last_output_ns = now;
@@ -127,24 +123,25 @@ int main(int argc, char *argv[]) {
                     }
                 }
             }
-            // CAN·판다 상태
-            while (next_event < route.events.size() && route.events[next_event].timestamp_ns < t_end &&
-                   now >= due(route.events[next_event].timestamp_ns)) {
-                const ReplayRoute::Event &e = route.events[next_event++];
-                if (e.type == RecordType::CanRx) {
-                    const CanBatch batch = decode_recorded_can(e.payload.data(), e.payload.size(), now);
-                    can_pub.push(batch);
-                    can_log_pub.push(batch);
-                    ++can_batches;
-                } else if (e.payload.size() == sizeof(PandaState)) {
-                    PandaState state;
-                    std::memcpy(&state, e.payload.data(), sizeof(state));
+            // CAN·판다 상태(기록 시각 순으로 흘려 읽는다)
+            for (const ReplayEvents::Event *event = events.peek();
+                 event && event->header.timestamp_ns < t_end && now >= due(event->header.timestamp_ns);
+                 event = events.peek()) {
+                const ReplayEvents::Event &e = *event;
+                PandaState state;
+                if (static_cast<RecordType>(e.header.type) == RecordType::CanRx) {
+                    if (decode_recorded_can(e.payload.data(), e.payload.size(), now, &rx)) {
+                        can_pub.push(rx);
+                        can_log_pub.push(rx);
+                        ++can_batches;
+                    }
+                } else if (read_record(e.payload, &state)) {
                     state.timestamp_ns = now;
                     panda_pub.publish(&state, sizeof(state));
                 }
+                events.pop();
             }
             // controlsd의 송신 요청: 보내지 않고 송신 로그로만.
-            CanBatch tx;
             while (sendcan_sub.pop(&tx)) {
                 tx.timestamp_ns = now;
                 sendcan_log_pub.push(tx);

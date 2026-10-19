@@ -69,8 +69,7 @@ of the steering command the shake causes:
 4. Start again from the measurement when:
    - the points within 20 m are on average more than 0.5 m from the
      prediction (a lane change renames the lines, or a line is picked up again);
-   - frames are more than 0.2 s apart;
-   - a value is not finite.
+   - frames are more than 0.2 s apart.
 
    Points beyond the prediction's reach keep the measurement.
 

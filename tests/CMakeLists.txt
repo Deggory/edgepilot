@@ -36,6 +36,7 @@ add_host_test(gtest_device_settings common utils_json)
 add_host_test(gtest_flow_calibration model)
 add_host_test(gtest_lead_flow model)
 add_host_test(gtest_lead_tracker model)
+add_host_test(gtest_model_input_transform model)
 add_host_test(gtest_calibration_source model)
 add_host_test(gtest_hud_canvas hud)
 add_host_test(gtest_hud_policy hud)
@@ -53,13 +54,23 @@ add_host_test(gtest_localization localization)
 add_host_test(gtest_model_output common)
 add_host_test(gtest_model_state_fill model hud_state)
 add_host_test(gtest_panda_can_codec panda)
-add_host_test(gtest_panda_firmware panda control_core)
+add_host_test(gtest_panda_firmware panda car)
 add_host_test(gtest_projection hud_state)
 add_host_test(gtest_recording recording)
+add_host_test(gtest_utils utils_json)
+# 재생 도구 연기 시험: 합성 route로 diagnostics/의 도구를 한 번씩 돌린다(도구가 같은 bin 폴더에 빌드된다)
+add_host_test(gtest_replay_tools recording)
+add_dependencies(gtest_replay_tools replay_controls replay_planner replay_closed_loop replay_localization
+                 replay_lateral_learners extract_lateral_dataset)
+target_compile_definitions(gtest_replay_tools PRIVATE REPLAY_TOOL_DIR="$<TARGET_FILE_DIR:replay_controls>")
+target_include_directories(gtest_replay_tools PRIVATE ${PROJECT_SOURCE_DIR}/diagnostics)  # cli_args.h
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME check_web_console.py
          COMMAND ${Python3_EXECUTABLE} tests/check_web_console.py
+         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME check_manager.py
+         COMMAND ${Python3_EXECUTABLE} tests/check_manager.py
          WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME check_recording_reader.py
          COMMAND ${Python3_EXECUTABLE} tests/check_recording_reader.py

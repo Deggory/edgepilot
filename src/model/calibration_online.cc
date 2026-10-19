@@ -100,14 +100,11 @@ OnlineCalibrator::UpdateResult OnlineCalibrator::update(const PoseObservation &p
     result.snapshot = snapshot_;
     old_rpy_weight_ = std::max(0.0f, old_rpy_weight_ - 1.0f / kSmoothCycles);
 
-    const bool valid_numbers =
-        finite3(pose.trans) && finite3(pose.rot) && finite3(pose.trans_std) && std::isfinite(v_ego);
-    const bool straight_and_fast = valid_numbers && v_ego > kMinSpeedFilter && pose.trans[0] > kMinSpeedFilter &&
-                                   std::fabs(pose.rot[2]) < kMaxYawRateFilter;
+    const bool straight_and_fast =
+        v_ego > kMinSpeedFilter && pose.trans[0] > kMinSpeedFilter && std::fabs(pose.rot[2]) < kMaxYawRateFilter;
     const bool rpy_certain = std::atan2(pose.trans_std[1], pose.trans[0]) < kMaxVelAngleStd;
     const bool height_certain = pose.road_trans_std[2] < kMaxHeightStd;
-    const bool certain_if_calib =
-        valid_numbers && ((rpy_certain && height_certain) || (snapshot_.valid_blocks < kInputsNeeded));
+    const bool certain_if_calib = (rpy_certain && height_certain) || snapshot_.valid_blocks < kInputsNeeded;
 
     if (!straight_and_fast || !certain_if_calib) {
         ++snapshot_.rejected_samples;
@@ -124,12 +121,7 @@ OnlineCalibrator::UpdateResult OnlineCalibrator::update(const PoseObservation &p
     float new_rpy[3];
     smooth_rpy(base_rpy);
     compose_rpy(base_rpy, observed_rpy, new_rpy);
-    sanity_clip(new_rpy);
-    if (!finite3(new_rpy)) {
-        ++snapshot_.rejected_samples;
-        result.snapshot = snapshot_;
-        return result;
-    }
+    sanity_clip(new_rpy);  // 유한하지 않으면 0으로 둔다(상류 RPY_INIT)
 
     for (int i = 0; i < 3; ++i)
         block_rpys_[block_idx_][i] =

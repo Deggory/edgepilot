@@ -1,7 +1,7 @@
-// The BEV's copy of the lane-line filter (scripts/web_console/static/lane_filter.js) against the C++ one
-// (src/planning/lane_line_filter.cc): the same scenario gives the same lines as the C++ golden output, which
-// gtest_lane_line_filter (GoldenSharedWithTheBev) holds to the C++ code. check_web_console.py runs this with
-// jsc (macOS) or node when one is installed, and checks that both files carry the same golden numbers.
+// BEV의 차선선 필터 사본(scripts/web_console/static/lane_filter.js)과 C++ 필터(src/planning/lane_line_filter.cc):
+// 같은 장면이면 C++ 기준 출력과 같은 선을 내야 한다. 그 기준값은 gtest_lane_line_filter(GoldenSharedWithTheBev)가
+// C++ 코드에 묶어 둔다. check_web_console.py가 jsc(macOS)나 node가 있으면 이 파일을 돌리고, 두 파일의 기준 숫자가
+// 같은지 본다.
 import {LaneLineFilter, LANE_FILTER_WEIGHT} from "../scripts/web_console/static/lane_filter.js";
 
 const say = globalThis.print ?? console.log;
@@ -14,7 +14,7 @@ const check = (ok, what) => {
 const N = 33;
 const X = Array.from({length: N}, (_, i) => Math.fround(192 * (i / 32) * (i / 32)));
 
-// GOLDEN BEGIN: frame -> the filtered line at points 0, 8, 12, 16, 20, 24 (C++ output)
+// GOLDEN BEGIN: 프레임 -> 0, 8, 12, 16, 20, 24번 점의 거른 선(C++ 출력)
 const GOLDEN = [
   [10, [-1.7860593, -1.6711308, -1.4910269, -1.1393055, -0.5273346, 0.4499038]],
   [24, [-1.7755761, -1.4648968, -1.0241125, -0.2886234, 0.8415040, 2.5161421]],
@@ -26,8 +26,8 @@ const GOLDEN = [
 // GOLDEN END
 const POINTS = [0, 8, 12, 16, 20, 24];
 
-// 40 frames at 25 m/s: a curving line that turns as the car yaws, a fixed pattern of noise, a lane change
-// at frame 25 (the lines jump 3.5 m) and a 0.35 s gap before frame 32
+// 25 m/s로 40프레임: 차가 요잉하는 만큼 휘는 선, 정해진 잡음 무늬, 25번 프레임의 차선 변경(선이 3.5 m
+// 뛴다), 32번 프레임 앞의 0.35 s 끊김
 {
   const filter = new LaneLineFilter();
   let worst = 0;
@@ -49,7 +49,7 @@ const POINTS = [0, 8, 12, 16, 20, 24];
   check(worst < 1e-5, `matches the C++ output (worst ${worst.toExponential(1)} m)`);
 }
 
-// weight 1 hands the measurement through
+// 가중치 1은 측정을 그대로 넘긴다
 {
   const filter = new LaneLineFilter(1);
   const y = X.map((_, i) => -1.7 + 0.001 * i);
@@ -57,8 +57,8 @@ const POINTS = [0, 8, 12, 16, 20, 24];
   check(filter.update(0.05, X, y, 20, 0.001).every((v, i) => v === y[i]), "weight 1 is off");
 }
 
-// following a circle the lines stay put in the car's frame; the quadratic read keeps them there (a
-// straight-line read drags them 8-17 mm toward the inside)
+// 원을 따라 돌면 선은 차 좌표에서 제자리에 있다. 2차식으로 읽으면 그대로 남고, 직선으로 읽으면 안쪽으로
+// 8~17 mm 끌린다
 {
   const kappa = 0.002, offset = -1.8, r = 1 / kappa - offset;
   const y = X.map((x) => Math.fround(1 / kappa - Math.sqrt(Math.max(0, r * r - x * x))));

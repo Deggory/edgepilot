@@ -58,7 +58,6 @@ private:
     static constexpr size_t kTensorAlign = 4096;
 
     void allocate(Block &block, std::vector<Tensor> &tensors, const void *metas, unsigned count);
-    void release();
 
     void *model_map_ = nullptr;  // 모델 파일의 읽기 전용 매핑(세션 동안 둔다)
     size_t model_size_ = 0;

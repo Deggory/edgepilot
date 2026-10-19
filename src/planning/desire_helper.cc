@@ -3,7 +3,6 @@
 #include "car/vehicle_can.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <tuple>
@@ -23,7 +22,9 @@ constexpr int kAgainstFrames = 4;  // 0.2초
 // 회전 desire: 깜빡이 쪽으로 kTurnAngleDeg 넘게 돌리면 주고, 핸들이 이 각도 아래로 돌아오면(회전을 마치면) 거둔다.
 // 운전자가 넘겨받은 큰 조향각 정지가 15도에서 풀리는 것과 같은 각도다.
 constexpr float kTurnEndAngleDeg = 15.0f;
-constexpr double kTurnMaxS = 15.0;  // 이보다 오래 돌면 거둔다(깜빡이를 켠 채 둥근 길을 계속 도는 경우)
+// 이보다 오래 돌면 거둔다(깜빡이를 켠 채 둥근 길을 계속 도는 경우). 거둔 회전은 핸들이 돌아오거나 깜빡이를 끌
+// 때까지 다시 주지 않는다: 예전에는 다음 틱에 곧바로 다시 회전이 되어 상한이 한 틱 끊김에 그쳤다.
+constexpr double kTurnMaxS = 15.0;
 // 모델 desire는 바뀐 틱의 펄스가 5초 이력에 남는다. 회전이 길면 2.5초마다 한 틱 내렸다가 다시 준다.
 constexpr int kTurnRepulseFrames = 50;
 
@@ -61,19 +62,26 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
     const bool blinker_used = used_blinker_ != 0;
     // 깜빡이 쪽으로 크게 돌리면 회전이다(조향각은 왼쪽이 +). 도중에 깜빡이를 꺼도 회전은 이어지므로 각도로만 끝낸다.
     if (turn_direction_ == 0) {
-        if (one_blinker && -blinker_direction * vehicle.steering_angle_deg >= kTurnAngleDeg) {
+        if (turn_expired_ && (!one_blinker || std::fabs(vehicle.steering_angle_deg) < kTurnEndAngleDeg))
+            turn_expired_ = false;
+        if (!turn_expired_ && one_blinker && -blinker_direction * vehicle.steering_angle_deg >= kTurnAngleDeg) {
             turn_direction_ = blinker_direction;
             turn_frames_ = 0;
         }
     } else {
         ++turn_frames_;
-        if (std::fabs(vehicle.steering_angle_deg) < kTurnEndAngleDeg || turn_frames_ * kDtModel > kTurnMaxS)
+        if (std::fabs(vehicle.steering_angle_deg) < kTurnEndAngleDeg) {
             turn_direction_ = 0;
+        } else if (turn_frames_ * kDtModel > kTurnMaxS) {
+            turn_direction_ = 0;
+            turn_expired_ = true;
+        }
     }
 
     // 깜빡이 쪽이 도로 경계(경계는 또렷하고 그 너머 차선선은 없음)면 차선 변경을 시작하지 않는다
     // (dragonpilot의 도로 경계 판정). 막힌 동안 깜빡이를 꺼진 것으로 두므로, 경계가 사라지면 깜빡이를
-    // 켠 채로도 그 틱에 시작한다.
+    // 켠 채로도 그 틱에 시작한다. 기다리는 동안(PreLaneChange)에도 본다: 경계가 한 프레임 끊겨 기다림에 들어간
+    // 뒤 경계가 돌아와도 밀면 경계 쪽으로 시작했다.
     const double left_edge_prob = std::clamp(1.0 - model.road_edge_stds[0], 0.0, 1.0);
     const double right_edge_prob = std::clamp(1.0 - model.road_edge_stds[1], 0.0, 1.0);
     const double left_nearside_prob = model.lane_probabilities[0];
@@ -83,9 +91,12 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
         : left_edge_prob > 0.35 && left_nearside_prob < 0.2 && right_nearside_prob >= left_nearside_prob ? -1
                                                                                                          : 0;
     const int lane_direction = vehicle.left_blinker ? -1 : vehicle.right_blinker ? 1 : 2;
-    const bool road_edge_blocked = lane_change_state_ == LaneChangeState::Off && road_edge == lane_direction;
+    const bool road_edge_blocked =
+        (lane_change_state_ == LaneChangeState::Off || lane_change_state_ == LaneChangeState::PreLaneChange) &&
+        road_edge == lane_direction;
 
     if (road_edge_blocked) {
+        lane_change_state_ = LaneChangeState::Off;
         direction_ = 0;
     } else if (!lat_active || lane_change_timer_ > 10.0 || blinker_used) {
         lane_change_state_ = LaneChangeState::Off;
@@ -98,8 +109,7 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
         // 시작 넛지는 이 틱의 토크로 본다. 상류의 거른 steeringPressed(6틱 연속)를 쓰면 짧게 툭 친 넛지(30~40 ms)가
         // 시작하지 않았다(녹화 재생 130번 중 4번). 취소는 거른 값으로 본다.
         const bool torque_applied = std::abs(vehicle.driver_torque) > params_.steering_pressed_threshold && toward;
-        const bool blindspot_detected =
-            (vehicle.left_blindspot && direction_ == -1) || (vehicle.right_blindspot && direction_ == 1);
+        // 상류의 사각지대(LCA11) 막음은 없다: K7은 Panda 버스에 LCA11을 내지 않는다
         const bool slowing_for_turn = v_ego < kTurnApproachSpeedMps && decel > kTurnApproachDecelMps2;
         if (lane_change_state_ == LaneChangeState::Off && one_blinker && !previous_one_blinker_ && !below_speed) {
             lane_change_state_ = LaneChangeState::PreLaneChange;
@@ -110,7 +120,7 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
                 lane_change_state_ = LaneChangeState::Off;
             } else {
                 direction_ = blinker_direction;  // 상류: 기다리는 동안 깜빡이 방향을 다시 읽는다
-                if (!blindspot_detected && !slowing_for_turn && torque_applied) {
+                if (!slowing_for_turn && torque_applied) {
                     lane_change_state_ = LaneChangeState::Starting;
                     change_activation_ = blinker_activation_;
                 }

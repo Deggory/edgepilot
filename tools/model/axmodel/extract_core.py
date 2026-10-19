@@ -104,7 +104,8 @@ t_in, t_out = byname["model/p_node_Transpose_0"], byname["model/p_node_index"]
 g.initializer.extend([numpy_helper.from_array(np.array([-9], np.int64), "last9_start"),
                       numpy_helper.from_array(np.array([np.iinfo(np.int64).max], np.int64), "last9_end"),
                       numpy_helper.from_array(np.array([1], np.int64), "last9_axis")])
-sl = helper.make_node("Slice", [t_in.input[0], "last9_start", "last9_end", "last9_axis"], [t_out.output[0]], name="last9_slice")
+sl = helper.make_node("Slice", [t_in.input[0], "last9_start", "last9_end", "last9_axis"], [t_out.output[0]],
+                      name="last9_slice")
 wh = byname["model/p_node_masked_fill"]
 mask = consts[wh.input[0]]
 # 녹화 주행에서 잰 score는 [-6.3, 4.7]이다: -30이면 가린 가중치가 e^-19 미만으로 남고

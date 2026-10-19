@@ -1,30 +1,30 @@
-// 녹화된 ModelState/ControlState로 LateralPlanner를 재실행한다.
+// 녹화된 ModelState/ControlState로 LateralPlanner를 재실행한다(기록 시각 순, RouteEvents).
 // 녹화된 인지 결과에 대해 플래너가 무엇을 요구했는지 오프라인으로 재현한다.
 // 사용: replay_planner [--laneless|--lane] [--exact] [--vehicle] [--steering s.json] [--lane-filter W]
 //                      <out.csv> <events.bin...>
 //   --exact     LateralTarget의 모든 필드와 지연 보정 곡률을 %a(비트 그대로)로 쓴다. 리팩토링 전후
 //               출력이 비트 단위로 같은지 비교할 때 쓴다.
+// 지연 보정 곡률(des_replay)은 controlsd처럼 plan 나이를 촬영 시각부터 재고(modeld 지연 포함), 녹화된
+// LearnerState의 경로 지연(lagd를 쓰고 있었으면 그 추정)과 롤을 쓴다. 경로 지연이 없는 예전 녹화는
+// steer_actuator_delay를 쓴다.
 //   --vehicle   녹화한 CAN(깜빡이·운전자 토크·사각지대)과 ControlState의 active를 플래너에 준다.
 //               없으면 깜빡이·개입 없음, active로 돌려 차선 변경이 돌지 않는다.
 //   --steering  조향 파라미터 파일(예: route의 params 스냅샷). 없으면 기본값.
 //   --laneless, --lane     파라미터 파일과 상관없이 Laneless 또는 Lane 모드로 돌린다.
 //   --lane-filter  차선선 시간 필터의 새 측정 가중(planning/lane_line_filter, 1이면 끈다).
 #include "car/vehicle_can.h"
+#include "cli_args.h"
 #include "common/ipc_messages.h"
 #include "controls/control_params.h"
-#include "controls/lateral_controller.h"
+#include "controls/drive_helpers.h"
 #include "controls/steering_pressed.h"
 #include "planning/lateral_planner.h"
 #include "recorded_vehicle_can.h"
 #include "recording/event_log_reader.h"
-#include "recording/recorded_model_state.h"
 #include "recording/recording_format.h"
+#include "route_events.h"
 
-#include <algorithm>
-#include <cmath>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -42,7 +42,7 @@ void write_exact_header(std::FILE *out) {
 void write_exact_row(std::FILE *out, uint64_t timestamp_ns, const LateralTarget &t, float des) {
     std::fprintf(out, "%llu,%d,%llu,%d,%d,%a,%a,%a,%d,%d,%d", static_cast<unsigned long long>(timestamp_ns),
                  t.valid ? 1 : 0, static_cast<unsigned long long>(t.capture_timestamp_ns), t.mpc_solution_valid ? 1 : 0,
-                 t.laneless_mode ? 1 : 0, t.target_y_m, t.heading_rad, t.curvature, t.desire, t.lane_change_state,
+                 t.laneless_mode ? 1 : 0, t.target_y_m, t.psis[0], t.curvatures[0], t.desire, t.lane_change_state,
                  t.lane_change_direction);
     for (float v : t.psis) std::fprintf(out, ",%a", v);
     for (float v : t.curvatures) std::fprintf(out, ",%a", v);
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     SteeringParams steering;
     bool force_laneless = false, force_lane = false, exact = false, use_vehicle = false, usage_error = false;
     std::string steering_path;
-    double lane_filter = 0.0;  // 0이면 코드 기본값
+    float lane_filter = 0.0f;  // 0이면 코드 기본값
     std::vector<const char *> positional;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -71,14 +71,13 @@ int main(int argc, char **argv) {
         else if (arg == "--steering" && i + 1 < argc)
             steering_path = argv[++i];
         else if (arg == "--lane-filter" && i + 1 < argc)
-            lane_filter = std::atof(argv[++i]);
+            usage_error |= !parse_float_arg(argv[++i], &lane_filter, 0.0, 1.0);
         else if (arg.rfind("--", 0) == 0)
             usage_error = true;
         else
             positional.push_back(argv[i]);
     }
-    if (usage_error || (force_laneless && force_lane) || positional.size() < 2 || lane_filter < 0.0 ||
-        lane_filter > 1.0) {
+    if (usage_error || (force_laneless && force_lane) || positional.size() < 2) {
         std::fprintf(stderr,
                      "usage: %s [--laneless|--lane] [--exact] [--vehicle] [--steering s.json] "
                      "[--lane-filter W] <out.csv> <events.bin...>\n",
@@ -93,7 +92,7 @@ int main(int argc, char **argv) {
     if (force_laneless) steering.laneless_mode = true;
     if (force_lane) steering.laneless_mode = false;
     LateralPlanner planner(steering);
-    if (lane_filter > 0.0) planner.set_lane_filter_weight(lane_filter);
+    if (lane_filter > 0.0f) planner.set_lane_filter_weight(lane_filter);
 
     VehicleCanState vehicle{};  // --vehicle이 아니면 깜빡이·개입 없음
     std::FILE *out = std::fopen(positional[0], "w");
@@ -110,57 +109,63 @@ int main(int argc, char **argv) {
     }
 
     float v_kph = 0.0f, measured = 0.0f, des_rec = 0.0f, prev_des = 0.0f;
+    float plan_delay_s = 0.0f, roll_rad = 0.0f;  // 마지막 LearnerState: controlsd가 실제로 쓴 경로 지연과 롤
     bool have_cs = false, active = true, steering_pressed = false;
     SteeringPressedFilter pressed_filter;  // controlsd처럼 녹화된 운전자 토크를 거른다
-    for (size_t a = 1; a < positional.size(); ++a) {
-        EventLogReader reader(positional[a]);
-        if (!reader.ok()) continue;
-        EventRecordHeader rh{};
-        std::vector<char> buf;
-        while (reader.next(&rh, &buf)) {
-            if (use_vehicle && rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
-                apply_recorded_can(buf.data(), rh.payload_size, static_cast<double>(rh.timestamp_ns) * 1e-9, &vehicle);
-            } else if (rh.type == static_cast<uint16_t>(RecordType::ControlState) &&
-                       rh.payload_size >= sizeof(ControlState)) {
-                ControlState cs{};
-                std::memcpy(&cs, buf.data(), sizeof(cs));
-                v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
-                measured = cs.actual_curvature;
-                des_rec = cs.desired_curvature;
-                if (use_vehicle) {
-                    // 녹화에는 latActive가 없다: 큰 조향각에서 쉬는 동안(HUD 플래그)만 빼고 active로 대신한다
-                    active = cs.active != 0 && (cs.hud_flags & kHudFlagSteerPaused) == 0;
-                    steering_pressed = pressed_filter.update(cs.driver_torque, steering.steering_pressed_threshold);
-                }
-                have_cs = true;
-            } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
-                if (!have_cs) continue;
-                ModelState ms{};
-                if (!decode_recorded_model_state(buf.data(), rh.payload_size, reader.version(), &ms)) continue;
-                const float v = v_kph / 3.6f;
-                LateralTarget t = planner.update(ms, vehicle, v, measured, active, steering_pressed);
-                // 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이
-                // 있어 모델 주기로 한 번만 부르면 5배 과하게 걸린다. plan 나이는 틱마다
-                // 늘어난다.
-                float des = prev_des;
-                for (int tick = 0; tick < 5; ++tick) {
-                    des = lag_adjusted_desired_curvature(t, v, 0.01f * tick, steering.steer_actuator_delay, prev_des);
-                    if (t.valid) prev_des = des;
-                }
-                if (exact) {
-                    write_exact_row(out, rh.timestamp_ns, t, des);
-                    continue;
-                }
-                std::fprintf(out,
-                             "%.3f,%.1f,%.6f,%.6f,%.6f,%.6f,%.3f,"
-                             "%.3f,%.3f,%.2f,%.2f,%.2f,%d,%.2f,%d,%.4f,%.4f\n",
-                             rh.timestamp_ns * 1e-9, v_kph, measured, des_rec, des, t.curvature, t.target_y_m,
-                             t.lane_left_y_m, t.lane_right_y_m, t.lane_left_prob, t.lane_right_prob, t.lane_d_prob,
-                             t.laneless_mode ? 1 : 0, t.lane_width_m, t.mpc_solution_valid ? 1 : 0, t.heading_rad,
-                             t.psis[kLateralControlN - 1]);
+    RouteEvents events(std::vector<std::string>(positional.begin() + 1, positional.end()));
+    TimeOrderedEvents::Record record;
+    while (events.next(&record)) {
+        const EventRecordHeader &rh = record.header;
+        const std::vector<char> &buf = record.payload;
+        ControlState cs;
+        LearnerState ls;
+        if (use_vehicle && rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
+            apply_recorded_can(buf.data(), rh.payload_size, static_cast<double>(rh.timestamp_ns) * 1e-9, &vehicle);
+        } else if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && read_record(buf, &cs)) {
+            v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
+            measured = cs.actual_curvature;
+            des_rec = cs.desired_curvature;
+            if (use_vehicle) {
+                // 녹화에는 latActive가 없다: 큰 조향각에서 쉬는 동안(HUD 플래그)만 빼고 active로 대신한다
+                active = cs.active != 0 && (cs.hud_flags & kHudFlagSteerPaused) == 0;
+                steering_pressed = pressed_filter.update(cs.driver_torque, steering.steering_pressed_threshold);
             }
+            have_cs = true;
+        } else if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) && read_record(buf, &ls)) {
+            plan_delay_s = ls.plan_delay_s;
+            roll_rad = (ls.flags & kLearnerUseVehicle) != 0 ? ls.roll_rad : 0.0f;
+        } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
+            if (!have_cs) continue;
+            ModelState ms{};
+            if (!read_record(buf, &ms)) continue;
+            const float v = v_kph / 3.6f;
+            LateralTarget t = planner.update(ms, vehicle, v, measured, active, steering_pressed);
+            // 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이
+            // 있어 모델 주기로 한 번만 부르면 5배 과하게 걸린다. plan 나이는 촬영 시각부터
+            // 재어 틱마다 늘어난다.
+            const float capture_age_s =
+                ms.model_timestamp_ns > ms.capture_timestamp_ns && ms.capture_timestamp_ns != 0
+                    ? static_cast<float>(static_cast<double>(ms.model_timestamp_ns - ms.capture_timestamp_ns) * 1e-9)
+                    : 0.0f;
+            const float delay_s = plan_delay_s > 0.0f ? plan_delay_s : steering.steer_actuator_delay;
+            float des = prev_des;
+            for (int tick = 0; tick < 5; ++tick) {
+                des = lag_adjusted_desired_curvature(t, v, capture_age_s + 0.01f * tick, delay_s, prev_des, roll_rad);
+                if (t.valid) prev_des = des;
+            }
+            if (exact) {
+                write_exact_row(out, rh.timestamp_ns, t, des);
+                continue;
+            }
+            std::fprintf(out,
+                         "%.3f,%.1f,%.6f,%.6f,%.6f,%.6f,%.3f,"
+                         "%.3f,%.3f,%.2f,%.2f,%.2f,%d,%.2f,%d,%.4f,%.4f\n",
+                         rh.timestamp_ns * 1e-9, v_kph, measured, des_rec, des, t.curvatures[0], t.target_y_m,
+                         t.lane_left_y_m, t.lane_right_y_m, t.lane_left_prob, t.lane_right_prob, t.lane_d_prob,
+                         t.laneless_mode ? 1 : 0, t.lane_width_m, t.mpc_solution_valid ? 1 : 0, t.psis[0],
+                         t.psis[kLateralControlN - 1]);
         }
     }
     std::fclose(out);
-    return 0;
+    return events.exit_code();
 }

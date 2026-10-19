@@ -1,7 +1,10 @@
 #pragma once
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <fstream>
@@ -49,15 +52,29 @@ inline std::string read_text_file(const std::string &path) {
     return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
-// content를 path.tmp에 쓴 뒤 rename으로 바꿔 넣어, 읽는 쪽이 반쯤 쓴 파일을 보지 않게 한다.
-// 실패하면 임시 파일을 지우고 false다(errno는 실패한 호출의 값).
+// content를 path.tmp에 쓰고 fsync한 뒤 rename으로 바꿔 넣는다: 읽는 쪽이 반쯤 쓴 파일을 보지 않고, 전원이 끊겨도
+// 옛 파일이나 새 파일 하나가 남는다(웹 콘솔 files.write_text_atomic과 같다). 실패하면 임시 파일을 지우고 false다
+// (errno는 실패한 호출의 값).
 inline bool write_file_atomic(const std::string &path, const std::string &content) {
     const std::string temp = path + ".tmp";
-    std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-    file.write(content.data(), static_cast<std::streamsize>(content.size()));
-    file.close();
-    if (file && std::rename(temp.c_str(), path.c_str()) == 0) return true;
-    const int error = errno;
+    const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0664);
+    if (fd < 0) return false;
+    const bool written =
+        ::write(fd, content.data(), content.size()) == static_cast<ssize_t>(content.size()) && ::fsync(fd) == 0;
+    int error = errno;
+    ::close(fd);
+    if (written && std::rename(temp.c_str(), path.c_str()) == 0) {
+        // 바꿔 넣은 이름도 남게 폴더를 fsync한다
+        const size_t slash = path.rfind('/');
+        const std::string directory = slash == std::string::npos ? "." : path.substr(0, std::max<size_t>(slash, 1));
+        const int dir_fd = ::open(directory.c_str(), O_RDONLY | O_CLOEXEC);
+        if (dir_fd >= 0) {
+            ::fsync(dir_fd);
+            ::close(dir_fd);
+        }
+        return true;
+    }
+    if (written) error = errno;
     std::remove(temp.c_str());
     errno = error;
     return false;

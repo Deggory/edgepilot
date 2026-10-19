@@ -111,4 +111,8 @@ private:
            last_pose_invalid_t_ = 0.0, last_estimate_t_ = 0.0;
 };
 
+// steering.json 글에서 steer_actuator_delay를 읽어 lagd 초기값(config->initial_lag)으로 둔다. controlsd 로더
+// (control_params.cc)와 같은 0.01~1.0으로 자르고, 키가 없으면 그대로 둔다. locationd와 재생 도구가 같은 규칙을 쓴다.
+void apply_steering_initial_lag(const std::string &steering_json, LateralLagConfig *config);
+
 #endif

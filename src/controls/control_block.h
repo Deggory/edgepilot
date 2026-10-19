@@ -4,25 +4,31 @@
 #include <cstdint>
 #include <cstring>
 
-// engage/조향 차단 사유. 컨트롤러가 정하고, ControlState에는 와이어 이름(문자열)으로
+// 결합·조향 차단 사유. 컨트롤러가 정하고, ControlState에는 와이어 이름(문자열)으로
 // 실려 녹화·Python 리더·HUD가 읽는다. 행 하나가 열거값·와이어 이름·HUD 라벨·분류라서
 // 사유를 더할 때 다른 곳을 고칠 필요가 없다.
 enum class BlockKind : uint8_t {
     None,    // 차단 없음: active
-    Reject,  // 정적 gate: engage 요청은 실패로 처리, 표시만 한다
-    Hard,    // 차량 결함: engage 중이면 즉시 해제한다
+    Reject,  // 정적 gate: 결합 요청은 실패로 처리, 표시만 한다
+    Hard,    // 차량 결함: 결합 중이면 즉시 해제한다
     // Panda의 controls_allowed는 비동기로 보고된다(브리지가 100 Hz 컨트롤러보다
     // 낮은 주기로 health를 폴링한다). 대응하는 허가보다 SET 해제가 한두 틱 먼저
-    // 올 수 있어, handshake가 끝날 때까지 engage를 유지한다. 실패가 아닌 대기다.
+    // 올 수 있어, handshake가 끝날 때까지 결합을 유지한다. 실패가 아닌 대기다.
     Transient,
-    // 고장이 아니라 가용성 상태다. openpilot처럼 engage는 허용하고 조향만 쉰다.
+    // 고장이 아니라 가용성 상태다. openpilot처럼 결합은 허용하고 조향만 쉰다.
     // 정차에서는 plan 도달거리가 짧아 path가 상시 무효라, 거부로 치면 정차 중
-    // engage가 불가능해진다.
+    // 결합할 수 없게 된다.
     Availability,
-    // openpilot의 SOFT_DISABLE. engage 요청은 거부하고, engage 중에 생기면 경고를 띄운 채
+    // openpilot의 SOFT_DISABLE. 결합 요청은 거부하고, 결합 중에 생기면 경고를 띄운 채
     // 3초 더 조향한 뒤 해제한다(운전자가 넘겨받을 시간). 목록 맨 끝에서만 판정하므로
-    // 앞선 차단 사유를 가리지 않는다.
+    // 앞선 차단 사유를 가리지 않는다. 3초는 앞선 사유가 끼어도 이 사유가 이어지는 동안 센다.
     SoftDisable,
+    // 입력이 끊겼다: 차량 CAN, 모델, 계획. 결합 요청은 거부한다. 결합 중에 생기면 바로 조향을 쉬고(토크 0,
+    // 요청 비트는 유지) 3초를 센다(0.5초가 넘으면 해제 예고를 띄운다). 그 안에 돌아오면 다시 조향하고, 넘으면
+    // 해제한다.
+    // 낡은 입력으로 3초를 조향하지 않는 것이 SoftDisable과 다르다. 상류는 같은 경우(commIssue,
+    // canBusMissing) 해제한다. 결합 중 Panda 허가가 빠진 Transient(핸드셰이크가 아닐 때)도 이렇게 다룬다.
+    Interrupt,
 };
 
 // ControlStale은 컨트롤러가 내지 않는다. 스냅샷이 오래됐을 때 overlayd가 대신 쓴다.
@@ -30,9 +36,8 @@ enum class BlockKind : uint8_t {
     X(None, "", "", BlockKind::None)                                                                  \
     X(NotEngaged, "not_engaged", "STANDBY", BlockKind::Reject)                                        \
     X(ControllerDisabled, "controller_disabled", "CONTROL OFF", BlockKind::Hard)                      \
-    X(SeedsMissing, "seeds_missing", "CAN SEEDS", BlockKind::Reject)                                  \
-    X(VehicleStateStale, "vehicle_state_stale", "CAR STALE", BlockKind::Reject)                       \
-    X(SpeedInvalid, "speed_invalid", "SPEED INVALID", BlockKind::Reject)                              \
+    X(SeedsMissing, "seeds_missing", "CAN SEEDS", BlockKind::Interrupt)                               \
+    X(VehicleStateStale, "vehicle_state_stale", "CAR STALE", BlockKind::Interrupt)                    \
     X(DoorOpen, "door_open", "DOOR OPEN", BlockKind::Hard)                                            \
     X(SeatbeltUnlatched, "seatbelt_unlatched", "SEATBELT", BlockKind::Hard)                           \
     X(EspDisabled, "esp_disabled", "ESP OFF", BlockKind::Hard)                                        \
@@ -43,8 +48,9 @@ enum class BlockKind : uint8_t {
     X(PandaControlsOff, "panda_controls_off", "PANDA CTRL OFF", BlockKind::Transient)                 \
     X(Stopped, "stopped", "STOPPED", BlockKind::Availability)                                         \
     X(PathInvalid, "path_invalid", "PATH INVALID", BlockKind::Availability)                           \
-    X(LateralPlanInvalid, "lateral_plan_invalid", "PLAN INVALID", BlockKind::Reject)                  \
-    X(LateralPlanStale, "lateral_plan_stale", "PLAN STALE", BlockKind::Reject)                        \
+    X(ModelLost, "model_lost", "MODEL LOST", BlockKind::Interrupt)                                    \
+    X(LateralPlanInvalid, "lateral_plan_invalid", "PLAN INVALID", BlockKind::Interrupt)               \
+    X(LateralPlanStale, "lateral_plan_stale", "PLAN STALE", BlockKind::Interrupt)                     \
     X(SteerTempUnavailable, "steer_temp_unavailable", "STEER UNAVAILABLE", BlockKind::SoftDisable)    \
     X(CalibrationIncomplete, "calibration_incomplete", "CALIBRATING", BlockKind::SoftDisable)         \
     X(CalibrationRecalibrating, "calibration_recalibrating", "RECALIBRATING", BlockKind::SoftDisable) \
@@ -82,7 +88,6 @@ constexpr BlockKind block_kind(BlockReason reason) { return kBlockReasons[static
 
 // 와이어 이름 → 열거값. 모르는 이름(다른 빌드의 controlsd)이면 Count.
 inline BlockReason block_reason_from_name(const char *name) {
-    if (!name) return BlockReason::Count;
     for (const BlockReasonRow &row : kBlockReasons) {
         if (std::strcmp(row.name, name) == 0) return row.reason;
     }

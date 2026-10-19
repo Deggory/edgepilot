@@ -40,11 +40,13 @@ The hardware composes the two layers for the 480x640 portrait panel.
   drawn by the CPU renderer in the panel's portrait orientation into a cached
   buffer. There is no rotation pass: IVPS TDP rotation smears 32-bit BGRA
   edges (it spread G, R and A into the neighbouring pixels, which gave the path
-  stepped edges and a bright rim). Only the 64 px tiles drawn this frame or
+  stepped edges and a bright rim). Only the 32 px tiles drawn this frame or
   last frame are cleared and copied into the visible fb0 page.
 
 The renderer draws in 640x480 screen coordinates and the canvas transposes them
-into the portrait buffer. Lanes and path are anti-aliased.
+into the portrait buffer, in the orientation of this board's `disp_flip=1`,
+`disp_mirror=0` (the touchscreen mapping assumes the same). Lanes and path are
+anti-aliased.
 
 ## Redraw timing
 
@@ -188,6 +190,11 @@ that the driver holds it. Then steering resumes when the driver lets go below
 15°, or below 80° once the wheel has followed the planned curve for 1 s, as on
 a ramp the driver holds after a brief pass over 85°.
 
+The card grows with its text up to the gap between the bottom corner cards,
+344 px, so a title or detail may be at most 288 px wide. `gtest_hud_canvas`
+measures every alert text against that; the driver-held `STEERING PAUSED`
+detail was 354 px and ran out of the card.
+
 <table>
   <tr>
     <td width="33%" align="center" valign="top"><img src="images/hud/lane-change.jpg" width="240" alt="Lane change alert"><br><sub><code>LANE CHANGE</code>: blinker on</sub></td>
@@ -228,10 +235,15 @@ Every tap is logged as `overlayd: tap x=... y=... <action>`.
 
 ## Backlight
 
-`overlayd` turns the backlight on (`/sys/class/pwm/pwmchip0/pwm3`), because the
-MaixCDK display leaves it at 0 when it closes. The level comes from
-`/boot/configs` (`maix_backlight_value`), scaled by `disp_max_backlight` from
-`/boot/board`.
+`overlayd` is the only process that sets the backlight
+(`/sys/class/pwm/pwmchip0/pwm3`). It turns it on at start, because the MaixCDK
+display leaves it at 0 when it closes, at the level in `/boot/configs`
+(`maix_backlight_value`). Right after, it applies `enabled` and
+`brightness_percent` from `params/display.json`, and again within 1 s of each
+change. The duty is the 100 µs period x the brightness x `disp_max_backlight`
+from `/boot/board`. A restart of `overlayd`, which follows every `camerad`
+restart, therefore keeps the chosen level, and a screen turned off at night
+stays off.
 
 ## Alert sounds
 

@@ -3,8 +3,8 @@
 [← Documentation](README.md)
 
 How the openpilot math ported to this board is checked: the online calibration
-and the model input warp against openpilot's own formulas and OpenCL warp, and
-the lateral MPC against the optimality conditions of the problem it solves.
+and the model input warp against openpilot's own formulas, and the lateral MPC
+against the optimality conditions of the problem it solves.
 Read it before changing one of these parts; it also records the solver changes
 that were measured and rejected.
 
@@ -13,39 +13,35 @@ What each check compares, what it compares against, and where it runs:
 ```mermaid
 flowchart LR
     online["online calibration<br>calibration_online"] --> t1["gtest_calibration<br>host"]
-    t1 --> r1(["openpilot calibrationd.py<br>and model.py formulas"])
-    cpu["CPU input warp<br>model_input_transform"] --> t2["gtest_calibration<br>host"]
-    t2 --> r2(["openpilot OpenCL warp<br>transform.cl"])
-    gdc["GDC input warp<br>maix_gdc_warp"] --> t3["comparison<br>on the board"]
-    t3 --> r3(["CPU input warp<br>same frame"])
-    mpc["lateral MPC<br>lateral_mpc"] --> t4["gtest_lateral_mpc<br>host"]
-    t4 --> r4(["optimality conditions<br>of the 0.8.16 OCP"])
+    t1 --> r1(["openpilot calibrationd.py<br>formulas"])
+    warp["input warp matrices<br>model_input_transform"] --> t2["gtest_model_input_transform<br>host"]
+    t2 --> r2(["openpilot model.py<br>get_warp_matrix"])
+    mpc["lateral MPC<br>lateral_mpc"] --> t3["gtest_lateral_mpc<br>host"]
+    t3 --> r3(["optimality conditions<br>of the 0.8.16 OCP"])
     classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
     classDef external fill:#fff3e8,stroke:#f0883e,color:#1f2328
-    class online,cpu,gdc,mpc compute
-    class t1,t2,t3,t4 proc
-    class r1,r2,r3,r4 external
+    class online,warp,mpc compute
+    class t1,t2,t3 proc
+    class r1,r2,r3 external
 ```
 
 ## Calibration and input warp
 
-`tests/gtest_calibration.cc` is a host-only verifier for the openpilot-derived
-calibration and input-warp math. It needs neither the AX runtime nor the
-MaixCAM2 SDK. It covers the CPU warp and the projection matrices the GDC warp
-is given; the GDC itself runs only on the board.
+`tests/gtest_calibration.cc` and `tests/gtest_model_input_transform.cc` are
+host-only verifiers for the openpilot-derived calibration and input-warp math.
+They need neither the AX runtime nor the MaixCAM2 SDK. The input-warp one
+covers the projection matrices the GDC warp is given and the NEON YUV6
+unpacking of its views; the GDC itself runs only on the board.
 
-### What the host test checks
+### What the host tests check
 
-- The pose-based calibration state machine.
-- The manual-vs-online feedback policy.
-- The medmodel and sbigmodel homography matrices. The verifier checks the
-  ISP-normalised medmodel defaults and compares its matrix with the original
-  openpilot formula.
-- The UV `transform_scale_buffer(0.5)` handling.
-- The YUV6 plane order (`Y00, Y10, Y01, Y11, U, V`).
-- With zero rpy, the warped YUV6 must equal a direct (unwarped) pack byte for
-  byte.
+- `gtest_calibration`: the pose-based calibration state machine; saving,
+  restoring and resetting the calibration, and the flow source.
+- `gtest_model_input_transform`: the medmodel and sbigmodel homography
+  matrices. It checks the ISP-normalised medmodel defaults and compares the
+  matrix with the original openpilot formula. It also checks the YUV6 plane
+  order (`Y00, Y10, Y01, Y11, U, V`) of the GDC views' unpacking.
 
 ### Conventions kept from openpilot
 
@@ -63,28 +59,26 @@ is given; the GDC itself runs only on the board.
 
 ### Measured differences
 
-- **CPU warp against OpenCL.** Against openpilot's OpenCL interpolation on a
-  `640x360` source frame, the worst 12-case mean absolute pixel difference of
-  the CPU warp is `0.314/255` and the worst absolute difference is `7/255`. The
-  paths use the same projection and YUV6 layout, but are not bit-exact:
-  openpilot quantises coordinates to 1/32 pixel with 15-bit coefficients, while
-  this warp uses 12-bit coefficients.
-- **GDC against CPU.** On the board, the GDC warp matches the CPU warp to
-  1 LSB in Y and 0.4 LSB on average in U/V.
+- **GDC against the CPU warp.** Earlier builds kept a fixed-point CPU warp
+  (12-bit weights) whose worst mean difference from openpilot's OpenCL
+  interpolation on a `640x360` frame was `0.314/255` (worst pixel `7/255`). On
+  the board the GDC matched it to 1 LSB in Y and 0.4 LSB on average in U/V. The
+  CPU warp was removed once the GDC was the only path in use.
 - **Model output.** On a replay, the plan lateral offset at 2 s differs from
   the fp32 host reference by 0.0005 m.
 
-### Run it alone
+### Run them alone
 
-`scripts/run_host_tests.sh` already runs this verifier. To run it alone:
+`scripts/run_host_tests.sh` already runs these verifiers. To run them alone:
 
 ```sh
 cmake -S . -B build-host \
   -DCMAKE_BUILD_TYPE=Release \
   -DEDGEPILOT_BUILD_RUNTIME=OFF \
   -DEDGEPILOT_BUILD_DIAGNOSTICS=ON
-cmake --build build-host --target gtest_calibration -j2
+cmake --build build-host --target gtest_calibration gtest_model_input_transform -j2
 build-host/bin/gtest_calibration
+build-host/bin/gtest_model_input_transform
 ```
 
 ## Lateral MPC solver

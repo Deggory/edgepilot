@@ -94,6 +94,10 @@ inline double model_x_idx_double(int i) {
 inline float model_t_idx(int i) { return static_cast<float>(model_t_idx_double(i)); }
 inline float model_x_idx(int i) { return static_cast<float>(model_x_idx_double(i)); }
 
+// plan(점의 앞 거리 plan_x)이 차선 점 거리(X_IDXS)에 닿는 시각(openpilot plan→lane_t). 끝을 넘는 점은 NaN이고(플래너가
+// 보간에서 뺀다), 정차 부근의 뒤로 뛰는 knot은 두 knot 시각 사이로 묶여 lane_t는 단조다.
+void compute_lane_t(const float plan_x[kTrajectorySize], float lane_t[kTrajectorySize]);
+
 struct ModelPoint {
     float x = 0.0f;
     float y = 0.0f;
@@ -101,9 +105,6 @@ struct ModelPoint {
 };
 
 struct ParsedPlan {
-    bool valid = false;
-    int best_index = 0;
-    float probability = 0.0f;
     std::array<ModelPoint, kTrajectorySize> points{};
     // T_FROM_CURRENT_EULER z / ORIENTATION_RATE z (rad, rad/s). openpilot 메인의
     // get_curvature_from_plan이 쓰는 값이다(laneless 모드).
@@ -112,14 +113,12 @@ struct ParsedPlan {
 };
 
 struct ParsedLaneLine {
-    bool valid = false;
     float probability = 0.0f;
     float std = 0.0f;
     std::array<ModelPoint, kTrajectorySize> points{};
 };
 
 struct ParsedRoadEdge {
-    bool valid = false;
     float std = 0.0f;
     std::array<ModelPoint, kTrajectorySize> points{};
 };
@@ -154,15 +153,16 @@ constexpr float kLeadProbabilityThreshold = 0.5f;
 // check_web_console.py가 대조)가 같은 값을 쓴다.
 constexpr float kRadarToCameraDistanceM = 1.52f;
 
-// 시간 오프셋(0/2/4 s)마다 궤적 하나와 존재 확률 하나.
+// 시간 오프셋(0/2/4 s)마다 궤적 하나와 존재 확률 하나. primary는 time_idx 번째의 첫 점을 존재 확률이
+// min_probability 이상일 때만 준다.
 struct ParsedLeads {
-    bool valid = false;
     std::array<ParsedLeadPrediction, kLeadMhpSelection> predictions{};
     std::array<float, kLeadMhpSelection> global_probabilities{};
 
     bool primary(int time_idx, float min_probability, ParsedLeadPoint *lead, float *probability = nullptr) const;
 };
 
+// valid가 거짓이면(모델 출력이 아직 없음) 나머지는 0이다.
 struct ParsedModelOutput {
     bool valid = false;
     ParsedPlan plan;
@@ -170,15 +170,12 @@ struct ParsedModelOutput {
     std::array<ParsedRoadEdge, 2> road_edges{};
     ParsedLeads leads;
     ParsedMeta meta;
-    bool has_pose = false;
     PoseObservation pose{};
 };
 
 class ModelOutputParser {
 public:
     static ParsedModelOutput parse(const std::vector<float> &raw);
-
-    static float sigmoid(float x);
 };
 
 #endif

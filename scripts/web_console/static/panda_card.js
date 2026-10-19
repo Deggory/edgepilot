@@ -8,7 +8,7 @@ const bytes = size => t("panda.bytes", {size: size.toLocaleString(locale)});
 
 // conditions: 플래싱 조건의 긴 안내(한 번 만든 helpText, 펼친 상태가 1초마다 접히지 않게)
 function describe(p, conditions) {
-  const flash = p.flash || {};
+  const flash = p.flash;
   const flashing = flash.state === "flashing" || p.request_pending;
   const badgeList = [
     p.stale ? [t("panda.no_pandad"), "bad"] : p.mode === "app" ? [t("panda.connected"), "good"]

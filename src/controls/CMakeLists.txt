@@ -8,7 +8,6 @@ add_edgepilot_library(control_core
   lateral_controller.cc
   lateral_nn.cc
   lateral_nn_select.cc
-  lateral_path.cc
   lateral_torque.cc
 )
 target_link_libraries(control_core PUBLIC car utils_json)

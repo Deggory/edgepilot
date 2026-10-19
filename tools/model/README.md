@@ -61,8 +61,10 @@ image for the compile step; nothing here needs a GPU or a compiler.
 
 ## Recording-driven helpers
 
-`recording_reader.py` decodes a route and `model_warp.py` is a numpy port of
-the CPU warp in `src/model/model_input_transform.cc`.
+`recording_reader.py` decodes a route and `model_warp.py` is a numpy model-input
+warp: the matrices of `src/model/model_input_transform.cc` and the fixed-point
+bilinear sampling of the CPU warp earlier builds carried (the board warps on the
+GDC, within 1 LSB).
 
 | File | What it does |
 | --- | --- |
@@ -126,13 +128,14 @@ views. It holds the MaixCAM2 intrinsics once (`maixcam2_intrinsics`, the
 `src/common/app_config.h` values) for the preview, the calibration report and
 the axmodel calibration data; the warp uses them unless given others.
 
-It copies the runtime's 12-bit fixed-point sampling and its projection:
+It copies the 12-bit fixed-point sampling of the CPU warp earlier builds used
+(the board's GDC matched it to about 1 LSB) and the runtime's projection:
 openpilot's `get_warp_matrix` (a rotation about the camera centre) with the
 camera-mount shift `modeld` applies (`camera_offset_m`, `camera_height_m`).
 The runtime multiplies in single precision, so the matrices agree to a
 relative 1e-5, well under a thousandth of a pixel.
 `check_recording_reader.py` holds them to the golden values that
-`gtest_calibration` pins on the C++ side.
+`gtest_model_input_transform` pins on the C++ side.
 
 ## Related
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""문서 속 Mermaid 그림을 mermaid-cli(도커 이미지 minlag/mermaid-cli)로 그려 본다. 그리지 못한 그림과, GitHub
+"""문서 속 Mermaid 그림을 mermaid-cli(도커 이미지 minlag/mermaid-cli, 버전 고정)로 그려 본다. 그리지 못한 그림과, GitHub
 본문 칸(약 830 px)보다 넓어 글자가 작아지는 그림을 알려 준다. 그린 PNG는 --out 아래에 남는다(눈으로 볼 때).
 
 사용: tools/docs/render_mermaid.py [--out build-docs] [문서.md ...]
@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "minlag/mermaid-cli:latest"
+# 고정한 버전: 2026-10-13 문서 정비 때 그린 latest(09-28부터 12.0.1)다. latest를 쓰면 같은 문서가 날마다 다른 판으로
+# 그려져 폭 판정이 바뀐다. 올릴 때는 모든 그림을 다시 그려 본다.
+IMAGE = "minlag/mermaid-cli:12.0.1"
 COLUMN_PX = 830
 BLOCK = re.compile(r"^```mermaid\n(.*?)^```", re.M | re.S)
 
@@ -21,13 +23,14 @@ def documents():
     files = [ROOT / "README.md"] + sorted((ROOT / "docs").glob("*.md"))
     listed = subprocess.run(["git", "ls-files", "*/README.md"], cwd=ROOT, capture_output=True, text=True).stdout
     # firmware/panda는 들여온 코드지만 README는 우리 문서다
-    files += [ROOT / f for f in listed.split() if not f.startswith("firmware/panda/") or f == "firmware/panda/README.md"]
-    return files
+    files += [ROOT / f for f in listed.split()
+              if not f.startswith("firmware/panda/") or f == "firmware/panda/README.md"]
+    return list(dict.fromkeys(files))  # docs/README.md는 두 목록에 다 있다
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--out", default="build-docs", help="그림을 남길 곳(저장소 기준)")
+    parser.add_argument("--out", default="build-docs", help="where to leave the images (relative to the repository)")
     parser.add_argument("files", nargs="*")
     args = parser.parse_args()
     out = (ROOT / args.out).resolve()
@@ -47,7 +50,8 @@ def main():
         return 0
     # 컨테이너 하나에서 차례로 그린다. svg로 폭을 재고, png는 2배로 그려 눈으로 본다.
     script = ("cd /data && for f in *.mmd; do s=${f%.mmd}; rm -f $s.svg $s.png; "
-              "mmdc -q -p /puppeteer-config.json -i $f -o $s.svg -b white >$s.log 2>&1 && mmdc -q -p /puppeteer-config.json -i $f -o $s.png -b white -s 2 >>$s.log 2>&1; "
+              "mmdc -q -p /puppeteer-config.json -i $f -o $s.svg -b white >$s.log 2>&1 && "
+              "mmdc -q -p /puppeteer-config.json -i $f -o $s.png -b white -s 2 >>$s.log 2>&1; "
               "done")
     subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{out}:/data", IMAGE, "-c", script],
                    check=True)

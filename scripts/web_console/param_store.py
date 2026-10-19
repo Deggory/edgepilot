@@ -1,6 +1,6 @@
-"""파라미터 파일(params/*.json) 읽기·쓰기. 바꾸면 그 그룹을 읽는 프로세스에 SIGHUP으로 알리고(controlsd), 기기
-설정의 백라이트 항목은 하드웨어에도 바로 적용한다. 기본값은 params/ 옆의 params.defaults/(업로드 스크립트가
-저장소의 params/에서 채운다)이고, 런타임 파일의 키 집합을 기본값에 맞춰 둔다.
+"""파라미터 파일(params/*.json) 읽기·쓰기. 읽는 프로세스가 파일을 스스로 다시 읽는다(controlsd는 1초마다 보고, 기기
+설정의 백라이트도 overlayd가 적용한다). 그래서 웹 콘솔은 쓰기만 하고 알리지 않는다. 기본값은 params/ 옆의
+params.defaults/(업로드 스크립트가 저장소의 params/에서 채운다)이고, 런타임 파일의 키 집합을 기본값에 맞춰 둔다.
 
 값은 런타임 로더가 받는 꼴만 쓴다(check_value). 로더는 켜고 끄는 값이 true/false가 아니거나 숫자가 유한하지 않으면
 파일 전체를 거부하고, 시작할 때 거부하면 controlsd가 뜨지 못한다(인증 없는 포트라 페이지의 검사만 믿지 않는다).
@@ -10,16 +10,12 @@ from __future__ import annotations
 import math
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict
 
-from .backlight import DisplayBacklight
 from .files import defaults_dir, params_dir, read_json_object, write_json_atomic
 from .param_metadata import PARAM_GROUPS, PARAM_METADATA, VEHICLE_TAB
-from .process_status import signal_process
+from .process_status import process_running
 from .refusal import Refusal
-
-# 백라이트 하드웨어에 적용하는 기기 설정 항목. 나머지(알림음 등)는 overlayd·modeld가 파일에서 읽는다.
-BACKLIGHT_KEYS = ("enabled", "brightness_percent")
 
 # 런타임 로더는 숫자를 strtof로 읽고 범위 오류(ERANGE)면 파일을 거부한다: float로 나타낼 수 없는 큰 수와 정규화되지
 # 않는 작은 수(0이 아닌데 FLT_MIN보다 작은 것)
@@ -44,7 +40,7 @@ def check_value(group: str, key: str, value: Any, current: Any) -> Any:
     """값 하나를 런타임 로더가 받는 꼴인지 보고 저장할 값을 돌려준다. 받지 않으면 Refusal(400,
     error.param_invalid.<이유>). 켜고 끄는 항목(지금 값이 true/false)은 true/false만, 나머지는 로더가 float로 읽을 수
     있는 숫자만 받고(loader_float), 메타데이터가 있으면 그 범위 안이어야 한다. step이 정수인 항목은 정수로 쓴다."""
-    meta = PARAM_METADATA.get(group, {}).get(key, {})
+    meta = PARAM_METADATA[group][key]
     if isinstance(current, bool):
         if not isinstance(value, bool):
             raise Refusal("error.param_invalid.boolean", status=400, name=key)
@@ -76,47 +72,30 @@ def read_document(path: Path) -> Dict[str, Any]:
 
 class ParamStore:
     def __init__(self, paths: Dict[str, Path] | None = None, default_paths: Dict[str, Path] | None = None,
-                 notify: Callable[[str], List[int]] = signal_process, backlight: DisplayBacklight | None = None):
+                 running: Callable[[str], bool] = process_running):
         directory = params_dir()
         self.paths = paths if paths is not None else group_paths(directory)
         if default_paths is None:
             default_paths = group_paths(defaults_dir(directory)) if paths is None else {}
         self.default_paths = default_paths
-        self.notify = notify
-        self.backlight = backlight
+        self.running = running
         self.lock = threading.Lock()
         self._sync_with_defaults()
-        if self.backlight is not None and "display" in self.paths:
-            try:
-                self.backlight.apply(self.read_group("display"))
-            except (Refusal, RuntimeError, ValueError):
-                pass
 
     def _sync_with_defaults(self) -> None:
         """런타임 파일의 키 집합을 기본값에 맞춘다. 빠진 키는 기본값으로 채우고, 기본값에서 사라진 키는 지운다.
         살아남은 키의 값은 그대로 둔다. 지우지 않으면 코드가 더 이상 읽지 않는 파라미터가 편집기에 남아 튜닝이
         적용된 것처럼 보인다."""
         for group, defaults in self.defaults().items():
-            runtime_path = self.paths.get(group)
-            if runtime_path is None:
-                continue
-            try:
-                runtime = read_document(runtime_path) if runtime_path.is_file() else {}
-            except ValueError:
-                continue
+            runtime_path = self.paths[group]
+            runtime = read_document(runtime_path) if runtime_path.is_file() else {}
             merged = {key: runtime.get(key, value) for key, value in defaults.items()}
             if merged != runtime:
                 write_json_atomic(runtime_path, merged)
 
     def defaults(self) -> Dict[str, Dict[str, Any]]:
-        """그룹별 기본값. 기본값 파일이 없거나 깨진 그룹은 뺀다."""
-        result = {}
-        for group, path in self.default_paths.items():
-            try:
-                result[group] = read_document(path)
-            except ValueError:
-                continue
-        return result
+        """그룹별 기본값(업로드 스크립트가 채운 params.defaults/)."""
+        return {group: read_document(path) for group, path in self.default_paths.items()}
 
     def read_group(self, group: str) -> Dict[str, Any]:
         """그룹 파일. 없는 그룹이면 Refusal(404), 파일이 없거나 깨졌으면 Refusal(500, error.param_file)."""
@@ -127,13 +106,13 @@ class ParamStore:
             raise Refusal("error.param_file", status=500, error=str(exc)) from exc
 
     def snapshot(self) -> Dict[str, Any]:
-        """페이지가 파라미터 탭을 그리는 데 필요한 것 전부: 그룹 구성(섹션 순서, 알릴 프로세스), 차량 특성 탭 구성,
+        """페이지가 파라미터 탭을 그리는 데 필요한 것 전부: 그룹 구성(섹션 순서, 읽는 프로세스), 차량 특성 탭 구성,
         현재값, 기본값, 항목 메타데이터, 파일 경로. 글자는 페이지가 고른 언어의 문구로 채운다(param_metadata)."""
         with self.lock:
             documents = {group: self.read_group(group) for group in self.paths}
         return {
-            "groups": {group: {key: spec[key] for key in ("sections", "notify")}
-                       for group, spec in PARAM_GROUPS.items() if group in self.paths},
+            "groups": {group: {key: spec[key] for key in ("sections", "reader")}
+                       for group, spec in PARAM_GROUPS.items()},
             "vehicle_tab": VEHICLE_TAB,
             "params": documents,
             "defaults": self.defaults(),
@@ -155,16 +134,10 @@ class ParamStore:
             if unknown:
                 raise Refusal("error.param_unknown", status=404, name=", ".join(unknown))
             document.update({key: check_value(group, key, value, document[key]) for key, value in values.items()})
-            if group == "display" and any(key in values for key in BACKLIGHT_KEYS):
-                if self.backlight is None:
-                    raise Refusal("error.backlight_unavailable", status=503)
-                try:
-                    self.backlight.apply(document)
-                except (RuntimeError, ValueError) as exc:
-                    raise Refusal("error.backlight_failed", status=503, error=str(exc)) from exc
             write_json_atomic(self._path(group), document)
-        process = PARAM_GROUPS.get(group, {}).get("notify", "")
-        return {"group": group, "params": document, "notified": self.notify(process) if process else []}
+        # 읽는 프로세스(controlsd)가 돌지 않으면 페이지가 저장만 됐다고 알린다. 다시 뜨면 이 파일을 읽는다.
+        reader = PARAM_GROUPS[group]["reader"]
+        return {"group": group, "params": document, "reader_running": not reader or self.running(reader)}
 
     def _path(self, group: str) -> Path:
         if group not in self.paths:

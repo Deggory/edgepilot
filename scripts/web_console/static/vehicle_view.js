@@ -3,7 +3,9 @@
 // 그 출처, 학습값, 수동값(바로 고친다)과 자동 학습 중 그 쓰임을 함께 둔다. 그 아래 학습 입력, 최근 10분 추이, 카메라
 // 보정, 고정 제원(VEHICLE_TAB 섹션 순서에 추이와 보정을 끼운다). 1초마다 /api/learners를 읽는다.
 import {codeText, locale, t} from "./i18n.js";
-import {clampToMeta, defaultOf, metaFor, onParamsChanged, params, sectionName, valueOf} from "./param_state.js";
+import {
+  clampToMeta, defaultOf, metaFor, onParamsChanged, params, sectionName, updateRuntime, valueOf,
+} from "./param_state.js";
 import {conditionNoteList, effectsDetails, formatValue, paramCard, paramEditor} from "./param_editor.js";
 import {
   actionButton, api, badges, confirmAction, DASH, deg, el, fitRange, helpText, infoTable, liveCard, ms, note, num, poller,
@@ -186,7 +188,7 @@ function quantityCard(key, switchKey, learner) {
     label(t("vehicle.manual_value")),
     el("span.quantity-foot",
       {},
-      fallback === undefined ? null : el("span", {text: t("params.default", {value: formatValue(fallback, meta)})}),
+      el("span", {text: t("params.default", {value: formatValue(fallback, meta)})}),
       editor.modifiedBadge, editor.resetButton, editor.status),
     editor.control.element);
   const role = el("p.card-note.prior");
@@ -472,7 +474,7 @@ function trendCard(chart) {
     update(rows, windowS, manual, state) {
       const end = rows.length ? rows[rows.length - 1][0] : 0;
       const shown = rows.filter(row => row[0] >= end - windowS);
-      const at = chart.levels(manual, state || {});  // 학습 상태가 없으면 사전값 기준선은 숨는다(NaN)
+      const at = chart.levels(manual, state);
       const data = Object.fromEntries(chart.series.map(([index, name]) => [name, shown.map(row => [row[0], value(row, index, name)])]));
       const y = fitRange([...Object.values(at), ...Object.values(data).flat().map(([, v]) => v)], {minSpan: chart.span, pad: 0.08});
       plot.draw({x: [end - windowS, end], y, data, at});
@@ -505,6 +507,7 @@ export function createVehicleView() {
   let trendLoaded = false;
 
   const update = data => {
+    updateRuntime(data.runtime);
     calibration.update(data.calibration);
     if (!data.available) {
       notice.replaceChildren(el("p.group-note.warn", {text: t("vehicle.no_learners")}));
@@ -513,7 +516,7 @@ export function createVehicleView() {
     }
     notice.replaceChildren(data.stale
       ? el("p.group-note.warn", {text: t("vehicle.learners_stale", {seconds: Math.round(data.age_s)})}) : "");
-    const live = {learner: data.state, localization: data.localization && data.localization.available ? data.localization : null};
+    const live = {learner: data.state, localization: data.localization.available ? data.localization : null};
     groups.forEach(group => group.update(live));
     const row = data.trend_row;
     if (row && rows.length && row[0] < rows[rows.length - 1][0]) rows = [];

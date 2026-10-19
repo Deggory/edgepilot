@@ -56,15 +56,15 @@ def toggle(section: str, *, tab: str = "", learned: bool = False, card: str = ""
 
 PARAM_GROUPS: Dict[str, Dict[str, Any]] = {
     "steering": {
-        "file": "steering.json", "notify": "controlsd",
+        "file": "steering.json", "reader": "controlsd",
         "sections": ["basics", "torque_controller", "path_mode", "lane_position", "driver", "lkas_fault"],
     },
     "adaptive_cruise": {
-        "file": "adaptive_cruise.json", "notify": "controlsd",
+        "file": "adaptive_cruise.json", "reader": "controlsd",
         "sections": ["cruise", "gap", "speed_response", "resume", "vision", "buttons"],
     },
-    "recording": {"file": "recording.json", "notify": "", "sections": ["recording"]},
-    "display": {"file": "display.json", "notify": "", "sections": ["backlight", "sound", "camera_mount"]},
+    "recording": {"file": "recording.json", "reader": "", "sections": ["recording"]},
+    "display": {"file": "display.json", "reader": "", "sections": ["backlight", "sound", "camera_mount"]},
 }
 
 # 차량 특성 탭: steering.json 항목 중 차의 성질인 것(tab="vehicle"), 섹션 순서대로. 학습기 섹션의 값들은 학습기
@@ -105,7 +105,8 @@ PARAM_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         "torque_kp": number("torque_controller", "", 0.05, 0, 10, unused=(STEERING_OFF,)),
         "torque_ki": number("torque_controller", "", 0.01, 0, 2, unused=(STEERING_OFF,)),
         "steering_angle_deadzone_deg": number("torque_controller", "°", 0.1, 0, 3, unused=(STEERING_OFF,),
-                                              role=(when("nn_feedforward", True, "nn_feedforward_curves", also=NN_LOADED),)),
+                                              role=(when("nn_feedforward", True, "nn_feedforward_curves",
+                                                         also=NN_LOADED),)),
         "torque_straight_kp_scale": number("torque_controller", "x", 0.05, 0.3, 1, unused=(STEERING_OFF,)),
         "nn_feedforward": toggle("torque_controller", unused=(
             STEERING_OFF, when("lateral_nn_loaded", False, "nn_not_loaded", group="runtime"))),

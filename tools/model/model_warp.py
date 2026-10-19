@@ -1,7 +1,8 @@
-"""src/model/model_input_transform.cc의 Numpy 포팅.
+"""모델 입력 워프의 Numpy 구현. 행렬은 src/model/model_input_transform.cc와 같다.
 
-기기의 고정소수점 bilinear 워프(kWeightBits=12)를 그대로 재현해, student가 런타임이
-만드는 것과 같은 픽셀 분포로 학습하게 한다. 출력은 supercombo 모델이 받는 YUV6
+샘플링은 고정소수점 bilinear(가중치 12비트)다. 보드의 GDC 워프와 바이트 단위로 같지는 않지만 Y 1 LSB, U/V 평균
+0.4 LSB 안이라(docs/verification.md) axmodel 보정·평가 데이터(axmodel/make_m2_data.py)와 미리보기가 런타임과 같은
+픽셀 분포를 갖는다. 출력은 supercombo 모델이 받는 YUV6
 텐서 배치다: 128x256에서 채널 [Y(2x,2y), Y(2x,2y+1), Y(2x+1,2y), Y(2x+1,2y+1), U, V].
 """
 
@@ -32,7 +33,7 @@ def maixcam2_intrinsics(width: int, height: int) -> tuple[float, float, float, f
             MAIXCAM2_CX_1080 * width / 1920.0, MAIXCAM2_CY_1080 * height / 1080.0)
 
 
-def _rotation_from_rpy(roll: float, pitch: float, yaw: float) -> np.ndarray:
+def rotation_from_rpy(roll: float, pitch: float, yaw: float) -> np.ndarray:
     cr, sr = np.cos(roll), np.sin(roll)
     cp, sp = np.cos(pitch), np.sin(pitch)
     cy, sy = np.cos(yaw), np.sin(yaw)
@@ -49,7 +50,7 @@ def projection_matrix(fx: float, fy: float, cx: float, cy: float,
     """모델 화소 -> 원본 화소. ModelInputTransform::projection_matrix와 같은 openpilot get_warp_matrix다:
     K · view_from_device · device_from_calib(rpy) · shift · inv(K_model · view_from_device). 카메라 중심에서의
     순수 회전에, 가상 카메라를 오른쪽으로 camera_offset_m 옮긴 높이 camera_height_m의 도로면 이동(shift)을
-    더한다. C++는 단정밀도로 곱하므로 상대 1e-5 안에서 같다(tests/gtest_calibration.cc의 기준값)."""
+    더한다. C++는 단정밀도로 곱하므로 상대 1e-5 안에서 같다(tests/gtest_model_input_transform.cc의 기준값)."""
     if sbig:
         model_f, model_cy = 455.0, 0.5 * (256.0 + 47.6)  # sbigmodel_fl, 가운데
     else:
@@ -59,7 +60,7 @@ def projection_matrix(fx: float, fy: float, cx: float, cy: float,
     model_k_inv = np.array([[1.0 / model_f, 0.0, -model_cx / model_f],
                             [0.0, 1.0 / model_f, -model_cy / model_f],
                             [0.0, 0.0, 1.0]])
-    rot = _rotation_from_rpy(*np.asarray(rpy, dtype=np.float64))
+    rot = rotation_from_rpy(*np.asarray(rpy, dtype=np.float64))
     shift = np.eye(3)
     shift[1, 2] = camera_offset_m / camera_height_m
     projection = k @ VIEW_FROM_DEVICE @ rot @ shift @ VIEW_FROM_DEVICE.T @ model_k_inv

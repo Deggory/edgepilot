@@ -26,15 +26,44 @@ TEST(Localization, LagdMatchesUpstreamCorrelation) {
         act[i] = 0.9 * (std::sin(0.7 * td) + 0.5 * std::sin(1.9 * td + 1.0)) + 0.05 * std::sin(13.0 * t);
         mask[i] = std::fmod(std::floor(t / 7.0), 3.0) != 0.0;
     }
-    auto e = LateralLagEstimator::masked_smooth(des, mask);
-    auto a = LateralLagEstimator::masked_smooth(act, mask);
-    for (auto *v : {&e, &a})
-        for (double &x : *v)
-            if (!std::isfinite(x)) x = 0.0;
+    const auto e = LateralLagEstimator::masked_smooth(des, mask);
+    const auto a = LateralLagEstimator::masked_smooth(act, mask);
     const auto r = LateralLagEstimator::actuator_delay(e, a, mask, 0.05, 0.15, 0.65);
     EXPECT_NEAR(r.lag, 0.330126928, 1e-6);
     EXPECT_NEAR(r.corr, 0.998941686, 1e-6);
     EXPECT_NEAR(r.confidence, 0.6, 1e-9);
+}
+
+// 봉우리가 하나뿐인 정상 추정의 신뢰도도 upstream과 같다. upstream은 구간을 고르는 키가 실제 봉우리보다 min_lag
+// 표본만큼 앞이라 -1이 되는데, numpy에서 -1은 마지막 구간이라 그 봉우리 구간을 집는다. 예전 이식은 '구간 없음'으로
+// 보고 신뢰도 0을 내 거의 모든 추정을 버렸다(lagd가 멈춰 보였다). 기준값은 upstream 함수를 그대로 돌린 것이다.
+TEST(Localization, LagdConfidenceOfASinglePeakMatchesUpstream) {
+    const int n = 1200;
+    const double freqs[] = {0.31, 0.53, 0.89, 1.37, 1.91, 2.63, 3.17};
+    const double phases[] = {0.0, 1.1, 2.3, 0.4, 1.7, 2.9, 0.8};
+    const auto signal = [&](double t) {
+        double s = 0.0;
+        for (int i = 0; i < 7; ++i) s += std::sin(freqs[i] * 2.0 * kPi * t * 0.3 + phases[i]) / (1 + i);
+        return s;
+    };
+    struct Case {
+        double lag, est, corr, confidence;
+    };
+    for (const Case c : {Case{0.40, 0.400078884, 0.999741055, 0.75}, Case{0.62, 0.6, 0.999324928, 0.70}}) {
+        std::vector<double> des(n), act(n);
+        std::vector<bool> mask(n, true);
+        for (int i = 0; i < n; ++i) {
+            const double t = i * 0.05;
+            des[i] = signal(t);
+            act[i] = 0.9 * signal(t - c.lag) + 0.03 * std::sin(13.0 * t);
+        }
+        auto e = LateralLagEstimator::masked_smooth(des, mask);
+        auto a = LateralLagEstimator::masked_smooth(act, mask);
+        const auto r = LateralLagEstimator::actuator_delay(e, a, mask, 0.05, 0.15, 0.65);
+        EXPECT_NEAR(r.lag, c.est, 1e-6) << c.lag;
+        EXPECT_NEAR(r.corr, c.corr, 1e-6) << c.lag;
+        EXPECT_NEAR(r.confidence, c.confidence, 1e-9) << c.lag;
+    }
 }
 
 // 20 Hz로 60초 넘게 조건을 만족하는 주행을 넣으면 블록이 차고 진짜 지연을 낸다. 두 사인파의
@@ -76,6 +105,20 @@ TEST(Localization, LagdEstimatesDelayFromDriving) {
     ASSERT_TRUE(retuned.restore(lag.cache_json()));
     EXPECT_EQ(retuned.output().valid_blocks, out.valid_blocks);
     EXPECT_NEAR(retuned.output().estimate, out.estimate, 1e-5);
+}
+
+// steering.json의 steer_actuator_delay가 lagd 초기값이 된다: controlsd 로더와 같은 범위로 자르고, 없으면 기본값을
+// 둔다
+TEST(Localization, InitialLagFromSteeringJson) {
+    LateralLagConfig config;
+    const double prior = config.initial_lag;
+    apply_steering_initial_lag(R"({"steer_actuator_delay": 0.55})", &config);
+    EXPECT_NEAR(config.initial_lag, 0.55, 1e-6);
+    config.initial_lag = prior;
+    apply_steering_initial_lag(R"({"steer_max": 384})", &config);
+    EXPECT_EQ(config.initial_lag, prior) << "키가 없으면 그대로";
+    apply_steering_initial_lag(R"({"steer_actuator_delay": 3})", &config);
+    EXPECT_NEAR(config.initial_lag, 1.0, 1e-6) << "controlsd처럼 1.0으로 자른다";
 }
 
 TEST(Localization, LagdIgnoresSteeringOverrideAndLowSpeed) {
@@ -222,6 +265,34 @@ TEST(Localization, PoseKalmanRewindMatchesInOrder) {
         << "0.8초보다 오래된 관측은 거부";
 }
 
+// 같은 시각의 카메라 회전·이동을 한 번에 넣으면(되감기 한 번) 하나씩 넣은 것과 비트까지 같다. 과거 시각이든
+// 지금이든 같다.
+TEST(Localization, PoseKalmanSameTimeObservationsMatchOneByOne) {
+    using K = PoseKalman::Kind;
+    PoseKalman one_by_one, together;
+    for (int i = 0; i < 60; ++i) {
+        const double t = 1.0 + i * 0.01;
+        for (PoseKalman *kf : {&one_by_one, &together}) {
+            kf->predict_and_observe(t, K::Gyro, {0.001 * i, -0.002, 0.05}, PoseKalman::default_noise(K::Gyro));
+            kf->predict_and_observe(t, K::Accel, {0.1, 0.2, -9.8}, PoseKalman::default_noise(K::Accel));
+        }
+    }
+    const PoseKalman::Vec3 rot = {0.0, 0.01, 0.06}, trans = {20.0, 0.1, -0.05}, noise = {0.01, 0.02, 0.03};
+    for (const double t : {1.25, 1.75}) {  // 1.25는 과거(되감기), 1.75는 필터보다 뒤
+        SCOPED_TRACE(t);
+        ASSERT_TRUE(one_by_one.predict_and_observe(t, K::CameraRotation, rot, noise));
+        ASSERT_TRUE(one_by_one.predict_and_observe(t, K::CameraTranslation, trans, noise));
+        ASSERT_TRUE(
+            together.predict_and_observe(t, {{K::CameraRotation, rot, noise}, {K::CameraTranslation, trans, noise}}));
+        EXPECT_EQ(together.t(), one_by_one.t());
+        for (int i = 0; i < PoseKalman::kN; ++i) {
+            EXPECT_EQ(together.x()[i], one_by_one.x()[i]) << "상태 " << i;
+            for (int j = 0; j < PoseKalman::kN; ++j)
+                ASSERT_EQ(together.p()[i][j], one_by_one.p()[i][j]) << i << "," << j;
+        }
+    }
+}
+
 // 파이프라인: 조향 지연 lag만큼 늦게 따라오는 선회를 IMU 묶음·모델 상태·제어 상태로 넣는다.
 // 모델 상태는 캡처보다 늦게, IMU는 묶음으로 도착한다(보드와 같은 순서).
 struct PipelineRun {
@@ -230,7 +301,9 @@ struct PipelineRun {
     int outputs = 0;
 };
 
-PipelineRun run_pipeline(double batch_s, double true_lag, double seconds) {
+// hud_flags·driver_torque는 모든 제어 상태에 그대로 싣는다(lagd 입력 판정 시험).
+PipelineRun run_pipeline(double batch_s, double true_lag, double seconds, uint32_t hud_flags = 0,
+                         int driver_torque = 0) {
     LateralLagConfig config;
     config.min_confidence = 0.5;  // 합성 사인파의 신뢰도(LagdEstimatesDelayFromDriving 참고)
     LocalizationPipeline pipeline(config);
@@ -249,6 +322,8 @@ PipelineRun run_pipeline(double batch_s, double true_lag, double seconds) {
             cs.vehicle_fresh = 1;
             cs.ego_speed_kph = static_cast<float>(v * 3.6);
             cs.desired_curvature = static_cast<float>(kappa(next_control));
+            cs.hud_flags = hud_flags;
+            cs.driver_torque = driver_torque;
             pipeline.on_control(cs);
             next_control += 0.01;
         }
@@ -298,6 +373,23 @@ TEST(Localization, PipelineOutputsPoseAndLagIndependentOfImuBatching) {
         EXPECT_EQ(run.last.lag_valid_blocks, run.lag.valid_blocks);
         EXPECT_EQ(run.last.input_flags, 0U) << "맞는 카메라는 차속 가드에 걸리지 않는다";
     }
+}
+
+// lagd의 핸들 조작·포화 입력은 controlsd의 판정(hud_flags 13·14, 15가 있을 때)이다. 상류 lagd처럼
+// carState.steeringPressed(설정 문턱, 히스테리시스)와 lateralControlState.saturated(0.4초 누적)를 쓴다. 비트 15가
+// 없는 옛 녹화는 예전처럼 순간값으로 어림한다.
+TEST(Localization, LagdTakesPressedAndSaturatedFromControlsd) {
+    const auto points = [](uint32_t flags, int torque) {
+        return run_pipeline(0.1, 0.3, 30.0, flags, torque).last.lag_points;
+    };
+    const uint32_t points_free = points(kHudFlagLagInputs, 0);
+    EXPECT_GT(points_free, 100u);
+    EXPECT_EQ(points(kHudFlagLagInputs, 300), points_free)
+        << "controlsd가 조작이 아니라고 했으면 토크로 다시 재지 않는다";
+    EXPECT_EQ(points(kHudFlagLagInputs | kHudFlagSteeringPressed, 0), 0u) << "controlsd가 조작이라고 했다";
+    EXPECT_EQ(points(kHudFlagLagInputs | kHudFlagLatSaturated, 0), 0u) << "controlsd가 포화라고 했다";
+    EXPECT_EQ(points(0, 300), 0u) << "옛 녹화: 토크 150을 넘으면 조작";
+    EXPECT_EQ(points(kHudFlagSteeringPressed, 0), points_free) << "비트 15가 없으면 13을 믿지 않는다";
 }
 
 // 정차 중 모델이 가짜 움직임(2026-09-29 책상: 전진 15 m/s, 요 −0.25 rad/s)을 내도, CAN 차속이
@@ -391,7 +483,7 @@ TEST(Localization, ImuExtrinsicLevelsTiltedChip) {
     const double g = 9.81;
     // 기기(수평) 중력 측정 (0,0,−g)을 IMU 좌표로: imu = device_from_imuᵀ · device
     const double cr = std::cos(r), sr = std::sin(r), cp = std::cos(p), sp = std::sin(p);
-    // euler_rotate(r,p,0)ᵀ의 셋째 열 × (−g)
+    // rotation_from_rpy(r,p,0)ᵀ(tools/model/model_warp.py)의 셋째 열 × (−g)
     const double ix = -g * (-sp), iy = -g * (cp * sr), iz = -g * (cp * cr);
     // 기기 → 칩: chip = (y, −z, −x)
     const float accel_chip[3] = {static_cast<float>(iy), static_cast<float>(-iz), static_cast<float>(-ix)};

@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -55,8 +54,8 @@ uint16_t parse_safety_model(const char *name, uint16_t *default_param) {
     return kPandaSafetyNoOutput;
 }
 
-CanBatch rx_can_batch(const std::vector<PandaCanFrame> &frames) {
-    return make_can_batch(frames, [](IpcCanFrame *dst, const PandaCanFrame &src) {
+void fill_rx_batch(CanBatch *batch, const PandaCanFrame *frames, size_t size) {
+    fill_can_batch(batch, frames, size, [](IpcCanFrame *dst, const PandaCanFrame &src) {
         dst->address = src.address;
         dst->src = src.bus;
         dst->data_len = src.data_len;
@@ -65,18 +64,13 @@ CanBatch rx_can_batch(const std::vector<PandaCanFrame> &frames) {
     });
 }
 
+// 보낼 묶음은 controlsd가 만든 LKAS11·CLU11·MDPS12뿐이다(버스 0~2, 4·8바이트). 길이는 복사할 버퍼를 넘지 않게만 본다.
 std::vector<PandaCanFrame> frames_from_batch(const CanBatch &batch) {
     std::vector<PandaCanFrame> frames;
-    if (!batch.valid) return frames;
-    const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
-    frames.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
+    frames.reserve(batch.count);
+    for (uint32_t i = 0; i < batch.count; ++i) {
         const IpcCanFrame &src = batch.frames[i];
-        if (src.flags != 0) continue;
-        if (src.address > kPandaCanMaxAddress) continue;
-        if (src.src > kPandaCanMaxTxBus) continue;
         if (src.data_len > kPandaCanMaxDataLen) continue;
-        if (!panda_can_is_valid_data_len(static_cast<uint8_t>(src.data_len))) continue;
         PandaCanFrame frame;
         frame.address = src.address;
         frame.bus = static_cast<uint8_t>(src.src);
@@ -95,8 +89,8 @@ void publish_disconnected(LatestChannel &state_pub, bool tx_enabled) {
 }
 
 // 상태를 조회해 PandaState로 올린다. 조회한 값은 health_out에 남겨 1초 통계 줄이 다시 묻지 않게 한다.
-bool publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enabled, PandaHealth *health_out) {
-    PandaHealth health;
+bool publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enabled, PandaHealthPacket *health_out) {
+    PandaHealthPacket health{};
     PandaState state;
     state.timestamp_ns = monotonic_now_ns();
     state.connected = panda.connected() ? 1 : 0;
@@ -105,23 +99,23 @@ bool publish_health(LatestChannel &state_pub, PandaClient &panda, bool tx_enable
     state.panda_type = panda.hw_type();
     const bool got = panda.get_health(&health);
     if (got) {
-        state.controls_allowed = health.controls_allowed;
-        state.ignition_line = health.ignition_line;
-        state.ignition_can = health.ignition_can;
-        state.safety_mode = health.safety_mode;
-        state.safety_param = health.safety_param;
-        state.can_rx_errs = health.can_rx_errs;
-        state.can_send_errs = health.can_send_errs;
-        state.can_fwd_errs = health.can_fwd_errs;
-        state.blocked_msg_cnt = health.blocked_msg_cnt;
-        state.heartbeat_lost = health.heartbeat_lost;
+        state.controls_allowed = health.controls_allowed_pkt;
+        state.ignition_line = health.ignition_line_pkt;
+        state.ignition_can = health.ignition_can_pkt;
+        state.safety_mode = health.safety_mode_pkt;
+        state.safety_param = health.safety_param_pkt;
+        state.can_rx_errs = health.can_rx_errs_pkt;
+        state.can_send_errs = health.can_send_errs_pkt;
+        state.can_fwd_errs = health.can_fwd_errs_pkt;
+        state.blocked_msg_cnt = health.blocked_msg_cnt_pkt;
+        state.heartbeat_lost = health.heartbeat_lost_pkt;
         state.usb_tx_timeouts = panda.usb_tx_timeouts();
         state.usb_tx_retries = panda.usb_tx_retries();
         state.malformed_rx_batches = panda.malformed_rx_batches();
-        state.faults = health.faults;
-        state.fault_status = health.fault_status;
-        state.voltage = health.voltage;
-        state.current = health.current;
+        state.faults = health.faults_pkt;
+        state.fault_status = health.fault_status_pkt;
+        state.voltage = health.voltage_pkt;
+        state.current = health.current_pkt;
     }
     state_pub.publish(&state, sizeof(state));
     if (got && health_out) *health_out = health;
@@ -162,10 +156,9 @@ struct BridgeStats {
     std::map<std::pair<uint32_t, uint8_t>, unsigned> rejected_frames;
 
     // last_health는 직전 publish_health가 조회한 값(없으면 nullptr). 여기서 다시 묻지 않는다.
-    void log(PandaClient &panda, TxStats &tx, const PandaHealth *last_health, unsigned long long tx_depth,
+    void log(PandaClient &panda, TxStats &tx, const PandaHealthPacket *last_health, unsigned long long tx_depth,
              unsigned long long rx_depth) {
-        const PandaHealth health = last_health ? *last_health : PandaHealth{};
-        const bool got_health = last_health != nullptr;
+        const PandaHealthPacket health = last_health ? *last_health : PandaHealthPacket{};  // 없으면 0
         const unsigned lag_n = tx.lag_n.exchange(0);
         const uint64_t lag_sum = tx.lag_sum_us.exchange(0);
         std::fprintf(stderr,
@@ -179,13 +172,11 @@ struct BridgeStats {
                      tx.unsent.exchange(0), static_cast<unsigned long long>(lag_n ? lag_sum / lag_n : 0),
                      tx.lag_max_us.exchange(0), rx_late, tx_depth, rx_depth, rx_queue_full, rx_log_queue_full,
                      tx.log_full.exchange(0), tx.blocked.exchange(0), rx_rejected, errors, tx.errors.exchange(0),
-                     got_health ? health.can_rx_errs : 0, got_health ? health.can_send_errs : 0,
-                     got_health ? health.can_fwd_errs : 0, got_health ? health.blocked_msg_cnt : 0,
-                     got_health ? health.heartbeat_lost : 0, got_health ? health.controls_allowed : 0,
+                     health.can_rx_errs_pkt, health.can_send_errs_pkt, health.can_fwd_errs_pkt,
+                     health.blocked_msg_cnt_pkt, health.heartbeat_lost_pkt, health.controls_allowed_pkt,
                      panda.usb_tx_timeouts(), panda.usb_tx_retries(), panda.malformed_rx_batches(),
-                     got_health ? health.safety_mode : 0, got_health ? health.safety_param : 0,
-                     got_health ? health.ignition_line : 0, got_health ? health.ignition_can : 0,
-                     got_health ? health.voltage : 0, got_health ? health.current : 0, got_health ? health.faults : 0);
+                     health.safety_mode_pkt, health.safety_param_pkt, health.ignition_line_pkt, health.ignition_can_pkt,
+                     health.voltage_pkt, health.current_pkt, health.faults_pkt);
         for (const auto &[key, count] : rejected_frames) {
             std::fprintf(stderr, "pandad: rejected addr=0x%x bus=%u count=%u\n", key.first, key.second, count);
         }
@@ -194,43 +185,47 @@ struct BridgeStats {
 };
 
 // 이번 주기에 받은 프레임을 CAN 토픽과 로그 토픽에 올린다. 256개를 넘으면(밀린 뒤 한꺼번에 왔을 때) 나눠 올린다.
-void publish_rx(const std::vector<PandaCanFrame> &frames, CanQueue &can_pub, CanQueue &can_log_pub,
+// batch는 호출하는 쪽이 다시 쓰는 묶음이다(fill_can_batch).
+void publish_rx(const std::vector<PandaCanFrame> &frames, CanQueue &can_pub, CanQueue &can_log_pub, CanBatch *batch,
                 BridgeStats *stats) {
-    auto push = [&](const CanBatch &batch) {
-        if (!can_pub.push(batch)) {
+    for (size_t start = 0; start < frames.size(); start += kCanBatchMaxFrames) {
+        fill_rx_batch(batch, frames.data() + start, std::min<size_t>(frames.size() - start, kCanBatchMaxFrames));
+        if (!can_pub.push(*batch)) {
             ++stats->rx_queue_full;
             ++stats->errors;
         }
-        if (!can_log_pub.push(batch)) ++stats->rx_log_queue_full;
-    };
-    if (frames.size() <= kCanBatchMaxFrames) {
-        if (!frames.empty()) push(rx_can_batch(frames));
-        return;
-    }
-    for (size_t start = 0; start < frames.size(); start += kCanBatchMaxFrames) {
-        const size_t end = std::min<size_t>(frames.size(), start + kCanBatchMaxFrames);
-        push(rx_can_batch(std::vector<PandaCanFrame>(frames.begin() + static_cast<std::ptrdiff_t>(start),
-                                                     frames.begin() + static_cast<std::ptrdiff_t>(end))));
+        if (!can_log_pub.push(*batch)) ++stats->rx_log_queue_full;
     }
 }
 
 // USB 연결과 safety 모델 설정. 실패하면 false를 돌려주고 호출자가 다음 루프에서
-// 다시 시도한다. 연결 자체가 안 되면 1초 쉰다.
+// 다시 시도한다. 연결이 안 되거나 safety 설정이 맞지 않으면 1초 쉰다.
 bool connect_and_configure(PandaClient &panda, uint16_t safety_model, uint16_t safety_param, BridgeStats *stats) {
+    // 기다리기 시작할 때 한 번만 알린다(1초마다 찍으면 Panda 없는 시간 동안 로그의 1/5을 차지했다)
+    static bool waiting_logged = false;
     if (!panda.connect()) {
-        std::fprintf(stderr, "pandad: waiting for panda\n");
+        if (!waiting_logged) std::fprintf(stderr, "pandad: waiting for panda\n");
+        waiting_logged = true;
         sleep(1);
         return false;
     }
+    waiting_logged = false;
     std::fprintf(stderr, "pandad: connected serial=%s hw_type=%u health_v=%u can_v=%u\n", panda.usb_serial().c_str(),
                  panda.hw_type(), panda.health_packet_version(), panda.can_packet_version());
-    PandaHealth configured_health;
+    PandaHealthPacket configured_health{};
     if (!panda.set_safety_model(safety_model, safety_param) || !panda.get_health(&configured_health) ||
-        configured_health.safety_mode != safety_model || configured_health.safety_param != safety_param) {
-        std::fprintf(stderr, "pandad: safety setup failed expected=%u:%u actual=%u:%u\n", safety_model, safety_param,
-                     configured_health.safety_mode, configured_health.safety_param);
+        configured_health.safety_mode_pkt != safety_model || configured_health.safety_param_pkt != safety_param) {
+        // 같은 실패가 이어지면 처음 한 번만 알리고, 1초 쉬고 다시 잇는다(쉬지 않으면 재접속만 되풀이했다)
+        static std::string last_failure;
+        const std::string failure = std::to_string(configured_health.safety_mode_pkt) + ":" +
+                                    std::to_string(configured_health.safety_param_pkt);
+        if (failure != last_failure)
+            std::fprintf(stderr, "pandad: safety setup failed expected=%u:%u actual=%s\n", safety_model, safety_param,
+                         failure.c_str());
+        last_failure = failure;
         ++stats->errors;
         panda.close();
+        sleep(1);
         return false;
     }
     panda.set_configured();  // 이제부터 송신 스레드가 보낸다
@@ -340,6 +335,10 @@ bool service_rx(PandaClient &panda, bool log_can, std::vector<PandaCanFrame> *fr
                          frame.data_len, frame.returned ? 1 : 0, frame.rejected ? 1 : 0);
         }
     }
+    // Panda가 버스에 낸 프레임(버스 사이 전달과 우리 송신)은 returned로 다시 온다. 받은 프레임의 약 2/3(경로 하나에
+    // 700 MB 넘게)이고 읽는 쪽이 모두 버리므로 올리지도 녹화하지도 않는다. 거부된 프레임(rejected)은 둔다.
+    frames->erase(std::remove_if(frames->begin(), frames->end(), [](const PandaCanFrame &f) { return f.returned; }),
+                  frames->end());
     return true;
 }
 
@@ -428,6 +427,7 @@ int main() {
         sendcan_log_pub.reset();
 
         const bool tx_enabled = env_flag("EDGEPILOT_PANDA_TX", false);
+        // 동봉한 펌웨어(firmware/panda)는 하트비트의 결합 값을 읽지 않고 타이머만 되돌린다. 새 펌웨어가 읽는다
         const bool heartbeat_engaged = env_flag("EDGEPILOT_PANDA_ENGAGED", false);
         const bool log_can = env_flag("EDGEPILOT_PANDA_LOG_CAN", false);
         uint16_t default_safety_param = 0;
@@ -452,7 +452,7 @@ int main() {
         uint64_t last_firmware_ns = 0;
         std::vector<PandaCanFrame> frames;
         frames.reserve(kCanBatchMaxFrames);
-        PandaHealth last_health;
+        PandaHealthPacket last_health{};
         bool have_health = false;
 
         TxThread tx;
@@ -461,6 +461,7 @@ int main() {
 
         using Clock = std::chrono::steady_clock;
         auto next_cycle = Clock::now();
+        CanBatch rx_batch;  // 주기마다 21.5 KB를 0으로 채우지 않게 다시 쓴다
         while (!g_stop) {
             if (!panda.connected()) {
                 have_health = false;
@@ -481,7 +482,7 @@ int main() {
                 panda.close();
                 continue;
             }
-            publish_rx(frames, can_pub, can_log_pub, &stats);
+            publish_rx(frames, can_pub, can_log_pub, &rx_batch, &stats);
 
             const uint64_t now = monotonic_now_ns();
             // 하트비트와 상태 조회(USB 제어 전송, 각각 최대 100 ms)를 한 주기에 몰지 않는다. 송신 스레드가 USB 잠금을
@@ -495,6 +496,15 @@ int main() {
             if (!control_transfer && now - last_health_ns >= 500000000ULL) {
                 have_health = publish_health(panda_state_pub, panda, tx_enabled, &last_health);
                 last_health_ns = now;
+                // 접속 뒤에도 safety 모드를 본다. 하트비트가 5초 끊기면 펌웨어는 NOOUTPUT으로 바꾸고 다음 하트비트에도
+                // 그대로 둔다. 그대로 두면 재접속할 때까지 조향이 막힌다. 이때 controls_allowed는 이미 0이라 다시
+                // 설정해도 잃는 것이 없다(운전자 버튼으로 다시 얻는다). 상태 조회 주기(0.5초)마다만 다시 보낸다.
+                if (have_health &&
+                    (last_health.safety_mode_pkt != safety_model || last_health.safety_param_pkt != safety_param)) {
+                    std::fprintf(stderr, "pandad: safety is %u:%u, setting %u:%u again\n", last_health.safety_mode_pkt,
+                                 last_health.safety_param_pkt, safety_model, safety_param);
+                    panda.set_safety_model(safety_model, safety_param);
+                }
             }
             if (now - last_log_ns >= 1000000000ULL) {
                 stats.log(panda, tx_stats, have_health ? &last_health : nullptr,

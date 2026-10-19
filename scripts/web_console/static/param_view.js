@@ -6,7 +6,6 @@ import {metaFor, params, sectionName} from "./param_state.js";
 import {paramCard} from "./param_editor.js";
 import {el, section} from "./ui.js";
 
-const OTHER_SECTION = "other";
 const tabLabel = tab => (tab === "vehicle" ? params().vehicle_tab.label : tab);
 
 // extras: 파라미터 섹션 뒤에 붙일 것들({element, start, stop, after}, 예: 기기 설정의 Panda 펌웨어 카드). after가
@@ -21,9 +20,7 @@ export function createParamView(group, {extras = []} = {}) {
       elsewhere.push({key, meta, search: `${meta.label} ${key} ${meta.description}`.toLowerCase()});
       continue;
     }
-    const name = bySection.has(meta.section) ? meta.section : OTHER_SECTION;
-    if (!bySection.has(name)) bySection.set(name, []);
-    bySection.get(name).push(paramCard(group, key));
+    bySection.get(meta.section).push(paramCard(group, key));
   }
   const sections = [...bySection].filter(([, cards]) => cards.length).map(([name, cards]) => ({
     name, cards, element: section(sectionName(name), cards, {count: cards.length}),

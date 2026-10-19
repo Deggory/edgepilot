@@ -1,6 +1,5 @@
 #include "learners/lateral_learners.h"
 
-#include <algorithm>
 #include <cmath>
 
 #include "common/utils_time.h"
@@ -22,7 +21,7 @@ double YawBiasEstimator::update(double t_s, double speed_mps, bool yaw_valid, do
     const bool standing = std::fabs(speed_mps) < kStandstillMps;
     if (standing && !standing_) standing_since_s_ = t_s;
     standing_ = standing;
-    if (standing && t_s - standing_since_s_ >= kSettleS && yaw_valid && std::isfinite(yaw_rate_rad_s) &&
+    if (standing && t_s - standing_since_s_ >= kSettleS && yaw_valid &&
         std::fabs(yaw_rate_rad_s - bias_) < kMaxStandstillYaw)
         bias_ += kAlpha * (yaw_rate_rad_s - bias_);
     return yaw_rate_rad_s - bias_;
@@ -68,13 +67,16 @@ LateralLearners::LateralLearners(const SteeringParams &params, const std::string
       vehicle_(constants_, init_.steer_ratio, init_.stiffness_factor, rad(init_.angle_offset_deg), options),
       torque_(torque_tuning(params), params.steer_actuator_delay, seed, torque_cache,
               params.use_locationd_learner_inputs),
-      steer_max_(std::max(1, params.steer_max)) {}
+      steer_max_(params.steer_max) {}
 
 void LateralLearners::set_localizer(bool use, const LocalizerSample &sample) {
     use_localizer_ = use;
-    if (!use || !std::isfinite(sample.t_s) || !std::isfinite(sample.yaw_rate_rad_s) || !std::isfinite(sample.roll_rad))
+    if (!use) return;
+    // 같은 표본을 또 읽었다. t_s는 학습기 시계로 옮긴 값이라 같은 표본도 읽을 때마다 조금씩 달라(두 시계의 읽는
+    // 시각 차이) 원래 정수 시각으로 가린다.
+    if (!samples_.empty() &&
+        ((sample.stamp_ns != 0 && sample.stamp_ns == samples_.back().stamp_ns) || sample.t_s <= samples_.back().t_s))
         return;
-    if (!samples_.empty() && sample.t_s <= samples_.back().t_s) return;  // 같은 표본을 또 읽었다
     samples_.push_back(sample);
     while (samples_.size() > 32) samples_.pop_front();  // 3초면 지연(0.25초)에 넉넉하다
 }

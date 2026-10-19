@@ -22,7 +22,9 @@ import {CSS2DRenderer, CSS2DObject} from "./three/CSS2DRenderer.js";
 import {carModel, fit, wheel} from "./bev_car.js";
 import {BevStream, GAS_PRESS_HORIZON, HISTORY_S, LANE_SURE, LEAD_HISTORY_S} from "./bev_data.js";
 import {EGO_SIZE, makeEgo} from "./bev_ego.js";
-import {clamp, smoothstep} from "./bev_math.js";
+import {arc, arrow, band, corridor, curb, egoLane, headingAt, normalAt} from "./bev_geometry.js";
+import {BLACK, Batch, CORRIDOR, FOOTPRINT, GROUND, Instances, OVERLAY, SHARED, ink, modelMaterial, shader} from "./bev_gl.js";
+import {clamp} from "./bev_math.js";
 import {t} from "./i18n.js";
 import {recall, remember} from "./storage.js";
 import {DASH, el, fitRange, sparkline} from "./ui.js";
@@ -80,275 +82,6 @@ const LAYERS = ["path", "lanes", "rawLanes", "edges", "lead", "curvature", "labe
 const LAYER_GROUPS = {labels: ["lead_labels", "path_labels"]};
 const VIEWS = ["behind", "top"];   // 시점 버튼, bev.view.<이름> 문구
 
-// -- 색 --------------------------------------------------------------------------------------------
-const BLACK = new THREE.Color(0, 0, 0);
-const inks = new Map();
-const ink = (hex) => inks.get(hex) || inks.set(hex, new THREE.Color(hex)).get(hex);
-
-// -- 매 프레임 다시 쓰는 지오메트리 ---------------------------------------------------------------------
-// 프레임 사이에 유지하는 버퍼 속 삼각형: position과 값 size개짜리 속성 하나 더(알파가 있는 색, uv, ...).
-// 프레임은 begin()하고, 쓰고, end()한다. end()가 새로 쓴 부분을 보낸다.
-class Batch {
-  constructor(name, size, material, order) {
-    this.name = name;
-    this.size = size;
-    this.geometry = new THREE.BufferGeometry();
-    this.mesh = new THREE.Mesh(this.geometry, material);
-    Object.assign(this.mesh, {frustumCulled: false, renderOrder: order, matrixAutoUpdate: false});
-    this.positions = new Float32Array(3 * 512);
-    this.values = new Float32Array(size * 512);
-    this.indices = new Uint32Array(1024);
-    this.v = this.n = 0;
-    this.grown = true;
-  }
-
-  begin() { this.v = this.n = 0; }
-
-  // 정점 vertices개와 인덱스 indices개를 더 넣을 자리. 첫 새 정점의 인덱스를 돌려준다.
-  reserve(vertices, indices) {
-    const grow = (array, need) => {
-      const bigger = new array.constructor(Math.max(2 * array.length, need));
-      bigger.set(array);
-      this.grown = true;
-      return bigger;
-    };
-    if (3 * (this.v + vertices) > this.positions.length) {
-      this.positions = grow(this.positions, 3 * (this.v + vertices));
-      this.values = grow(this.values, this.size * (this.v + vertices));
-    }
-    if (this.n + indices > this.indices.length) this.indices = grow(this.indices, this.n + indices);
-    return this.v;
-  }
-
-  put(x, y, z, a, b, c, d) {
-    const v = this.v++, o = this.size * v, values = this.values;
-    this.positions[3 * v] = x; this.positions[3 * v + 1] = y; this.positions[3 * v + 2] = z;
-    values[o] = a;
-    if (this.size > 1) values[o + 1] = b;
-    if (this.size > 2) values[o + 2] = c;
-    if (this.size > 3) values[o + 3] = d;
-  }
-
-  tri(a, b, c) { this.indices[this.n++] = a; this.indices[this.n++] = b; this.indices[this.n++] = c; }
-
-  end() {
-    const geometry = this.geometry;
-    if (this.grown) {                       // 새 버퍼: 다음 렌더에서 GPU에 다시 만든다
-      geometry.dispose();
-      geometry.setAttribute("position", new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
-      geometry.setAttribute(this.name, new THREE.BufferAttribute(this.values, this.size).setUsage(THREE.DynamicDrawUsage));
-      geometry.setIndex(new THREE.BufferAttribute(this.indices, 1).setUsage(THREE.DynamicDrawUsage));
-      this.grown = false;
-    } else if (this.n) {                    // 같은 버퍼: 이 프레임이 쓴 부분만
-      for (const [attribute, count] of [[geometry.attributes.position, 3 * this.v], [geometry.attributes[this.name], this.size * this.v],
-                                        [geometry.index, this.n]]) {
-        attribute.clearUpdateRanges();
-        attribute.addUpdateRange(0, count);
-        attribute.needsUpdate = true;
-      }
-    }
-    geometry.setDrawRange(0, this.n);
-    this.mesh.visible = this.n > 0;
-  }
-}
-
-// 지오메트리 하나의 인스턴스를 프레임에 있는 만큼 한 번의 드로로 그린다: 각각 x, y, z에 놓고 yaw만큼 돌리고
-// sx, sy, sz만큼 늘이며, 제 색(colors)과 제 속성(extra, name: size)을 갖는다. 프레임에 메시가 담을 수 있는
-// 것보다 많으면 메시를 더 크게 다시 만든다.
-class Instances {
-  constructor(geometry, material, {order = 0, colors = true, extra = {}} = {}) {
-    this.geometry = Object.keys(extra).length ? geometry.clone() : geometry;
-    Object.assign(this, {material, order, colors, extra});
-    this.object = new THREE.Group();
-    this.capacity = 0;
-    this.count = 0;
-    this.allocate(4);
-  }
-
-  allocate(capacity) {
-    if (this.mesh) {
-      this.object.remove(this.mesh);
-      this.mesh.dispose();
-      if (this.attributes.length) this.geometry.dispose();
-    }
-    this.mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    if (this.colors) {
-      this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(3 * capacity), 3).setUsage(THREE.DynamicDrawUsage);
-    }
-    this.attributes = Object.entries(this.extra).map(([name, size]) => {
-      const attribute = new THREE.InstancedBufferAttribute(new Float32Array(size * capacity), size).setUsage(THREE.DynamicDrawUsage);
-      this.geometry.setAttribute(name, attribute);
-      return attribute;
-    });
-    Object.assign(this.mesh, {frustumCulled: false, renderOrder: this.order, count: 0, matrixAutoUpdate: false});
-    this.object.add(this.mesh);
-    this.capacity = capacity;
-  }
-
-  begin(count) {
-    if (count > this.capacity) this.allocate(Math.max(count, 2 * this.capacity));
-    this.count = 0;
-  }
-
-  add(x, y, z, yaw, sx, sy, sz, color, ...extra) {
-    const i = this.count++, m = this.mesh.instanceMatrix.array, o = 16 * i, c = Math.cos(yaw), s = Math.sin(yaw);
-    m[o] = c * sx; m[o + 1] = s * sx; m[o + 2] = 0; m[o + 3] = 0;
-    m[o + 4] = -s * sy; m[o + 5] = c * sy; m[o + 6] = 0; m[o + 7] = 0;
-    m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = sz; m[o + 11] = 0;
-    m[o + 12] = x; m[o + 13] = y; m[o + 14] = z; m[o + 15] = 1;
-    if (this.colors) {
-      const a = this.mesh.instanceColor.array;
-      a[3 * i] = color.r; a[3 * i + 1] = color.g; a[3 * i + 2] = color.b;
-    }
-    this.attributes.forEach((attribute, k) => attribute.array.set(extra[k], attribute.itemSize * i));
-  }
-
-  end() {
-    this.mesh.count = this.count;
-    this.mesh.visible = this.count > 0;
-    if (!this.count) return;
-    for (const attribute of [this.mesh.instanceMatrix, this.mesh.instanceColor, ...this.attributes]) {
-      if (!attribute) continue;
-      attribute.clearUpdateRanges();
-      attribute.addUpdateRange(0, attribute.itemSize * this.count);
-      attribute.needsUpdate = true;
-    }
-  }
-}
-
-// -- 재질 -------------------------------------------------------------------------------------------
-// 공유 유니폼, 렌더마다 한 번 정한다: 안개(near, far, 뷰 깊이로)와 픽셀 비율.
-const SHARED = {uFog: {value: new THREE.Vector2(70, 200)}, uPixel: {value: 1}, uBackground: {value: new THREE.Color(THEME.background)}};
-const FOG_FADE = "float fogFade(float depth) { return 1.0 - smoothstep(uFog.x, uFog.y, depth); }";
-
-function shader(vertex, fragment, uniforms = {}, options = {}) {
-  return new THREE.ShaderMaterial({
-    uniforms: {...SHARED, ...uniforms}, transparent: true, depthWrite: false, ...options,
-    vertexShader: vertex,
-    fragmentShader: `uniform vec2 uFog; uniform float uPixel; uniform vec3 uBackground;\n${FOG_FADE}\n${fragment}`,
-  });
-}
-
-// 조명을 받는 모델, 플랫 셰이딩: 제 색이고, 도색 부분에는 인스턴스 색.
-function modelMaterial() {
-  const material = new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true, roughness: 0.55, metalness: 0.05});
-  material.onBeforeCompile = (program) => {
-    program.vertexShader = program.vertexShader
-      .replace("#include <common>", "#include <common>\nattribute float paint;")
-      .replace("#include <color_vertex>", `#include <color_vertex>
-        #ifdef USE_INSTANCING_COLOR
-          vColor.xyz = color.xyz * mix(vec3(1.0), instanceColor.xyz, paint);
-        #endif`);
-  };
-  material.customProgramCacheKey = () => "bev-model";
-  return material;
-}
-
-// 조명 없음, 알파가 있는 정점 색: 차선선, 자차 차로, 간격과 화살표.
-// 도로 위에 겹쳐 그리는 띠(차선, 곡률 호, 앞차 선)가 같이 쓰는 재질. 그리는 순서는 메시마다
-// 정한다(Batch의 order).
-const OVERLAY = new THREE.MeshBasicMaterial({vertexColors: true, transparent: true, depthWrite: false,
-                                            side: THREE.DoubleSide, toneMapped: false});
-
-// 도로 위 풋프린트, 모서리가 둥근 길이 x 폭 직사각형 둘레를 미터로: iStyle은 채움, 윤곽선,
-// 모서리 괄호만(1)과 글로, iSize는 길이, 폭과 글로가 사라지는 여백이다. 검은색이면 부드러운 접지 그림자다.
-const FOOTPRINT = [`
-  attribute vec3 iSize; attribute vec4 iStyle;
-  varying vec2 vQ; varying vec3 vSize; varying vec4 vStyle; varying vec3 vColor; varying float vDepth;
-  void main() {
-    vQ = position.xy * (iSize.xy + 2.0 * iSize.z); vSize = iSize; vStyle = iStyle; vColor = instanceColor;
-    vec4 view = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-    vDepth = -view.z;
-    gl_Position = projectionMatrix * view;
-  }`, `
-  varying vec2 vQ; varying vec3 vSize; varying vec4 vStyle; varying vec3 vColor; varying float vDepth;
-  void main() {
-    vec2 hs = vSize.xy * 0.5;
-    float r = min(0.35, min(hs.x, hs.y) * 0.45);
-    vec2 k = abs(vQ) - hs + r;
-    float d = length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - r;               // metres outside the outline
-    float aa = fwidth(d);
-    float fill = vStyle.x * (1.0 - smoothstep(-aa, aa, d));
-    float width = max(0.045, 1.1 * uPixel * aa);
-    float line = vStyle.y * (1.0 - smoothstep(width - aa, width + aa, abs(d)));
-    if (vStyle.z > 0.5) {
-      vec2 corner = abs(vQ) - (hs - min(0.8, min(hs.x, hs.y) * 0.7));
-      line *= step(0.0, min(corner.x, corner.y));
-    }
-    float glow = vStyle.w * exp(-max(d, 0.0) / max(vSize.z * 0.4, 0.05)) * (1.0 - step(vSize.z, d));
-    float alpha = 1.0 - (1.0 - fill) * (1.0 - line) * (1.0 - glow);
-    alpha *= fogFade(vDepth);
-    if (alpha < 0.004) discard;
-    gl_FragColor = vec4(mix(vColor, vec3(1.0), line * 0.15), alpha);
-    #include <colorspace_fragment>
-  }`];
-
-// 계획 경로를 HUD 리본만큼 넓은 띠로: HUD 경로 색의 밝은 가장자리, 4 m마다 셰브런, 앞으로 갈수록 흐려진다.
-// uStrength는 HUD가 조향하지 않을 때처럼 띠를 흐리게 한다. 안쪽은 모델이 감속을 계획한 곳에서 호박색, 이어
-// 빨간색이 된다. corridor는 폭 방향 위치(0..1), 진행 거리(미터)와 그곳의 계획 감속(0..1, SLOW)이다.
-const CORRIDOR = [`
-  attribute vec3 corridor;
-  varying vec3 vC; varying float vDepth;
-  void main() {
-    vC = corridor;
-    vec4 view = modelViewMatrix * vec4(position, 1.0);
-    vDepth = -view.z;
-    gl_Position = projectionMatrix * view;
-  }`, `
-  uniform vec3 uColor; uniform vec3 uSlow; uniform vec3 uStop; uniform float uLength; uniform float uWidth;
-  uniform float uStrength; uniform float uTint;
-  varying vec3 vC; varying float vDepth;
-  void main() {
-    float across = abs(vC.x - 0.5) * 2.0, aa = fwidth(across);
-    float edge = smoothstep(1.0 - 0.1 - aa, 1.0 - 0.1 + aa, across);
-    float v = (vC.y - across * uWidth * 0.4) / 4.0, av = fwidth(v);
-    float stripe = min(fract(v), 1.0 - fract(v));
-    float chevron = 1.0 - smoothstep(0.035 - av, 0.035 + av, stripe);
-    float slow = smoothstep(uTint, uTint + 0.25, vC.z);
-    // fading out ahead, but not where it slows down: that is mostly at its end, by a stop
-    float fade = max(1.0 - smoothstep(0.6, 1.0, vC.y / uLength), 0.8 * slow) * smoothstep(0.0, 1.5, vC.y);
-    vec3 inner = mix(uColor, mix(uSlow, uStop, smoothstep(0.45, 0.9, vC.z)), slow);
-    float alpha = (0.1 + 0.2 * slow + 0.7 * edge + (0.22 + 0.3 * slow) * chevron * (1.0 - edge)) * fade * fogFade(vDepth) * uStrength;
-    if (alpha < 0.004) discard;
-    gl_FragColor = vec4(mix(inner, mix(uColor, vec3(1.0), 0.15), edge), alpha);
-    #include <colorspace_fragment>
-  }`];
-
-// 바닥: BEV 범위는 한 톤 밝게, 5 m와 20 m 격자선은 빽빽해져 모아레가 되기 전에 흐려지고, 자차 축, 모두
-// 멀리서 배경으로 사라진다.
-const GROUND = [`
-  varying vec3 vWorld; varying float vDepth;
-  void main() {
-    vec4 world = modelMatrix * vec4(position, 1.0);
-    vWorld = world.xyz;
-    vec4 view = viewMatrix * world;
-    vDepth = -view.z;
-    gl_Position = projectionMatrix * view;
-  }`, `
-  uniform vec3 uGround; uniform vec3 uRoad; uniform vec3 uLine; uniform vec3 uAxis; uniform vec4 uArea;
-  varying vec3 vWorld; varying float vDepth;
-  float grid(vec2 p, float cell, float width) {
-    vec2 g = p / cell, w = fwidth(g);
-    vec2 a = abs(fract(g - 0.5) - 0.5) / max(w, vec2(1e-5));
-    return (1.0 - min(min(a.x, a.y) / width, 1.0)) * (1.0 - smoothstep(0.12, 0.35, max(w.x, w.y)));
-  }
-  void main() {
-    vec2 p = vWorld.xy;
-    float soft = uArea.w;
-    float inside = (1.0 - smoothstep(0.0, soft, p.x - uArea.y)) * (1.0 - smoothstep(0.0, soft, -uArea.x - p.x))
-                 * (1.0 - smoothstep(0.0, soft, abs(p.y) - uArea.z));
-    vec3 color = mix(uGround, uRoad, inside);
-    float lines = max(grid(p, 5.0, 1.0) * 0.035, grid(p, 20.0, 1.2) * 0.08) * (0.25 + 0.75 * inside);
-    lines *= 1.0 - smoothstep(uFog.x - 30.0, uFog.x + 30.0, vDepth);
-    color = mix(color, uLine, lines);
-    vec2 w = fwidth(p);
-    float axis = max(1.0 - min(abs(p.y) / w.y / 1.2, 1.0), 1.0 - min(abs(p.x) / w.x / 1.2, 1.0));
-    color = mix(color, uAxis, axis * 0.45 * inside);
-    gl_FragColor = vec4(mix(color, uBackground, 1.0 - fogFade(vDepth)), 1.0);
-    #include <colorspace_fragment>
-  }`];
-
 // 이 탭의 스타일은 console.css의 BEV 부분이다. HUD 색은 createBev가 CSS 변수(--hud-<이름>, --bev-bg)로 넘긴다.
 
 class BevView {
@@ -375,6 +108,7 @@ class BevView {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(THEME.background);
+    SHARED.uBackground.value.set(THEME.background);
     this.scene.fog = new THREE.Fog(THEME.background, 70, 200);
     this.scene.add(new THREE.HemisphereLight("#e4ebf5", "#1c2026", 1.7));
     const key = new THREE.DirectionalLight("#ffffff", 1.9);
@@ -616,7 +350,7 @@ class BevView {
     const b = this.lanes, raw = this.rawLanes, color = ink(THEME.lane), gray = ink(HUD.gray);
     b.begin();
     raw.begin();
-    if (lanes.length === 4 && lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE) egoLane(b, lanes[1].points, lanes[2].points);
+    if (lanes.length === 4 && lanes[1].probability >= LANE_SURE && lanes[2].probability >= LANE_SURE) egoLane(b, lanes[1].points, lanes[2].points, ink(THEME.egoLane));
     for (const lane of lanes) {
       if (lane.probability < LANE_MIN_PROBABILITY) continue;
       band(b, lane.points, LANE_WIDTH, 0.03, color, 0.25 + 0.65 * lane.probability);
@@ -730,7 +464,7 @@ class BevView {
   }
 
   // 자차 후광은 HUD 상태 색: 조향 중에는 초록이나 파랑이고 출력이 한계에 가까워지면 호박색으로 바뀌며(HUD는
-  // 경로가 그렇게 한다. 여기서는 경로의 호박색이 감속을 뜻한다), engaged 상태에서는 회색. 그다음 등화:
+  // 경로가 그렇게 한다. 여기서는 경로의 호박색이 감속을 뜻한다), 결합 중에는 회색. 그다음 등화:
   // 방향지시등과 비상등, 제동등.
   drawEgo(scene) {
     const [l, w] = EGO, state = scene && scene.state, hex = state && stateColor(state);
@@ -886,6 +620,8 @@ class BevView {
     const text = ttc < LEAD_CARD.ttc ? ttcText(ttc) : `TTC ${DASH}`;
     if (this.ttcBadge.textContent !== text) this.ttcBadge.textContent = text;
     if (this.ttcBadge.className !== `bev-badge ${tone}`.trim()) this.ttcBadge.className = `bev-badge ${tone}`.trim();
+    // 접었으면 차트와 눈금 줄이 숨어 있으니 그리지 않는다(펼치면 다음 프레임에 그린다)
+    if (card.classList.contains("collapsed")) return;
     // 차트마다 선 이름 -> 행 필드의 [[시각, 값 × unit]]. 값이 없는 행(NaN)에서 선이 끊긴다.
     const end = rows[rows.length - 1].t, x = [end - LEAD_HISTORY_S, end];
     const columns = (fields, unit = 1) => Object.fromEntries(Object.entries(fields).map(([name, key]) =>
@@ -956,8 +692,10 @@ function planSummary(path, now) {
   return null;
 }
 
-// hud_draw.h state_color(): 조향 상태의 색, engaged가 아니면 null.
+// hud_draw.h state_color(): 조향 상태의 색, 결합 중이 아니면 null. 조향 결함·해제 예고는 빨강이다. HUD의 Panda 결함
+// 빨강과 서비스 대기 호박색은 BEV가 PandaState·ManagerState를 읽지 않아 뺀다.
 function stateColor(state) {
+  if (state.alarm) return HUD.red;
   if (state.steering) return state.laneless ? HUD.blue : HUD.green;
   return state.engaged ? HUD.gray : null;
 }
@@ -967,7 +705,7 @@ function modeText(state) {
   return state.engaged || state.enabled ? "READY" : "OFF";
 }
 
-// path_color(): [색, 세기]: engaged가 아니면 옅은 흰색, 조향하지 않으면 회색, 조향 중이면 초록이나 파랑.
+// path_color(): [색, 세기]: 결합 중이 아니면 옅은 흰색, 조향하지 않으면 회색, 조향 중이면 초록이나 파랑.
 // (출력 한계 부근의 호박색은 여기서는 자차 후광에 있다, drawEgo().)
 function pathStyle(state) {
   if (!state.engaged) return [HUD.white, 0.6];
@@ -989,123 +727,6 @@ function meter(row, value, full, go, text) {
   row.fill.style.width = `${(Number.isFinite(value) ? clamp(value / full, 0, 1) : 0) * 100}%`;
   row.fill.classList.toggle("go", go);
   if (row.value.textContent !== text) row.value.textContent = text;
-}
-
-// -- 지오메트리 쓰기 --------------------------------------------------------------------------------------
-// points [[x, y], ...]를 따라 높이 z에 놓는 폭 width의 띠.
-function band(b, points, width, z, color, alpha) {
-  ribbon(b, points, width / 2, (i, side, x, y) => b.put(x, y, z, color.r, color.g, color.b, alpha));
-}
-
-// left와 right 사이 차로를 옅게 채우고, 앞으로 갈수록 흐려진다.
-function egoLane(b, left, right) {
-  if (left.length < 2 || right.length < 2) return;
-  const x0 = Math.max(left[0][0], right[0][0], 0), x1 = Math.min(left[left.length - 1][0], right[right.length - 1][0]);
-  if (x1 - x0 < 2) return;
-  const color = ink(THEME.egoLane);
-  let base = -1;
-  for (let x = x0; ; x = Math.min(x + 2, x1)) {
-    const yl = lateralAt(left, x), yr = lateralAt(right, x);
-    if (yl === null || yr === null) break;
-    const alpha = 0.06 * (1 - smoothstep(25, 90, x));
-    const v = b.reserve(2, 6);
-    b.put(x, yl - 0.1, 0.012, color.r, color.g, color.b, alpha);
-    b.put(x, yr + 0.1, 0.012, color.r, color.g, color.b, alpha);
-    if (base >= 0) { b.tri(base, base + 1, v); b.tri(base + 1, v + 1, v); }
-    base = v;
-    if (x >= x1) break;
-  }
-}
-
-// 도로 위 (x0, y0)에서 (x1, y1)까지의 화살표.
-function arrow(b, x0, y0, x1, y1, color) {
-  const length = Math.hypot(x1 - x0, y1 - y0), ux = (x1 - x0) / length, uy = (y1 - y0) / length, head = Math.min(0.6, length * 0.4);
-  band(b, [[x0, y0], [x1 - ux * head, y1 - uy * head]], 0.1, 0.07, color, 0.95);
-  const base = b.reserve(3, 3);
-  b.put(x1, y1, 0.07, color.r, color.g, color.b, 0.95);
-  b.put(x1 - ux * head - uy * head * 0.55, y1 - uy * head + ux * head * 0.55, 0.07, color.r, color.g, color.b, 0.95);
-  b.put(x1 - ux * head + uy * head * 0.55, y1 - uy * head - ux * head * 0.55, 0.07, color.r, color.g, color.b, 0.95);
-  b.tri(base, base + 1, base + 2);
-}
-
-// 경로용으로 points를 따르는 띠: 폭 방향 위치, 진행 거리와 slow[i](계획 감속). 그 길이를 돌려준다.
-function corridor(b, points, width, z, slow) {
-  const along = arcLengths(points);
-  ribbon(b, points, width / 2, (i, side, x, y) => b.put(x, y, z, side, along[i], slow[i]));
-  return along.length ? along[along.length - 1] : 0;
-}
-
-// 원점에서 x 방향으로 출발해 곡률 k(1/m, 왼쪽이 +)로 length m만큼 가는 원호의 [[x, y], ...].
-function arc(k, length, n = 24) {
-  return Array.from({length: n + 1}, (_, i) => {
-    const s = length * i / n;
-    return Math.abs(k) < 1e-6 ? [s, 0] : [Math.sin(k * s) / k, (1 - Math.cos(k * s)) / k];
-  });
-}
-
-// 도로 경계를 낮은 연석으로: 윗면과 양 옆면, 조명을 받는다.
-function curb(b, points, width, height, color, alpha) {
-  const n = points.length, h = width / 2;
-  if (n < 2) return;
-  const base = b.reserve(4 * n, 18 * (n - 1));
-  points.forEach(([px, py], i) => {
-    const [nx, ny] = normalAt(points, i);
-    for (const [s, z] of [[1, 0], [1, height], [-1, height], [-1, 0]]) {
-      b.put(px + s * nx * h, py + s * ny * h, z, color.r, color.g, color.b, alpha);
-    }
-    if (i) {
-      const a = base + 4 * (i - 1), c = base + 4 * i;
-      for (const [p, q] of [[0, 1], [1, 2], [2, 3]]) { b.tri(a + p, a + q, c + p); b.tri(a + q, c + q, c + p); }
-    }
-  });
-}
-
-// 폴리라인의 x에서 y, 닿지 않는 곳에서는 null.
-function lateralAt(points, x) {
-  for (let i = 1; i < points.length; i++) {
-    const [x0, y0] = points[i - 1], [x1, y1] = points[i];
-    if ((x0 <= x && x <= x1) || (x1 <= x && x <= x0)) return x1 === x0 ? y0 : y0 + (y1 - y0) * (x - x0) / (x1 - x0);
-  }
-  return null;
-}
-
-// 폴리라인이 x를 지나는 곳의 방향(끝 너머는 마지막 조각), 판단하기에 너무 짧은 경로(정차 중)는 0.
-function headingAt(points, x) {
-  const n = points.length;
-  if (n < 2 || points[n - 1][0] - points[0][0] < 5) return 0;
-  let i = 1;
-  while (i < n - 1 && points[i][0] < x) i++;
-  return Math.atan2(points[i][1] - points[i - 1][1], points[i][0] - points[i - 1][0]);
-}
-
-// 폴리라인을 따라 반폭 h의 띠: 점마다 왼쪽(side 0)·오른쪽(1) 정점을 vertex(i, side, x, y)가 넣고, 이웃한 두 점
-// 사이를 삼각형 둘로 잇는다(band, corridor). 점이 둘보다 적으면 넣지 않는다.
-function ribbon(b, points, h, vertex) {
-  const n = points.length;
-  if (n < 2) return;
-  const base = b.reserve(2 * n, 6 * (n - 1));
-  for (let i = 0; i < n; i++) {
-    const [px, py] = points[i], [nx, ny] = normalAt(points, i);
-    vertex(i, 0, px + nx * h, py + ny * h);
-    vertex(i, 1, px - nx * h, py - ny * h);
-    if (i) { const k = base + 2 * i; b.tri(k - 2, k - 1, k); b.tri(k - 1, k + 1, k); }
-  }
-}
-
-// 폴리라인 점마다 첫 점부터의 길이(m)
-function arcLengths(points) {
-  const along = points.length ? [0] : [];
-  for (let i = 1; i < points.length; i++) {
-    along.push(along[i - 1] + Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
-  }
-  return along;
-}
-
-// 폴리라인의 점 i에서 왼쪽을 향하는 단위 법선.
-function normalAt(points, i) {
-  const [ax, ay] = points[Math.max(0, i - 1)], [bx, by] = points[Math.min(points.length - 1, i + 1)];
-  const length = Math.hypot(bx - ax, by - ay) || 1;
-  return [-(by - ay) / length, (bx - ax) / length];
 }
 
 // BEV 탭: 뷰와 그 스트림을 한 번 만든다. start()와 stop()은 탭과 페이지가 보이는지를 따른다.

@@ -1,12 +1,22 @@
 #ifndef LATERAL_TARGET_H
 #define LATERAL_TARGET_H
 
-// LateralPlanner(횡방향 MPC)가 만들고 LateralController가 소비하는
-// 횡방향 계획. 생산자는 controlsd의 MPC 하나뿐이다.
+// LateralController의 틱 입력 둘: LateralPlanner(횡방향 MPC)가 만드는 횡방향 계획(LateralTarget, 생산자는 controlsd의
+// MPC 하나뿐이다)과 모델 plan의 조향 가용성(LateralPath).
 
 #include <cstdint>
 
 constexpr int kLateralControlN = 17;
+
+// 모델 plan을 조향 가용성 gate로만 환산한 것(control_holds.h path_from_model_state). 목표 곡률은 MPC(LateralTarget)가
+// 내므로 경로 기하는 없다. 쓸 수 없으면 모델이 낡았거나(model_lost) 경로가 짧다.
+struct LateralPath {
+    int point_count = 0;
+    float reach_m = 0.0f;
+    bool usable_for_steering = false;
+    // 모델 상태가 낡았다(경로 기하와 별개로 입력이 끊긴 것이다). 시작할 때의 빈 상태(시각 0)도 여기에 든다.
+    bool model_lost = false;
+};
 
 struct LateralTarget {
     bool valid = false;
@@ -17,12 +27,11 @@ struct LateralTarget {
     bool mpc_solution_valid = false;
     bool laneless_mode = false;
     float target_y_m = 0.0f;
-    float heading_rad = 0.0f;
-    float curvature = 0.0f;
     int desire = 0;
     // 차선 변경 상태(0 없음, 1 운전자 토크 대기, 2 변경 중, 3 마무리)와 방향(-1 왼쪽, 1 오른쪽). HUD 표시용.
     int lane_change_state = 0;
     int lane_change_direction = 0;
+    // 경로 노드의 방향각(rad)과 곡률(1/m). [0]이 지금이다.
     float psis[kLateralControlN] = {};
     float curvatures[kLateralControlN] = {};
     // 차선 관측값(로그 전용). 모델 좌표계(+y=오른쪽), 오프셋 미적용.

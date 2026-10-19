@@ -32,9 +32,8 @@ float lead_risk(const LeadInfo &lead) {
     return std::clamp(std::clamp(distance, 0.0f, 1.0f) + std::clamp(closing, 0.0f, 1.0f), 0.0f, 1.0f);
 }
 
-// 모델 좌표는 180° 뒤집힌 화면 기준이라 투영한 뒤 뒤집는다.
+// 모델 좌표는 180° 뒤집힌 화면 기준이라 투영한 뒤 뒤집는다. 유한하지 않은 점은 투영이 거른다.
 std::optional<HudPoint> project(const HudCanvas &canvas, const ProjectionState &projection, float x, float y, float z) {
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return std::nullopt;
     float px = 0.0f, py = 0.0f;
     if (!project_point_subpixel(projection, x, y, z, canvas.width(), canvas.height(), &px, &py)) return std::nullopt;
     return HudPoint{static_cast<float>(canvas.width() - 1) - px, static_cast<float>(canvas.height() - 1) - py};
@@ -48,10 +47,6 @@ void draw_ribbon(HudCanvas &canvas, const std::array<ModelPoint, kTrajectorySize
     int n = 0;
     float previous_x = -1.0f, winding = 0.0f;
     for (const ModelPoint &point : points) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
-            if (n) break;
-            continue;
-        }
         if (point.x > max_distance) break;
         if (point.x < 0.5f) continue;
         if (n && point.x <= previous_x) break;
@@ -142,27 +137,23 @@ std::string lead_text(const LeadInfo &lead) {
 void draw_scene(HudCanvas &canvas, const ParsedModelOutput &output, const ProjectionState &projection,
                 const HudState &hud, const LeadInfo &lead) {
     if (!output.valid) return;
-    const float max_distance = output.plan.valid
-                                   ? std::clamp(output.plan.points.back().x, kMinDrawDistance, kMaxDrawDistance)
-                                   : kMaxDrawDistance;
+    const float max_distance = std::clamp(output.plan.points.back().x, kMinDrawDistance, kMaxDrawDistance);
 
     if (!hud.laneless_mode) {
         for (const ParsedRoadEdge &edge : output.road_edges) {
             const float confidence = std::clamp(1.0f - edge.std, 0.0f, 1.0f);
-            if (!edge.valid || confidence < kEdgeMinConfidence) continue;
+            if (confidence < kEdgeMinConfidence) continue;
             draw_ribbon(canvas, edge.points, kEdgeHalfWidth, 0.0f, max_distance, hud_fade(kRed, 0.7f * confidence),
                         projection);
         }
         for (const ParsedLaneLine &lane : output.lanes) {
-            if (!lane.valid || lane.probability < kLaneMinProbability) continue;
+            if (lane.probability < kLaneMinProbability) continue;
             const float half_width = std::max(kLaneHalfWidthMin, kLaneHalfWidthPerProbability * lane.probability);
             draw_ribbon(canvas, lane.points, half_width, 0.0f, max_distance,
                         hud_fade(kText, 0.25f + 0.65f * lane.probability), projection);
         }
     }
-    if (output.plan.valid)
-        draw_ribbon(canvas, output.plan.points, kPathHalfWidth, kModelHeight, max_distance, path_color(hud),
-                    projection);
+    draw_ribbon(canvas, output.plan.points, kPathHalfWidth, kModelHeight, max_distance, path_color(hud), projection);
     if (lead.vision) draw_lead_marker(canvas, lead, projection);
 }
 

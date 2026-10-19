@@ -3,21 +3,17 @@
 // ModelState / ControlState 원본 바이트다(tools/ui/hud_tools.py inputs가 만든다). 주지 않으면 합성
 // 장면을 쓰고, 준 파일을 읽지 못하거나 프레임을 쓰지 못하면 1로 끝난다. 호스트와 보드에서 같은
 // 소스로 빌드한다.
-// --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고(--flip-x/--flip-y는
-// 보드의 disp_flip/disp_mirror 축 뒤집기), 파일도 그 버퍼 그대로 쓴다. 리팩토링 전후 그림이
-// 바이트 단위로 같은지 비교할 때 쓴다.
-// 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX]
-//                    [--portrait [--flip-x] [--flip-y]]
+// --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고, 파일도 그 버퍼 그대로
+// 쓴다. 리팩토링 전후 그림이 바이트 단위로 같은지 비교할 때 쓴다.
+// 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX] [--portrait]
+#include "cli_args.h"
 #include "common/ipc_messages.h"
 #include "hud/hud_renderer.h"
 #include "hud/hud_state.h"
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -41,7 +37,7 @@ bool read_file(const std::string &path, void *dst, size_t size) {
 bool write_frame_file(const std::string &path, const HudTarget &target) {
     FILE *file = std::fopen(path.c_str(), "wb");
     if (!file) return false;
-    const bool transpose = target.orientation.transpose;
+    const bool transpose = target.transpose;
     const uint32_t buffer_w = transpose ? target.height : target.width;
     const uint32_t buffer_h = transpose ? target.width : target.height;
     const char magic[8] = {'E', 'D', 'G', 'E', 'A', 'R', 'G', 'B'};
@@ -59,8 +55,6 @@ bool write_frame_file(const std::string &path, const HudTarget &target) {
 ParsedModelOutput synthetic_output() {
     ParsedModelOutput output;
     output.valid = true;
-    output.plan.valid = true;
-    output.plan.probability = 0.9f;
     const float lane_y[4] = {-5.4f, -1.8f, 1.8f, 5.4f};
     const float lane_prob[4] = {0.35f, 0.95f, 0.95f, 0.35f};
     const float edge_y[2] = {-7.2f, 7.2f};
@@ -69,17 +63,14 @@ ParsedModelOutput synthetic_output() {
         const float curve = 0.0006f * x * x;
         output.plan.points[i] = {x, curve, 0.0f};
         for (int lane = 0; lane < 4; ++lane) {
-            output.lanes[lane].valid = true;
             output.lanes[lane].probability = lane_prob[lane];
             output.lanes[lane].points[i] = {x, lane_y[lane] + curve, kModelHeight};
         }
         for (int edge = 0; edge < 2; ++edge) {
-            output.road_edges[edge].valid = true;
             output.road_edges[edge].std = 0.3f;
             output.road_edges[edge].points[i] = {x, edge_y[edge] + curve, kModelHeight};
         }
     }
-    output.leads.valid = true;
     output.leads.global_probabilities[0] = 0.85f;
     output.leads.predictions[0].points[0] = {42.0f, 0.4f, 16.0f, 0.0f};
     return output;
@@ -106,31 +97,34 @@ int main(int argc, char **argv) {
     std::string control_path;
     std::string out_prefix = "hud_snapshot";
     int iterations = 50;
-    HudOrientation orientation;
+    bool transpose = false;
+    bool usage_error = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        auto next = [&]() -> const char * { return i + 1 < argc ? argv[++i] : ""; };
+        auto next = [&]() -> const char * {
+            if (i + 1 < argc) return argv[++i];
+            usage_error = true;
+            return "";
+        };
         if (arg == "--model")
             model_path = next();
         else if (arg == "--control")
             control_path = next();
         else if (arg == "--iterations")
-            iterations = std::max(1, std::atoi(next()));
+            usage_error |= !parse_int_arg(next(), &iterations, 1);
         else if (arg == "--out")
             out_prefix = next();
         else if (arg == "--portrait")
-            orientation.transpose = true;
-        else if (arg == "--flip-x")
-            orientation.flip_x = true;
-        else if (arg == "--flip-y")
-            orientation.flip_y = true;
-        else {
-            std::fprintf(stderr,
-                         "usage: %s [--model model.bin] [--control control.bin] [--iterations N] "
-                         "[--out PREFIX] [--portrait [--flip-x] [--flip-y]]\n",
-                         argv[0]);
-            return 2;
-        }
+            transpose = true;
+        else
+            usage_error = true;
+    }
+    if (usage_error) {
+        std::fprintf(stderr,
+                     "usage: %s [--model model.bin] [--control control.bin] [--iterations N] "
+                     "[--out PREFIX] [--portrait]\n",
+                     argv[0]);
+        return 2;
     }
 
     ModelState model_state{};
@@ -242,7 +236,7 @@ int main(int argc, char **argv) {
     saturated.steer_torque_fraction = 0.95f;
     saturated.steer_saturated = true;
 
-    HudState debug = drive;  // 웹 기기 설정의 HUD 진단을 켠 주행 화면(torqued·lagd는 아직 학습 중)
+    HudState debug = drive;  // 왼쪽 열을 눌러 HUD 진단 카드를 켠 주행 화면(torqued·lagd는 아직 학습 중)
     debug.debug_card = true;
 
     HudState learned = drive;  // 학습값을 다 쓰는 중, 후진
@@ -385,13 +379,12 @@ int main(int argc, char **argv) {
     constexpr uint32_t width = 640;
     constexpr uint32_t height = 480;
     std::vector<uint32_t> storage(static_cast<size_t>(width) * height, 0);
-    const uint32_t stride = (orientation.transpose ? height : width) * 4;
-    const HudTarget target{storage.data(), width, height, stride, orientation};
+    const uint32_t stride = (transpose ? height : width) * 4;
+    const HudTarget target{storage.data(), width, height, stride, transpose};
 
     HudRenderer renderer;
     std::printf("inputs: model=%s control=%s target=%ux%u%s\n", have_model ? model_path.c_str() : "synthetic",
-                have_control ? control_path.c_str() : "synthetic", width, height,
-                orientation.transpose ? " portrait" : "");
+                have_control ? control_path.c_str() : "synthetic", width, height, transpose ? " portrait" : "");
 
     bool written = true;
     for (const Scenario &scenario : scenarios) {

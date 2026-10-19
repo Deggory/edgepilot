@@ -3,11 +3,10 @@
 [← Documentation](../docs/README.md)
 
 This folder holds the steering, vision-cruise, recording, display and camera
-calibration values for the KIA K7 YG HEV. `controlsd` notices a change to its
-two runtime JSON files (`steering.json`, `adaptive_cruise.json`) on the next
-10 ms control cycle when the web console signals it, or within a second when a
-file is edited by hand, and applies it engaged or not, keeping the control and
-PID state.
+calibration values for the KIA K7 YG HEV. `controlsd` checks its two runtime
+JSON files (`steering.json`, `adaptive_cruise.json`) every second, so a change
+from the web console or by hand applies within a second, engaged or not,
+keeping the control and PID state.
 
 Who writes each file and which process reads it:
 
@@ -97,15 +96,15 @@ start, or the one in progress ends.
 | Key | Value | Unit | Range | Description |
 |---|---:|---|---|---|
 | `enabled` | true | bool | | Turns only the backlight on or off (duty 0); the LCD video pipeline keeps running. |
-| `brightness_percent` | 100 | % | | Duty of backlight PWM3 (pwmchip0/pwm3, 10 kHz, normal polarity). The actual duty is brightness x the board maximum (`disp_max_backlight` in `/boot/board`, default 95%). |
+| `brightness_percent` | 100 | % | 1 to 100 | Duty of backlight PWM3 (pwmchip0/pwm3, 10 kHz, normal polarity). The actual duty is brightness x the board maximum (`disp_max_backlight` in `/boot/board`, default 95%). |
 | `alert_volume_percent` | 70 | % | 0 to 100 | Volume of the alert sounds on the board speaker. 0 makes no sound. overlayd checks the file every second, applies a change and plays a confirmation tone once. Without a value, `EDGEPILOT_ALERT_VOLUME` (default 70) is used. |
 | `camera_offset_m` | 0.0 | m | -0.35 to 0.35 | When the board is mounted to one side of the car's centre, shifts the input image so the model sees as if from the car's centre (the sunnypilot camera offset method). Positive moves the car left within the lane (with the board on the driver's side, + by that distance). Applies in both Lane and Laneless modes, and the HUD lane lines follow. Beyond ±0.35 m the lead and traffic-light detection get worse, so it is blocked. modeld checks the file every second and moves a changed value at 0.1 m/s. |
-| `camera_height_m` | 1.22 | m | 0.8 to 2.0 | Height of the camera above the road. It sizes the effect of `camera_offset_m` and places the lead in the image for the optical-flow lead track. |
+| `camera_height_m` | 1.22 | m | 0.8 to 2.0 | Height of the camera above the road. It sizes the effect of `camera_offset_m` and places the lead in the image for the optical-flow lead track. modeld moves a changed value at 0.1 m/s, as it does the offset. |
 | `calibration_use_flow` | false | bool | | Takes the warp calibration's pitch and yaw from the optical-flow estimate (the direction of camera motion measured directly in the image, `flow_calibration.json`). It is used only while the flow estimate is usable (3 blocks or more, block-median standard deviation within 0.5°, within upstream's angle limits); otherwise the model pose calibration (`calibration.json`) is used. Roll is the pose calibration's value. modeld checks the file every second and switches to flow only while disengaged (if the setting changes while engaged, or the flow estimate appears while driving, it waits for the disengagement). If flow stops being usable (standard deviation over 0.8° and so on), it goes back to pose even while engaged. It moves the warp towards the new value by 1/5 of the remaining difference per second, at least 0.05°/s. While flow drives the warp (moving included), the pose calibrator pauses and leaves its last value and `calibration.json` as they are. Changed only from the camera calibration card of the web Vehicle tab: the card's `POST /api/calibration/source` is refused while engaged, and the parameter API (`PATCH /api/params/display`) does not accept this key. It does not appear on the Device settings tab ([Flow calibration](../docs/flow-calibration.md)). |
 
-The settings are changed from the web Device settings tab. The web console
-applies the backlight at once, and again every time it starts. For the alert
-volume, the web console only edits the file and overlayd reads it.
+The settings are changed from the web Device settings tab. The web console only
+edits the file; overlayd applies the backlight and the alert volume within 1 s,
+and the backlight again every time it starts.
 
 ## adaptive_cruise.json
 
@@ -197,7 +196,7 @@ friction = friction_raw ÷ 1000.
 | `torque_friction` | 0.083 | normalised torque | 0 to 0.3 | Torque added in the error's direction to overcome the steering friction (openpilot `friction`; upstream adds it in torque space too). |
 | `steering_angle_deadzone_deg` | 1.0 | ° | 0 to 3 | No friction compensation while the lateral-acceleration error is within what this steering angle produces (openpilot `steeringAngleDeadzoneDeg`; upstream uses it only on some Toyotas, 0.2°, and openpilot_c2 used 1°). Unlike upstream it fades from 40 km/h to zero at 60 km/h: set as an angle it grows with v², and at 80 km/h and above a 1° dead zone would remove about 90% of the friction compensation. See [Low-speed wheel shake](#low-speed-wheel-shake). |
 | `torque_straight_kp_scale` | 0.7 | factor | 0.3 to 1.0 | Factor on the `KP_INTERP` curve on slow straights: in full below 10 m/s (36 km/h) with a desired curvature under 0.003 1/m, back to 1 at 15 m/s (54 km/h) or 0.008 1/m. The desired curvature is the larger of the current request and the delayed one the error compares against, so the whole of a turn keeps the full gain. 1 is upstream. See [Low-speed wheel shake](#low-speed-wheel-shake). |
-| `nn_feedforward` | false | bool | | Uses the learned torque model chosen in [`lateral_nn.json`](#lateral_nnjson) for the feed-forward instead of the linear one's lateral-acceleration factor, offset and bank; the PID stays. The friction compensation (`torque_friction`, `steering_angle_deadzone_deg`) is added to a model trained without it (`k7_hev_v3`, `spec.friction_free`) in curves, from 0.2 m/s² of desired lateral acceleration and in full from 0.6 m/s², because the model does not see the tracking error. Its inputs keep the same limits as the PID request, including the 80° hold while the hands are off. Switching blends over 1 s, and every engagement ramps in the same way; below 3 m/s, where there is no training data, it ramps back to the linear one. Without the model file it does nothing. See [Lateral NN](../docs/lateral-nn.md). |
+| `nn_feedforward` | false | bool | | Uses the learned torque model chosen in [`lateral_nn.json`](#lateral_nnjson) for the feed-forward instead of the linear one's lateral-acceleration factor, offset and bank; the PID stays. The friction compensation (`torque_friction`, `steering_angle_deadzone_deg`) is added to a model trained without it (`spec.friction_free`: `k7_hev_v3` and `k7_hev_v4`) in curves, from 0.2 m/s² of desired lateral acceleration and in full from 0.6 m/s², because the model does not see the tracking error. Its inputs keep the same limits as the PID request, including the 80° hold while the hands are off. Switching blends over 1 s, and every engagement ramps in the same way; below 3 m/s, where there is no training data, and during lane changes, turns or while a blinker is on, which the training leaves out, it ramps back to the linear one. Without the model file it does nothing. See [Lateral NN](../docs/lateral-nn.md). |
 
 ### Low-speed wheel shake
 
@@ -256,7 +255,7 @@ ringing after a disturbance:
 
 | Key | Value | Unit | Range | Description |
 |---|---:|---|---|---|
-| `laneless_mode` | false | bool | | `false` is Lane mode: with a high lane probability it blends in the lane-centre path, and as the probability drops it uses only the model path. `true` is Laneless mode, the same method as openpilot master (`get_curvature_from_plan`). Without lanes, MPC or `path_offset_m`, it makes the desired curvature `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v` from the model plan's yaw and yaw rate (t_d = steering delay + plan age). Lane mode uses the same calculation when no lanes are visible (intersections and so on, effective probability below 0.3), and the handover with the lane MPC blends the desired curvature (0.5 s when dropping the lanes, 0.25 s when getting them back). Before 2026-10-06 this stretch followed the plan positions through the lane MPC, which below 25 km/h turned 26-30% less than laneless and 0.3-0.4 s later (recording replay). On real drives, the median driver torque in slow turns was also 152, twice laneless's 80. Changed on the web console's Steering tab; the HUD shows the path in use as `LANE`/`LANELESS`. Lane changes work through the model's desire input in both modes. |
+| `laneless_mode` | false | bool | | `false` is Lane mode: with a high lane probability it blends in the lane-centre path, and as the probability drops it uses only the model path. `true` is Laneless mode, the same method as openpilot master (`get_curvature_from_plan`). Without lanes, MPC or `path_offset_m`, it makes the desired curvature `2·ψ(t_d)/(v·t_d) − ψ̇(0)/v` from the model plan's yaw and yaw rate (t_d = steering delay + plan age). Lane mode uses the same calculation when no lanes are visible (intersections and so on, effective probability below 0.3, back to the lanes above 0.4; not while a lane change takes the lanes out, though a blinker alone does not stop it), and the handover with the lane MPC blends the desired curvature (0.5 s when dropping the lanes, 0.25 s when getting them back). Before 2026-10-06 this stretch followed the plan positions through the lane MPC, which below 25 km/h turned 26-30% less than laneless and 0.3-0.4 s later (recording replay). On real drives, the median driver torque in slow turns was also 152, twice laneless's 80. Changed on the web console's Steering tab; the HUD shows the path in use as `LANE`/`LANELESS`. Lane changes work through the model's desire input in both modes. |
 
 ### Lane change
 
@@ -314,7 +313,7 @@ and the absolute cap on the final desired curvature, openpilot's `0.2 1/m`
 | Key | Value | Unit | Range | Description |
 |---|---:|---|---|---|
 | `avoid_lkas_fault_enabled` | true | bool | | Uses the large-steering-angle fault avoidance. Measured on the K7 YG HEV (2026-09-18): when the steer request stays on above 85° for 0.98-1.12 s, the MDPS sets ToiFlt/FailState whatever the torque, and cuts the assist until the angle comes back below 85°. Above 85° the torque is still output, but only so much is left that it reaches 0 within the allowed frames (`steer_delta_down` × remaining frames), and from that frame the steer request is turned off, without ToiFlt, until the angle comes below 85°. The same holds while waiting at a stop, and above 85° the request is never newly turned on. If the driver turned the wheel during that stay (steering detected), it stays off until the angle comes below 15°, not 85°, and the hands leave the wheel (carrotpilot's release condition): it does not push a driver who is straightening the wheel out of a turn. It also comes back below 80° once the planned curvature has matched the wheel's curvature (same side, within 25%) for 1 s, as when the driver holds a ramp after a brief pass over 85°. Off, upstream hyundai `carcontroller.py`'s `common_fault_avoidance` is used: above 85°, after 89 frames of request it cuts 2 frames (ToiFlt on, torque unchanged) and counts again. On the K7, turning a cut request back on above 85° caused a fault within 3-14 ms (2026-10-03, 4 times out of 4). Do not turn it off. |
-| `avoid_lkas_fault_hold_angle_deg` | 80.0 | ° | 0 to 180 | Largest steering-wheel angle the controller goes to on its own while the driver is not holding the wheel (not steering pressed). It binds the desired curvature within the curvature this angle produces (the vehicle model with the learned SR, stiffness, offset and roll). So instead of passing 85°, losing the torque 0.89 s later, and the wheel unwinding and being caught again over and over, the torque holds at this angle without a break. Not bound while the driver is steering (it does not push a driver who winds on). Above about 35 km/h, where the lateral-acceleration limit (3.0 m/s²) is tighter, it never binds. 0 turns it off. |
+| `avoid_lkas_fault_hold_angle_deg` | 80.0 | ° | 0 to 84 | Largest steering-wheel angle the controller goes to on its own while the driver is not holding the wheel (not steering pressed). It binds the desired curvature within the curvature this angle produces (the vehicle model with the learned SR, stiffness, offset and roll). So instead of passing 85°, losing the torque 0.89 s later, and the wheel unwinding and being caught again over and over, the torque holds at this angle without a break. Not bound while the driver is steering (it does not push a driver who winds on). Above about 35 km/h, where the lateral-acceleration limit (3.0 m/s²) is tighter, it never binds. 0 turns it off; the loader keeps it below the 85° avoidance threshold. |
 
 With the avoidance on, the steer request moves between these states (the
 request is off from the start when it would begin above 85°):
@@ -372,17 +371,14 @@ board, and puts this file in `params.defaults/`.
 | Key | Value | Unit | Description |
 |---|---:|---|---|
 | `version` | 1 | schema version | Version of the storage format. Users do not change it. |
-| `rpy_rad` | `[-0.00134, -0.01746, -0.01960]` | rad `[roll, pitch, yaw]` | Camera attitude correction, about -0.077°, -1.001° and -1.123°. The valid range is upstream's: pitch -0.0907 to 0.17 and yaw ±0.0691 rad. A saved value outside the range is still loaded, and marked invalid. |
+| `rpy_rad` | `[0, 0, 0]` | rad `[roll, pitch, yaw]` | Camera attitude correction. The valid range is upstream's: pitch -0.0907 to 0.17 and yaw ±0.0691 rad. A saved value outside the range is still loaded, and marked invalid. |
 | `spread_rad` | `[0, 0, 0]` | rad `[roll, pitch, yaw]` | Spread of the calibration values between the valid blocks. The smaller, the steadier the observation. |
 | `valid_blocks` | 0 | block | Number of saved valid calibration blocks. With 5 or more the state can become calibrated. |
 | `height_m` | (absent → 1.22) | m | Height of the camera above the road, block-averaged from the model's road_transform z (upstream `extrinsicsCalibration.height`, added 2026-10-05). An old file without it starts at 1.22. After calibration, samples whose height standard deviation is over e^-3.5 (0.030 m) are dropped. Collecting again after a mount change takes it back to 1.22. Not yet used for `display.camera_height_m` (the size of the camera offset). |
 
-`valid_blocks` is 0 on purpose. On 2026-08-22 the camera intrinsics were
-measured again and `fx` changed by 2.6%. The attitude here had been learned
-under the old intrinsics and absorbed part of that error (fitted again against
-the new matrix, it differs by pitch +4.9 mrad and yaw -5.8 mrad). `rpy_rad` was
-kept as the starting point, and only `valid_blocks` was cleared so that the
-calibration learns again under the new intrinsics.
+The seed is all zero, the same as having no file: the input warp starts from
+the camera's own axis and the online calibration learns the mount on the first
+drive.
 
 `OnlineCalibrator::restore()` uses the saved `valid_blocks` as it is (as
 openpilot's calibrationd does). Below 5 (`kInputsNeeded`), `rpy_rad` is only
@@ -439,8 +435,9 @@ uses: `{"model": "k7_hev_v3"}`, a name from `models/lateral_nn/` without
 `.json`. A model is trained on one car, so choose the one of this car. The
 web console's Steering tab writes it. controlsd checks it every second and
 switches models without a restart; `nn_feedforward` still decides whether the
-model is used. Without the file, or with a name that does not load, the linear
-feed-forward stays.
+model is used. Without the file, or with a name that does not load when
+controlsd starts, the linear feed-forward is used. A name that does not load
+while it runs leaves the current model in use.
 
 ## flow_calibration.json
 

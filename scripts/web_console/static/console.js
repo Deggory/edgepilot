@@ -148,8 +148,7 @@ function showRuntime(status, failure = "") {
     status.stale && processes.length ? el("p.runtime-note", {text: t("app.last_known")}) : null,
     build.common && el("p.runtime-note", {text: t(build.mixed ? "app.build_mixed" : "app.build", {version: build.common})}),
     el("p.runtime-note", {
-      text: backlight.error ? t("app.backlight_error", {error: backlight.error})
-        : !backlight.available ? t("app.backlight_missing")
+      text: !backlight.available ? t("app.backlight_missing")
         : backlight.enabled ? t("app.backlight_on", {percent: backlight.brightness_percent}) : t("app.backlight_off"),
     }),
   ].filter(Boolean));

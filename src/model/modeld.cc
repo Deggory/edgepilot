@@ -14,7 +14,6 @@
 #include "model/replay_source.h"
 #include "model/supercombo_model.h"
 
-#include <linux/videodev2.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -61,9 +60,8 @@ public:
     }
 
     void append(const std::vector<float> &raw) {
-        if (!file_ || raw.empty()) return;
-        if (raw_size_ == 0) raw_size_ = static_cast<uint32_t>(raw.size());
-        if (raw.size() != raw_size_) return;
+        if (!file_) return;
+        raw_size_ = static_cast<uint32_t>(raw.size());  // 늘 모델 출력 하나(2576)
         std::fwrite(raw.data(), sizeof(float), raw.size(), file_);
         ++frames_;
     }
@@ -74,7 +72,7 @@ private:
     uint32_t frames_ = 0;
 };
 
-// 1초 창 통계. 두 루프(라이브·리플레이)가 같은 시계로 fps를 센다. 벽시계가 아니라 monotonic_now_ns라
+// 1초 창 통계. 두 루프(라이브·재생)가 같은 시계로 fps를 센다. 벽시계가 아니라 monotonic_now_ns라
 // NTP가 시각을 옮겨도 창 길이와 전체 fps가 흔들리지 않는다.
 struct RateWindow {
     uint64_t start_ns = monotonic_now_ns();
@@ -112,8 +110,7 @@ public:
         ControlState control_state;
         const bool read = sub_.read(&control_state, sizeof(control_state));
         if (read) last_stamp_ns_ = control_state.timestamp_ns;
-        const uint64_t now = monotonic_now_ns();
-        if (last_stamp_ns_ == 0 || (now > last_stamp_ns_ && now - last_stamp_ns_ > kStaleNs)) {
+        if (!timestamp_fresh_ns(last_stamp_ns_, monotonic_now_ns(), kStaleNs)) {
             gate_.vehicle_fresh = false;
             engaged_ = false;
             return;
@@ -188,9 +185,10 @@ private:
     DeviceSettings settings_;
 };
 
-// 카메라 장착(기기 설정 camera_offset_m·camera_height_m). 바뀐 오프셋은 초당 kRateMps로 옮긴다: 모델은 t−4·t 두
-// 프레임과 4.8초 특징 이력을 보므로 한 번에 바꾸면 차가 옆으로 순간 이동한 것처럼 보여 pose·보정·locationd·경로가
-// 튄다(보정 워프도 같은 이유로 천천히 옮긴다, model/calibration_source). 시작할 때는 첫 프레임부터 그대로 쓴다.
+// 카메라 장착(기기 설정 camera_offset_m·camera_height_m). 바뀐 오프셋과 높이는 초당 kRateMps로 옮긴다: 모델은 t−4·t
+// 두 프레임과 4.8초 특징 이력을 보므로 한 번에 바꾸면 차가 옆으로 순간 이동한 것처럼 보여 pose·보정·locationd·경로가
+// 튄다(보정 워프도 같은 이유로 천천히 옮긴다, model/calibration_source). 높이도 오프셋이 있으면 워프의 옆 이동을
+// 바꾸므로 같이 옮긴다(예전에는 높이만 한 번에 바꿨다). 시작할 때는 첫 프레임부터 그대로 쓴다.
 class CameraMount {
 public:
     static constexpr float kRateMps = 0.1f;
@@ -203,7 +201,7 @@ public:
     void apply(SupercomboModel &model, const DeviceSettings &settings) {
         const float step = kRateMps * kFrameS;
         offset_m_ += std::clamp(settings.camera_offset_m - offset_m_, -step, step);
-        height_m_ = settings.camera_height_m;
+        height_m_ += std::clamp(settings.camera_height_m - height_m_, -step, step);
         model.set_camera_mount(offset_m_, height_m_);
     }
     float offset_m() const { return offset_m_; }
@@ -224,7 +222,7 @@ struct LeadIo {
 
 // engaged는 controlsd 결합 상태, use_flow는 보정 출처 설정. 워프에 쓴 보정(출처와 상관없이)이 calibration,
 // 출처와 포즈 보정기 자신의 추정이 calibration_source, 광류 상태가 flow_calibration이다.
-bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
+void publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
                     CalibrationService &calibration, const CameraMount &mount, uint64_t frame_id,
                     uint64_t capture_timestamp_ns, float model_ms, float v_ego, bool engaged, bool use_flow,
                     const LeadIo &lead) {
@@ -235,8 +233,8 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
 
     const ProjectionState projection = calibration.projection();
 
-    ModelState state;
-    fill_model_state(state, parsed, projection, calibration.snapshot(), frame_id, capture_timestamp_ns, model_ms);
+    ModelState state =
+        fill_model_state(parsed, projection, calibration.snapshot(), frame_id, capture_timestamp_ns, model_ms);
     state.camera_offset_m = mount.offset_m();
     state.camera_height_m = mount.height_m();
     state.flow_calibration = calibration.flow_state();
@@ -263,7 +261,7 @@ bool publish_output(LatestChannel &model_pub, SupercomboModel &model, const Pars
         lead.next->camera_height_m = mount.height_m();
         lead.next->camera_offset_m = mount.offset_m();
     }
-    return model_pub.publish(&state, sizeof(state));
+    model_pub.publish(&state, sizeof(state));
 }
 
 int run_replay(const AppConfig &config, LatestChannel &model_pub) {
@@ -274,10 +272,8 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     replay_config.nv12_width = source.width();
     replay_config.nv12_height = source.height();
     replay_config.set_warp_source(source.width(), source.height());
-    const unsigned target_frames =
-        config.max_frames > 0 ? std::min(config.max_frames, source.frame_count()) : source.frame_count();
-    std::fprintf(stderr, "modeld replay input format=NV12 frames=%u file=%s target=%u\n", source.frame_count(),
-                 config.replay_nv12_path.c_str(), target_frames);
+    std::fprintf(stderr, "modeld replay input format=NV12 frames=%u file=%s\n", source.frame_count(),
+                 config.replay_nv12_path.c_str());
 
     SupercomboModel model(config.axmodel_path.c_str(), replay_config);
     const ModeldSettings settings(false);
@@ -297,7 +293,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     while (!g_stop && source.read(frame)) {
         mount.apply(model, settings.get());
         const uint64_t t0 = monotonic_now_ns();
-        const bool ok = model.run_frame_nv12(frame.data.data(), frame.width, frame.height, raw);
+        const bool ok = model.run_frame_nv12(frame.data.data(), raw);
         const uint64_t t1 = monotonic_now_ns();
         if (ok) {
             raw_dump.append(raw);
@@ -305,11 +301,8 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             // 재생은 처리 시각으로 찍으므로 앞차 추적(시간 간격이 필요하다)은 돌리지 않는다
             const LeadIo lead;
-            if (!publish_output(model_pub, model, parsed, calibration, mount, processed, monotonic_now_ns(), model_ms,
-                                0.0f, false, settings.get().calibration_use_flow, lead)) {
-                std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
-                ++errors;
-            }
+            publish_output(model_pub, model, parsed, calibration, mount, processed, monotonic_now_ns(), model_ms, 0.0f,
+                           false, settings.get().calibration_use_flow, lead);
             ++processed;
         } else {
             ++errors;
@@ -317,12 +310,10 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
 
         uint64_t window_us = 0;
         if (window.close_if_due(&window_us)) {
-            std::fprintf(stderr, "modeld replay: frames=%u/%u fps=%.2f errors=%u          \r", processed, target_frames,
-                         window.total_fps(processed), errors);
+            std::fprintf(stderr, "modeld replay: frames=%u/%u fps=%.2f errors=%u          \r", processed,
+                         source.frame_count(), window.total_fps(processed), errors);
             std::fflush(stderr);
         }
-
-        if (config.max_frames > 0 && processed >= config.max_frames) break;
     }
 
     std::fprintf(stderr, "\nmodeld replay done frames=%u errors=%u fps=%.2f\n", processed, errors,
@@ -330,8 +321,8 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 
-// CPU 워프 대체 경로용: CMM 링 슬롯을 캐시 없이 매핑해 링에 붙인다. camerad가
-// 다시 떠서 물리 주소가 바뀌면 다시 매핑한다.
+// 광류 작업이 앞차 점을 고를 때 읽는 링 슬롯의 CPU 매핑(캐시 없이). camerad가 다시 떠서 물리 주소가 바뀌면 다시
+// 매핑한다.
 struct RingSlotMaps {
     unsigned long long phys[kFrameSlots] = {};
     uint8_t *virt[kFrameSlots] = {};
@@ -371,7 +362,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
     model.set_input_calibration(initial_rpy);
     CameraMount mount(settings.get());
     EgoStateReader ego;
-    // 링 슬롯의 CPU 매핑(CPU 워프 복사, 광류 작업의 앞차 점 고르기). 광류 작업보다 먼저 선언해 나중에 없앤다.
+    // 링 슬롯의 CPU 매핑(광류 작업의 앞차 점 고르기). 광류 작업보다 먼저 선언해 나중에 없앤다.
     RingSlotMaps slot_maps;
     // 광류 작업(보정 창과 앞차 확대율). 링 슬롯을 IVE가 직접 읽으므로 frame_ring보다 먼저 없어져야 한다(뒤에
     // 선언). IVE를 쓸 수 없으면 끄고 계속 간다(저장해 둔 보정 추정은 보정 서비스가 그대로 쓴다). 보정을 워프에
@@ -403,7 +394,6 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
     uint64_t last_frame_id = 0;
     bool have_last_frame_id = false;
     RateWindow window;
-    std::vector<uint8_t> frame_copy(frame_ring.frame_bytes());
 
     std::fprintf(stderr, "modeld: live frame ring slots=%u frame=%ux%u, every frame\n", frame_ring.slot_count(),
                  frame_ring.width(), frame_ring.height());
@@ -414,31 +404,16 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             std::fprintf(stderr, "modeld: waiting for roadAiFrame\n");
             continue;
         }
-        if (meta.slot >= frame_ring.slot_count()) {
-            ++errors;
-            continue;
-        }
 
         if (have_last_frame_id && meta.frame_id > last_frame_id + 1)
             missed += static_cast<unsigned>(meta.frame_id - last_frame_id - 1);
         have_last_frame_id = true;
         last_frame_id = meta.frame_id;
 
-        model.set_chroma_vu(meta.format == V4L2_PIX_FMT_NV21);
-        const int frame_w = static_cast<int>(meta.width), frame_h = static_cast<int>(meta.height);
-        // 링 슬롯이 CMM이고 GDC 워프를 쓰면 GDC가 슬롯을 직접 읽는다(복사 없음). 아니면
-        // 슬롯을 복사해 CPU 워프로 간다(CMM 슬롯은 캐시 없는 매핑으로 읽는다).
+        // GDC가 링 슬롯(CMM)을 직접 읽는다(복사 없음). camerad가 슬롯을 다시 잡는 동안은 물리 주소가 0이다.
         const unsigned long long slot_phys = frame_ring.slot_phys(meta.slot);
-        const bool zero_copy = slot_phys != 0 && model.input_buffer(frame_w, frame_h) != nullptr;
         uint64_t slot_seq = 0;
-        bool frame_ready = false;
-        if (zero_copy) {
-            frame_ready = frame_ring.read_begin(meta.slot, meta.frame_id, &slot_seq);
-        } else {
-            if (slot_phys != 0) slot_maps.attach(frame_ring, meta.slot);
-            frame_ready = frame_ring.copy_slot(meta.slot, meta.frame_id, frame_copy.data(), frame_copy.size());
-        }
-        if (!frame_ready) {
+        if (slot_phys == 0 || !frame_ring.read_begin(meta.slot, meta.frame_id, &slot_seq)) {
             ++frame_sync_failures;
             ++errors;
             continue;
@@ -447,13 +422,13 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
         ego.poll();
         model.set_desire(ego.desire());
         mount.apply(model, settings.get());
-        if (flow && zero_copy) {
-            // Y 평면이 슬롯 앞에 있다(NV12/NV21). IVE가 복사를 마친 뒤 슬롯이 그대로인지 seqlock으로 본다.
+        if (flow) {
+            // Y 평면이 슬롯 앞에 있다(NV12). IVE가 복사를 마친 뒤 슬롯이 그대로인지 seqlock으로 본다.
             slot_maps.attach(frame_ring, meta.slot);  // 슬롯마다 한 번 매핑한다
             FlowFrame job;
             job.y_phys = slot_phys;
             job.y_virt = slot_maps.virt[meta.slot];
-            job.stride = frame_w;
+            job.stride = static_cast<int>(meta.width);
             job.frame_id = meta.frame_id;
             job.t_s = static_cast<double>(meta.timestamp_ns) * 1e-9;
             job.gate = ego.flow_gate();
@@ -465,16 +440,12 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
         }
 
         // 녹화기(recordd)가 모델이 본 바로 그 프레임을 따라가도록 알린다.
-        if (!record_frame_pub.publish(&meta, sizeof(meta))) {
-            std::fprintf(stderr, "\nmodeld: publish recordFrame failed\n");
-        }
+        record_frame_pub.publish(&meta, sizeof(meta));
 
         const uint64_t t0 = monotonic_now_ns();
         // GDC가 읽는 동안 슬롯이 덮어써졌으면 모델 상태(이미지·특징 큐)에 넣기 전에 버린다.
-        const bool ok = zero_copy ? model.run_frame_phys(
-                                        slot_phys, frame_w, frame_h, raw,
-                                        [&] { return frame_ring.read_still_valid(meta.slot, meta.frame_id, slot_seq); })
-                                  : model.run_frame_nv12(frame_copy.data(), meta.width, meta.height, raw);
+        const bool ok = model.run_frame_phys(
+            slot_phys, raw, [&] { return frame_ring.read_still_valid(meta.slot, meta.frame_id, slot_seq); });
         const uint64_t t1 = monotonic_now_ns();
         if (ok) {
             ParsedModelOutput parsed = ModelOutputParser::parse(raw);
@@ -484,17 +455,12 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             lead.next = &last_lead;
             lead.tracker = &lead_tracker;
             if (ego.vehicle_fresh()) lead.ego_mps = ego.v_ego();
-            if (!publish_output(model_pub, model, parsed, calibration, mount, meta.frame_id, meta.timestamp_ns,
-                                model_ms, ego.v_ego(), ego.engaged(), settings.get().calibration_use_flow, lead)) {
-                std::fprintf(stderr, "\nmodeld: publish modelState failed\n");
-                ++errors;
-            }
+            publish_output(model_pub, model, parsed, calibration, mount, meta.frame_id, meta.timestamp_ns, model_ms,
+                           ego.v_ego(), ego.engaged(), settings.get().calibration_use_flow, lead);
             ++processed;
         } else {
             ++errors;
         }
-
-        if (config.max_frames > 0 && processed >= config.max_frames) break;
 
         uint64_t window_us = 0;
         if (window.close_if_due(&window_us)) {

@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <string>
 
+namespace {
+
 TEST(JsonValue, ParsesEveryKind) {
     JsonValue v;
     std::string error;
@@ -55,3 +57,5 @@ TEST(JsonValue, LimitsNesting) {
     ok += std::string(60, ']');
     EXPECT_TRUE(JsonValue::parse(ok, &v, &error)) << error;
 }
+
+}  // namespace

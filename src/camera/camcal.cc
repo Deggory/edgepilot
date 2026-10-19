@@ -22,7 +22,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <mutex>
@@ -237,8 +236,7 @@ private:
 
 void draw_osd(MaixDisplay &display, int width, int height, int saved, double sharp, bool saving, bool flash) {
     const MaixDisplay::OverlayBuffer buffer = display.begin_overlay();
-    if (!buffer.pixels) return;
-    // 가로 화면 좌표로 그린 뒤 세로 패널 방향 그림판으로 옮긴다(transpose, 보드 방향만큼 뒤집기).
+    // 가로 화면 좌표로 그린 뒤 세로 패널 방향 그림판으로 옮긴다(transpose).
     cv::Mat osd(MaixDisplay::kHeight, MaixDisplay::kWidth, CV_8UC4, cv::Scalar(0, 0, 0, 0));
     const cv::Scalar white(255, 255, 255, 255), yellow(0, 220, 255, 255);
     char top[96], bottom[96];
@@ -255,8 +253,6 @@ void draw_osd(MaixDisplay &display, int width, int height, int saved, double sha
     if (flash) cv::rectangle(osd, cv::Rect(0, kBarH, MaixDisplay::kWidth, MaixDisplay::kHeight - 2 * kBarH), white, 8);
     cv::Mat panel(MaixDisplay::kWidth, MaixDisplay::kHeight, CV_8UC4, buffer.pixels, buffer.stride);
     cv::transpose(osd, panel);
-    if (buffer.flip_x) cv::flip(panel, panel, 1);
-    if (buffer.flip_y) cv::flip(panel, panel, 0);
     display.end_overlay();
 }
 
@@ -276,7 +272,7 @@ int main() {
         make_dirs(dir);
         int index = next_index(dir);
 
-        MaixCamera camera(width, height, 20, true);
+        MaixCamera camera(width, height, 20);
         MaixDisplay display;
         display.set_letterbox(true);
         AlertSound sound;
@@ -302,7 +298,7 @@ int main() {
             }
             ++frames;
             ++window_frames;
-            if (!display.show_video_phys(slot.phys, width, height, false, [] { return true; })) ++errors;
+            if (!display.show_video_phys(slot.phys, width, height, [] { return true; })) ++errors;
 
             bool quit = false;
             const int presses = inputs.poll(&quit);

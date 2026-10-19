@@ -1,8 +1,9 @@
-// 웹 기기 설정(display.json) 읽기: 범위 클램프, 잘못된 값은 프로세스를 죽이지 않고 이전 값을
+// 웹 기기 설정(display.json) 읽기: 범위 클램프(백라이트 밝기 포함), 잘못된 값은 프로세스를 죽이지 않고 이전 값을
 // 유지(modeld가 죽으면 횡제어가 멈춘다), 파일이 바뀔 때만 다시 읽기.
 #include "common/device_settings.h"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <cmath>
 #include <filesystem>
@@ -14,8 +15,9 @@ namespace {
 struct TempFile {
     std::filesystem::path path;
     TempFile() {
+        // 프로세스마다 다른 이름(두 실행이 겹쳐도 서로 지우지 않게)
         path = std::filesystem::temp_directory_path() /
-               ("edgepilot_display_" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "_" +
+               ("edgepilot_display_" + std::to_string(getpid()) + "_" +
                 ::testing::UnitTest::GetInstance()->current_test_info()->name() + ".json");
     }
     ~TempFile() { std::filesystem::remove(path); }
@@ -37,11 +39,21 @@ TEST(DeviceSettings, ReadsAndClampsLikeTheEditor) {
     EXPECT_FLOAT_EQ(s.camera_height_m, 1.30f);
     EXPECT_FALSE(file.poll(2'000'000'000ULL, &s)) << "바뀌지 않았으면 다시 읽지 않는다";
 
+    EXPECT_TRUE(s.display_enabled);
+    EXPECT_TRUE(std::isnan(s.brightness_percent)) << "밝기가 없으면 overlayd는 시작 밝기를 둔다";
+
     f.write(R"({"brightness_percent": 40})");
     ASSERT_TRUE(file.poll(3'000'000'000ULL, &s));
     EXPECT_TRUE(std::isnan(s.alert_volume_percent)) << "없는 키는 기본값";
     EXPECT_FLOAT_EQ(s.camera_offset_m, 0.0f);
     EXPECT_FLOAT_EQ(s.camera_height_m, kModelHeight);
+    EXPECT_FLOAT_EQ(s.brightness_percent, 40.0f);
+
+    // 백라이트는 overlayd만 쓴다: 끄기와 편집기와 같은 1..100% 범위
+    f.write(R"({"enabled": false, "brightness_percent": 0})");
+    ASSERT_TRUE(file.poll(5'000'000'000ULL, &s));
+    EXPECT_FALSE(s.display_enabled);
+    EXPECT_FLOAT_EQ(s.brightness_percent, 1.0f);
 }
 
 TEST(DeviceSettings, MalformedValueKeepsPreviousSettings) {

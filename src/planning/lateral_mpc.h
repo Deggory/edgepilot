@@ -51,7 +51,7 @@ public:
     const std::array<LateralMpcNode, kLatMpcNodes> &nodes() const { return x_; }
     const std::array<double, kLatMpcN> &rates() const { return u_; }
     double cost() const { return cost_; }
-    // 0이 아니면 해를 버려야 한다. 1 = 비유한 값, 2 = 헤시안 비양정.
+    // 0이 아니면(1 = 비유한 값) 해를 버려야 한다.
     int status() const { return status_; }
 
     // 노드 i의 적분 구간 길이. T_IDXS 간격이다.

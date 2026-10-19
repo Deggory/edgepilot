@@ -4,7 +4,6 @@
 #include "common/ipc_messages.h"
 #include "common/model_output.h"
 #include "controls/control_holds.h"
-#include "controls/lateral_path.h"
 
 #include <gtest/gtest.h>
 
@@ -15,7 +14,6 @@ ModelState usable_model_state() {
     ModelState state;
     state.valid = 1;
     state.model_timestamp_ns = 1000000000ULL;
-    state.plan_probability = 0.9f;
     state.lane_probabilities[1] = 0.8f;
     state.lane_probabilities[2] = 0.7f;
     for (int i = 0; i < kTrajectorySize; ++i) {
@@ -36,8 +34,6 @@ TEST(ControlHolds, ModelPathAdapter) {
     const LateralPath path = path_from_model_state(state, 1100000000ULL, 250000000ULL);
     // 모델 경로 변환의 유효 판정
     ASSERT_TRUE(path.usable_for_steering);
-    ASSERT_TRUE(path.left_valid);
-    ASSERT_TRUE(path.right_valid);
     // 모델 경로 변환은 앞쪽 plan 점을 모두 센다
     ASSERT_EQ(path.point_count, kTrajectorySize);
     ASSERT_GE(path.reach_m, 60.0f);
@@ -48,7 +44,7 @@ TEST(ControlHolds, ModelPathAdapter) {
     const LateralPath short_path = path_from_model_state(short_state, 1100000000ULL, 250000000ULL);
     // plan 도달 거리가 짧으면 조향 게이트에서 막힌다
     ASSERT_FALSE(short_path.usable_for_steering);
-    ASSERT_EQ(short_path.invalid_reason, "path_invalid");
+    ASSERT_FALSE(short_path.model_lost) << "모델 끊김이 아니라 짧은 경로";
 }
 
 // 문서화된 안전 홀드 1: Panda 헬스 스냅샷 공백은 100 ms까지만, 신선한
@@ -139,10 +135,9 @@ TEST(ControlHolds, PathInvalidHold) {
     collapse_plan(&collapsed);
     out = gate.update(collapsed, 1100000000ULL, timeout_ns);
     // 무너진 프레임 하나는 마지막 쓸 수 있는 경로로 덮는다
-    ASSERT_EQ(out.raw.invalid_reason, "path_invalid");
+    ASSERT_FALSE(out.raw.usable_for_steering);
     ASSERT_TRUE(out.hold_applied);
     ASSERT_TRUE(out.path.usable_for_steering);
-    ASSERT_TRUE(out.path.invalid_reason.empty());
     collapsed.model_timestamp_ns = 1120000000ULL;
     out = gate.update(collapsed, 1150000000ULL, timeout_ns);
     ASSERT_TRUE(out.hold_applied) << "홀드는 정확히 150 ms까지 덮는다";
@@ -150,7 +145,7 @@ TEST(ControlHolds, PathInvalidHold) {
     // 홀드는 마지막 쓸 수 있는 프레임 150 ms 뒤 끝난다
     ASSERT_FALSE(out.hold_applied);
     ASSERT_FALSE(out.path.usable_for_steering);
-    ASSERT_EQ(out.path.invalid_reason, "path_invalid");
+    ASSERT_FALSE(out.path.model_lost);
 
     PathHoldGate stale_gate;
     stale_gate.update(good, 1100000000ULL, timeout_ns);
@@ -159,17 +154,13 @@ TEST(ControlHolds, PathInvalidHold) {
     out = stale_gate.update(stale, 1400000000ULL, timeout_ns);
     // 낡은 모델은 바로 막고 홀드하지 않는다
     ASSERT_FALSE(out.hold_applied);
-    ASSERT_EQ(out.path.invalid_reason, "model_stale");
+    ASSERT_TRUE(out.path.model_lost);
 
-    PathHoldGate invalid_gate;
-    invalid_gate.update(good, 1100000000ULL, timeout_ns);
-    ModelState invalid = good;
-    invalid.valid = 0;
-    invalid.model_timestamp_ns = 1120000000ULL;
-    out = invalid_gate.update(invalid, 1130000000ULL, timeout_ns);
-    // 무효 모델은 홀드하지 않는다
+    PathHoldGate startup_gate;
+    out = startup_gate.update(ModelState{}, 1130000000ULL, timeout_ns);
+    // 시작할 때의 빈 모델 상태(시각 0)는 모델 끊김이다
     ASSERT_FALSE(out.hold_applied);
-    ASSERT_EQ(out.path.invalid_reason, "model_invalid");
+    ASSERT_TRUE(out.path.model_lost);
 }
 
 }  // namespace

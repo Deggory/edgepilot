@@ -93,8 +93,13 @@ the car responds, it gives the torque command that produced it.
 
 ### Inputs at run time
 
-Training uses the trajectory that happened; the controller feeds the target
-trajectory in the same places (`LateralController::lateral_nn_feedforward`).
+The controller feeds the target trajectory in the places of the training
+inputs (`LateralController::lateral_nn_feedforward`): `v3` was trained on the
+trajectory that happened, `v4` on these run-time inputs. The roll input is the
+road-bank estimate over g, as in the training data, which has the opposite
+sign of paramsd's roll; `gtest_lateral_nn` pins it. The model is not used
+during lane changes, turns or while a blinker is on, which the training
+leaves out: the feed-forward ramps to the linear one over 1 s.
 
 - **Lateral acceleration at δ s ahead:** the MPC curvature trajectory at
   δ + plan age, times v².
@@ -160,10 +165,11 @@ model option (`friction_override`) for models with a weak friction response,
 and blends in its error response only at high lateral acceleration.
 
 Only a model trained without that share gets it: the file's
-`spec.friction_free` (nnlc `Spec.friction_free`; false when absent). That is
-`k7_hev_v3`. A model that learned the torque that was sent, friction included,
-as `k7_hev_v1` and `v2` did, runs alone: adding the term would count the
-friction twice.
+`spec.friction_free` (nnlc `Spec.friction_free`; false when absent). Both
+models in `models/lateral_nn/`, `k7_hev_v3` and `k7_hev_v4`, are. A model that
+learned the torque that was sent, friction included, as the removed
+`k7_hev_v1` and `v2` did, runs alone: adding the term would count the friction
+twice.
 
 The model file's `curve_gain` raises the model's output in curves: ×(1 +
 `curve_gain`), ramped in over the same 0.2→0.6 m/s² of desired lateral

@@ -35,6 +35,7 @@ private:
 
 // locationd 한 표본. t_s는 학습기 시계(controlsd now_s)로 옮긴 추정 시각(마지막 IMU 샘플).
 struct LocalizerSample {
+    uint64_t stamp_ns = 0;  // locationd의 추정 시각(0이면 모름). 같은 표본을 다시 읽었는지 이것으로 가린다
     double t_s = 0.0;
     double yaw_rate_rad_s = 0.0;  // 보정 좌표계, 우측 양수
     double yaw_rate_std_rad_s = 0.0;
@@ -96,6 +97,8 @@ public:
 
     // 대조 도구용: 마지막으로 학습기에 넣은 입력(locationd 모드면 kLocalizerDelayS 전 틱)
     const VehicleParamsInput &last_vehicle_input() const { return last_vehicle_input_; }
+    // 쌓아 둔 locationd 표본 수(시험용, 최대 32)
+    size_t localizer_sample_count() const { return samples_.size(); }
     const TorqueEstimatorInput &last_torque_input() const { return last_torque_input_; }
     TorqueEstimator &torque_estimator() { return torque_; }
     const TorqueEstimator &torque_estimator() const { return torque_; }

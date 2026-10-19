@@ -117,7 +117,7 @@ std::vector<double> LateralLagEstimator::masked_smooth(const std::vector<double>
     }
     for (double &v : w) v /= wsum;
     const int n = static_cast<int>(x.size());
-    std::vector<double> out(x.size(), std::numeric_limits<double>::quiet_NaN());
+    std::vector<double> out(x.size(), 0.0);  // 상류처럼 가중치 합이 0인 자리는 0
     for (int i = 0; i < n; ++i) {
         double num = 0.0, den = 0.0;
         for (int k = 0; k < kSmoothK; ++k) {
@@ -189,7 +189,10 @@ LateralLagEstimator::DelayResult LateralLagEstimator::actuator_delay(const std::
     const double thresh = (tmax - tmin) * kLagCandidateCorrThreshold + tmin;
     std::vector<int> good;
     for (int k = lo; k < hi; ++k) good.push_back(ncc(k) >= thresh ? 1 : 0);
-    // 연속 구간 시작·끝, upstream과 같이 roi 인덱스 + 테두리로 구간을 고른다
+    // 연속 구간 시작·끝, upstream과 같이 roi 인덱스 + 테두리로 구간을 고른다. 이 키는 실제 봉우리보다 min_lag 표본
+    // 수만큼 앞을 가리킨다(upstream의 버릇). 그래서 봉우리 구간이 키보다 뒤에서 시작하면 찾은 번호가 -1이 되는데,
+    // numpy에서 -1은 마지막 구간이라 대개 그 봉우리 구간을 집는다. 같은 값을 내도록 -1은 마지막 구간으로 읽는다(예전
+    // 이식은 '구간 없음'으로 보고 신뢰도 0을 내 봉우리가 하나뿐인 정상 추정을 거의 다 버렸다).
     std::vector<int> starts, ends;
     for (size_t i = 0; i < good.size(); ++i) {
         const int prev = i == 0 ? 0 : good[i - 1];
@@ -198,7 +201,9 @@ LateralLagEstimator::DelayResult LateralLagEstimator::actuator_delay(const std::
         if (good[i] && !next) ends.push_back(static_cast<int>(i));
     }
     const int key = static_cast<int>(best) + kCorrBorderOffset;
-    const int run = static_cast<int>(std::upper_bound(starts.begin(), starts.end(), key) - starts.begin()) - 1;
+    int run = static_cast<int>(std::upper_bound(starts.begin(), starts.end(), key) - starts.begin()) - 1;
+    if (run < 0) run = static_cast<int>(starts.size()) - 1;  // numpy의 [-1]
+    // 구간이 하나도 없으면(문턱 정의상 일어나지 않는다) 신뢰도 0
     const double width = run >= 0 ? ends[static_cast<size_t>(run)] - starts[static_cast<size_t>(run)] + 1
                                   : static_cast<double>(good.size());
     out.confidence = std::clamp(1.0 - width * dt, 0.0, 1.0);
@@ -231,11 +236,7 @@ bool LateralLagEstimator::update_estimate() {
         actual.push_back(p.actual);
         mask.push_back(p.okay);
     }
-    std::vector<double> ds = masked_smooth(desired, mask), as = masked_smooth(actual, mask);
-    for (size_t i = 0; i < ds.size(); ++i) {
-        if (!std::isfinite(ds[i])) ds[i] = 0.0;
-        if (!std::isfinite(as[i])) as[i] = 0.0;
-    }
+    const std::vector<double> ds = masked_smooth(desired, mask), as = masked_smooth(actual, mask);
     const DelayResult r = actuator_delay(ds, as, mask, config_.dt, config_.min_lag, config_.max_lag);
     if (r.corr < config_.min_ncc || r.confidence < config_.min_confidence) return false;
     blocks_.update(r.lag);
@@ -273,17 +274,24 @@ bool LateralLagEstimator::restore(const std::string &json) {
     // upstream retrieve_initial_lag: 같은 버전·차량(단일 차종이라 버전만)이고 무효가 아니면
     // 추정값과 유효 블록 수로 다시 시작한다. 초기값(steer_actuator_delay)이 바뀌어도 측정한 블록은
     // 차의 지연이라 그대로 쓴다(상류도 steerActuatorDelay로 거르지 않는다).
+    JsonValue root;
     float version = 0, initial = 0, estimate = 0, blocks = 0, status = 0;
-    if (!parse_json_float_value(json, "version", &version) || static_cast<int>(version) != kCacheVersion ||
-        !parse_json_float_value(json, "initial_lag", &initial) ||
-        !parse_json_float_value(json, "estimate", &estimate) ||
-        !parse_json_float_value(json, "valid_blocks", &blocks) || !parse_json_float_value(json, "status", &status))
+    if (!parse_json_object(json, &root) || !json_float(root, "version", &version) ||
+        static_cast<int>(version) != kCacheVersion || !json_float(root, "initial_lag", &initial) ||
+        !json_float(root, "estimate", &estimate) || !json_float(root, "valid_blocks", &blocks) ||
+        !json_float(root, "status", &status))
         return false;
-    if (static_cast<int>(status) == static_cast<int>(LateralLagStatus::Invalid) || blocks < 0 ||
-        blocks > config_.block_count || !std::isfinite(estimate))
-        return false;
+    // 이 코드만 쓰는 파일이다: 수는 유한하고 블록 수는 범위 안이다(reset이 다시 묶는다)
+    if (static_cast<int>(status) == static_cast<int>(LateralLagStatus::Invalid)) return false;
     const double keep_initial = config_.initial_lag;
     reset(estimate, static_cast<int>(blocks));
     config_.initial_lag = keep_initial;
     return true;
+}
+
+void apply_steering_initial_lag(const std::string &steering_json, LateralLagConfig *config) {
+    JsonValue root;
+    float delay = 0.0f;
+    if (parse_json_object(steering_json, &root) && json_float(root, "steer_actuator_delay", &delay))
+        config->initial_lag = std::clamp(delay, 0.01f, 1.0f);
 }

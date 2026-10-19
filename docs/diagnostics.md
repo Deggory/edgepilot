@@ -55,9 +55,15 @@ cmake --build build-host --target replay_planner -j2
 
 Columns include the recorded and re-planned desired curvature, the MPC's own
 `target_curv`/`heading0`, the lane observations behind the plan, and the
-`laneless`/`mpc_valid` flags. The options, which go before the output file, are
-listed in [Diagnostic tools](../diagnostics/README.md#host). `--laneless` and
-`--lane` re-plan the same route both ways without editing
+`laneless`/`mpc_valid` flags. The re-planned curvature is lag-adjusted as
+`controlsd` does it: the plan's age counts from the frame's capture time, which
+includes the model's latency, and the delay and roll are the ones the recorded
+`LearnerState` says were in use (`steer_actuator_delay` for routes that predate
+its `plan_delay_s`). On the 10-18 routes this reproduces the recorded desired
+curvature 2 to 2.5 times closer, tick by tick, than the age from the model's
+output with the fixed delay did. The options, which go before the output file,
+are listed in [Diagnostic tools](../diagnostics/README.md#host). `--laneless`
+and `--lane` re-plan the same route both ways without editing
 `params/steering.json`, and lane changes run only with `--vehicle`.
 
 For a planner refactor, run the route with `--exact` through the builds before
@@ -74,7 +80,13 @@ R=<route>; ./build-host/bin/replay_planner --exact --vehicle --lane \
 controlsd tick, at 10 ms ticks. The recorded CAN, `ModelState`, `PandaState`
 and `Localization` records go in, the planner is computed in place and the
 clock is the tick time, so identical code gives a bit-identical `--dump` and
-digest. The dump has a line per tick: the state, the torque and curvature, the
+digest on the same compiler. The Mac's clang and the board's GCC fuse
+multiply-adds in different places (neither build sets `-ffp-contract`), so a
+digest from the Mac can differ from the board binary's in the last bit of a
+few ticks (11 of 6001 on `2026-10-18--01-05-10-822`). Check that a change keeps
+the board's output with the tools built by `scripts/run_host_tests.sh --linux`
+(`build-linux-test/bin`), which use the board's compiler. The dump has a line
+per tick: the state, the torque and curvature, the
 HUD flags, the wheel angle, the driver torque, the torque controller's
 feed-forward and its friction share (`fr`, normalised torque; nnlc subtracts
 it from the target, see [Lateral NN](lateral-nn.md)), the tick time and the
@@ -193,7 +205,9 @@ was a lateral offset, not a camera-matrix error.
 ## Lateral dataset extraction
 
 `extract_lateral_dataset` replays a recording and writes one CSV row per
-`ControlState` record (about 100 Hz on current recordings). It joins the CAN
+`ControlState` record: 100 Hz from 2026-10-19; before that `recordd` read the
+latest snapshot once per loop and missed about 4 % of them, in short runs where
+it handled a video frame. It joins the CAN
 state decoded by the runtime's own `vehicle_can`, so signs and scaling match
 the board exactly. Records are read in time order
 (`recording/time_ordered_events.h`), so each row sees the CAN and the model
@@ -204,8 +218,8 @@ cmake --build build-host --target extract_lateral_dataset -j2
 ./build-host/bin/extract_lateral_dataset out.csv <route>/events/*.bin
 ```
 
-Version 2 route-level `events.bin` files work as well. A file truncated by the
-tmpfs fill stops at the zero-filled gap, with the byte offset on stderr.
+A file truncated by the tmpfs fill stops at the zero-filled gap, with the byte
+offset on stderr.
 
 The columns are:
 
@@ -220,7 +234,9 @@ The columns are:
 - the EPS state from MDPS12: `toi_active` (the MDPS takes the LKAS torque),
   `steer_fault`, and `eps_out_tq`, the torque the MDPS actually applies (raw
   minus 2048, in the DBC's 0.1 units; 0 while MDPS12 is stale);
-- `blinker`, for picking training samples.
+- `blinker`, for picking training samples;
+- `nn_ff`, set where the learned torque model gave the feed-forward
+  (`hud_flags` bit 12), so training can leave those ticks out.
 
 The event log is not in time order: recordd writes the queued CAN first and
 then the latest state snapshots, each stamped by its publisher. On the 10-15
@@ -316,8 +332,11 @@ The model checks need the NPU, so they run `modeld` on the board.
 
 `modeld` can run headless from a recorded route. Replay mode reads an
 `SCNV12R1` file instead of the camera ring and feeds the same GDC warp as live
-capture, so it validates model execution and online calibration from stored
-segments.
+capture, so it validates model execution from stored segments. It does not
+validate the online calibration or the desire input: the replay passes a
+speed of 0, so the calibrator (which takes samples above 15 mph) never
+updates, and the desire input is always 0, while the route's turns and lane
+changes sent desire pulses on the board.
 
 ```sh
 # host: cut 120 frames of a route into an SCNV12R1 replay
@@ -368,6 +387,9 @@ EDGEPILOT_CALIB_AUTO=0 \
 - **Calibration.** With `EDGEPILOT_CALIB_AUTO=0`, the host reference must use
   the rpy the board restored from `params/calibration.json`, because the
   calibration service feeds the input warp on every frame.
+- **Desire.** The NV12 replay feeds desire 0, while `make_m2_data.py eval`
+  feeds the recorded desire pulses. Pick a stretch with no lane change or
+  turn, or expect the plan to differ there for the same model.
 
 For the master core, `tools/model/axmodel/make_m2_data.py eval` builds the fp32
 reference with the runtime's queue semantics from a MaixCAM2 recording, and

@@ -10,12 +10,6 @@ constexpr unsigned kDefaultSensorHeight = 1080;
 // 지만 파이프·워프 비용을 아직 재지 않았다.
 constexpr unsigned kDefaultAiWidth = 1280;
 constexpr unsigned kDefaultAiHeight = 720;
-constexpr unsigned kDefaultModelWidth = 512;
-constexpr unsigned kDefaultModelHeight = 256;
-constexpr float kDefaultModelFx = 910.0f;
-constexpr float kDefaultModelFy = 910.0f;
-constexpr float kDefaultModelCx = 256.0f;
-constexpr float kDefaultModelCy = 47.6f;
 // MaixCAM2(ov_os04d10) 카메라 내부 파라미터, 1920x1080 기준. 런타임과 같은 카메라
 // 경로(camcal: 센서 전체 화각 축소, 보드 cam_flip/mirror)로 65" TV 11x6
 // 체스보드를 찍어 구했다(2026-09-26, 42장, 재투영 0.52 px, 1σ fx/fy ±2, cx ±2.6,
@@ -55,20 +49,11 @@ struct AppConfig {
 
     unsigned nv12_width = kDefaultAiWidth;
     unsigned nv12_height = kDefaultAiHeight;
-    unsigned nv12_crop_x = 0;
-    unsigned nv12_crop_y = 0;
-    unsigned nv12_crop_width = kDefaultSensorWidth;
-    unsigned nv12_crop_height = kDefaultSensorHeight;
-    unsigned max_frames = 0;
 
     std::string replay_nv12_path;
 
+    // EDGEPILOT_CALIB_AUTO=0: 저장된 보정(calibration.json)을 고정해 쓰고 온라인 보정을 하지 않는다(모델 교체 확인).
     bool calibration_auto = true;
-    bool manual_calibration = false;
-    float manual_roll = 0.0f;
-    float manual_pitch = 0.0f;
-    float manual_yaw = 0.0f;
-    bool log_calibration = false;
     bool profile = false;
     // 광류 보정기(VPP·IVE 작업 스레드). 끄면 새로 재지 않는다. 저장해 둔 추정(params/flow_calibration.json)은 그래도
     // 기록되고 설정이 광류면 워프에 쓰이며, 없으면 ModelState.flow_calibration.status가 0이다. EDGEPILOT_FLOW_CALIB=0.

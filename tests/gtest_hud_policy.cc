@@ -1,6 +1,6 @@
 // hud_policy: overlayd가 그리기 밖에서 정하는 것. 제어 이벤트 카운터 → 알림(첫 스냅샷은 기준값,
 // 우선순위, 한 프레임 하나, controlsd 재시작), 프레임마다 알림음 하나(해제 예고는 미루고 불가용 천이는
-// 넘긴다, engage 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활.
+// 넘긴다, 결합 거부 토스트 3초), 깜빡이 단계, 터치로 여닫는 카드, 차선 위치 평활.
 #include "hud/hud_policy.h"
 
 #include <gtest/gtest.h>
@@ -24,12 +24,12 @@ ControlState control_with_events(uint32_t engage, uint32_t disengage, uint32_t r
 TEST(HudAlertEvents, FirstSnapshotIsABaseline) {
     HudAlertEvents events;
     const auto first = events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
-    ASSERT_EQ(first.alert, HudAlert::none) << "첫 스냅샷은 기준값만 잡는다";
+    ASSERT_EQ(first.sound, HudSound::none) << "첫 스냅샷은 기준값만 잡는다";
     const auto same = events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
-    ASSERT_EQ(same.alert, HudAlert::none) << "그대로인 카운터는 이벤트가 아니다";
+    ASSERT_EQ(same.sound, HudSound::none) << "그대로인 카운터는 이벤트가 아니다";
     const auto engaged = events.update(control_with_events(6, 3, 2, 1), DepartureAlertType::none);
-    // 새 engage id는 그 id로 engage 알림음을 낸다
-    ASSERT_EQ(engaged.alert, HudAlert::engage);
+    // 새 결합 id는 그 id로 결합 알림음을 낸다
+    ASSERT_EQ(engaged.sound, HudSound::engage);
     ASSERT_EQ(engaged.event_id, 6);
 }
 
@@ -38,22 +38,22 @@ TEST(HudAlertEvents, PriorityAndOneAlertPerFrame) {
     events.update(control_with_events(5, 3, 2, 1), DepartureAlertType::none);
     const ControlState burst = control_with_events(6, 4, 3, 2);
     const auto first = events.update(burst, DepartureAlertType::lead_departed);
-    // 같은 프레임에서는 engage 거부가 가장 먼저다
-    ASSERT_EQ(first.alert, HudAlert::unable);
+    // 같은 프레임에서는 결합 거부가 가장 먼저다
+    ASSERT_EQ(first.sound, HudSound::unable);
     ASSERT_EQ(first.event_id, 3);
     const auto second = events.update(burst, DepartureAlertType::lead_departed);
-    // 다음 프레임에 engage 알림음
-    ASSERT_EQ(second.alert, HudAlert::engage);
+    // 다음 프레임에 결합 알림음
+    ASSERT_EQ(second.sound, HudSound::engage);
     ASSERT_EQ(second.event_id, 6);
     const auto third = events.update(burst, DepartureAlertType::lead_departed);
-    // 그다음 disengage 알림음
-    ASSERT_EQ(third.alert, HudAlert::disengage);
+    // 그다음 해제 알림음
+    ASSERT_EQ(third.sound, HudSound::disengage);
     ASSERT_EQ(third.event_id, 4);
     const auto fourth = events.update(burst, DepartureAlertType::lead_departed);
     // 그다음 출발 알림음
-    ASSERT_EQ(fourth.alert, HudAlert::signal_changed);
+    ASSERT_EQ(fourth.sound, HudSound::signal_changed);
     ASSERT_EQ(fourth.event_id, 2);
-    ASSERT_EQ(events.update(burst, DepartureAlertType::lead_departed).alert, HudAlert::none)
+    ASSERT_EQ(events.update(burst, DepartureAlertType::lead_departed).sound, HudSound::none)
         << "이벤트는 모두 한 번씩만 소비된다";
 }
 
@@ -61,11 +61,11 @@ TEST(HudAlertEvents, DepartureWaitsForADisplayedType) {
     HudAlertEvents events;
     events.update(control_with_events(0, 0, 0, 0), DepartureAlertType::none);
     const ControlState departed = control_with_events(0, 0, 0, 7);
-    ASSERT_EQ(events.update(departed, DepartureAlertType::none).alert, HudAlert::none)
+    ASSERT_EQ(events.update(departed, DepartureAlertType::none).sound, HudSound::none)
         << "표시할 알림 종류가 없으면 출발 id를 소비하지 않는다";
     const auto later = events.update(departed, DepartureAlertType::green_light);
     // 알림 종류가 표시되면 같은 id로 울린다
-    ASSERT_EQ(later.alert, HudAlert::signal_changed);
+    ASSERT_EQ(later.sound, HudSound::signal_changed);
     ASSERT_EQ(later.event_id, 7);
 }
 
@@ -73,10 +73,10 @@ TEST(HudAlertEvents, ControlsdRestartRebaselines) {
     HudAlertEvents events;
     events.update(control_with_events(40, 39, 12, 9), DepartureAlertType::none);
     const auto restarted = events.update(control_with_events(1, 0, 0, 0), DepartureAlertType::none);
-    ASSERT_EQ(restarted.alert, HudAlert::none) << "카운터가 줄면 controlsd 재시작이다. 기준을 다시 잡고 울리지 않는다";
+    ASSERT_EQ(restarted.sound, HudSound::none) << "카운터가 줄면 controlsd 재시작이다. 기준을 다시 잡고 울리지 않는다";
     const auto next = events.update(control_with_events(2, 0, 0, 0), DepartureAlertType::none);
     // 재시작 뒤 이벤트는 새 기준으로 잡는다
-    ASSERT_EQ(next.alert, HudAlert::engage);
+    ASSERT_EQ(next.sound, HudSound::engage);
     ASSERT_EQ(next.event_id, 2);
 }
 
@@ -112,11 +112,6 @@ TEST(HudAlertPolicy, RejectShowsItsReasonForThreeSeconds) {
     ASSERT_STREQ(f.hud.engage_reject_label, "DOOR OPEN");
     f.step(4000 * kMs);
     ASSERT_STREQ(f.hud.engage_reject_label, "") << "3초 뒤 내린다";
-
-    f.control.engage_reject_event_id = 5;
-    f.control.engage_reject_block[0] = '\0';
-    f.step(5000 * kMs);
-    ASSERT_STREQ(f.hud.engage_reject_label, "NOT READY") << "사유가 없으면 NOT READY";
 }
 
 TEST(HudAlertPolicy, TakeControlWaitsForAFrameWithoutAnEvent) {
@@ -169,10 +164,7 @@ TEST(HudAlertPolicy, UnavailableIsSkippedInAFrameThatAlreadySounded) {
         << "같은 프레임에 다른 알림이 울렸으면 불가용 천이는 미루지 않고 넘긴다";
 }
 
-TEST(HudSound, NamesAndSounds) {
-    ASSERT_STREQ(hud_sound_name(HudSound::signal_changed), "signal_changed");
-    ASSERT_STREQ(hud_sound_name(HudSound::take_control), "take_control");
-    ASSERT_STREQ(hud_sound_name(HudSound::none), "none");
+TEST(HudSound, Sounds) {
     ASSERT_EQ(hud_sound_id(HudSound::engage), AlertSoundId::engage);
     ASSERT_EQ(hud_sound_id(HudSound::unavailable), AlertSoundId::unavailable);
     ASSERT_EQ(hud_sound_id(HudSound::none), AlertSoundId::count);

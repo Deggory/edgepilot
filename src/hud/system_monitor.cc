@@ -40,7 +40,6 @@ void read_ssid(const char *interface_name, char *ssid, size_t size) {
 }  // namespace
 
 void SystemMonitor::sample(HudState *hud) {
-    if (!hud) return;
     sample_cpu(&hud->cpu_percent);
     sample_memory(&hud->memory_percent);
     sample_storage(&hud->storage_percent);
@@ -81,17 +80,13 @@ void SystemMonitor::sample_memory(float *percent) {
         std::sscanf(line, "MemAvailable: %llu kB", &available_kb);
     }
     std::fclose(file);
-    if (total_kb > 0) {
-        *percent = static_cast<float>(100.0 * (1.0 - static_cast<double>(std::min(available_kb, total_kb)) / total_kb));
-    }
+    *percent = static_cast<float>(100.0 * (1.0 - static_cast<double>(available_kb) / total_kb));
 }
 
 void SystemMonitor::sample_storage(float *percent) {
     struct statvfs space{};
-    if (statvfs("/", &space) != 0 || space.f_blocks == 0) return;
-    const uint64_t available = space.f_bavail;
-    const uint64_t total = space.f_blocks;
-    *percent = static_cast<float>(100.0 * (1.0 - static_cast<double>(std::min(available, total)) / total));
+    if (statvfs("/", &space) != 0) return;
+    *percent = static_cast<float>(100.0 * (1.0 - static_cast<double>(space.f_bavail) / space.f_blocks));
 }
 
 void SystemMonitor::sample_temperature(float *temperature_c) {
@@ -105,7 +100,7 @@ void SystemMonitor::sample_temperature(float *temperature_c) {
         const bool read = std::fscanf(file, "%f", &value) == 1;
         std::fclose(file);
         if (!read) continue;
-        if (value > 1000.0f) value /= 1000.0f;  // 밀리도
+        value /= 1000.0f;  // 밀리도
         if (value > 0.0f && value < 200.0f) maximum = std::max(maximum, value);
     }
     *temperature_c = maximum;
@@ -128,10 +123,9 @@ void SystemMonitor::sample_network(HudState *hud) {
     for (const ifaddrs *address = addresses; address; address = address->ifa_next) {
         if (!address->ifa_addr || address->ifa_addr->sa_family != AF_INET) continue;
         if ((address->ifa_flags & IFF_UP) == 0 || (address->ifa_flags & IFF_LOOPBACK) != 0) continue;
-        const char *name = address->ifa_name ? address->ifa_name : "";
+        const char *name = address->ifa_name;
         char ipv4[INET_ADDRSTRLEN] = {};
-        const sockaddr_in *socket_address = reinterpret_cast<const sockaddr_in *>(address->ifa_addr);
-        if (!inet_ntop(AF_INET, &socket_address->sin_addr, ipv4, sizeof(ipv4))) continue;
+        inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in *>(address->ifa_addr)->sin_addr, ipv4, sizeof(ipv4));
         const bool wifi = std::strncmp(name, "wlan", 4) == 0;
         char *interface = wifi ? hud->network_interface : hud->wired_interface;
         char *ip = wifi ? hud->network_ipv4 : hud->wired_ipv4;

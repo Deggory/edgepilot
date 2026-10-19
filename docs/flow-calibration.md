@@ -32,8 +32,8 @@ flowchart TB
 ```
 
 The same flow worker also measures how fast the lead car's image grows; see
-[Lead flow](lead-flow.md). `EDGEPILOT_FLOW_CALIB=0`, an IVE that cannot be set
-up, or the CPU warp path turns the worker off, and the lead flow with it
+[Lead flow](lead-flow.md). `EDGEPILOT_FLOW_CALIB=0` or an IVE that cannot be
+set up turns the worker off, and the lead flow with it
 ([Outputs](#outputs)).
 
 ## Why
@@ -272,8 +272,9 @@ sequenceDiagram
 - `ModelState.flow_calibration` (`FlowCalibrationState`, recording v10; v11
   appended four fields):
   - `status`: 0 off, 1 collecting, 2 estimate.
-  - `windows` and `blocks`: counts so far (`blocks` keeps counting);
-    `estimate_blocks`: blocks in the current estimate, up to 30.
+  - `windows` and `blocks`: counts so far. `blocks` goes on counting while
+    `modeld` runs, but starts again from the saved blocks (at most 30) after a
+    restart; `estimate_blocks`: blocks in the current estimate, up to 30.
   - `yaw` and `pitch`: the estimate, in rad.
   - `sd_yaw` and `sd_pitch`: the standard deviation of the block medians (v10
     stored their range in the same place).
@@ -304,9 +305,8 @@ sequenceDiagram
 - `EDGEPILOT_FLOW_CALIB=0` turns the calibrator off
   ([Runtime options](runtime-options.md#model-and-calibration)). If the IVE
   cannot be set up, `modeld` logs `flow calibration and lead flow off` and runs
-  without it. The worker also gets no frames on the CPU warp path
-  ([Frame input](model-pipeline.md#frame-input)). In each case the lead flow is
-  off too, and the lead track runs on the model distance alone. A stored
+  without it. In both cases the lead flow is off too, and the lead track runs on
+  the model distance alone. A stored
   estimate is still recorded and can still be applied.
 
 In `tools/model/recording_reader.py` the layouts are `FLOW_CALIBRATION_STATE`

@@ -32,18 +32,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
 from pathlib import Path
 
 import numpy as np
 
-from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE,
-                              TRAJECTORY_SIZE, iter_event_records,
-                              route_event_files)
+from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE, X_IDXS,
+                              iter_event_records, route_event_files)
 
-# openpilot X_IDXS: 궤적 점마다 놓인 거리.
-X_IDXS = np.array([192.0 * (i / (TRAJECTORY_SIZE - 1.0)) ** 2
-                   for i in range(TRAJECTORY_SIZE)])
 FIT_POINTS = 20          # 0 .. 75 m. 그 너머는 차선이 흔들린다
 STRAIGHT_PLAN_Y_M = 0.5  # 48 m에서 |plan y|가 이보다 작으면 직진으로 친다
 MIN_SPEED_KPH = 60.0
@@ -59,7 +54,7 @@ class RouteLateral:
         self.plan_y = []         # [N, TRAJECTORY_SIZE] 모델 경로
         self.left_prob = []
         self.right_prob = []
-        self.camera_offset = []  # [N] 워프 카메라 오프셋(녹화 v7+), 아니면 비어 있다
+        self.camera_offset = []  # [N] 워프 카메라 오프셋(v6 이하 녹화는 params 스냅샷의 값)
         self.model_ts = []
         self.control = {k: [] for k in
                         ("ts", "active", "cluster_speed_kph", "steer_deg",
@@ -73,31 +68,19 @@ class RouteLateral:
         return self
 
 
-def _floats(data: memoryview, offset: int, count: int) -> np.ndarray:
-    return np.frombuffer(data, "<f4", count, offset)
-
-
 def read_route_lateral(route: Path) -> RouteLateral:
     out = RouteLateral()
     for path in route_event_files(route):
         for rec in iter_event_records(path):
             if rec.type == RECORD_MODEL_STATE:
-                layout = rec.model_layout()
-                lanes = layout["lanes"]
-                stride = TRAJECTORY_SIZE * 12
-                left = _floats(rec.payload, lanes + stride, TRAJECTORY_SIZE * 3)[1::3]
-                right = _floats(rec.payload, lanes + 2 * stride, TRAJECTORY_SIZE * 3)[1::3]
-                plan = _floats(rec.payload, layout["plan"], TRAJECTORY_SIZE * 3)
-                probs = _floats(rec.payload, layout["lane_probabilities"], 4)
-                out.lane_offset.append((left + right) / 2.0)
-                out.plan_y.append(plan[1::3])
-                out.left_prob.append(probs[1])
-                out.right_prob.append(probs[2])
-                if "camera_offset_m" in layout:
-                    out.camera_offset.append(_floats(rec.payload, layout["camera_offset_m"], 1)[0])
-                out.model_ts.append(
-                    struct.unpack_from("<Q", rec.payload,
-                                       layout["capture_timestamp_ns"])[0])
+                model = rec.model_state()
+                lanes = model["lanes"]  # (y, z)
+                out.lane_offset.append((lanes[1, :, 0] + lanes[2, :, 0]) / 2.0)
+                out.plan_y.append(model["plan"][:, 1].copy())  # 뷰는 청크 버퍼 전체를 붙잡는다
+                out.left_prob.append(float(model["lane_probabilities"][1]))
+                out.right_prob.append(float(model["lane_probabilities"][2]))
+                out.camera_offset.append(float(model["camera_offset_m"]))
+                out.model_ts.append(int(model["capture_timestamp_ns"]))
             elif rec.type == RECORD_CONTROL_STATE:
                 state = rec.control_state()
                 out.control["ts"].append(rec.timestamp_ns)
@@ -111,16 +94,10 @@ def read_route_lateral(route: Path) -> RouteLateral:
 
 
 def route_offsets(route: Path) -> dict[str, float]:
-    """이 주행이 시작될 때 적용되던 횡방향 튜닝. 주행의 param 스냅숏에서 읽는다.
-    camera_offset_m은 display.json(웹 기기 설정)에 있다."""
-    out = {}
-    for name, keys in (("steering.json", ("path_offset_m", "angle_offset_deg")),
-                       ("display.json", ("camera_offset_m",))):
-        path = route / "params" / name
-        if path.exists():
-            params = json.loads(path.read_text())
-            out.update({k: params[k] for k in keys if k in params})
-    return out
+    """이 주행이 시작될 때 적용되던 횡방향 튜닝. 주행의 param 스냅숏(steering.json)에서 읽는다."""
+    path = route / "params" / "steering.json"
+    params = json.loads(path.read_text()) if path.exists() else {}
+    return {k: params[k] for k in ("path_offset_m", "angle_offset_deg") if k in params}
 
 
 def analyse(route: Path) -> None:
@@ -174,14 +151,11 @@ def analyse(route: Path) -> None:
               f"uncompensated translation is about {raw * 100:+.1f} cm")
     # 워프가 모델의 시점을 카메라에서 오른쪽으로 camera_offset_m만큼 옮기므로,
     # (카메라 기준) y에 있는 차선 중앙은 모델에서 y - offset으로 읽힌다.
-    if len(data.camera_offset):
-        used = data.camera_offset[keep]
-        offset = float(used.mean())
-        if used.max() - used.min() > 0.005:
-            print(f"  camera_offset_m changed during the drive "
-                  f"({used.min():+.3f} .. {used.max():+.3f} m); using the mean")
-    else:
-        offset = float(tuning.get("camera_offset_m", 0.0))
+    used = data.camera_offset[keep]
+    offset = float(used.mean())
+    if used.max() - used.min() > 0.005:
+        print(f"  camera_offset_m changed during the drive "
+              f"({used.min():+.3f} .. {used.max():+.3f} m); using the mean")
     if offset:
         print(f"  camera_offset_m={offset:+.3f} m is in the warp: the translation above is from "
               f"the virtual camera; from the physical camera it is about "

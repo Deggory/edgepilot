@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,11 +42,7 @@ def process_table(proc: Path = Path("/proc")) -> Dict[str, List[int]]:
     """argv[0]의 파일 이름 -> 그 프로세스들의 pid(오름차순). 머리 줄이 2초마다 부르므로 Path 대신 os로 읽는다(보드에서
     프로세스 125개에 83 ms → 19 ms). cmdline이 빈 커널 스레드는 뺀다."""
     table: Dict[str, List[int]] = {}
-    try:
-        entries = os.listdir(proc)
-    except OSError:
-        return table
-    for entry in entries:
+    for entry in os.listdir(proc):
         if not entry.isdigit():
             continue
         try:
@@ -60,25 +55,14 @@ def process_table(proc: Path = Path("/proc")) -> Dict[str, List[int]]:
     return {name: sorted(pids) for name, pids in table.items()}
 
 
-def find_process_pids(name: str, proc: Path = Path("/proc")) -> List[int]:
-    """argv[0]의 파일 이름이 name인 프로세스들."""
-    return process_table(proc).get(name, [])
-
-
-def signal_process(name: str, signum: int = signal.SIGHUP) -> List[int]:
-    """name 프로세스들에 신호를 보내고, 받은 pid를 돌려준다."""
-    notified = []
-    for pid in find_process_pids(name):
-        try:
-            os.kill(pid, signum)
-            notified.append(pid)
-        except (PermissionError, ProcessLookupError):
-            continue
-    return notified
+def process_running(name: str, proc: Path = Path("/proc")) -> bool:
+    """argv[0]의 파일 이름이 name인 프로세스가 있는가."""
+    return name in process_table(proc)
 
 
 class ProcessStatus:
-    """install_dir은 실행 파일이 있는 곳이다: 매니저가 설치 디렉터리(보드 /root/edgepilot)에서 띄우므로 작업 디렉터리."""
+    """install_dir은 실행 파일이 있는 곳이다: 매니저가 설치 디렉터리(보드 /root/edgepilot)에서 띄우므로
+    작업 디렉터리."""
 
     def __init__(self, path: str = topic_path(MANAGER_STATE_TOPIC), install_dir: Path = Path("."),
                  proc: Path = Path("/proc")):
@@ -96,8 +80,6 @@ class ProcessStatus:
             return None
         key = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
         if key not in self._versions:
-            if len(self._versions) > 64:
-                self._versions.clear()
             self._versions[key] = read_binary_version(path)
         return self._versions[key]
 
@@ -108,7 +90,8 @@ class ProcessStatus:
         for binary in binaries:
             pids = table.get(binary)
             if pids:
-                return self.binary_version(self.proc / str(pids[0]) / "exe"), self.binary_version(self.install_dir / binary)
+                running = self.binary_version(self.proc / str(pids[0]) / "exe")
+                return running, self.binary_version(self.install_dir / binary)
         return None, self.binary_version(self.install_dir / binaries[0])
 
     def status(self, versions: bool = False) -> Dict[str, Any]:

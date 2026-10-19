@@ -1,8 +1,8 @@
 #ifndef DEVICE_SETTINGS_H
 #define DEVICE_SETTINGS_H
 
-// 웹 기기 설정(params/display.json) 중 런타임이 읽는 값. modeld(카메라 장착, 보정 출처)와 overlayd(알림음)가
-// 각자 메인 루프에서 poll()을 부른다. 1초에 한 번만 stat하고 파일이 바뀌었을 때만 다시 읽는다.
+// 웹 기기 설정(params/display.json) 중 런타임이 읽는 값. modeld(카메라 장착, 보정 출처)와 overlayd(백라이트,
+// 알림음)가 각자 메인 루프에서 poll()을 부른다. 1초에 한 번만 stat하고 파일이 바뀌었을 때만 다시 읽는다.
 
 #include "common/model_output.h"
 #include "common/utils_file.h"
@@ -16,6 +16,9 @@
 #include <utility>
 
 struct DeviceSettings {
+    // LCD 백라이트. overlayd만 PWM에 쓴다(웹 콘솔은 파일만 쓴다). 밝기가 없으면 NAN(시작할 때 켠 밝기 유지).
+    bool display_enabled = true;
+    float brightness_percent = NAN;
     float alert_volume_percent = NAN;  // 없으면 NAN(시작 크기 유지)
     float camera_offset_m = 0.0f;      // 가상 카메라를 오른쪽(+)으로: 차가 왼쪽으로 간다
     float camera_height_m = kModelHeight;
@@ -27,12 +30,14 @@ struct DeviceSettings {
 // 허용 범위(벗어나면 클램프). 웹 콘솔의 min/max와 같아야 한다(check_web_console.py가 대조).
 // 카메라 오프셋 ±0.35 m는 sunnypilot과 같은 한계(넘으면 물체가 기운다).
 inline constexpr JsonFloatField<DeviceSettings> kDeviceSettingsFloats[] = {
+    {"brightness_percent", 1.0f, 100.0f, &DeviceSettings::brightness_percent},
     {"alert_volume_percent", 0.0f, 100.0f, &DeviceSettings::alert_volume_percent},
     {"camera_offset_m", -0.35f, 0.35f, &DeviceSettings::camera_offset_m},
     {"camera_height_m", 0.8f, 2.0f, &DeviceSettings::camera_height_m},
 };
 
 inline constexpr JsonBoolField<DeviceSettings> kDeviceSettingsBools[] = {
+    {"enabled", &DeviceSettings::display_enabled},
     {"calibration_use_flow", &DeviceSettings::calibration_use_flow},
 };
 
@@ -48,9 +53,9 @@ inline bool load_device_settings(const std::string &path, DeviceSettings *out, s
     DeviceSettings settings;
     if (!load_json_param_file(
             path,
-            [&settings](const std::string &text) {
-                parse_json_fields(text, kDeviceSettingsFloats, &settings);
-                parse_json_fields(text, kDeviceSettingsBools, &settings);
+            [&settings](const JsonValue &root) {
+                parse_json_fields(root, kDeviceSettingsFloats, &settings);
+                parse_json_fields(root, kDeviceSettingsBools, &settings);
             },
             error))
         return false;

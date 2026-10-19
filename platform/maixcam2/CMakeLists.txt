@@ -1,39 +1,48 @@
 # MaixCAM2 보드 SDK 래퍼. 헤더는 platform/ 기준 경로로 부른다(#include "maixcam2/maix_display.h").
 # MAIX_DEPS·MAIX_INCLUDES·AX_ALL_LIBS는 루트 CMakeLists.txt가 정한다.
 
+# CMM 블록 할당(AX SYS). 미디어와 GDC 두 라이브러리가 함께 쓴다(한 번만 컴파일한다).
+add_library(maixcam2_cmm STATIC maix_cmm.cc)
+target_include_directories(maixcam2_cmm PUBLIC "${PROJECT_SOURCE_DIR}/platform")
+target_include_directories(maixcam2_cmm SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_msp/out/arm64_glibc/include")
+target_compile_options(maixcam2_cmm PRIVATE ${PROJECT_WARNINGS})
+target_link_libraries(maixcam2_cmm PUBLIC ${AX_SYS_LIB})
+
 # 카메라(VI)·화면(VO)·터치. 보드의 libmaixcam_lib(ax_middleware)를 직접 쓴다.
 add_library(maixcam2_media STATIC
   maix_camera.cc
   maix_display.cc
   maix_touch.cc
   maix_shim.cc
-  maix_cmm.cc
   "${MAIX_MSP_OVERRIDE}/common_vin.c"
   "${MAIX_MSP_OVERRIDE}/common_isp.c"
   "${MAIX_MSP_OVERRIDE}/common_sys.c"
   "${MAIX_MSP_OVERRIDE}/common_hw.c")
 target_include_directories(maixcam2_media SYSTEM PRIVATE ${MAIX_INCLUDES})
 target_include_directories(maixcam2_media PUBLIC "${PROJECT_SOURCE_DIR}/platform")
+target_compile_options(maixcam2_media PRIVATE ${PROJECT_WARNINGS})
 set_source_files_properties(
   "${MAIX_MSP_OVERRIDE}/common_vin.c" "${MAIX_MSP_OVERRIDE}/common_isp.c"
   "${MAIX_MSP_OVERRIDE}/common_sys.c" "${MAIX_MSP_OVERRIDE}/common_hw.c"
   PROPERTIES COMPILE_OPTIONS "-w")
 target_link_directories(maixcam2_media PUBLIC "${MAIX_DEPS}/maix")
 target_link_libraries(maixcam2_media PUBLIC
-  -Wl,--as-needed maixcam_lib samplerate ${AX_ALL_LIBS} pthread dl)
+  maixcam2_cmm -Wl,--as-needed maixcam_lib samplerate ${AX_ALL_LIBS} pthread dl)
 
 # 모델 입력 워프용 GDC. MSP SDK 헤더만 쓰고 미들웨어는 쓰지 않는다(NPU 세션과 같은
 # 프로세스에서 AX SYS를 두 번 초기화하지 않도록).
-add_library(maixcam2_gdc STATIC maix_gdc_warp.cc maix_cmm.cc)
+add_library(maixcam2_gdc STATIC maix_gdc_warp.cc)
 target_include_directories(maixcam2_gdc PUBLIC "${PROJECT_SOURCE_DIR}/platform")
+target_include_directories(maixcam2_gdc PRIVATE "${PROJECT_SOURCE_DIR}/src")  # model/yuv6_pack.h
 target_include_directories(maixcam2_gdc SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_msp/out/arm64_glibc/include")
 target_compile_options(maixcam2_gdc PRIVATE ${PROJECT_WARNINGS})
-target_link_libraries(maixcam2_gdc PUBLIC "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
+target_link_libraries(maixcam2_gdc PUBLIC maixcam2_cmm "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
 
 # 광류 보정기용 VPP 축소 단과 IVE(코너 응답·LK). GDC와 같이 MSP SDK를 직접 쓴다(modeld 안에서 돈다).
 add_library(maixcam2_ive STATIC maix_ive_flow.cc)
 target_include_directories(maixcam2_ive PUBLIC "${PROJECT_SOURCE_DIR}/platform")
 target_include_directories(maixcam2_ive SYSTEM PRIVATE "${MAIX_DEPS}/maixcam2_msp/out/arm64_glibc/include")
+target_include_directories(maixcam2_ive PRIVATE "${PROJECT_SOURCE_DIR}/src")  # model/flow_engine.h
 target_compile_options(maixcam2_ive PRIVATE ${PROJECT_WARNINGS})
 target_link_libraries(maixcam2_ive PUBLIC "${AX_LIB_DIR}/libax_ive.so" "${AX_LIB_DIR}/libax_ivps.so" ${AX_SYS_LIB})
 

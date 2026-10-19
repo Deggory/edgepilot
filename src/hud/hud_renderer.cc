@@ -9,11 +9,11 @@
 
 // MaixCAM2 HUD(640x480). 주행 화면에는 필요한 것만 둔다: 상태 테두리, 현재 속도와 그 양옆
 // 깜빡이·비상등(노랑), 설정 속도(비전 크루즈가 낮게 잡으면 SET도)와 기어, 조향 모드와 하고 있는
-// 조작(회전, 차선 변경), 경로·차선, 앞차, 토크 바(운전자 토크 눈금 포함), 알림, 오토 홀드(속도
-// 아래 큰 배지). 아래 두 모서리에는 TPMS와 카메라 보정을, 그 위에는 보드 상태와 주행에 쓰는
-// 학습값을 좌우 짝으로 늘 두고, 오른쪽 위 상태 알약은 녹화와 와이파이를 보이며 누르면 네트워크
-// 카드를 연다. panda·저장 공간은 문제가 있을 때 칩으로도 띄우고(온도는 보드 상태 카드가 색으로),
-// 다른 카드에 없는 수치 진단은 웹 기기 설정의 HUD 진단을 켜면 왼쪽 카드에 모은다. 색·간격·글꼴
+// 조작(차선 변경), 경로·차선과 길 위의 차선 안 위치 눈금, 앞차, 토크 바(운전자 토크 눈금 포함),
+// 알림, 오토 홀드(속도 아래 큰 배지). 아래 두 모서리에는 TPMS와 카메라 보정을, 그 위에는 보드 상태와
+// 주행에 쓰는 학습값을 좌우 짝으로 늘 두고, 오른쪽 위 상태 알약은 녹화와 와이파이를 보이며 누르면
+// 네트워크 카드를 연다. panda·저장 공간은 문제가 있을 때 칩으로도 띄우고(온도는 보드 상태 카드가 색으로),
+// 다른 카드에 없는 수치 진단은 왼쪽 열을 누르면(처음에는 꺼져 있다) 진단 카드에 모은다. 색·간격·글꼴
 // 크기는 hud_draw.h의 토큰 한 곳에서 정한다. 도로 장면은 hud_scene.cc, 카드는
 // hud_cards.cc가 그린다. 크기는 2.4" 패널(333 ppi)을 차 안에서 읽을 만큼(2026-10-04
 // 실차에서 한 번 키움).
@@ -31,10 +31,7 @@ std::string mode_text(const HudState &hud) {
     if (hud.controller_active) return hud.laneless_mode ? "LANELESS" : "LANE";
     if (!hud.controller_engaged) return hud.controller_enabled ? "READY" : "OFF";
     if (hud.active_block[0] == '\0') return "READY";
-    if (const char *label = engage_block_label(hud.active_block)) return label;
-    std::string fallback = hud.active_block;
-    std::replace(fallback.begin(), fallback.end(), '_', ' ');
-    return fallback;
+    return engage_block_label(hud.active_block);
 }
 
 const char *gear_text(int gear) {
@@ -60,7 +57,7 @@ uint32_t gear_color(int gear) {
     return gear == kGearDrive || gear == kGearSport ? kText : kTextSecondary;
 }
 
-bool speed_valid(float kph) { return std::isfinite(kph) && kph > 0.0f; }
+bool speed_valid(float kph) { return kph > 0.0f; }
 
 // ---- 알림 ----
 
@@ -134,7 +131,7 @@ int speed_unit_line() { return kMargin + kHudSpeedFont.glyph('0')->h + 4; }
 
 // 가운데 현재 속도와 그 양옆 깜빡이 화살표. 화살표 기준으로 쓸 숫자 폭을 돌려준다.
 int draw_speed(HudCanvas &canvas, const HudState &hud) {
-    const std::string speed = format_text("%.0f", std::max(0.0f, hud.cluster_speed_kph));
+    const std::string speed = format_text("%.0f", hud.cluster_speed_kph);
     const int center = canvas.width() / 2;
     const int top = kMargin - kHudSpeedFont.glyph('0')->top;
     const int width = canvas.text(center, top, speed, kHudSpeedFont, kText, HudAlign::center, true);
@@ -159,7 +156,7 @@ void draw_brake_hold(HudCanvas &canvas, const HudState &hud) {
 // 띄우되, 세 자리 속도에서도 왼쪽 위 카드에 닿지 않게 안쪽으로 당긴다(오른쪽은 대칭).
 void draw_turn_signals(HudCanvas &canvas, const HudState &hud, int speed_width) {
     if (!hud.left_blinker && !hud.right_blinker) return;
-    const int step = std::clamp(hud.turn_signal_step, 0, kTurnSignalSteps - 1);
+    const int step = hud.turn_signal_step;
     if (step >= kTurnLitSteps) return;
     const float center_y = kMargin + kHudSpeedFont.glyph('0')->h / 2.0f;
     constexpr float kHalfH = 18.0f, kWidth = 18.0f, kThickness = 9.0f, kStep = 17.0f;
@@ -296,14 +293,14 @@ void draw_torque_bar(HudCanvas &canvas, const HudState &hud) {
     const bool steering = steering_now(hud);
     canvas.fill_round_rect(cx - half, y, kTorqueBarW, kTorqueBarH, kTorqueBarH / 2.0f,
                            steering ? kTrack : hud_fade(kTrack, 0.5f));
-    const float fraction = steering ? std::clamp(hud.steer_torque_fraction, -1.0f, 1.0f) : 0.0f;
+    const float fraction = steering ? hud.steer_torque_fraction : 0.0f;
     const float length = std::fabs(fraction) * half;
     if (length >= 1.0f) {
         // openpilot mici 토크 바처럼 75%를 넘으면 흰색에서 주황으로. + = 왼쪽 조향은 왼쪽으로 찬다.
         const uint32_t color = mix(kText, kAmber, (std::fabs(fraction) - 0.75f) * 4.0f);
         canvas.fill_round_rect(fraction > 0.0f ? cx - length : cx, y, length, kTorqueBarH, kTorqueBarH / 2.0f, color);
     }
-    const float driver = std::clamp(hud.driver_torque_fraction, -1.0f, 1.0f);
+    const float driver = hud.driver_torque_fraction;
     if (std::fabs(driver) >= kDriverTickMin)
         canvas.fill_round_rect(cx - driver * half - 1.5f, y - 5.0f, 3.0f, kTorqueBarH + 10.0f, 1.5f, kDriverTorque);
 }
@@ -313,7 +310,7 @@ void draw_alert(HudCanvas &canvas, const HudAlertCard &alert) {
     if (alert.empty()) return;
     const int max_w = canvas.width() - 2 * (kMargin + kCornerCardW + kGap);
     const int text_w = std::max(kHudTitleFont.width(alert.title), kHudBodyFont.width(alert.detail));
-    const int w = std::clamp(text_w + 56, kAlertMinW, max_w);
+    const int w = std::clamp(text_w + kAlertTextPad, kAlertMinW, max_w);
     const int x = (canvas.width() - w) / 2, center = canvas.width() / 2;
     const int y = canvas.height() - kMargin - kTorqueBarH - kGap - kAlertH;
     constexpr int kInset = 16;  // 제목 윗선·설명 기준선과 색 막대 끝
@@ -322,8 +319,8 @@ void draw_alert(HudCanvas &canvas, const HudAlertCard &alert) {
     const int title_w =
         canvas.text(center, cap_line(kHudTitleFont, y + kInset), alert.title, kHudTitleFont, kText, HudAlign::center);
     if (alert.arrow)
-        draw_arrow(canvas, center + alert.arrow * (title_w / 2.0f + 18.0f),
-                   y + kInset + cap_glyph(kHudTitleFont).h / 2.0f, 14.0f, 16.0f, alert.arrow, kText);
+        draw_arrow(canvas, center + alert.arrow * (title_w / 2.0f + kAlertArrowGap),
+                   y + kInset + cap_glyph(kHudTitleFont).h / 2.0f, kAlertArrowW, 16.0f, alert.arrow, kText);
     canvas.text(center, base_line(kHudBodyFont, y + kAlertH - kInset), alert.detail, kHudBodyFont, kTextSecondary,
                 HudAlign::center);
 }
@@ -342,20 +339,13 @@ int draw_maneuver(HudCanvas &canvas, int y, const HudState &hud) {
 void HudRenderer::draw(const HudTarget &target, const ParsedModelOutput &output, const ProjectionState &projection,
                        const HudState &hud) {
     using namespace hud_draw;
-    const uint32_t buffer_h = target.orientation.transpose ? target.width : target.height;
-    BufferDamage *damage = nullptr;
-    for (BufferDamage &known : damage_)
-        if (known.map == target.map && known.width == target.width && known.rows.size() == buffer_h) damage = &known;
-    const bool known = damage != nullptr;
-    if (!known) {
-        damage = &damage_[next_slot_++ % damage_.size()];
-        *damage = BufferDamage{target.map, target.width, std::vector<uint16_t>(buffer_h, 0)};
-    }
+    const bool known = target.map == map_;
+    if (!known) damage_.clear();
+    map_ = target.map;
     HudCanvas canvas(target.map, static_cast<int>(target.width), static_cast<int>(target.height),
-                     static_cast<int>(target.stride), coverage_, damage->rows, target.orientation);
+                     static_cast<int>(target.stride), coverage_, damage_, target.transpose);
     canvas.clear(known);
-    last_damage_ = &damage->rows;
-    last_tile_shift_ = canvas.tile_shift();
+    tile_shift_ = canvas.tile_shift();
     const LeadInfo lead = lead_info(hud, output);
     draw_scene(canvas, output, projection, hud, lead);
     draw_lane_position(canvas, output, projection, hud.lane_center_offset_m,

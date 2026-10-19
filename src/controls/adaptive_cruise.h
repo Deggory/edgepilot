@@ -100,12 +100,12 @@ private:
         void anchor(float speed_kph, double now_s);
     };
 
-    // vision 선행차 거리·상대속도 필터. 가까워지는 거리는 빨리, 멀어지는 거리는 천천히 따라가고,
+    // 비전 앞차 거리·상대속도 필터. 가까워지는 거리는 빨리, 멀어지는 거리는 천천히 따라가고,
     // lead_hold_s보다 오래 끊겼다가 다시 보이면 새 값에서 시작한다.
     struct LeadFilter {
         float distance_m = 0.0f;
         float relative_speed_mps = 0.0f;
-        double last_valid_s = -1.0;  // 유효한 선행차를 마지막으로 본 시각
+        double last_valid_s = -1.0;  // 유효한 앞차를 마지막으로 본 시각
         void update(const AdaptiveCruiseInput &input, const AdaptiveCruiseConfig &config);
     };
 

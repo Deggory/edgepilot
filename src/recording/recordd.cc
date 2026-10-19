@@ -11,18 +11,13 @@
 #include <signal.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <array>
-#include <cerrno>
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
-#include <vector>
+#include <thread>
 
 // 주행 녹화기. modeld가 실제로 쓴 프레임(recordFrame)을 하드웨어 H.264 인코더(VENC)로
 // 압축하고, CAN과 모델·제어·판다·학습기 상태를 함께 RecordingWriter 형식(세그먼트별
@@ -41,21 +36,13 @@ constexpr uint64_t kMaximumFrameAgeNs = 100000000ULL;
 constexpr uint64_t kStatePublishIntervalNs = 500000000ULL;
 constexpr unsigned kIdleSleepUs = 100000;  // 기록이 꺼진 동안의 대기(CAN 로그 큐 64칸 = 640 ms보다 짧게)
 
-bool read_recording_enabled(const std::string &path, bool fallback) {
-    std::ifstream file(path);
-    if (!file) return fallback;
-    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    bool enabled = fallback;
-    if (!parse_json_bool_value(text, "enabled", &enabled)) {
-        throw std::runtime_error("recording config has no 'enabled' value");
-    }
-    return enabled;
-}
-
+// params/recording.json(웹 콘솔이 쓴다). 녹화 on/off와 비트레이트.
 struct RecordingSettings {
-    int bitrate_bps = 0;
+    bool enabled = false;
+    int bitrate_bps = static_cast<int>(kRecordingBitrate);
 };
 
+constexpr JsonBoolField<RecordingSettings> kRecordingBools[] = {{"enabled", &RecordingSettings::enabled}};
 // 허용 범위(벗어나면 클램프). 웹 콘솔의 min/max와 같아야 한다(check_web_console.py가 대조). 상한 10 Mbit/s는
 // 스테이징 상한(recording_writer.cc의 160 MiB) 안에 옮기는 중인 세그먼트와 쓰는 중인 세그먼트가 함께 들어가는 값이다
 // (SD로 3 MiB/s 옮길 때 최대 약 134 MiB). 그 위로는 세그먼트마다 기록이 멈췄다.
@@ -63,16 +50,19 @@ constexpr JsonIntField<RecordingSettings> kRecordingInts[] = {
     {"bitrate_bps", 1000000, 10000000, &RecordingSettings::bitrate_bps},
 };
 
-// 인코더는 시작할 때 한 번만 열리므로 비트레이트는 기동 시점 값이다.
-// 웹에서 바꾸면 recordd 재시작부터 적용된다.
-unsigned read_recording_bitrate(const std::string &path, unsigned fallback) {
-    std::ifstream file(path);
-    if (!file) return fallback;
-    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    RecordingSettings settings;
-    settings.bitrate_bps = static_cast<int>(fallback);
-    parse_json_fields(text, kRecordingInts, &settings);
-    return static_cast<unsigned>(settings.bitrate_bps);
+// 잘못된 파일이면 false와 error이고 settings는 그대로다.
+bool load_recording_settings(const std::string &path, RecordingSettings *settings, std::string *error) {
+    RecordingSettings loaded;
+    if (!load_json_param_file(
+            path,
+            [&loaded](const JsonValue &root) {
+                parse_json_fields(root, kRecordingBools, &loaded);
+                parse_json_fields(root, kRecordingInts, &loaded);
+            },
+            error))
+        return false;
+    *settings = loaded;
+    return true;
 }
 
 }  // namespace
@@ -84,7 +74,11 @@ int main() {
     try {
         const std::string config_path = param_path("recording.json");
         const std::string recording_root = env_string("EDGEPILOT_RECORD_ROOT", "recordings");
-        const unsigned recording_bitrate = read_recording_bitrate(config_path, kRecordingBitrate);
+        // 인코더는 시작할 때 한 번만 열리므로 비트레이트는 기동 시점 값이다(웹에서 바꾸면 recordd 재시작부터).
+        // 파일 오류는 아래 설정 확인이 알린다.
+        RecordingSettings startup_settings;
+        load_recording_settings(config_path, &startup_settings, nullptr);
+        const unsigned recording_bitrate = static_cast<unsigned>(startup_settings.bitrate_bps);
 
         FrameRing frame_ring;
         while (!g_stop && !frame_ring.open(false)) {
@@ -128,6 +122,20 @@ int main() {
         };
 
         StateRecorder states;
+        // 100 Hz ControlState는 발행마다 기다려 쓰는 스레드가 맡는다(StateRecorder 머리 주석). write_state는 녹화가
+        // 꺼져 있으면 버리므로 늘 돌아도 된다. writer보다 먼저 멈추도록 뒤에 선언한다.
+        std::atomic<bool> stop_control{false};
+        std::thread control_thread([&] {
+            while (!stop_control) states.record_control(writer, 20);
+        });
+        struct JoinControl {
+            std::atomic<bool> &stop;
+            std::thread &thread;
+            ~JoinControl() {
+                stop = true;
+                if (thread.joinable()) thread.join();
+            }
+        } join_control{stop_control, control_thread};
         uint64_t frame_seq = 0;
         FileStamp config_stamp;
         uint64_t next_config_poll_ns = 0;
@@ -147,12 +155,13 @@ int main() {
                 const FileStamp stamp = file_stamp(config_path);
                 if (stamp != config_stamp) {
                     config_stamp = stamp;
-                    try {
-                        const bool enabled = read_recording_enabled(config_path, false);
-                        if (!enabled && writer.requested_enabled()) drain_encoder();
-                        writer.set_enabled(enabled, now_ns);
-                    } catch (const std::exception &error) {
-                        std::fprintf(stderr, "recordd: config error: %s\n", error.what());
+                    RecordingSettings settings;
+                    std::string error;
+                    if (load_recording_settings(config_path, &settings, &error)) {
+                        if (!settings.enabled && writer.requested_enabled()) drain_encoder();
+                        writer.set_enabled(settings.enabled, now_ns);
+                    } else {
+                        std::fprintf(stderr, "recordd: config error: %s\n", error.c_str());
                     }
                 }
                 writer.poll_storage(now_ns);
@@ -211,7 +220,7 @@ int main() {
             while (can_log_sub.pop(&can_batch)) writer.write_can(RecordType::CanRx, can_batch);
             while (sendcan_log_sub.pop(&can_batch)) writer.write_can(RecordType::CanTx, can_batch);
 
-            if (writer.requested_enabled()) states.record(writer);
+            if (writer.requested_enabled()) states.record(writer, false);
 
             if (now_ns >= next_log_ns) {
                 next_log_ns = now_ns + 1000000000ULL;
@@ -231,11 +240,13 @@ int main() {
                     static_cast<unsigned long long>(writer.queue_drops()),
                     static_cast<unsigned long long>(writer.pending_moves()),
                     writer.storage_blocked() == kStorageBlockedStaging ? " staging-full"
-                    : writer.blocked_for_space()                       ? " storage-blocked"
+                    : writer.storage_blocked() != 0                    ? " storage-blocked"
                                                                        : "");
             }
         }
 
+        stop_control = true;
+        if (control_thread.joinable()) control_thread.join();
         drain_encoder();
         writer.close();
         std::fprintf(stderr, "recordd: stopped\n");

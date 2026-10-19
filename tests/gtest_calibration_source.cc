@@ -110,7 +110,6 @@ TEST(CalibrationSource, SettingWaitsWhileEngaged) {
     sel.update(pose, flow, false, false, 0.0f);
     run(&sel, pose, flow, true, true, 2.0f);
     EXPECT_FALSE(sel.flow_applied()) << "결합 중에는 바꾸지 않는다";
-    EXPECT_TRUE(sel.requested());
     EXPECT_NE(sel.flags() & kCalibrationSourcePending, 0u);
     EXPECT_FLOAT_EQ(out(sel).v[2], pose[2]);
     sel.update(pose, flow, true, false, kFrameS);
@@ -202,9 +201,6 @@ TEST(CalibrationSource, UnusableFlowIsNotApplied) {
     f.status = 1;
     EXPECT_FALSE(CalibrationSourceSelector::flow_usable(f));
     f = good;
-    f.estimate_blocks = 2;
-    EXPECT_FALSE(CalibrationSourceSelector::flow_usable(f));
-    f = good;
     f.sd_yaw = 2.0f * kDeg;
     EXPECT_FALSE(CalibrationSourceSelector::flow_usable(f)) << "블록끼리 맞지 않는다";
     f = good;
@@ -212,7 +208,7 @@ TEST(CalibrationSource, UnusableFlowIsNotApplied) {
     EXPECT_FALSE(CalibrationSourceSelector::flow_usable(f)) << "upstream yaw 한계(3.96°) 밖";
     f = good;
     f.pitch = std::nanf("");
-    EXPECT_FALSE(CalibrationSourceSelector::flow_usable(f));
+    EXPECT_FALSE(CalibrationSourceSelector::flow_usable(f)) << "한계 비교에서 걸린다";
 
     CalibrationSourceSelector sel;
     const float pose[3] = {0.0f, -0.5f * kDeg, -0.3f * kDeg};

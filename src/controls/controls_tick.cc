@@ -1,7 +1,6 @@
 #include "controls/controls_tick.h"
 
 #include "common/model_output.h"
-#include "common/utils_file.h"
 #include "common/utils_time.h"
 #include "learners/localizer_inputs.h"
 #include "localization/lateral_lag.h"
@@ -17,20 +16,17 @@ namespace {
 
 constexpr uint64_t kAlertModelTimeoutNs = 500000000ULL;
 constexpr uint64_t kMaxCanRxAgeNs = 100000000ULL;
-// 파라미터 파일을 stat하는 간격. 웹 콘솔은 바꾸면 SIGHUP으로 곧바로 알리므로, 이 확인은 손으로 고친 파일을 위한
-// 것이다. 제어 스레드에서 SD를 자주 보지 않게 1초로 둔다.
-constexpr int kParamPollIntervalMs = 1000;
 // 학습 파일 쓰기가 실패한 뒤 다시 내놓기까지(paramsd·torqued 저장 주기 12 s와 같다)
 constexpr double kLearnerRetryS = 12.0;
 
+// 배치는 신선함(valid 포함)을 본 뒤에 들어오고, 프레임 수는 큐에서 꺼낼 때 이미 묶였다.
 void apply_can_batch(const CanBatch &batch, double now_s, VehicleCanState *vehicle) {
-    if (!batch.valid) return;
-    const uint32_t count = std::min<uint32_t>(batch.count, kCanBatchMaxFrames);
-    for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < batch.count; ++i) {
         const IpcCanFrame &frame = batch.frames[i];
         if (!is_vehicle_rx_frame(frame.flags, frame.data_len, frame.src)) continue;
-        std::array<uint8_t, 8> data = {};
-        std::copy_n(frame.data, frame.data_len, data.begin());
+        // 8바이트를 통째로 옮긴다: data_len 뒤는 0이다(fill_can_batch가 프레임을 비우고 채운다)
+        std::array<uint8_t, 8> data;
+        std::copy_n(frame.data, data.size(), data.begin());
         update_vehicle_can_state(vehicle, frame.address, data, static_cast<uint8_t>(frame.data_len),
                                  static_cast<uint8_t>(frame.src), now_s);
     }
@@ -138,7 +134,9 @@ ControlState make_control_state(const LateralControllerConfig &config, const Lat
                       (result.large_angle_hold ? kHudFlagSteerPaused : 0U) |
                       (result.large_angle_hold_by_driver ? kHudFlagSteerPausedByDriver : 0U) |
                       (result.vehicle_fresh && brake_lights_on(vehicle, now_s) ? kHudFlagBrakeLights : 0U) |
-                      (result.nn_feedforward_used ? kHudFlagNnFeedforward : 0U);
+                      (result.nn_feedforward_used ? kHudFlagNnFeedforward : 0U) |
+                      (result.steering_pressed ? kHudFlagSteeringPressed : 0U) |
+                      (result.lat_saturated ? kHudFlagLatSaturated : 0U) | kHudFlagLagInputs;
     state.seeds_ready = result.seeds_ready ? 1U : 0U;
     state.vehicle_fresh = result.vehicle_fresh ? 1U : 0U;
     // 결합 중 MDPS 일시 고장(상류도 결합 중에만 경고한다)
@@ -161,7 +159,8 @@ ControlState make_control_state(const LateralControllerConfig &config, const Lat
     state.apply_torque = result.apply_torque;
     state.driver_torque = vehicle.driver_torque;
     state.desire = static_cast<uint32_t>(target.desire);
-    std::snprintf(state.active_block, sizeof(state.active_block), "%s", block_reason_name(result.active_block));
+    // 새 스냅샷(0으로 채워짐)이라 끝의 NUL은 그대로다. 매 틱 snprintf보다 싸다.
+    std::strncpy(state.active_block, block_reason_name(result.active_block), sizeof(state.active_block) - 1);
     state.radar_lead_valid = radar_lead_fresh && vehicle.radar_lead_valid ? 1U : 0U;
     state.radar_lead_distance_m = vehicle.radar_lead_distance_m;
     state.radar_lead_relative_speed_mps = vehicle.radar_lead_relative_speed_mps;
@@ -185,66 +184,13 @@ ControlState make_control_state(const LateralControllerConfig &config, const Lat
 
 }  // namespace
 
-bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error) {
-    ControlParams candidate = *params;
-    std::string load_error;
-    if (!load_steering_params_json(paths.steering, &candidate.steering, &load_error)) {
-        if (error) *error = "steering " + paths.steering + ": " + load_error;
-        return false;
-    }
-    if (!load_adaptive_cruise_params_json(paths.cruise, &candidate.cruise, &load_error)) {
-        if (error) *error = "adaptive cruise " + paths.cruise + ": " + load_error;
-        return false;
-    }
-    *params = candidate;
-    return true;
-}
-
-std::string control_params_summary(const ControlParams &params) {
-    char text[160];
-    std::snprintf(text, sizeof(text), "mdpsSpoof=%.1fkph adaptiveCruise=%u gap=%.1fm/%.1fs decel=%.1fkph/s",
-                  params.steering.mdps_speed_spoof_kph, params.cruise.enabled ? 1U : 0U, params.cruise.standstill_gap_m,
-                  params.cruise.following_time_s, params.cruise.deceleration_rate_kph_per_s);
-    return text;
-}
-
-ControlParamsWatcher::ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now)
-    : paths_(std::move(paths)), next_check_(now + std::chrono::milliseconds(kParamPollIntervalMs)) {
-    stamp();
-}
-
-std::optional<ControlParams> ControlParamsWatcher::poll(std::chrono::steady_clock::time_point now,
-                                                        bool reload_requested, const ControlParams &current) {
-    if (!reload_requested && now < next_check_) return std::nullopt;
-    next_check_ = now + std::chrono::milliseconds(kParamPollIntervalMs);
-    const FileStamp steering = file_stamp(paths_.steering);
-    const FileStamp cruise = file_stamp(paths_.cruise);
-    const bool changed = steering != steering_stamp_ || cruise != cruise_stamp_;
-    if (!reload_requested && !changed) return std::nullopt;
-    steering_stamp_ = steering;
-    cruise_stamp_ = cruise;
-    ControlParams candidate = current;
-    std::string error;
-    if (!load_control_params(paths_, &candidate, &error)) {
-        std::fprintf(stderr, "controlsd: params reload rejected: %s\n", error.c_str());
-        return std::nullopt;
-    }
-    ++generation_;
-    std::fprintf(stderr, "controlsd: params reloaded generation=%u %s\n", generation_,
-                 control_params_summary(candidate).c_str());
-    return candidate;
-}
-
-void ControlParamsWatcher::stamp() {
-    steering_stamp_ = file_stamp(paths_.steering);
-    cruise_stamp_ = file_stamp(paths_.cruise);
-}
-
 void EngageEvents::update(const LateralControlResult &result, const VehicleCanState &vehicle,
                           const PandaGateOutput &panda, const PandaState &panda_state, const PathHoldOutput &held,
                           const ModelState &model, uint64_t now_ns) {
     if (result.engage_rejected) {
         if (++reject_id == 0) reject_id = 1;
+        // 녹화 바이트가 직전 이름의 꼬리를 남기지 않게 비우고 쓴다
+        std::memset(reject_block, 0, sizeof(reject_block));
         std::snprintf(reject_block, sizeof(reject_block), "%s", block_reason_name(result.active_block));
         std::fprintf(stderr, "controlsd: engage rejected block=%s event=%u\n", reject_block, reject_id);
     } else if (have_previous && result.engaged != previous_engaged) {
@@ -269,8 +215,11 @@ void EngageEvents::update(const LateralControlResult &result, const VehicleCanSt
                      "state=%u/%u/%u/%u safety=%u:%u hb=%u fresh=%u\n",
                      previous_active ? 1U : 0U, result.active ? 1U : 0U, result.engaged ? 1U : 0U,
                      block_reason_name(result.active_block),
-                     held.raw.invalid_reason.empty() ? "none" : held.raw.invalid_reason.c_str(), held.raw.point_count,
-                     static_cast<double>(held.raw.reach_m), held.path.point_count, held.hold_applied ? 1U : 0U,
+                     held.raw.usable_for_steering ? "none"
+                     : held.raw.model_lost        ? "model_stale"
+                                                  : "path_invalid",
+                     held.raw.point_count, static_cast<double>(held.raw.reach_m), held.path.point_count,
+                     held.hold_applied ? 1U : 0U,
                      model.model_timestamp_ns != 0 && now_ns >= model.model_timestamp_ns
                          ? static_cast<unsigned long long>((now_ns - model.model_timestamp_ns) / 1000000ULL)
                          : 0ULL,
@@ -367,8 +316,8 @@ void ControlsTick::apply_params(const ControlParams &params) {
     adaptive_cruise_controller_.update_config(cruise_);
 }
 
-bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t can_now_ns, double now_s) {
-    if (!can_batch_is_fresh(batch, can_now_ns, kMaxCanRxAgeNs)) return false;
+bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t now_ns, double now_s) {
+    if (!can_batch_is_fresh(batch, now_ns, kMaxCanRxAgeNs)) return false;
     apply_can_batch(batch, now_s, &vehicle_);
     return true;
 }
@@ -382,7 +331,7 @@ void ControlsTick::on_model(const ModelState &model) {
                         last_result_.actual_curvature, last_result_.lat_active, last_result_.steering_pressed);
 }
 
-void ControlsTick::on_localization(const LocalizationRead &localization, uint64_t can_now_ns, double now_s) {
+void ControlsTick::on_localization(const LocalizationRead &localization, double now_s) {
     // lagd(locationd) 추정 지연. 확정(5블록)이고 2초 안의 값만 쓴다.
     if (!localization.open) {
         learners_.set_localizer(false, LocalizerSample{});
@@ -403,7 +352,8 @@ void ControlsTick::on_localization(const LocalizationRead &localization, uint64_
     // 상류 paramsd·torqued 입력(localizer_sample_from). 표본 시각은 학습기 시계(now_s)로
     // 옮긴다. 새로 읽은 틱에만 넘기고, 못 읽은 틱은 학습기가 직전 표본을 그대로 쓴다.
     if (localization.read) {
-        const double age_s = static_cast<double>(static_cast<int64_t>(can_now_ns - state.timestamp_ns)) * 1e-9;
+        const double age_s =
+            static_cast<double>(static_cast<int64_t>(localization.read_ns - state.timestamp_ns)) * 1e-9;
         LocalizerSample sample;
         const bool use = localizer_sample_from(state, config_.steering_params.use_locationd_learner_inputs, age_s,
                                                now_s - age_s, &sample);
@@ -421,7 +371,7 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
     events_.update(last_result_, vehicle_, panda_, panda_state_, held, model_, now_ns);
 
     const bool radar_lead_fresh = signal_time_fresh(vehicle_.scc11_time_s, now_s, 0.5);
-    // 크루즈·이탈 경보·발행 속도(modeld 캘리브레이션, locationd도 읽는다)도 컨트롤러가 거른 vEgo를 쓰되,
+    // 크루즈·이탈 경보·발행 속도(modeld 보정, locationd도 읽는다)도 컨트롤러가 거른 vEgo를 쓰되,
     // 휠 속도를 0.5 s까지만 믿는다. 조향(control_speed_kph)은 ControlTiming의 vehicle_state_timeout_ms를
     // 쓰므로 그 값을 늘려도 크루즈 버튼이 낡은 속도로 나가지 않는다.
     const float ego_speed_kph = std::isfinite(vehicle_speed_kph(vehicle_, now_s))
@@ -450,6 +400,13 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
                      alert_input_.lead_relative_speed_mps, model_.lead.probability, alert_input_.plan_distance_m,
                      alert_input_.gas_press_prob);
     }
+    // 유한하지 않은 입력으로 토크를 0으로 낸 틱이 늘면 한 번 남긴다(원인은 학습값·모델·차량 상태 쪽에 있다)
+    const uint64_t nonfinite = controller_.torque_nonfinite_ticks();
+    if (nonfinite != logged_nonfinite_ticks_) {
+        std::fprintf(stderr, "controlsd: non-finite torque input, torque 0 (%llu ticks so far)\n",
+                     static_cast<unsigned long long>(nonfinite));
+        logged_nonfinite_ticks_ = nonfinite;
+    }
     model_updated_ = false;
     return make_control_state(config_, last_result_, lateral_target_, vehicle_, adaptive_cruise_, departure_alert,
                               events_, radar_lead_fresh, ego_speed_kph, now_s);
@@ -457,12 +414,13 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
 
 LearnerOutputs ControlsTick::update_learners(double now_s) {
     // 학습기는 이번 틱에 실제로 보낸 토크로 갱신하고, 컨트롤러는 다음 틱에 쓴다. torqued 지연은
-    // 컨트롤러와 같은 조향 지연(상류는 lateralDelay).
+    // 컨트롤러와 같은 조향 지연(상류는 lateralDelay). 조향 여부는 상류 latActive다: MDPS 일시 고장·정차·큰 조향각
+    // 요청 끔 동안의 점은 torqued가 거른다(예전에는 active를 넘겨 그 점도 들어갔다).
     learners_.set_lateral_delay(controller_.plan_delay_s());
     learners_.update(vehicle_, now_s, static_cast<double>(config_.timing.vehicle_state_timeout_ms) / 1000.0,
-                     last_result_.control_speed_kph / 3.6f, last_result_.active, last_result_.apply_torque,
+                     last_result_.control_speed_kph / 3.6f, last_result_.lat_active, last_result_.apply_torque,
                      last_result_.steering_pressed);
-    controller_.set_live_params(learners_.live(), learners_.vehicle_valid(), model_.calibration.status == 1U);
+    controller_.set_live_params(learners_.live(), learners_.vehicle_valid());
     controller_.set_calibration_status(model_.calibration.status);
     LearnerOutputs out;
     // 실패한 쓰기를 다시 시도할 때다: 저장 주기와 관계없이 두 파일을 다시 내놓는다(주차 중이면 주기가 오지 않는다).
@@ -496,6 +454,20 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
         out.learner_state = make_learner_state(learners_, config_.steering_params, controller_.road_bank_lat_accel(),
                                                controller_.live_delay_in_use(), controller_.plan_delay_s(),
                                                controller_.lateral_nn_loaded());
+    }
+    return out;
+}
+
+LearnerOutputs ControlsTick::final_learner_outputs() {
+    LearnerOutputs out;
+    std::string json = learners_.vehicle_persist_json();
+    if (json != saved_vehicle_json_) {
+        saved_vehicle_json_ = json;
+        out.vehicle_json = std::move(json);
+    }
+    if (!learners_.torque_cache().empty() && learners_.torque_cache() != saved_torque_cache_) {
+        saved_torque_cache_ = learners_.torque_cache();
+        out.torque_cache = saved_torque_cache_;
     }
     return out;
 }

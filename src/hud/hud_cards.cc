@@ -6,7 +6,7 @@
 #include <iterator>
 
 // HUD의 카드: 아래 두 모서리의 TPMS와 카메라 보정, 그 위 보드 상태와 학습값(늘 있다), 상태 알약을
-// 눌러 여는 네트워크 카드, 웹 기기 설정의 HUD 진단 카드.
+// 눌러 여는 네트워크 카드, 왼쪽 열을 눌러 여는 HUD 진단 카드.
 
 namespace hud_draw {
 namespace {
@@ -21,7 +21,7 @@ constexpr float kTpmsHighPsi = 45.0f;
 
 // 공기압 하나의 색: 낮으면 주황, 높으면 빨강, 값이 없으면 0.
 uint32_t tire_color(float pressure, bool bar) {
-    if (!std::isfinite(pressure) || pressure <= 0.0f) return 0;
+    if (pressure <= 0.0f) return 0;
     if (pressure > (bar ? kTpmsHighBar : kTpmsHighPsi)) return kRed;
     return pressure < (bar ? kTpmsLowBar : kTpmsLowPsi) ? kAmber : kText;
 }
@@ -216,7 +216,7 @@ void draw_system(HudCanvas &canvas, const HudState &hud) {
     card_rows(canvas, x, y + kH, rows);
 }
 
-// 웹 기기 설정의 HUD 진단: 다른 카드에 없는 수치만 모은다. 처리 속도, 조향 토크, 학습기 상세
+// HUD 진단 카드(왼쪽 열을 눌러 켜고 끈다): 다른 카드에 없는 수치만 모은다. 처리 속도, 조향 토크, 학습기 상세
 // (paramsd 강성과 평균 영점, torqued 원시 추정과 진행률, lagd 블록). 보드 상태·기어·크루즈·연결·
 // 제어가 쓰는 학습값·보정·TPMS·네트워크는 각자 카드나 칩에 있다. 아직 유효하지 않은 학습기 줄은
 // 주황.

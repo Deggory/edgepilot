@@ -178,7 +178,8 @@ It matches openpilot's alerts:
   - If this happens while engaged (a mount change is detected, for example),
     steering goes on for 3 s more with the warning shown and then disengages
     (openpilot's soft disable). If the calibration completes again within 3 s,
-    it does not disengage.
+    it does not disengage. The 3 s keep counting through a stop or a short
+    invalid path in between, as in openpilot.
 - **`TAKE CONTROL: STEER UNAVAILABLE`** (openpilot's `steerTempUnavailable`).
   While engaged, the MDPS reported a fault (MDPS12 `ToiFlt` or `ToiUnavail`),
   the driver was not holding the wheel, and at least 1.5 s had passed since
@@ -189,6 +190,17 @@ It matches openpilot's alerts:
   - If the fault came while the driver was holding the wheel, had just let
     go, or the car was stopped, only `STEERING FAULT` shows, with no warning
     of a disengage, and steering resumes when the fault clears.
+- **`TAKE CONTROL: MODEL LOST / CAR STALE / PLAN STALE / PLAN INVALID /
+  PANDA CTRL OFF`.** An input stopped while engaged: the model went stale or
+  invalid, the car's CAN went stale, the plan went stale or invalid, or the
+  Panda took back `controls_allowed` after the engage.
+  - Steering rests at once (torque 0, the request bit kept), since the old
+    input must not steer for 3 s.
+  - If the input is back within 0.5 s, nothing is shown. Short gaps of this
+    kind (up to 0.3 s in the recordings) are normal.
+  - After 0.5 s the warning shows. If the input is back within 3 s of the
+    stop, steering resumes; otherwise control disengages (openpilot disengages
+    on `commIssue` and `canBusMissing`).
 - **`TAKE CONTROL` / `Turn exceeds steering limit`** (openpilot's
   `steerSaturated`). All of these hold:
   - the speed is 36 km/h or more;

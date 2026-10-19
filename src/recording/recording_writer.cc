@@ -12,7 +12,6 @@
 #include <sys/syscall.h>
 #endif
 
-#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -98,10 +97,12 @@ std::string route_name() {
 // SD(저가 카드는 쓰기 수 MB/s)를 몇 초씩 붙잡아 다른 프로세스의 IO가 멈췄다(보드에서 부하
 // 10, SSH 한 번에 36초). 1 MB씩 쓰고 바로 fdatasync하며 초당 kMoveBytesPerSecond로
 // 제한한다. 녹화 평균(8 Mbps 영상 + CAN·상태 로그 ≈ 1.6 MB/s)보다 넉넉히 빠르다.
+// unthrottled가 서 있으면(종료 중) 제한 없이 SD가 내는 속도로 옮긴다.
 constexpr size_t kMoveChunkBytes = 1 << 20;
 constexpr double kMoveBytesPerSecond = 3.0 * (1 << 20);
 
-bool copy_file(const std::string &source, const std::string &destination) {
+bool copy_file(const std::string &source, const std::string &destination,
+               const std::atomic<bool> *unthrottled = nullptr) {
     const int in = ::open(source.c_str(), O_RDONLY);
     if (in < 0) return false;
     const int out = ::open(destination.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -115,14 +116,12 @@ bool copy_file(const std::string &source, const std::string &destination) {
     size_t copied = 0;
     while (ok) {
         const ssize_t n = ::read(in, buffer.data(), buffer.size());
-        if (n < 0 && errno == EINTR) continue;
         if (n <= 0) {
             ok = n == 0;
             break;
         }
         for (ssize_t done = 0; ok && done < n;) {
             const ssize_t w = ::write(out, buffer.data() + done, static_cast<size_t>(n - done));
-            if (w < 0 && errno == EINTR) continue;
             ok = w > 0;
             if (ok) done += w;
         }
@@ -130,6 +129,7 @@ bool copy_file(const std::string &source, const std::string &destination) {
         if (ok) ::fdatasync(out);
 #endif
         copied += static_cast<size_t>(n);
+        if (unthrottled && *unthrottled) continue;
         const auto due = start + std::chrono::duration<double>(copied / kMoveBytesPerSecond);
         std::this_thread::sleep_until(due);
     }
@@ -172,6 +172,9 @@ void StagingMover::enqueue(Job &&job) {
 }
 
 void StagingMover::stop() {
+    // 남은 파일은 속도 제한 없이 옮긴다. 종료는 기다려 주는 시간이 짧다(매니저 8초, systemd 10초) — 3 MiB/s로는
+    // 열린 세그먼트(최대 약 96 MB)를 다 옮기지 못하고 tmpfs에 남은 것은 전원이 꺼지면 사라진다.
+    unthrottled_ = true;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stop_ = true;
@@ -211,7 +214,7 @@ void StagingMover::loop() {
 void StagingMover::move_file(const std::string &from, const std::string &to) {
     const size_t slash = to.rfind('/');
     if (slash != std::string::npos) make_directories(to.substr(0, slash));
-    if (!copy_file(from, to)) {
+    if (!copy_file(from, to, &unthrottled_)) {
         std::fprintf(stderr, "recordd: move failed %s -> %s: %s\n", from.c_str(), to.c_str(), std::strerror(errno));
         return;
     }
@@ -406,6 +409,11 @@ bool RecordingWriter::start_route(uint64_t now_ns) {
     }
     snapshot_params();
     write_manifest(false);
+    // params·모델 사본과 첫 manifest는 바로 SD로 보낸다. route를 닫을 때까지 tmpfs에만 두면 시동을 끄는 보통의
+    // 끝(전원이 바로 끊긴다)에 통째로 사라졌다(2026-09-25~10-14 route 31개 가운데 5개). manifest는 닫을 때 다시 쓴다.
+    mover_.enqueue_tree(route_path_ + "/params", final_route_path_ + "/params");
+    mover_.enqueue_tree(route_path_ + "/models", final_route_path_ + "/models");
+    mover_.enqueue_file(route_path_ + "/manifest.json", final_route_path_ + "/manifest.json");
     next_storage_check_ns_ = now_ns + kStorageCheckIntervalNs;
     active_.store(true);
     std::fprintf(stderr, "recordd: recording started route=%s staging=%s\n", final_route_path_.c_str(),
@@ -502,6 +510,13 @@ void RecordingWriter::write_encoded_frame_impl(const RoadAiFrame &frame, const u
     }
     video_offset_ += size;
     total_video_frames_.fetch_add(1);
+    // 키프레임(1초)마다 영상과 인덱스를 스테이징에 내보낸다(영상 먼저: 인덱스가 아직 없는 바이트를 가리키지 않게).
+    // 인덱스(세그먼트에 약 48 KB)는 1 MiB stdio 버퍼를 채우지 못해, recordd가 비정상으로 끝나면 회수한 마지막
+    // 세그먼트의 frames.bin이 0바이트로 남아 그 영상을 어떤 리더도 읽지 못했다.
+    if (keyframe) {
+        std::fflush(video_file_);
+        std::fflush(index_file_);
+    }
 }
 
 bool RecordingWriter::open_event_chunk(uint64_t now_ns) {
@@ -550,7 +565,7 @@ bool RecordingWriter::write_event_header(RecordType type, uint64_t timestamp_ns,
 // 배치를 큐에 넣기 전에 디스크 형식(recorded_can.h)으로 직렬화한다. 이후 경로는
 // 상태 스냅샷과 같다.
 void RecordingWriter::write_can(RecordType type, const CanBatch &batch) {
-    if (!requested_enabled_.load() || (type != RecordType::CanRx && type != RecordType::CanTx)) return;
+    if (!requested_enabled_.load()) return;
     PendingWrite write;
     write.kind = PendingWrite::Kind::Can;
     write.record_type = type;
@@ -560,7 +575,7 @@ void RecordingWriter::write_can(RecordType type, const CanBatch &batch) {
 }
 
 void RecordingWriter::write_state(RecordType type, uint64_t timestamp_ns, const void *data, size_t size) {
-    if (!requested_enabled_.load() || !data || size == 0 || size > UINT32_MAX) return;
+    if (!requested_enabled_.load()) return;
     PendingWrite write;
     write.kind = PendingWrite::Kind::State;
     write.record_type = type;
@@ -594,7 +609,6 @@ void RecordingWriter::close_segment() {
 }
 
 void RecordingWriter::write_manifest(bool complete) const {
-    if (route_path_.empty()) return;
     std::ofstream manifest(route_path_ + "/manifest.json", std::ios::trunc);
     manifest << "{\n"
              << "  \"version\": " << kRecordingVersion << ",\n"
@@ -618,7 +632,9 @@ void RecordingWriter::snapshot_params() const {
     while (dirent *entry = readdir(directory)) {
         const std::string name = entry->d_name;
         if (name.empty() || name[0] == '.') continue;
-        if (name.size() < 5 || name.substr(name.size() - 5) != ".json") continue;
+        // 설정(.json)과 torqued 캐시(.bin, 약 88 KB). 캐시가 있어야 재생 도구가 보드와 같은 torqued에서 시작한다.
+        const bool json = name.size() >= 5 && name.substr(name.size() - 5) == ".json";
+        if (!json && name != "live_torque_parameters.bin") continue;
         copy_file(params_directory_ + "/" + name, destination + "/" + name);
     }
     closedir(directory);
@@ -630,19 +646,16 @@ void RecordingWriter::snapshot_params() const {
 }
 
 void RecordingWriter::close_route(bool complete) {
-    if (!event_file_ && route_path_.empty()) return;
+    if (route_path_.empty()) return;  // 이벤트 청크는 route 안에서만 열린다
     close_segment();
     close_event_chunk();
     write_manifest(complete);
-    if (!route_path_.empty()) {
-        std::fprintf(stderr, "recordd: recording stopped route=%s frames=%llu events=%llu\n", final_route_path_.c_str(),
-                     static_cast<unsigned long long>(total_video_frames_.load()),
-                     static_cast<unsigned long long>(event_records_));
-        // 남은 route 파일(events.bin, manifest, params, 마지막 세그먼트)을
-        // 전부 SD로 옮긴다. mover는 순서대로 처리하므로 앞선 파일 이동이
-        // 끝난 뒤 잔여만 쓸어 담는다.
-        mover_.enqueue_tree(route_path_, final_route_path_);
-    }
+    std::fprintf(stderr, "recordd: recording stopped route=%s frames=%llu events=%llu\n", final_route_path_.c_str(),
+                 static_cast<unsigned long long>(total_video_frames_.load()),
+                 static_cast<unsigned long long>(event_records_));
+    // 남은 route 파일(이벤트 청크, manifest, params, 마지막 세그먼트)을 전부 SD로 옮긴다. mover는 순서대로 처리하므로
+    // 앞선 파일 이동이 끝난 뒤 잔여만 쓸어 담는다.
+    mover_.enqueue_tree(route_path_, final_route_path_);
     route_path_.clear();
     final_route_path_.clear();
     segment_index_ = 0;
@@ -655,6 +668,6 @@ void RecordingWriter::close() {
     PendingWrite write;
     write.kind = PendingWrite::Kind::Stop;
     enqueue(std::move(write), true);
-    if (worker_.joinable()) worker_.join();
+    worker_.join();
     mover_.stop();
 }

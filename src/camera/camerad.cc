@@ -39,7 +39,7 @@ int main() {
             throw std::runtime_error("open road ai frame ring failed");
 
         // 카메라가 AX SYS를 초기화한 뒤에 슬롯 CMM을 잡는다.
-        MaixCamera camera(static_cast<int>(config.nv12_width), static_cast<int>(config.nv12_height), 20, true);
+        MaixCamera camera(static_cast<int>(config.nv12_width), static_cast<int>(config.nv12_height), 20);
         std::vector<CmmBlock> slots(frame_ring.slot_count());
         for (unsigned i = 0; i < slots.size(); ++i) {
             if (!cmm_alloc(&slots[i], frame_ring.frame_bytes(), "frame_ring"))
@@ -84,16 +84,10 @@ int main() {
             msg.slot = slot;
             msg.width = config.nv12_width;
             msg.height = config.nv12_height;
-            msg.format = camera.fourcc();
-            msg.crop_x = config.nv12_crop_x;
-            msg.crop_y = config.nv12_crop_y;
-            msg.crop_width = config.nv12_crop_width;
-            msg.crop_height = config.nv12_crop_height;
-            if (!frame_pub.publish(&msg, sizeof(msg))) ++errors;
+            frame_pub.publish(&msg, sizeof(msg));
 
             ++frame_id;
             ++window_frames;
-            if (config.max_frames > 0 && frame_id >= config.max_frames) break;
 
             const uint64_t now = monotonic_now_ns();
             if (now - window_start >= 1000000000ULL) {
@@ -105,8 +99,9 @@ int main() {
                 window_frames = 0;
             }
             if (now - age_window_start >= 10000000000ULL && !ages_us.empty()) {
-                auto pct = [](std::vector<uint64_t> v, double q) {
-                    std::sort(v.begin(), v.end());
+                std::sort(ages_us.begin(), ages_us.end());
+                std::sort(pop_ages_us.begin(), pop_ages_us.end());
+                auto pct = [](const std::vector<uint64_t> &v, double q) {  // 둘은 같이 쌓여 길이가 같다
                     return v[std::min(v.size() - 1, static_cast<size_t>(q * v.size()))] / 1000.0;
                 };
                 std::fprintf(stderr,

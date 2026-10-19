@@ -2,6 +2,7 @@
 #define CALIBRATION_SERVICE_H
 
 #include "common/app_config.h"
+#include "common/background_writer.h"
 #include "common/model_output.h"
 #include "common/projection.h"
 #include "model/calibration_online.h"
@@ -9,17 +10,14 @@
 #include "model/flow_calibration.h"
 
 #include <chrono>
-#include <condition_variable>
-#include <mutex>
 #include <string>
-#include <thread>
 
 // 모델 입력 워프의 카메라 보정. 모델 포즈 보정기(OnlineCalibrator, upstream calibrationd)를 돌리고, 웹 기기
 // 설정이 광류면 광류 추정(FlowSource, 보드에서는 광류 워커)의 pitch·yaw로 바꿔 쓴다(CalibrationSourceSelector).
 // projection·input_rpy·snapshot은 언제나 워프에 쓰는 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다
 // (upstream 루프는 모델이 자기 값으로 워프된 영상을 봤다고 가정한다). 포즈 보정은 calibration.json, 광류 블록은
-// flow_calibration.json에 저장하고, 웹 콘솔의 초기화는 둘 다 지운다(광류 측정원에도 알린다). 설정을 읽는 것은
-// 프로세스(modeld)이고, 여기서는 인자로 받는다.
+// flow_calibration.json에 저장하고(SD가 바빠도 모델 루프가 서지 않게 BackgroundWriter로), 웹 콘솔의 초기화는 둘 다
+// 지운다(광류 측정원에도 알린다). 설정을 읽는 것은 프로세스(modeld)이고, 여기서는 인자로 받는다.
 class CalibrationService {
 public:
     // use_flow: 시작할 때의 보정 출처 설정(display.json calibration_use_flow). 첫 프레임 워프부터 맞춘다.
@@ -38,7 +36,6 @@ public:
     // 워프에 쓴 보정의 상태(ModelState.calibration). 출처가 광류면 Calibrated다.
     OnlineCalibrator::Snapshot snapshot() const { return applied_snapshot_; }
     void input_rpy(float rpy[3]) const;
-    bool can_apply_online() const { return auto_enabled_ && !manual_override_; }
     // 출처와 포즈 보정기 자신의 추정(ModelState.calibration_source)
     CalibrationSourceState source_state() const;
 
@@ -48,27 +45,20 @@ public:
     FlowCalibrationState flow_state() const { return flow_state_; }
 
 private:
-    const char *mode_name(const OnlineCalibrator::Snapshot &snapshot) const;
-    void maybe_log(const OnlineCalibrator::UpdateResult &result);
     void maybe_persist(const OnlineCalibrator::UpdateResult &result);
     void poll_flow_source(std::chrono::steady_clock::time_point now);
     void maybe_persist_flow(std::chrono::steady_clock::time_point now, bool flush);
     void set_fixed_projection();
     void apply_selection(float dt_s);
-    void persist_loop();
     void poll_reset_request();
     void reset_online();
 
-    bool auto_enabled_ = true;
-    bool manual_override_ = false;
-    bool log_enabled_ = false;
-    bool restored_ = false;
+    bool auto_enabled_ = true;  // 끄면(EDGEPILOT_CALIB_AUTO=0) 저장된 보정을 고정해 쓴다(fixed_rpy_)
     bool has_persisted_ = false;
     float fixed_rpy_[3] = {};
     float online_rpy_[3] = {};   // 포즈 보정기 출력
     float applied_rpy_[3] = {};  // 워프에 쓰는 값
     float persisted_rpy_[3] = {};
-    std::string params_dir_;
     std::string calibration_path_;
     std::string flow_path_;
     std::string reset_request_path_;
@@ -101,30 +91,11 @@ private:
     uint32_t persisted_mount_changes_ = 0;
     std::chrono::steady_clock::time_point last_flow_persist_{};
 
-    std::chrono::steady_clock::time_point last_log_{};
     std::chrono::steady_clock::time_point last_persist_{};
-    CalibrationStatus last_status_ = CalibrationStatus::Uncalibrated;
-    int last_valid_blocks_ = -1;
 
-    // 주행 중 저장은 SD가 녹화로 바쁠 때 open/rename이 몇 초씩 막혀 모델 루프를 세웠다.
-    // 그래서 저장 스레드에 최신 값만 넘긴다. 포즈 보정과 광류 블록은 따로 줄을 선다.
-    struct PersistJob {
-        float rpy[3] = {};
-        OnlineCalibrator::Snapshot snapshot{};
-        bool remove = false;  // 초기화: 저장 파일을 지운다
-    };
-    struct FlowPersistJob {
-        FlowBlocks blocks;
-        bool remove = false;
-    };
-    std::mutex persist_mutex_;
-    std::condition_variable persist_cv_;
-    bool persist_pending_ = false;
-    bool flow_persist_pending_ = false;
-    bool persist_stop_ = false;
-    PersistJob persist_job_;
-    FlowPersistJob flow_job_;
-    std::thread persist_thread_;
+    // 주행 중 저장은 SD가 녹화로 바쁠 때 open/rename이 몇 초씩 막혀 모델 루프를 세웠다. 그래서 쓰기 스레드에
+    // 넘긴다(경로마다 최신 것만, 없앨 때 남은 일을 마친다).
+    BackgroundWriter writer_{"calibration: write"};
 };
 
 #endif

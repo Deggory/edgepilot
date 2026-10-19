@@ -282,7 +282,7 @@ flowchart TB
         io["camera, 640x480 LCD,<br>speaker"]
     end
     board -- "USB-C, host mode" --> panda(["comma Panda"])
-    panda -- "bus 0<br>TX LKAS11" --> pt["powertrain<br>cluster, brake, gear"]
+    panda -- "bus 0<br>TX LKAS11, CLU11 cruise buttons" --> pt["powertrain<br>cluster, brake, gear"]
     panda -- "bus 1<br>TX LKAS11, CLU11" --> mdps["MDPS<br>and SAS"]
     panda -- "bus 2<br>TX MDPS12" --> cam["stock LKAS<br>camera"]
     classDef compute fill:#ebf3fe,stroke:#2f81f7,color:#1f2328
@@ -388,7 +388,8 @@ document that covers it and gives a reading order.
   [Diagnostics](docs/diagnostics.md) · [Verification](docs/verification.md)
 - **Design notes:** [K7 Panda port](docs/k7-panda-port.md) · [Departure alerts](docs/departure-alerts.md) ·
   [Closed-loop replay](docs/closed-loop-replay.md) · [Flow calibration](docs/flow-calibration.md) ·
-  [Lead flow](docs/lead-flow.md) · [Lane-line filter](docs/lane-line-filter.md)
+  [Lead flow](docs/lead-flow.md) · [Lane-line filter](docs/lane-line-filter.md) ·
+  [Lateral NN](docs/lateral-nn.md)
 - **Code and tools:** [Style guide](docs/style-guide.md) · [Host tests](tests/README.md) ·
   [Diagnostic tools](diagnostics/README.md) · [Scripts](scripts/README.md) ·
   [Model tools](tools/model/README.md) · [axmodel pipeline](tools/model/axmodel/README.md) ·

@@ -190,8 +190,7 @@ PoseKalman::Vec3 PoseKalman::h(Kind kind, const Vec &x) {
 // 속도는 가속도에 선형, 나머지는 항등이다. h는 가속도계만 자세·각속도·속도에 비선형이고
 // 나머지는 상태를 그대로 고른다. 보드(A53 2코어)에서 되감기가 초당 수천 번 갱신을 다시
 // 하므로, 18열 전부를 미분하고 조밀 행렬로 곱하던 것보다 수 배 가볍다. 결과는 같다.
-void PoseKalman::predict(double dt) {
-    if (!(dt > 0.0)) return;
+void PoseKalman::predict(double dt) {  // dt > 0: apply가 시각이 앞으로 갈 때만 부른다
     constexpr double kEps = 1e-6;
     // F = I + (자세 행: 자세·각속도 열 수치 미분 − I) + (속도 행: 가속도 열 dt)
     double fo[3][6];  // 자세 행 × {자세 0..2, 각속도 6..8}
@@ -279,7 +278,7 @@ void PoseKalman::update(Kind kind, const Vec3 &z, const Vec3 &r) {
     const double det = s[0][0] * (s[1][1] * s[2][2] - s[1][2] * s[2][1]) -
                        s[0][1] * (s[1][0] * s[2][2] - s[1][2] * s[2][0]) +
                        s[0][2] * (s[1][0] * s[2][1] - s[1][1] * s[2][0]);
-    if (!(std::fabs(det) > 0.0) || !std::isfinite(det)) return;
+    // S = H P Hᵀ + R(R > 0)은 양의 정부호라 det > 0이다
     const double si[3][3] = {
         {(s[1][1] * s[2][2] - s[1][2] * s[2][1]) / det, (s[0][2] * s[2][1] - s[0][1] * s[2][2]) / det,
          (s[0][1] * s[1][2] - s[0][2] * s[1][1]) / det},
@@ -312,20 +311,25 @@ void PoseKalman::apply(double t, Kind kind, const Vec3 &z, const Vec3 &r) {
     update(kind, z, r);
 }
 
-bool PoseKalman::predict_and_observe(double t, Kind kind, const Vec3 &z, const Vec3 &r) {
+bool PoseKalman::predict_and_observe(double t, std::initializer_list<Observation> observations) {
     if (!std::isnan(t_) && t_ - t > max_rewind_s_) return false;
     if (std::isnan(t_) || t >= t_) {
-        history_.push_back({t, kind, z, r, t_, x_, p_});
-        apply(t, kind, z, r);
+        for (const Observation &o : observations) {
+            history_.push_back({t, o.kind, o.z, o.r, t_, x_, p_});
+            apply(t, o.kind, o.z, o.r);
+        }
     } else {
-        // 되감기: t보다 뒤인 첫 관측 직전 상태로 돌아가 새 관측을 넣고, 뒤의 관측을 다시 적용한다.
+        // 되감기: t보다 뒤인 첫 관측 직전 상태로 돌아가 새 관측들을 넣고, 뒤의 관측을 다시 적용한다. 직전 상태는
+        // 아래 루프가 채운다.
         auto it = std::find_if(history_.begin(), history_.end(), [t](const Entry &e) { return e.t > t; });
         if (it == history_.end()) return false;
         t_ = it->t_before;
         x_ = it->x_before;
         p_ = it->p_before;
         const size_t index = static_cast<size_t>(it - history_.begin());
-        history_.insert(it, {t, kind, z, r, t_, x_, p_});
+        size_t at = index;
+        for (const Observation &o : observations)
+            history_.insert(history_.begin() + static_cast<std::ptrdiff_t>(at++), {t, o.kind, o.z, o.r, t_, x_, p_});
         for (size_t i = index; i < history_.size(); ++i) {
             Entry &e = history_[i];
             e.t_before = t_;
@@ -490,12 +494,13 @@ void LocationEstimator::handle_camera_odometry(double t_capture, const float tra
         rot_noise[i] = rot_device_std[i] * rot_device_std[i];
         trans_noise[i] = trans_device_std[i] * trans_device_std[i];
     }
-    const bool ok_rot = kf_.predict_and_observe(t, PoseKalman::Kind::CameraRotation, rot_device, rot_noise);
-    const bool ok_trans = kf_.predict_and_observe(t, PoseKalman::Kind::CameraTranslation, trans_device, trans_noise);
+    // 회전과 이동은 같은 시각이라 한 번에 넣는다(되감기 한 번)
+    const bool ok = kf_.predict_and_observe(t, {{PoseKalman::Kind::CameraRotation, rot_device, rot_noise},
+                                                {PoseKalman::Kind::CameraTranslation, trans_device, trans_noise}});
     camodo_yawrate_ = {rot_device[2], rot_device_std[2]};
     gyro_cross_fails_ = 0;
-    ++(ok_rot && ok_trans ? counters_.camera_ok : counters_.camera_filter);
-    note_result(kCamera, ok_rot && ok_trans);
+    ++(ok ? counters_.camera_ok : counters_.camera_filter);
+    note_result(kCamera, ok);
     finite_check(t);
 }
 

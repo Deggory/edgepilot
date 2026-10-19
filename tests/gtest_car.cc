@@ -1,17 +1,111 @@
-// K7 YG HEV CAN: 받은 신호 해석(vehicle_can: LCA11, WHL_SPD11, TPMS11, TCS13/15, AHB1 페달, SCC11,
+// K7 YG HEV CAN: 받은 신호 해석(vehicle_can: WHL_SPD11, TPMS11, TCS13/15, AHB1 페달, SCC11,
 // CLU11 크루즈 버튼과 고정형 크루즈 설정 속도, MDPS12 고장 필터)과 보낼 프레임 구성(hyundai_can: MDPS용
-// CLU11 속도 바꿔치기). 신호 배치대로 손으로 채운 바이트로 검사한다.
+// CLU11 속도 바꿔치기). 신호 배치대로 손으로 채운 바이트로 검사한다. 보내는 LKAS11·CLU11·MDPS12 바이트와 토크
+// 제한기는 opendbc(상류)로 만든 골든 값(hyundai_can_golden.h)과 Panda 펌웨어의 검사식과도 대조한다.
 #include "car/can_frame.h"
 #include "car/hyundai_can.h"
 #include "car/speed_filter.h"
 #include "car/vehicle_can.h"
+#include "hyundai_can_golden.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <random>
 
 namespace {
+
+// params/steering.json 기본값(Panda 펌웨어 safety_hyundai.h의 HYUNDAI_MAX_STEER 등과 같다)
+HyundaiSteeringLimits k7_limits() {
+    HyundaiSteeringLimits limits;
+    limits.steer_max = 384;
+    limits.steer_delta_up = 3;
+    limits.steer_delta_down = 7;
+    limits.steer_driver_allowance = 50;
+    limits.steer_driver_multiplier = 2;
+    limits.steer_driver_factor = 1;
+    return limits;
+}
+
+// 보내는 LKAS11(두 버스)은 opendbc 패커와 상류 create_lkas11(기본 분기 체크섬)로 만든 바이트와 같다
+TEST(K7Can, LkasFramesMatchOpendbc) {
+    for (const LkasGolden &g : kLkasGolden) {
+        HyundaiLkasCommand command;
+        command.apply_steer = g.apply_steer;
+        command.steer_req = g.steer_req;
+        command.cut_steer_temp = g.cut_steer_temp;
+        command.sys_warning = g.sys_warning;
+        command.sys_state = g.sys_state;
+        command.left_lane_depart = g.left_lane_depart;
+        command.right_lane_depart = g.right_lane_depart;
+        command.lkas_msg_count = g.lkas_msg_count;
+        const std::vector<CanFrame> frames =
+            build_lateral_can_frames(decode_lkas11(g.seed), HyundaiClu11Values{}, {}, command, 60.0f, false, false, 0);
+        ASSERT_GE(frames.size(), 2u);
+        for (int bus = 0; bus < 2; ++bus) {
+            EXPECT_EQ(frames[bus].address, kHyundaiLkas11Address);
+            EXPECT_EQ(frames[bus].data, g.expected) << "토크 " << g.apply_steer << " 횟수 " << g.lkas_msg_count;
+        }
+    }
+}
+
+// 크루즈 버튼 CLU11은 상류 create_clu11과, MDPS12 오류 회피 프레임은 커뮤니티 create_mdps12와 같다
+TEST(K7Can, Clu11AndMdps12MatchOpendbc) {
+    for (const Clu11Golden &g : kClu11Golden) {
+        const CanFrame frame = create_cruise_button_frame(decode_clu11(g.seed), g.button, g.frame);
+        EXPECT_EQ(frame.length, 4);
+        EXPECT_TRUE(std::equal(g.expected.begin(), g.expected.end(), frame.data.begin()))
+            << "버튼 " << g.button << " 프레임 " << g.frame;
+    }
+    for (const Mdps12Golden &g : kMdps12Golden) {
+        const std::vector<CanFrame> frames = build_lateral_can_frames(
+            HyundaiLkas11Values{}, HyundaiClu11Values{}, g.seed, HyundaiLkasCommand{}, 60.0f, false, false, g.frame);
+        EXPECT_EQ(frames.back().address, kHyundaiMdps12Address);
+        EXPECT_EQ(frames.back().data, g.expected) << "프레임 " << g.frame;
+    }
+}
+
+// 토크 제한기는 opendbc apply_driver_steer_torque_limits와 같은 값을 낸다
+TEST(K7Can, TorqueLimiterMatchesOpendbc) {
+    for (const TorqueGolden &g : kTorqueGolden)
+        EXPECT_EQ(apply_hyundai_steer_torque_limits(g.desired, g.last, g.driver, k7_limits()), g.expected)
+            << "원하는 " << g.desired << " 지난 " << g.last << " 운전자 " << g.driver;
+}
+
+// Panda 펌웨어(firmware/panda/board/safety.h)의 driver_limit_check와 max_limit_check를 그대로 옮긴 것. 위반이면
+// 참이다. 운전자 토크는 최근 표본의 최소·최대인데, 아래 시험은 한 구간 동안 같은 값을 쓴다.
+bool firmware_violation(int val, int val_last, int driver_min, int driver_max) {
+    constexpr int kMaxSteer = 384, kRateUp = 3, kRateDown = 7, kAllowance = 50, kDriverFactor = 2;
+    if (val > kMaxSteer || val < -kMaxSteer) return true;
+    const int highest_allowed_rl = std::max(val_last, 0) + kRateUp;
+    const int lowest_allowed_rl = std::min(val_last, 0) - kRateUp;
+    const int driver_max_limit = kMaxSteer + (kAllowance + driver_max) * kDriverFactor;
+    const int driver_min_limit = -kMaxSteer + (-kAllowance + driver_min) * kDriverFactor;
+    const int highest_allowed =
+        std::min(highest_allowed_rl, std::max(val_last - kRateDown, std::max(driver_max_limit, 0)));
+    const int lowest_allowed =
+        std::max(lowest_allowed_rl, std::min(val_last + kRateDown, std::min(driver_min_limit, 0)));
+    return val < lowest_allowed || val > highest_allowed;
+}
+
+// 어떤 원하는 토크와 운전자 토크가 와도 제한기를 거친 토크는 Panda가 막지 않는다(막으면 controls_allowed가 풀린다)
+TEST(K7Can, TorqueLimiterPassesThePandaChecks) {
+    std::mt19937 rng(11);
+    std::uniform_int_distribution<int> desired_step(-60, 60), driver_value(-350, 350), hold(1, 80);
+    int last = 0, desired = 0, driver = 0, driver_ticks = 0;
+    for (int tick = 0; tick < 200000; ++tick) {
+        if (driver_ticks-- <= 0) {
+            driver = tick % 3 == 0 ? 0 : driver_value(rng);
+            driver_ticks = hold(rng);
+        }
+        desired = std::clamp(desired + desired_step(rng), -600, 600);
+        const int torque = apply_hyundai_steer_torque_limits(desired, last, driver, k7_limits());
+        ASSERT_FALSE(firmware_violation(torque, last, driver, driver))
+            << "틱 " << tick << ": 원하는 " << desired << " 지난 " << last << " 운전자 " << driver << " -> " << torque;
+        last = torque;
+    }
+}
 
 TEST(K7Can, MdpsSpeedSpoof) {
     HyundaiLkas11Values lkas;
@@ -43,22 +137,6 @@ TEST(K7Can, MdpsSpeedSpoof) {
     const auto custom_frames = build_lateral_can_frames(lkas, clu, mdps12_seed, command, 72.0f, true, false, 1);
     std::copy_n(custom_frames[2].data.begin(), bytes.size(), bytes.begin());
     ASSERT_NEAR(decode_clu11(bytes).speed, 72.0f, 0.001f) << "설정한 MDPS 속도로 바꿔 보낸다";
-}
-
-TEST(K7Can, Lca11) {
-    std::array<uint8_t, 8> bytes{};
-    bytes[1] = 1;
-    bytes[2] = 2;
-    const Lca11Values decoded = decode_lca11(bytes);
-    // LCA11 사각지대 해석
-    ASSERT_TRUE(decoded.left_blindspot);
-    ASSERT_TRUE(decoded.right_blindspot);
-
-    VehicleCanState vehicle;
-    update_vehicle_can_state(&vehicle, kHyundaiLca11Address, bytes, bytes.size(), kPowertrainBus, 1.0);
-    // LCA11로 차량 상태 갱신
-    ASSERT_TRUE(vehicle.left_blindspot);
-    ASSERT_TRUE(vehicle.right_blindspot);
 }
 
 TEST(K7Can, WhlSpd11) {
@@ -163,11 +241,10 @@ TEST(K7Can, Cgw1BcanTimeout) {
     ASSERT_FALSE(decoded.driver_door_open);
 
     // 3 = B-CAN 신호 타임아웃: 모르는 값은 안전한 쪽으로
-    for (const int start : {8, 10, 19, 33, 62}) set_signal_le(&bytes, start, 2, 3);
+    for (const int start : {8, 10, 19, 62}) set_signal_le(&bytes, start, 2, 3);
     decoded = decode_cgw1(bytes);
     ASSERT_FALSE(decoded.left_blinker) << "타임아웃은 깜빡이 켜짐이 아니다(차선 변경 desire가 생긴다)";
     ASSERT_FALSE(decoded.right_blinker);
-    ASSERT_FALSE(decoded.hazard);
     ASSERT_TRUE(decoded.driver_door_open) << "타임아웃 문은 열린 것으로(결합을 막는다)";
     ASSERT_TRUE(decoded.seatbelt_unlatched) << "타임아웃 안전벨트는 미착용으로(결합을 막는다)";
 }

@@ -65,9 +65,9 @@ class LateralNnModels:
         controlsd가 돌지 않으면 None이다."""
         selected, selection_error = read_choice(self.selection_path)
         default, _ = read_choice(self.default_path)
+        controlsd = read_json_or_none(self.status_path) if self.controlsd_running() else None
         return {"models": self.models(), "selected": selected, "selection_error": selection_error,
-                "default": default, "controlsd": read_json_or_none(self.status_path) if self.controlsd_running() else None,
-                "selection_path": str(self.selection_path)}
+                "default": default, "controlsd": controlsd, "selection_path": str(self.selection_path)}
 
     def select(self, name: str) -> Dict[str, Any]:
         """고르기를 바꾼다. 목록에 있는 이름만 받는다."""

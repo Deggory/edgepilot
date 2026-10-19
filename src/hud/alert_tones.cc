@@ -29,9 +29,9 @@ constexpr double kE5 = 659.26, kF5 = 698.46, kG5 = 783.99, kA5 = 880.0, kB5 = 98
 const Tone kTones[] = {
     // 거부·조향 넘겨받기: 같은 음을 두 번 두드리고 4도 아래로
     {"unable", {{0, kA5, 60, 0.9}, {150, kA5, 60, 0.9}, {300, kE5, 140, 1.0}}, 0.55},
-    // engage: 완전5도 위로
+    // 결합: 완전5도 위로
     {"engage", {{0, kG5, 140, 0.85}, {110, kD6, 200, 1.0}}, 0.35},
-    // disengage: 완전5도 아래로
+    // 해제: 완전5도 아래로
     {"disengage", {{0, kD6, 140, 0.9}, {110, kG5, 220, 1.0}}, 0.35},
     // 출발 알림: 밝게 세 음 위로
     {"signal_changed", {{0, kB5, 110, 0.75}, {75, kD6, 110, 0.8}, {150, kG6, 240, 1.0}}, 0.3},
@@ -46,12 +46,9 @@ constexpr double kQuietDecays = 7.0;  // 감쇠 상수의 7배면 -60 dB
 
 }  // namespace
 
-const char *alert_sound_name(AlertSoundId id) {
-    return id < AlertSoundId::count ? kTones[static_cast<int>(id)].name : "none";
-}
+const char *alert_sound_name(AlertSoundId id) { return kTones[static_cast<int>(id)].name; }
 
 std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate) {
-    if (id >= AlertSoundId::count) return {};
     const Tone &tone = kTones[static_cast<int>(id)];
     double end_ms = 0.0;
     for (const Note &note : tone.notes) end_ms = std::max(end_ms, note.at_ms + kQuietDecays * note.decay_ms);
@@ -71,7 +68,7 @@ std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate) {
     }
     double peak = 0.0;
     for (double v : mix) peak = std::max(peak, std::fabs(v));
-    const double gain = peak > 0.0 ? kAlertTonePeak * 32767.0 / peak : 0.0;
+    const double gain = kAlertTonePeak * 32767.0 / peak;
     const size_t tail = static_cast<size_t>(kTailMs * rate / 1000.0);
     std::vector<int16_t> pcm(mix.size());
     for (size_t i = 0; i < mix.size(); ++i) {

@@ -1,5 +1,5 @@
 // 파라미터 상태: /api/params 스냅샷(그룹·차량 특성 탭 구성, 현재값, 기본값, 항목 메타데이터, 안내가 보는 런타임
-// 사실)과 값 바꾸기. 파라미터 탭과 차량 특성 탭이 같이 쓴다. 서버는 구조(섹션 id, 단위, 범위)만 내고, 이름·안내·설명은
+// 사실; 런타임 사실은 폴링 응답으로 갱신한다)과 값 바꾸기. 파라미터 탭과 차량 특성 탭이 같이 쓴다. 서버는 구조(섹션 id, 단위, 범위)만 내고, 이름·안내·설명은
 // 읽을 때 고른 언어의 문구로 채운다(group.*, vehicle.*, param.<그룹>.<키>.*, unit.*, caution.*, unused.*, role.*,
 // toggle.*).
 import {codeText, has, t} from "./i18n.js";
@@ -13,7 +13,7 @@ let changeListeners = new Set();
 const optional = key => (has(key) ? t(key) : "");
 
 // 단위: 언어마다 다르게 쓰는 것만 문구가 있다(unit.s = 초/s). 나머지는 기호 그대로.
-export const unitText = unit => (unit ? codeText("unit", unit) : "");
+const unitText = unit => (unit ? codeText("unit", unit) : "");
 
 export const sectionName = id => t(`section.${id}`);
 
@@ -24,7 +24,7 @@ function describe(group, key, meta) {
   const base = `param.${group}.${key}`;
   return {
     ...meta,
-    unit: unitText(meta.unit || ""),
+    unit: unitText(meta.unit),
     label: t(`${base}.label`),
     description: t(`${base}.description`),
     increase: t(`${base}.increase`),
@@ -53,9 +53,27 @@ export async function loadParams() {
   return snapshot;
 }
 
-// 저장된 값이 바뀔 때(이 페이지에서 저장한 뒤) listener를 부른다.
+// 저장된 값이 바뀔 때(이 페이지에서 저장한 뒤)와 런타임 사실이 바뀔 때 listener를 부른다.
 export function onParamsChanged(listener) {
   changeListeners.add(listener);
+}
+
+function notifyChanged(group, key) {
+  for (const listener of changeListeners) {
+    try {
+      listener(group, key);
+    } catch (error) {
+      console.error(error);  // 값은 바뀌었다. 안내 하나를 못 고친 것으로 저장 실패를 알리지 않는다
+    }
+  }
+}
+
+// 폴링 응답에 실려 온 런타임 사실(GET /api/learners·/api/lateral_nn의 runtime). 바뀌었으면 안내를 다시 고른다:
+// 페이지를 연 뒤에 controlsd가 학습한 토크 모델을 읽거나 내려놓아도 흐림 안내가 따라온다.
+export function updateRuntime(runtime) {
+  if (JSON.stringify(runtime) === JSON.stringify(snapshot.runtime)) return;
+  snapshot.runtime = runtime;
+  notifyChanged("runtime", null);
 }
 
 // 조건(param_metadata.when)이 참인가: 그 항목의 값(group "runtime"이면 서버가 알린 런타임 사실, 모르면 null)이
@@ -79,15 +97,10 @@ export function params() {
   return snapshot;
 }
 
-// 메타데이터가 없는 항목(파일에는 있고 메타데이터에는 없는 키)의 기본 설명
+// 항목의 메타데이터. 런타임 파일의 키는 기본값(params.defaults/)에 맞춰지고(ParamStore) 저장소의 기본값은 모두
+// 메타데이터가 있다(check_web_console.py).
 export function metaFor(group, key) {
-  const meta = snapshot.metadata[group]?.[key];
-  if (meta) return meta;
-  const value = snapshot.params[group][key];
-  return {
-    label: key, section: "other", unit: "", step: Number.isInteger(value) ? 1 : 0.01, min: -1e6, max: 1e6,
-    description: t("params.undocumented"), increase: t("params.undocumented_up"), decrease: t("params.undocumented_down"),
-  };
+  return snapshot.metadata[group][key];
 }
 
 export function valueOf(group, key) {
@@ -95,17 +108,16 @@ export function valueOf(group, key) {
 }
 
 export function defaultOf(group, key) {
-  return snapshot.defaults?.[group]?.[key];
+  return snapshot.defaults[group][key];
 }
 
 export function isModified(group, key) {
-  const fallback = defaultOf(group, key);
-  return fallback !== undefined && JSON.stringify(fallback) !== JSON.stringify(valueOf(group, key));
+  return JSON.stringify(defaultOf(group, key)) !== JSON.stringify(valueOf(group, key));
 }
 
+// step의 소수 자릿수(가장 작은 step은 0.005라 지수 표기가 아니다)
 function decimals(step) {
   const text = String(step);
-  if (text.includes("e-")) return Number(text.split("e-")[1]);
   return text.includes(".") ? text.split(".")[1].length : 0;
 }
 
@@ -114,16 +126,11 @@ export function clampToMeta(value, meta, minDigits = 0) {
   return Number(Math.min(meta.max, Math.max(meta.min, value)).toFixed(Math.max(decimals(meta.step), minDigits)));
 }
 
-// 값 하나를 저장하고 스냅샷을 갱신한다. {applied, notified}를 돌려주고, 실패하면 예외를 던진다.
+// 값 하나를 저장하고 스냅샷을 갱신한다. {applied, readerRunning}을 돌려주고, 실패하면 예외를 던진다. 읽는 프로세스는
+// 파일을 스스로 다시 읽는다(controlsd는 1초 안).
 export async function saveParam(group, key, value) {
   const update = await api.patch(`/api/params/${group}`, {values: {[key]: value}});
   snapshot.params[group] = update.params;
-  for (const listener of changeListeners) {
-    try {
-      listener(group, key);
-    } catch (error) {
-      console.error(error);  // 저장은 됐다. 안내 하나를 못 고친 것으로 저장 실패를 알리지 않는다
-    }
-  }
-  return {applied: update.params[key], notified: update.notified || []};
+  notifyChanged(group, key);
+  return {applied: update.params[key], readerRunning: update.reader_running};
 }

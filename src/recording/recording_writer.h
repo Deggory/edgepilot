@@ -39,13 +39,14 @@ private:
     };
     void enqueue(Job &&job);
     void loop();
-    static void move_file(const std::string &from, const std::string &to);
-    static void move_tree(const std::string &from, const std::string &to);
+    void move_file(const std::string &from, const std::string &to);
+    void move_tree(const std::string &from, const std::string &to);
 
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<Job> queue_;
     bool stop_ = false;
+    std::atomic<bool> unthrottled_{false};  // stop 뒤: 속도 제한 없이 옮긴다
     std::atomic<uint64_t> pending_{0};
     std::thread thread_{&StagingMover::loop, this};  // 마지막 멤버: 위가 다 준비된 뒤 시작
 };
@@ -71,7 +72,6 @@ public:
 
     bool requested_enabled() const { return requested_enabled_.load(); }
     bool active() const { return active_.load(); }
-    bool blocked_for_space() const { return storage_blocked_.load() != 0; }
     uint32_t storage_blocked() const { return storage_blocked_.load(); }  // kStorageBlocked*, 막히지 않았으면 0
     uint64_t video_frames() const { return total_video_frames_.load(); }
     uint64_t queue_drops() const { return queue_drops_.load(); }

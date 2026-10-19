@@ -3,10 +3,10 @@
 [← Documentation](README.md)
 
 `recordd` writes each drive as a route: the camera video as H.264 in one-minute
-segments, an event log with every CAN batch and state snapshot, and a copy of
-the parameter files. This document describes the route layout, the binary
-format and its versions, for anyone who reads a route or changes what is
-recorded.
+segments, an event log with every CAN batch and state snapshot and the
+processes' log lines, and a copy of the parameter files. This document
+describes the route layout, the binary format and its versions, for anyone who
+reads a route or changes what is recorded.
 
 `recordd` encodes the frame `modeld` used and logs the shared-memory states
 beside it; the route is written to tmpfs first and moved to the SD card:
@@ -104,7 +104,7 @@ flowchart LR
 | Path | Holds |
 | --- | --- |
 | `manifest.json` | `version`, `complete`, `video_codec` (`"h264"`), `width`, `height`, `fps`, `bitrate`, `segment_seconds` (60), `video_frames`, `event_records` |
-| `params/` | a copy of every `*.json` in the parameter directory when the route started |
+| `params/` | a copy of every `*.json` in the parameter directory when the route started, and of the torqued cache `live_torque_parameters.bin` |
 | `models/lateral_nn.json` | a copy of the learned torque model chosen when the route started ([Lateral NN](lateral-nn.md)), so a replay can use the model that drove; `params/lateral_nn.json` names it |
 | `events/NNN.bin` | the event log, one 60 s chunk per file |
 | `segments/NNN/road.h264` | the H.264 stream of one segment, starting with its SPS and PPS so it decodes alone |
@@ -124,14 +124,25 @@ The active route is written to tmpfs (`/tmp/record_staging`,
 `EDGEPILOT_RECORD_STAGING`), so SD card latency spikes cannot block the writer.
 Each closed file is moved to `recordings/` in the install directory on the SD
 card (`EDGEPILOT_RECORD_ROOT`); the rest of the route follows when it closes.
+The parameter snapshot, the model copy and a first `manifest.json` are moved as
+soon as the route starts, so a drive that ends with the power cut still keeps
+them; the closing manifest replaces the first one.
 
 - The mover copies 1 MiB at a time, syncs each chunk, keeps to 3 MiB/s, and
   runs at idle IO priority. A plain copy piled up dirty pages and held the SD
   card for seconds when they were written: the board's load reached 10 and one
   SSH login took 36 s. A recording averages about 1.6 MB/s (8 Mbit/s video plus
   the CAN and state logs).
+- On `SIGTERM` (`systemctl stop edgepilot`, a reboot) `recordd` closes the
+  route and moves what is left without the rate limit; the manager waits up to
+  8 s for it, inside the service's 10 s stop timeout. Before removing the power,
+  stop recording or the service and wait until `/tmp/record_staging` is empty:
+  what is still there when the power goes is lost.
 - A route left in staging by a session that died is moved to the SD card when
-  `recordd` starts.
+  `recordd` starts. The open segment's video and frame index are written out
+  to staging at every keyframe (each second), so such a segment reads up to
+  its last keyframe; the index used to stay in its write buffer and was left
+  empty.
 - Writes wait in a queue of up to 1024 entries; when it is full, a write is
   dropped and counted in `recordd`'s log line (`write_queue_drops`).
 
@@ -166,7 +177,7 @@ File header (32 B):
 | Field | Size | Value |
 | --- | ---: | --- |
 | `magic` | 8 B | `EDGELOG1` |
-| `version` | 4 B | the recording version, now 13 |
+| `version` | 4 B | the recording version, now 14 |
 | `header_size` | 4 B | 32 |
 | `route_start_ns` | 8 B | when the route started |
 | `reserved` | 8 B | 0 |
@@ -185,26 +196,29 @@ Record header (16 B):
 | Type | Record | Payload |
 | ---: | --- | ---: |
 | 1, 2 | `CanRx` / `CanTx` | variable CAN batch |
-| 3 | `ModelState` | 3736 B |
+| 3 | `ModelState` | 2648 B |
 | 4 | `ControlState` | 240 B |
 | 5 | `PandaState` | 96 B |
 | 6 | `LearnerState` | 128 B |
 | 7 | `Imu` | 16 B + 40 B per sample (about 10 samples every 100 ms) |
 | 8 | `Localization` | 128 B |
-| 9 | `RetiredLaneState` | 6776 B, only in routes of 2026-10-15 to 10-18 |
 
 - State payloads are the structs of `src/common/ipc_messages.h` as they are.
-- Type 9 was the lane-line plugin's result (`LaneState`), a feature since
-  removed. Nothing writes it any more and readers skip it; the type keeps its
-  number so that `EventLogReader`, which ends a file at an unknown type, reads
-  those routes to the end.
 - A CAN batch is an 8-byte header (`count`, `dropped`) and `count` frames of
   84 B (`src/recording/recorded_can.h`). `CanRx` comes from `pandad`'s receive
-  log. `CanTx` holds the batches `controlsd` generated, as `pandad` took them,
-  whether or not TX was enabled; in rehearsal `replayd` logs them instead.
+  log: every frame the car sent, on all three buses, with its full data field.
+  The Panda's echoes of the frames it put on a bus (forwarding copies and
+  edgepilot's own frames, about two thirds of what it hands back) are left
+  out, so `events/` is about half the size it was. `CanTx` holds the batches
+  `controlsd` generated, as `pandad` took them, whether or not TX was enabled;
+  in rehearsal `replayd` logs them instead.
 - An `Imu` record holds only the samples of that batch, not the whole buffer.
 - The IMU axes are the chip's and the gyro bias is not removed
-  (`recording_reader.read_route_imu`).
+  (`recording_reader.EventRecord.imu_samples`).
+- `ModelState` leaves out what can be derived: the model's time grid
+  (`model_t_idx`), the distance of every lane-line and road-edge point (the
+  openpilot `X_IDXS` grid, `model_x_idx`, so a point is only its `y` and `z`)
+  and the lane times (`compute_lane_t` derives them from the plan).
 
 ## Frame index
 
@@ -228,74 +242,70 @@ Then one 40 B record per frame: `frame_id`, `capture_timestamp_ns`,
 ## Versions
 
 The version is `kRecordingVersion` in `src/recording/recording_format.h`. It
-changes with any recorded layout; nearly every change was to `ModelState`.
+changes with any recorded layout. The readers read only the current version:
+on 2026-10-19 every kept recording was rewritten to version 14 (below), so no
+reader carries the older layouts any more.
 
-| Version | Change | `ModelState` |
-| ---: | --- | ---: |
-| 1 | carried unused lateral draft fields | 4384 B |
-| 2 | dropped the lateral draft fields; kept a single route-level `events.bin` | 4080 B |
-| 3 | rotates event chunks `events/NNN.bin` alongside video segments; record layout as version 2 | 4080 B |
-| 4 | dropped the stop-line block that openpilot v0.9.4 does not emit | 4048 B |
-| 5 | dropped the plan position stds and orientations that nothing read; added `LearnerState` | 3256 B |
-| 6 | added the plan yaw and yaw rate (`plan_yaw`, `plan_yaw_rate`) that laneless mode steers from | 3520 B |
-| 7 | added the camera mount the warp used for that frame (`camera_offset_m`, `camera_height_m`) | 3528 B |
-| 8 | added the model's pedal predictions (`gas_press_probs`, `brake_press_probs`) | 3576 B |
-| 9 | only changed the two magics to `EDGELOG1` and `EDGEIDX1` | 3576 B |
-| 10 | appended the flow calibrator's shadow state (`flow_calibration`) | 3632 B |
-| 11 | grew `flow_calibration` by four fields, made its spread a standard deviation, added `calibration_source` | 3680 B |
-| 12 | added `lead_flow`, the lead's expansion rate from the optical flow | 3712 B |
-| 13 | added `lead_track`, the lead's fused distance and relative speed | 3736 B |
+| Version | Change |
+| ---: | --- |
+| 1–4 | the earlier board's layouts; no such recording is kept |
+| 5 | `LearnerState` added; `ModelState` 3256 B |
+| 6 | the plan yaw and yaw rate that laneless mode steers from |
+| 7 | the camera mount the warp used for that frame |
+| 8 | the model's pedal predictions |
+| 9 | the two file magics became `EDGELOG1` and `EDGEIDX1` |
+| 10–11 | the flow calibrator's state and the warp calibration's source ([Flow calibration](flow-calibration.md)) |
+| 12–13 | the lead's expansion rate and the fused lead track ([Lead flow](lead-flow.md)) |
+| 14 | `ModelState` drops what can be derived and the unread brake predictions (2648 B) |
 
-Notes on the changes:
+### Rewritten recordings
 
-- **Version 3.** Version 2's single `events.bin` filled the 988 MB tmpfs
-  staging in about 30 minutes on long drives from CAN logging alone
-  (~0.5 MB/s), and silently killed the rest of the recording. That is why
-  version 3 rotates event chunks alongside video segments.
-- **Version 5.** Readers that do not know the `LearnerState` record skip it.
-- **Version 7.** With the mount in each frame, the HUD and the analysis tools
-  use exactly what modeld applied.
-- **Version 8.** The predictions are the chance the driver presses the pedal
-  0, 2, …, 10 s ahead, which the departure alert reads
-  ([Departure alerts](departure-alerts.md)).
-- **Version 9.** Recordings up to version 8 carry the earlier magics
-  (`K230LOG1`, `K230IDX1`), and every reader still accepts them.
-- **Version 11.** The four new fields are `mount_changes`, `window_parallax`,
-  `estimate_blocks` and `rejected_windows`. The spread became the standard
-  deviation of the block medians (`sd_pitch`, `sd_yaw`; version 10 had a range
-  there). `calibration_source` holds the warp calibration's source and the
-  pose loop's own estimate. `calibration` is now the value the warp used, with
-  the status, block count and spread of that source
-  ([Flow calibration](flow-calibration.md)).
-- **Versions 12 and 13.** See [Lead flow](lead-flow.md).
+The 33 routes kept on 2026-10-19 (versions 5 to 13) were rewritten to version
+14 by a one-off tool kept outside the repository
+(`~/Documents/ax630/tools/recording_v14_migration`), checked record by record
+against the old files and by replaying both, and the old files kept aside. The
+tool:
 
-### Older recordings
+- rewrote `ModelState` into the version 14 layout. Fields a version did not
+  have are zero, except the camera mount before version 7 (0 m, 1.22 m) and
+  the calibration source before version 11 (the pose calibrator, its estimate
+  the recorded calibration);
+- dropped the Panda's echoes from `CanRx` (159 million frames, half the event
+  log) and the type 9 records of 2026-10-15 to 10-18, the removed lane-line
+  plugin's results;
+- gave `ControlState.hud_flags` today's meaning: before 2026-10-09 bit 11 was
+  the brake lights and bits 9 and 10 a turn desire, and bit 10 was the removed
+  Lanebow path mode on 2026-10-16 to 10-18. It also zeroed the bytes after the
+  end of the two block-name strings and the tail field;
+- removed `params/driving.json` (retired on 2026-10-09) and turned the
+  `path_mode` of the 2026-10-15 to 10-18 `steering.json` copies into
+  `laneless_mode`.
 
-The readers take every version from 2 on. `src/recording/recorded_model_state.h`
-and `recording_reader.model_state_layout` skip the blocks that versions 2 to 4
-still carried, and leave the fields added after a payload's version zeroed;
-`recording_reader.flow_calibration`, `calibration_source`, `lead_flow` and
-`lead_track` read those fields from any version. Only version 1 cannot be read:
-no reader has its layout, and `recording_reader.py` rejects its payload size.
+`replay_controls`, `replay_planner --exact`, `replay_localization` and
+`replay_lateral_learners` give the same output on every rewritten route as the
+old build on the old files. `replay_closed_loop` differs slightly, because it
+now fits the turned lane lines back onto the fixed distance grid.
 
 ## Readers
 
-- `tools/model/recording_reader.py` reads the v2 to v13 layouts. It checks each
-  payload's size against the layout of its version, so a layout changed
-  without a version bump fails instead of decoding garbage.
-- `lane_bias.py`, `lane_benchmark.py`, `hud_tools.py`,
-  `fit_lateral_params.py lag`, and `export_can_fixture.py` all walk the event
-  log through its `iter_event_records`.
+- `tools/model/recording_reader.py` reads version 14 only. It checks each
+  payload's size against the struct, so a layout changed without a version bump
+  fails instead of decoding garbage. `EventRecord.model_state()` reads a
+  `ModelState` by field name; `model_lanes()` adds the fixed `X_IDXS` distance
+  back to the lane points.
+- `lane_bias.py`, `lane_benchmark.py`, `hud_tools.py` and
+  `export_can_fixture.py` all walk the event log through its
+  `iter_event_records`.
 - In C++, `src/recording/event_log_reader.h` reads the event log for the
-  diagnostic tools and `replayd`, and `recorded_model_state.h` turns any
-  version's `ModelState` into the current struct.
-- The C++ reader stops at a cut-off tail (a chunk that tmpfs filled with
-  zeros, or the last chunk after a power loss) instead of trying to
-  resynchronise. The Python reader stops only where a record runs past the end
-  of the file: through a zero-filled tail it yields empty records of type 0,
-  which match no record type.
-- `check_recording_reader.py` holds the Python reader's layouts, record types
-  and version to the C++ headers.
+  diagnostic tools and `replayd`, and `read_record` copies a fixed-size state
+  record into its struct.
+- Both readers stop at a cut-off tail (a chunk that tmpfs filled with zeros,
+  or the last chunk after a power loss) instead of trying to resynchronise:
+  where a record's type is out of range, its length is over 1 MiB, or it runs
+  past the end of the file. `replayd` and the diagnostic tools report the tail
+  and any unreadable chunk on stderr.
+- `check_recording_reader.py` holds the Python reader's layouts, record types,
+  version and cut-off rules to the C++ headers and reader.
 
 ## Related
 

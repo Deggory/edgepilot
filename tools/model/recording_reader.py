@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import functools
-import json
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,12 +14,14 @@ from typing import Iterator
 
 import numpy as np
 
-# recording_format.h kRecordingVersion: recordd가 지금 쓰는 배치(check_recording_reader.py가 대조한다)
-RECORDING_VERSION = 13
-# v9 매직이 앞에 온다. v8까지의 녹화는 이전 매직을 담고 있다(recording_format.h kLegacy*)
-FRAME_INDEX_MAGICS = (b"EDGEIDX1", b"K230IDX1")
-EVENT_LOG_MAGICS = (b"EDGELOG1", b"K230LOG1")
+
+# recording_format.h kRecordingVersion: recordd가 쓰는 배치(check_recording_reader.py가 대조한다). 옛 녹화는 모두 이
+# 버전으로 다시 썼으므로 이 버전만 읽는다.
+RECORDING_VERSION = 14
+FRAME_INDEX_MAGIC = b"EDGEIDX1"
+EVENT_LOG_MAGIC = b"EDGELOG1"
 EVENT_RECORD_HEADER = struct.Struct("<QHHI")  # timestamp_ns, type, flags, size
+MAX_RECORD_PAYLOAD = 1 << 20  # EventLogReader kMaxPayloadBytes: 이보다 긴 레코드는 끊긴 꼬리다
 
 RECORD_CAN_RX = 1
 RECORD_CAN_TX = 2
@@ -31,7 +31,7 @@ RECORD_PANDA_STATE = 5
 RECORD_LEARNER_STATE = 6
 RECORD_IMU = 7
 RECORD_LOCALIZATION = 8
-RECORD_RETIRED_LANE_STATE = 9  # 2026-10-15~18 녹화에만 있는 차선선 플러그인 결과. 그 기능은 없어졌고 읽지 않는다
+LAST_RECORD_TYPE = RECORD_LOCALIZATION  # 범위 밖 타입은 끊긴 꼬리다(EventLogReader와 같다)
 
 FRAME_INDEX_RECORD = np.dtype([
     ("frame_id", "<u8"),
@@ -71,6 +71,7 @@ CONTROL_STATE = np.dtype([
     ("engage_reject_block", "S32"),
     ("ego_speed_kph", "<f4"),
 ])
+CONTROL_STATE_SIZE = (CONTROL_STATE.itemsize + 7) // 8 * 8  # C++ 구조체는 8바이트 정렬이라 꼬리 패딩이 붙는다
 
 # ImuBatch(src/common/ipc_messages.h): 16바이트 머리 뒤에 `count`개 샘플(그만큼만 기록된다).
 IMU_BATCH_HEAD = struct.Struct("<QII")
@@ -109,18 +110,13 @@ LEARNER_STATE = np.dtype([
     ("bucket_points", "<i2", (8,)), ("plan_delay_s", "<f4"),
 ])
 
-# ModelState의 앞부분(frame_id ..). 이 도구들이 쓰는 필드만 디코딩하고,
-# 가운데의 plan/lane 페이로드는 위치로 건너뛴다.
-# CalibrationState는 구조체의 마지막 멤버라 페이로드 끝에서부터
-# 위치를 잡는다.
+# ModelState의 앞부분(frame_id ..). 머리만 볼 도구가 쓴다.
 MODEL_STATE_HEAD = np.dtype([
     ("frame_id", "<u8"),
     ("capture_timestamp_ns", "<u8"),
     ("model_timestamp_ns", "<u8"),
     ("model_execution_ms", "<f4"),
     ("valid", "<u4"),
-    ("best_plan", "<i4"),
-    ("plan_probability", "<f4"),
 ])
 
 CALIBRATION_STATE = np.dtype([
@@ -158,25 +154,18 @@ def can_frames(payload: bytes) -> np.ndarray:
     count = min(count, (len(payload) - RECORDED_CAN_BATCH_HEAD.size) // RECORDED_CAN_FRAME.itemsize)
     return np.frombuffer(payload, RECORDED_CAN_FRAME, count, RECORDED_CAN_BATCH_HEAD.size)
 
-# ModelState.flow_calibration(v10+): 광류 보정기의 상태, 각도는 rad. v10은 앞 56바이트를 기록했고,
-# v11이 mount_changes, window_parallax(px), estimate_blocks, rejected_windows를 덧붙였다. sd_*는
-# 블록 중앙값들의 표준편차다. v10은 같은 자리에 그 범위(max - min)를 저장했다.
-# flow_calibration()으로 읽는다.
-_FLOW_CALIBRATION_FIELDS = [
+# ModelState.flow_calibration: 광류 보정기의 상태, 각도는 rad. sd_*는 블록 중앙값들의 표준편차다.
+FLOW_CALIBRATION_STATE = np.dtype([
     ("window_frame_id", "<u8"),
     ("status", "<u4"), ("windows", "<u4"), ("blocks", "<u4"),
     ("pitch", "<f4"), ("yaw", "<f4"), ("sd_pitch", "<f4"), ("sd_yaw", "<f4"),
     ("window_pitch", "<f4"), ("window_yaw", "<f4"), ("window_rotation", "<f4"),
     ("window_tracks", "<u4"), ("window_inliers", "<u4"),
-]
-FLOW_CALIBRATION_STATE_V10 = np.dtype(_FLOW_CALIBRATION_FIELDS)
-FLOW_CALIBRATION_STATE = np.dtype(_FLOW_CALIBRATION_FIELDS + [
     ("mount_changes", "<u4"), ("window_parallax", "<f4"), ("estimate_blocks", "<u4"), ("rejected_windows", "<u4"),
 ])
-assert FLOW_CALIBRATION_STATE_V10.itemsize == 56 and FLOW_CALIBRATION_STATE.itemsize == 72
+assert FLOW_CALIBRATION_STATE.itemsize == 72
 
-# ModelState.calibration_source(v11+): 워프가 쓴 보정의 출처와 포즈 보정기 자신의 추정.
-# v11 전에는 워프가 언제나 포즈 보정기(source 0)를 썼고 calibration이 그 값을 담았다.
+# ModelState.calibration_source: 워프가 쓴 보정의 출처와 포즈 보정기 자신의 추정.
 CALIBRATION_SOURCE_STATE = np.dtype([
     ("source", "<u4"),       # 0 모델 포즈, 1 광류
     ("requested", "<u4"),    # 웹 설정(calibration_use_flow)
@@ -186,7 +175,7 @@ CALIBRATION_SOURCE_STATE = np.dtype([
 ])
 assert CALIBRATION_SOURCE_STATE.itemsize == 32
 
-# ModelState.lead_flow(v12+): 광류로 잰 앞차 확대율(model/lead_flow). 상대 속도는
+# ModelState.lead_flow: 광류로 잰 앞차 확대율(model/lead_flow). 상대 속도는
 # -lead_x * expansion_rate(m/s, 음수 = 가까워짐)이고 충돌까지 시간은 1 / expansion_rate다.
 LEAD_FLOW_STATE = np.dtype([
     ("frame_id", "<u8"),
@@ -197,7 +186,7 @@ LEAD_FLOW_STATE = np.dtype([
 ])
 assert LEAD_FLOW_STATE.itemsize == 32
 
-# ModelState.lead_track(v13+): 모델 앞차 거리와 광류 확대율을 칼만 필터로 섞은 값
+# ModelState.lead_track: 모델 앞차 거리와 광류 확대율을 칼만 필터로 섞은 값
 # (model/lead_tracker). 비전 크루즈가 쓴다.
 LEAD_TRACK_FLOW_USED, LEAD_TRACK_FLOW_REJECTED, LEAD_TRACK_DISTANCE_REJECTED, LEAD_TRACK_STARTED = 1, 2, 4, 8
 LEAD_TRACK_STATE = np.dtype([
@@ -209,111 +198,32 @@ LEAD_TRACK_STATE = np.dtype([
 assert LEAD_TRACK_STATE.itemsize == 24
 
 TRAJECTORY_SIZE = 33
-IPC_POINT = 12  # IpcPoint: float32 세 개
+# openpilot X_IDXS: 궤적 점마다 놓인 거리. 차선·도로 경계의 점은 이 격자 위에 있어 y, z만 담는다
+X_IDXS = np.array([192.0 * (i / (TRAJECTORY_SIZE - 1.0)) ** 2 for i in range(TRAJECTORY_SIZE)])
 
+LEAD_STATE = np.dtype([("valid", "<u4"), ("probability", "<f4"), ("x", "<f4"), ("y", "<f4"),
+                       ("velocity", "<f4"), ("acceleration", "<f4")])
 
-@functools.lru_cache(maxsize=None)
-def model_state_layout(version: int) -> dict[str, int]:
-    """녹화 버전별 ModelState 페이로드 안의 바이트 위치.
+# ModelState(ipc_messages.h) 전체. 녹화는 구조체를 그대로 담는다(필드 사이 틈이 없다).
+MODEL_STATE = np.dtype([
+    ("frame_id", "<u8"), ("capture_timestamp_ns", "<u8"), ("model_timestamp_ns", "<u8"),
+    ("model_execution_ms", "<f4"), ("valid", "<u4"),
+    ("plan", "<f4", (TRAJECTORY_SIZE, 3)),          # x 앞, y 오른쪽, z 아래
+    ("lanes", "<f4", (4, TRAJECTORY_SIZE, 2)),      # 왼쪽 바깥부터, X_IDXS 위의 (y, z)
+    ("lane_probabilities", "<f4", (4,)), ("lane_stds", "<f4", (4,)),
+    ("road_edges", "<f4", (2, TRAJECTORY_SIZE, 2)), ("road_edge_stds", "<f4", (2,)),
+    ("desire_state", "<f4", (8,)),
+    ("lead", LEAD_STATE), ("pose", POSE_STATE), ("calibration", CALIBRATION_STATE),
+    ("plan_yaw", "<f4", (TRAJECTORY_SIZE,)), ("plan_yaw_rate", "<f4", (TRAJECTORY_SIZE,)),
+    ("camera_offset_m", "<f4"), ("camera_height_m", "<f4"),
+    ("gas_press_probs", "<f4", (6,)),
+    ("flow_calibration", FLOW_CALIBRATION_STATE), ("calibration_source", CALIBRATION_SOURCE_STATE),
+    ("lead_flow", LEAD_FLOW_STATE), ("lead_track", LEAD_TRACK_STATE),
+])
+assert MODEL_STATE.itemsize == 2648
+# 필드 이름 -> 페이로드 안의 바이트 위치(웹 콘솔 state_layout.py와 같은 값, check_recording_reader.py가 C++와 대조)
+MODEL_STATE_LAYOUT = {name: MODEL_STATE.fields[name][1] for name in MODEL_STATE.names}
 
-    런타임이 아무도 쓰지 않던 것을 덜어 내면서 구조체가 필드를 잃었으므로,
-    한 버전을 하드코딩한 리더는 다른 버전을 조용히 잘못 읽는다:
-      v3 이하는 stop_line이 있다(페이로드 4076 + 패딩 4 = 4080)
-      v4는 stop_line을 뺐다(4048)
-      v5는 plan_position_stds와 plan_orientations를 뺐다(3256)
-      v6은 plan_yaw와 plan_yaw_rate를 덧붙였다(3520)
-      v7은 camera_offset_m과 camera_height_m을 덧붙였다(3528). 그 프레임의
-         워프에 쓴 카메라 장착이다
-      v8은 gas_press_probs와 brake_press_probs를 덧붙였다(3576). 0, 2, ..., 10 s의
-         모델 페달 예측이다
-      v10은 flow_calibration을 덧붙였다(3632). 광류 보정기의
-         섀도 상태다(v9는 파일 매직만 바꿨다)
-      v11은 flow_calibration을 72바이트로 늘리고 calibration_source를 덧붙였다
-         (3680). calibration은 출처와 상관없이 워프에 쓴 값이다
-      v12는 lead_flow를 덧붙였다(3712). 광류로 잰 앞차 확대율이다
-      v13은 lead_track을 덧붙였다(3736). 모델 앞차와 그 확대율을 섞은 값이다
-    호출자는 ``layout["__size__"]``를 실제로 본 페이로드 크기와 대조해야
-    이후 배치가 바뀌었을 때 쓰레기를 디코딩하지 않고 바로 실패한다.
-    """
-    n, pt = TRAJECTORY_SIZE, IPC_POINT
-    fields = [("frame_id", 8), ("capture_timestamp_ns", 8),
-              ("model_timestamp_ns", 8), ("model_execution_ms", 4),
-              ("valid", 4), ("best_plan", 4), ("plan_probability", 4),
-              ("model_t", 4 * n), ("lane_t", 4 * n), ("plan", pt * n)]
-    if version <= 4:
-        fields += [("plan_position_stds", pt * n), ("plan_orientations", pt * n)]
-    fields += [("lanes", 4 * pt * n), ("lane_probabilities", 16),
-               ("lane_stds", 16), ("road_edges", 2 * pt * n),
-               ("road_edge_stds", 8), ("desire_state", 32), ("lead", 24)]
-    if version <= 3:
-        fields += [("stop_line", 28)]
-    fields += [("pose", 52), ("calibration", 32)]
-    if version >= 6:
-        fields += [("plan_yaw", 4 * n), ("plan_yaw_rate", 4 * n)]
-    if version >= 7:
-        fields += [("camera_offset_m", 4), ("camera_height_m", 4)]
-    if version >= 8:
-        fields += [("gas_press_probs", 24), ("brake_press_probs", 24)]
-    if version == 10:
-        fields += [("flow_calibration", 56)]
-    if version >= 11:
-        fields += [("flow_calibration", 72), ("calibration_source", 32)]
-    if version >= 12:
-        fields += [("lead_flow", 32)]
-    if version >= 13:
-        fields += [("lead_track", 24)]
-
-    layout, offset = {}, 0
-    for name, size in fields:
-        layout[name] = offset
-        offset += size
-    layout["__size__"] = offset
-    return layout
-
-
-
-def flow_calibration(payload: bytes, version: int):
-    """ModelState.flow_calibration을 FLOW_CALIBRATION_STATE 레코드 하나로 낸다(v10 전에는 0. v10은 마지막
-    네 필드가 없어 0으로 두고, sd_*에는 블록 중앙값들의 범위가 들어 있다)."""
-    out = np.zeros((), FLOW_CALIBRATION_STATE)
-    if version < 10:
-        return out
-    offset = model_state_layout(version)["flow_calibration"]
-    old = np.frombuffer(payload, FLOW_CALIBRATION_STATE_V10 if version == 10 else FLOW_CALIBRATION_STATE,
-                        count=1, offset=offset)[0]
-    for name in old.dtype.names:
-        out[name] = old[name]
-    return out
-
-
-def calibration_source(payload: bytes, version: int):
-    """ModelState.calibration_source를 CALIBRATION_SOURCE_STATE 레코드 하나로 낸다. v11 전에는 워프가 포즈
-    보정기를 썼으므로 source는 0이고 pose_*는 ModelState.calibration을 되풀이한다."""
-    if version >= 11:
-        return np.frombuffer(payload, CALIBRATION_SOURCE_STATE, count=1,
-                             offset=model_state_layout(version)["calibration_source"])[0]
-    out = np.zeros((), CALIBRATION_SOURCE_STATE)
-    cal = np.frombuffer(payload, CALIBRATION_STATE, count=1, offset=model_state_layout(version)["calibration"])[0]
-    out["pose_status"], out["pose_valid_blocks"] = cal["status"], cal["valid_blocks"]
-    out["pose_roll"], out["pose_pitch"], out["pose_yaw"] = cal["roll"], cal["pitch"], cal["yaw"]
-    return out
-
-def _model_record(payload: bytes, version: int, name: str, dtype: np.dtype):
-    """ModelState 필드 하나를 dtype 레코드로 낸다. 그 버전에 없는 필드면 0이다."""
-    layout = model_state_layout(version)
-    if name not in layout:
-        return np.zeros((), dtype)
-    return np.frombuffer(payload, dtype, count=1, offset=layout[name])[0]
-
-
-def lead_flow(payload: bytes, version: int):
-    """ModelState.lead_flow를 LEAD_FLOW_STATE 레코드 하나로 낸다(v12 전에는 0: 확대율이 없다)."""
-    return _model_record(payload, version, "lead_flow", LEAD_FLOW_STATE)
-
-
-def lead_track(payload: bytes, version: int):
-    """ModelState.lead_track을 LEAD_TRACK_STATE 레코드 하나로 낸다(v13 전에는 0: 추적이 없다)."""
-    return _model_record(payload, version, "lead_track", LEAD_TRACK_STATE)
 
 @dataclass
 class SegmentInfo:
@@ -329,18 +239,15 @@ class SegmentInfo:
 class RouteEvents:
     control: np.ndarray            # CONTROL_STATE 레코드들
     control_log_ts: np.ndarray     # control 레코드의 이벤트 머리 타임스탬프
-    model_frame_id: np.ndarray
-    model_capture_ts: np.ndarray
-    model_rpy: np.ndarray          # [N, 3] 보정 roll/pitch/yaw(rad)
-    model_valid_blocks: np.ndarray
+    model_capture_ts: np.ndarray   # 모델 상태의 촬영 시각
 
 
 def read_segment_index(segment_dir: Path) -> SegmentInfo:
     data = (segment_dir / "frames.bin").read_bytes()
     magic, version, header_size, record_size, width, height, fps = struct.unpack_from(
         "<8sIIIIII", data, 0)
-    if magic not in FRAME_INDEX_MAGICS:
-        raise ValueError(f"{segment_dir}: bad frames.bin magic {magic!r}")
+    if magic != FRAME_INDEX_MAGIC or version != RECORDING_VERSION:
+        raise ValueError(f"{segment_dir}: frames.bin is {magic!r} v{version}, not v{RECORDING_VERSION}")
     segment_start_ns, = struct.unpack_from("<Q", data, 32)
     if record_size != FRAME_INDEX_RECORD.itemsize:
         raise ValueError(f"{segment_dir}: index record size {record_size} != "
@@ -358,7 +265,11 @@ def segment_video(seg_dir: Path) -> Path | None:
 
 
 def route_segments(route_dir: Path) -> list[SegmentInfo]:
+    """영상이 있는 세그먼트들(기록 순서). segments/가 없는 route(영상 없이 이벤트만 옮긴 것)는 빈 목록이다:
+    예전에는 예외로 lane_benchmark 같은 일괄 실행 전체가 멈췄다."""
     seg_root = route_dir / "segments"
+    if not seg_root.is_dir():
+        return []
     segs = []
     for seg_dir in sorted(seg_root.iterdir()):
         if not (seg_dir.is_dir() and (seg_dir / "frames.bin").exists()
@@ -398,16 +309,9 @@ def decode_route_yuv(segments: list[SegmentInfo]):
 
     # access unit마다(스트림 순서) 그 AU가 시작하는 바이트 범위의 인덱스 레코드를
     # 대응시키고 패킷에 AU 번호를 pts로 붙여서, 디코더가 하나를 빠뜨려도
-    # 디코딩된 프레임이 레코드와 정확히 짝지어지게 한다.
+    # 디코딩된 프레임이 레코드와 정확히 짝지어지게 한다. 세그먼트마다 그 세그먼트의
+    # 레코드를 먼저 붙인 뒤 넣는다: 파서는 다음 AU를 본 뒤에야 패킷을 내므로 레코드가 늘 앞선다.
     au_records: list[tuple[np.void, int]] = []
-    for segment in segments:
-        data = segment_video(segment.path).read_bytes()
-        for rec in segment.frames:
-            payload = data[int(rec["file_offset"]):
-                           int(rec["file_offset"]) + int(rec["packet_size"])]
-            for _ in range(au_starts(payload)):
-                au_records.append((rec, segment.height))
-
     au_index = 0
 
     def decode(packet):
@@ -426,6 +330,10 @@ def decode_route_yuv(segments: list[SegmentInfo]):
 
     for segment in segments:
         data = segment_video(segment.path).read_bytes()
+        for rec in segment.frames:
+            payload = data[int(rec["file_offset"]):
+                           int(rec["file_offset"]) + int(rec["packet_size"])]
+            au_records.extend([(rec, segment.height)] * au_starts(payload))
         # 인덱스 레코드가 덮는 바이트만 믿을 수 있다. 깔끔하지 않게 멈추면
         # 꼬리가 일부만 쓰인 채 남을 수 있다
         last = segment.frames[-1]
@@ -441,69 +349,79 @@ def decode_route_yuv(segments: list[SegmentInfo]):
 
 
 def route_event_files(route_dir: Path) -> list[Path]:
-    """기록 순서대로 놓은 이벤트 로그 파일: v3은 events/에 60 s 청크를 돌려 쓰고,
-    v2 이하는 route 단위 events.bin 하나를 둔다."""
-    chunk_dir = route_dir / "events"
-    if chunk_dir.is_dir():
-        return sorted(chunk_dir.glob("*.bin"))
-    legacy = route_dir / "events.bin"
-    return [legacy] if legacy.exists() else []
+    """기록 순서대로 놓은 이벤트 로그 파일(events/의 60 s 청크)."""
+    return sorted((route_dir / "events").glob("*.bin"))
 
 
 @dataclass
 class EventRecord:
     """이벤트 로그 레코드 하나. ``payload``는 청크를 복사 없이 가리키는 뷰다."""
     path: Path
-    version: int
     timestamp_ns: int
     type: int
     payload: memoryview
 
+    def _record(self, dtype: np.dtype, what: str) -> np.void:
+        if len(self.payload) != dtype.itemsize:
+            raise ValueError(f"{self.path}: {what} payload {len(self.payload)} != {dtype.itemsize}; the layout "
+                             f"changed without a recording-version bump")
+        return np.frombuffer(self.payload, dtype, count=1)[0]
+
     def control_state(self) -> np.void:
-        expected = CONTROL_STATE.itemsize + _pad8(CONTROL_STATE.itemsize)
-        if len(self.payload) != expected:
+        if len(self.payload) != CONTROL_STATE_SIZE:
             raise ValueError(f"{self.path}: control state payload {len(self.payload)} "
-                             f"!= {expected}; ControlState changed without a "
+                             f"!= {CONTROL_STATE_SIZE}; ControlState changed without a "
                              f"recording-version bump")
         return np.frombuffer(self.payload, CONTROL_STATE, count=1)[0]
 
     def learner_state(self) -> np.void:
-        if len(self.payload) != LEARNER_STATE.itemsize:
-            raise ValueError(f"{self.path}: learner state payload {len(self.payload)} "
-                             f"!= {LEARNER_STATE.itemsize}")
-        return np.frombuffer(self.payload, LEARNER_STATE, count=1)[0]
+        return self._record(LEARNER_STATE, "learner state")
 
-    def model_layout(self) -> dict[str, int]:
-        """이 레코드 버전의 ModelState 위치. 레코드 크기와 대조한다: 기록기가
-        레코드를 8바이트로 패딩하므로, 구조체 크기 +0..7을 벗어나면 버전을
-        올리지 않고 배치가 바뀐 것이다."""
-        layout = model_state_layout(self.version)
-        expected = layout["__size__"]
-        if not expected <= len(self.payload) <= expected + 7:
-            raise ValueError(f"{self.path}: model state payload {len(self.payload)} "
-                             f"does not match the v{self.version} layout "
-                             f"({expected}, +0..7 pad)")
-        return layout
+    def model_state(self) -> np.void:
+        return self._record(MODEL_STATE, "model state")
+
+    def model_lanes(self) -> tuple[np.ndarray, np.ndarray]:
+        """ModelState의 차선 네 개(왼쪽 바깥부터) [4, 33, 3](x = X_IDXS, y 오른쪽 +, z)와 그 확률 [4]의 사본."""
+        model = self.model_state()
+        points = np.empty((4, TRAJECTORY_SIZE, 3), np.float32)
+        points[..., 0] = X_IDXS
+        points[..., 1:] = model["lanes"]
+        return points, model["lane_probabilities"].copy()
+
+    def camera_mount(self) -> tuple[float, float]:
+        """이 ModelState의 워프에 쓴 카메라 장착(오른쪽 오프셋 m, 높이 m)."""
+        model = self.model_state()
+        return float(model["camera_offset_m"]), float(model["camera_height_m"])
+
+    def imu_samples(self) -> np.ndarray:
+        """IMU 레코드의 샘플(칩 원래 축, 자이로 바이어스 제거 전) 사본. 머리의 count만큼 들어 있지 않으면 빈 배열."""
+        if len(self.payload) >= IMU_BATCH_HEAD.size:
+            count = IMU_BATCH_HEAD.unpack_from(self.payload, 0)[1]
+            if IMU_BATCH_HEAD.size + count * IMU_SAMPLE.itemsize <= len(self.payload):
+                return np.frombuffer(self.payload, IMU_SAMPLE, count, IMU_BATCH_HEAD.size).copy()
+        return np.zeros(0, IMU_SAMPLE)
 
 
 def iter_event_records(path: Path) -> Iterator[EventRecord]:
-    """이벤트 청크 하나의 모든 레코드를 파일 순서대로 낸다. 깔끔하지 않게 멈춰
-    잘린 꼬리에서 반복이 끝난다. 머리보다 짧은 파일은 아무것도 내지 않고,
-    매직이 틀리면 예외를 던진다."""
+    """이벤트 청크 하나의 모든 레코드를 파일 순서대로 낸다. 끊긴 꼬리(깔끔하지 않게 멈춰 잘린
+    레코드, tmpfs가 차서 0으로 채워진 구간)에서 C++ EventLogReader처럼 끝난다: 레코드가 파일을 넘거나
+    타입이 범위 밖이거나 MAX_RECORD_PAYLOAD보다 길다. 머리보다 짧은 파일은 아무것도 내지 않고, 매직이나
+    버전이 다르면 예외를 던진다. 레코드의 payload(와 그 위의 frombuffer)는 청크 버퍼를 가리키는 뷰라, 오래 쥘
+    값은 복사한다: 뷰 하나가 청크 전체를 붙잡는다."""
     data = path.read_bytes()
     if len(data) < 16:
         return
     magic, version, header_size = struct.unpack_from("<8sII", data, 0)
-    if magic not in EVENT_LOG_MAGICS:
-        raise ValueError(f"{path}: bad event log magic {magic!r}")
+    if magic != EVENT_LOG_MAGIC or version != RECORDING_VERSION:
+        raise ValueError(f"{path}: event log is {magic!r} v{version}, not v{RECORDING_VERSION}")
     view = memoryview(data)
     offset, end = header_size, len(data)
     while offset + EVENT_RECORD_HEADER.size <= end:
         ts, rtype, _flags, size = EVENT_RECORD_HEADER.unpack_from(data, offset)
         offset += EVENT_RECORD_HEADER.size
-        if offset + size > end:
+        if not 1 <= rtype <= LAST_RECORD_TYPE or size > MAX_RECORD_PAYLOAD or offset + size > end:
             break
-        yield EventRecord(path, version, ts, rtype, view[offset:offset + size])
+        yield EventRecord(path, ts, rtype, view[offset:offset + size])
         offset += size
 
 
@@ -512,71 +430,20 @@ def read_route_events(route_dir: Path) -> RouteEvents | None:
     if not paths:
         return None
 
-    controls, control_ts = [], []
-    model_fid, model_cts, model_rpy, model_blocks = [], [], [], []
+    controls, control_ts, model_cts = [], [], []
     for path in paths:
         for rec in iter_event_records(path):
             if rec.type == RECORD_CONTROL_STATE:
-                controls.append(rec.control_state())
+                controls.append(rec.control_state().copy())  # 뷰는 청크 버퍼 전체를 붙잡는다
                 control_ts.append(rec.timestamp_ns)
             elif rec.type == RECORD_MODEL_STATE:
-                layout = rec.model_layout()
-                head = np.frombuffer(rec.payload, MODEL_STATE_HEAD, count=1)[0]
-                calib = np.frombuffer(rec.payload, CALIBRATION_STATE, count=1,
-                                      offset=layout["calibration"])[0]
-                model_fid.append(head["frame_id"])
-                model_cts.append(head["capture_timestamp_ns"])
-                model_rpy.append((calib["roll"], calib["pitch"], calib["yaw"]))
-                model_blocks.append(calib["valid_blocks"])
+                model_cts.append(np.frombuffer(rec.payload, MODEL_STATE_HEAD, count=1)[0]["capture_timestamp_ns"])
 
-    if not model_fid and not controls:
+    if not model_cts and not controls:
         return None
     return RouteEvents(
         control=np.array(controls, dtype=CONTROL_STATE),
         control_log_ts=np.array(control_ts, dtype=np.uint64),
-        model_frame_id=np.array(model_fid, dtype=np.uint64),
         model_capture_ts=np.array(model_cts, dtype=np.uint64),
-        model_rpy=np.array(model_rpy, dtype=np.float32).reshape(-1, 3),
-        model_valid_blocks=np.array(model_blocks, dtype=np.int32),
     )
 
-
-def _pad8(size: int) -> int:
-    return (8 - size % 8) % 8
-
-
-def read_route_imu(route_dir: Path) -> np.ndarray | None:
-    """route의 보드 IMU 샘플 전부(칩 원래 축, 자이로 바이어스 제거 전). route에
-    IMU 레코드가 없으면(imud가 생기기 전 녹화) None."""
-    chunks = []
-    for path in route_event_files(route_dir):
-        if path.stat().st_size <= 32:
-            continue
-        for rec in iter_event_records(path):
-            if rec.type != RECORD_IMU:
-                continue
-            _, count, _ = IMU_BATCH_HEAD.unpack_from(rec.payload, 0)
-            if IMU_BATCH_HEAD.size + count * IMU_SAMPLE.itemsize > len(rec.payload):
-                continue
-            chunks.append(np.frombuffer(rec.payload, IMU_SAMPLE, count, IMU_BATCH_HEAD.size))
-    return np.concatenate(chunks) if chunks else None
-
-
-def read_route_localization(route_dir: Path) -> np.ndarray | None:
-    """route의 locationd 출력 전부. 없으면(locationd 전 녹화) None."""
-    rows = []
-    for path in route_event_files(route_dir):
-        if path.stat().st_size <= 32:
-            continue
-        for rec in iter_event_records(path):
-            if rec.type == RECORD_LOCALIZATION and len(rec.payload) == LOCALIZATION_STATE.itemsize:
-                rows.append(np.frombuffer(rec.payload, LOCALIZATION_STATE, 1)[0])
-    return np.array(rows, dtype=LOCALIZATION_STATE) if rows else None
-
-
-def read_route_calibration(route_dir: Path) -> np.ndarray | None:
-    path = route_dir / "params" / "calibration.json"
-    if not path.exists():
-        return None
-    rpy = json.loads(path.read_text()).get("rpy_rad")
-    return np.asarray(rpy, dtype=np.float32) if rpy else None

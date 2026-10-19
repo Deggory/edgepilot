@@ -27,7 +27,6 @@ PANDA_FLASHABLE_HW = (3, 5, 6)
 # panda_firmware.cc find_version과 같이 -DEBUG를 이미지 전체에서 먼저 찾고, 없으면 -RELEASE를 찾는다
 PANDA_VERSION_PATTERNS = tuple(re.compile(rb"(?<![0-9A-Za-z])[A-Z]{3,8}-[0-9A-Za-z]{8}-" + suffix + rb"(?![0-9A-Za-z])")
                                for suffix in (rb"DEBUG", rb"RELEASE"))
-CONTROL_MAX_AGE_S = 1.0
 PARKED_MAX_SPEED_KPH = 1.0
 # pandad·panda_flasher와 flash_blocker의 이유 코드, pandad가 알리는 플래싱 단계. 페이지가 panda.reason.<코드>,
 # panda.step.<단계> 문구로 보인다.

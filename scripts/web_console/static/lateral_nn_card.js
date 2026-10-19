@@ -3,7 +3,7 @@
 // 파일을 바꾸고, controlsd가 재시작 없이 1초 안에 읽어 바꾼다. 학습 피드포워드 스위치(nn_feedforward)가 꺼져 있으면
 // 모델은 읽혀도 쓰이지 않는다.
 import {codeText, t} from "./i18n.js";
-import {onParamsChanged, valueOf} from "./param_state.js";
+import {onParamsChanged, updateRuntime, valueOf} from "./param_state.js";
 import {api, badges, el, helpText, note, pollingCard, runAction, section} from "./ui.js";
 
 const fileName = name => (name ? `${name}.json` : "–");
@@ -49,6 +49,7 @@ export function createLateralNnCard() {
 
   const render = s => {
     latest = s;
+    updateRuntime(s.runtime);
     const status = s.controlsd;  // controlsd가 돌지 않으면 null
     syncRows(s.models);
     for (const [name, row] of rows) {

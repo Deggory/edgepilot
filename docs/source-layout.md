@@ -47,7 +47,7 @@ it runs.
 | `src/planning/` | lateral planner, desire helper, lateral MPC | `planning` | |
 | `src/learners/` | paramsd and torqued (run inside `controlsd`) | `learners` | |
 | `src/localization/` | locationd and lagd, the board IMU reader (`imud`) | `localization` | `imud`, `locationd` |
-| `src/model/` | `modeld`: NPU session, input warp, online calibration, `ModelState` packing | `model`, `replay` (board) | `modeld` |
+| `src/model/` | `modeld`: NPU session, input warp, online calibration, `ModelState` packing | `model` | `modeld` |
 | `src/camera/` | `camerad` and the `camcal` still capture | | `camerad`, `camcal` |
 | `src/hud/` | the HUD (`overlayd`): state mapping, drawing, alert policy and sounds | `hud_state`, `hud`, `alert_tones`, `alert_sound` (board) | `overlayd` |
 | `src/recording/` | `recordd` and `replayd`, the recording format and its readers | `recording` | `recordd`, `replayd` |
@@ -108,8 +108,8 @@ flowchart LR
     class common,utils_json,hud,hud_state,recording,panda proc
 ```
 
-`alert_tones` links nothing, and on the board `alert_sound` links it. `replay`
-(board only) links nothing either. The board processes link `build_version`.
+`alert_tones` links nothing, and on the board `alert_sound` links it. The
+board processes link `build_version`.
 
 A few headers are read across that order for their enums, constants and
 default values only:
@@ -169,7 +169,7 @@ What each process links:
 | `controlsd` | `src/controls` | `common`, `control_core`, `planning`, `controls` | |
 | `imud` | `src/localization` | `common` | |
 | `locationd` | `src/localization` | `common`, `localization` | |
-| `modeld` | `src/model` | `common`, `model`, `replay` | `maixcam2_gdc`, `maixcam2_ive`, `libax_engine`, `libax_sys` |
+| `modeld` | `src/model` | `common`, `model` | `maixcam2_gdc`, `maixcam2_ive`, `libax_engine`, `libax_sys` |
 | `overlayd` | `src/hud` | `common`, `hud`, `alert_sound`, `utils_json` | `maixcam2_media` |
 | `pandad` | `src/panda` | `common`, `panda` | libusb |
 | `panda_flash` | `src/panda` | `panda` | libusb |
@@ -225,7 +225,7 @@ processes themselves are described in [Runtime](runtime.md).
   tool name.
 - Tests are `tests/gtest_<module>.cc`, or `gtest_<folder>.cc` when they cover a
   folder. A module can be a family of files on one subject: `gtest_calibration`
-  covers `calibration_online`, `calibration_service` and the model input warp.
+  covers `calibration_online` and `calibration_service`.
 - The HUD module is `hud` in files, types and libraries. Only `overlayd`, the
   process, and the display's hardware overlay layer keep "overlay".
 - Names something else fixes keep their form:
@@ -289,13 +289,13 @@ Libraries `common` and `utils_json`, and the object library `build_version`.
   every timestamp that crosses a process boundary, and the freshness
   predicates for ns and CAN-seconds timestamps. Per-process scheduling may
   still use `std::chrono::steady_clock`.
-- `utils_json.*`: minimal JSON value readers, the clamped
-  `parse_json_optional_*` helpers, and the `Json*Field` tables that
-  `control_params` and `adaptive_cruise` fill their structs from: one
-  `{key, min, max, member}` row per parameter.
+- `utils_json.*`: readers for the flat parameter and learner files on top of
+  `json_value`: one value by key (a wrong type throws), `load_json_param_file`,
+  and the `Json*Field` tables that the parameter loaders fill their structs
+  from, one `{key, min, max, member}` row per parameter.
 - `json_value.*`: a small JSON document reader (objects, arrays, string
-  escapes, a nesting limit), part of `utils_json`, for files with nested data
-  such as the lateral NN model.
+  escapes, a nesting limit), part of `utils_json`. It reads every JSON file the
+  runtime loads, including the lateral NN model.
 - `lateral_nn_path.*`: which learned torque model is chosen
   (`params/lateral_nn.json`, or `EDGEPILOT_LATERAL_NN_MODEL`) and its path in
   `models/lateral_nn/`; controlsd and recordd share it.
@@ -334,20 +334,22 @@ Libraries `control_core` and `controls`, process `controlsd`.
   - The 20 Hz planner runs in place in the tick that receives the model
     (about 0.1 ms on the board), so a new plan is used in that same tick, on
     the board and in the tools and tests alike.
-  - It also holds the parameter-file watcher.
-- `lateral_controller.*`, `lateral_torque.*`, `control_params.*`: apply the
-  planner's lag-adjusted curvature through the validated K7 torque/CAN path
+- `control_params.*`: `SteeringParams`, `ControlTiming` and `ControlParams`
+  (steering plus vision cruise), the JSON loaders, and the watcher that
+  reloads both files when one changes (checked every second).
+- `lateral_controller.*`, `lateral_torque.*`: apply the planner's
+  lag-adjusted curvature through the validated K7 torque/CAN path
   (`car/hyundai_can`).
 - `lateral_nn.*`: the learned torque feed-forward: the model file loader,
   the network and the inputs built from the plan and a 1 s history
   ([Lateral NN](lateral-nn.md)).
 - `lateral_nn_select.*`: watches the chosen model, loads a new choice in the
   background, swaps it in and writes the status the web console shows.
-- `lateral_target.h`: declares `LateralTarget`, the planner-to-controller
-  interface.
-- `lateral_path.*`: reduces `modelState` to the steering-usability gate (reach
-  and point count). It computes no path geometry; curvature comes from the
-  MPC.
+- `lateral_target.h`: declares the controller's two per-tick inputs:
+  `LateralTarget`, the planner-to-controller interface, and `LateralPath`, the
+  steering-usability gate (reach and point count) that `control_holds.*`
+  reduces `modelState` to. There is no path geometry; curvature comes from
+  the MPC.
 - `adaptive_cruise.*`, `departure_alert.*`: vision cruise setpoint control and
   departure alerting ([Lead flow](lead-flow.md),
   [Departure alerts](departure-alerts.md)).
@@ -364,7 +366,8 @@ Libraries `control_core` and `controls`, process `controlsd`.
     departure and green light.
 - `control_block.h`: the engage/steer block reasons as one table: enum, wire
   name, HUD label, and kind (reject / hard disengage / transient Panda
-  handshake / availability). The controller decides in `BlockReason`,
+  handshake / availability / soft disable / interrupt, an input that stopped
+  while engaged). The controller decides in `BlockReason`,
   `ControlState` carries the wire name so recordings and the Python readers
   stay text, and `hud_state` labels it from the same rows. `gtest_hud_state`
   proves every reason has a label.
@@ -378,7 +381,7 @@ Libraries `control_core` and `controls`, process `controlsd`.
 ```mermaid
 flowchart LR
     plan["one malformed<br>plan frame"] --> pathhold["hold the last usable path<br>at most 150 ms"]
-    gap["Panda health gap<br>or health fault"] --> healthhold["hold<br>at most 100 ms"]
+    gap["Panda health gap<br>or health fault"] --> healthhold["hold<br>about 1.2 s for a gap,<br>100 ms for a fault"]
     stale["model stale<br>after 250 ms<br>or invalid"] --> off["control removed"]
     refuse["controls_allowed=0<br>fresh and<br>transport-ready"] -- never held --> off
     classDef safety fill:#eaf7ee,stroke:#2da44e,color:#1f2328
@@ -389,10 +392,14 @@ flowchart LR
 
 `controlsd` tolerates a single malformed plan frame by holding the last usable
 path for at most 150 ms; the normal 250 ms model freshness timeout remains a
-hard safety gate, so a stale or invalid model still removes control. A
-transient Panda health-snapshot gap is similarly limited to 100 ms; a fresh,
-transport-ready `controls_allowed=0` is never held. Other health faults are
-released after that short hold if they persist.
+hard safety gate, so a stale or invalid model still removes control at once,
+and if it stays lost for 3 s the controller disengages with a warning. A gap
+in the Panda health snapshots keeps the last verdict for up to about 1.2 s:
+`pandad` publishes one every 0.5 s, a snapshot counts as fresh for 1.1 s, and
+one that is stale or not ready (link down, heartbeat lost) holds the last
+verdict for another 100 ms. A fresh, transport-ready `controls_allowed=0` is
+never held. Other health faults are released after that short hold if they
+persist.
 
 ### `src/planning`
 
@@ -407,9 +414,10 @@ Library `planning`.
   the new frame. See [Lane-line filter](lane-line-filter.md).
 - `desire_helper.*`: the openpilot desire_helper port the planner runs each
   model frame: lane change states (`LaneChangeState`), the
-  blinker/torque/blind-spot/road-edge gates, the lane-line fade, one lane
-  change per blinker, the turn detection and turn desire, and the `Desire` the
-  model gets.
+  blinker/torque/road-edge gates (upstream's blind-spot gate is left out: the
+  K7 sends no LCA11 on the Panda's buses), the lane-line fade,
+  one lane change per blinker, the turn detection and turn desire, and the
+  `Desire` the model gets.
 - `lateral_mpc.*`: the lateral MPC itself: one Gauss-Newton SQP iteration per
   call over the openpilot 0.8.16 OCP, solved by a backward Riccati recursion.
   No external solver. See [Verification](verification.md#lateral-mpc-solver).
@@ -449,7 +457,7 @@ Library `localization`, processes `imud` and `locationd`.
 
 ### `src/model`
 
-Libraries `model` and (board) `replay`, process `modeld`.
+Library `model`, process `modeld`.
 [Model pipeline](model-pipeline.md) follows a frame through these files.
 
 - `modeld.cc`: the model process. It takes the newest ring frame, runs one
@@ -470,6 +478,8 @@ Libraries `model` and (board) `replay`, process `modeld`.
   100-tick desire pulses pooled to 25x8, 96 ticks of hidden state strided to
   24x512, and the 5-frame image history per tower. No engine dependency, so
   `gtest_model_output` pins the convention on the host.
+- `yuv6_pack.h`: unpacks an NV12 view into the YUV6 planes, with NEON where
+  the CPU has it; the GDC warp uses it.
 - `model_input_transform.*`: the CPU input warp: direct
   `NV12 -> calibrated warped YUV6`, fusing homography sampling and YUV6
   packing through a compact fixed-point LUT. Also produces the projection
@@ -493,11 +503,15 @@ Libraries `model` and (board) `replay`, process `modeld`.
   the travel-direction solver, the per-cell corner pick, the
   straight-and-fast gate and the block aggregation. Host-tested by
   `gtest_flow_calibration` ([Flow calibration](flow-calibration.md)).
-- `flow_worker.*`: board only. `FlowTracker` builds the pyramid once per frame
-  and tracks the calibration window's points and the lead's points in one IVE
-  LK call (the lead points also backward), and `FlowWorker` (a `FlowSource`)
-  runs it on its own thread in `modeld`. The model loop only hands over ring
-  slots, gate inputs and the previous frame's lead.
+- `flow_tracker.*`, `flow_engine.h`: `FlowTracker` builds the pyramid once per
+  frame and tracks the calibration window's points and the lead's points in
+  one LK call (the lead points also backward), through a `FlowEngine`: the
+  board's IVE (`platform/maixcam2/maix_ive_flow`), or a fake in
+  `gtest_flow_calibration`, which checks how it chains frames and drops a step
+  on a frame gap, an overwritten slot or an engine failure.
+- `flow_worker.*`: board only. `FlowWorker` (a `FlowSource`) runs the tracker
+  with the IVE engine on its own thread in `modeld`. The model loop only hands
+  over ring slots, gate inputs and the previous frame's lead.
 - `lead_flow.*`: the hardware-free part of the lead expansion: the lead box
   projection, the full-resolution corner pick, the similarity fit and
   `LeadFlowTracker` (forward-backward check, top-up, template refinement, the
@@ -509,12 +523,15 @@ Libraries `model` and (board) `replay`, process `modeld`.
   per model frame. Host-tested by `gtest_lead_tracker`
   ([Lead track](lead-flow.md#lead-track)).
 - `model_state_fill.*`: `fill_model_state`, which modeld calls to pack a
-  frame's outputs into `ModelState`, and `compute_lane_t` (the openpilot
-  plan→lane time mapping). It needs the online calibrator's snapshot, so it
-  lives in the `model` library and message consumers do not pull in the
-  calibrator.
+  frame's outputs into `ModelState`. It needs the online calibrator's
+  snapshot, so it lives in the `model` library and message consumers do not
+  pull in the calibrator. `ModelState` leaves out the fixed grids and the lane
+  times; the planner gets those from `common/model_output.h` (`model_t_idx`,
+  `model_x_idx`, and `compute_lane_t`, the openpilot plan→lane time
+  mapping).
 - `replay_source.*`: reads `SCNV12R1` replay files into `Nv12Frame` for
-  `modeld` replay mode. POSIX only.
+  `modeld` replay mode. POSIX only; built into `modeld` with its other
+  board-only sources.
 
 ### `src/camera`
 
@@ -555,9 +572,10 @@ Libraries `hud_state`, `hud` and `alert_tones`, and on the board
     chevron, lane position), `hud_cards` the cards, and `hud_draw.h` holds what
     they share (design tokens, text placement, state colours).
   - **Canvas.** `hud_canvas` fills polygons with 4-subrow anti-aliasing that
-    touches only covered spans, fills the straight rows of integer rounded
-    rectangles directly, blends without divisions, and records the 64 px tiles
-    each row touched so the next use of the same buffer clears only those.
+    touches only covered spans, fills the straight part of integer rounded
+    rectangles directly (cut along the buffer rows, so across the screen in the
+    portrait buffer), blends without divisions, and records the tiles (32 px in
+    the portrait buffer) each row touched so the next frame clears only those.
   - **Font.** `hud_font` holds the glyphs that `tools/ui/make_hud_font.py`
     bakes from Pillow's Aileron (CC0).
   - **Host.** No OpenCV, so `gtest_hud_canvas` and `hud_snapshot` run on the
@@ -612,14 +630,17 @@ the event log are described in [Recording](recording.md).
   `header_size`, and stops without resyncing at a truncated tail (record type
   out of range, a payload over 1 MiB, or a short header or payload), which
   `truncated()` reports.
+  `report_event_file_end` prints those problems for `replayd` and the tools.
 - `time_ordered_events.h`: reads several event logs in time order. recordd
   writes the queued CAN before the state snapshots, so file order is not time
-  order; it reorders within a 0.5 s window, so a route is never held in memory
-  (`extract_lateral_dataset`).
-- `recorded_can.h`, `recorded_model_state.h`: the recorded CAN payload
-  (written by `recordd`, read back by `replayd` and the tools, whole frames
-  only) and the reader that turns a v3 to v13 `ModelState` payload into the
-  current struct.
+  order; it reorders within a window (0.5 s by default), so a route is never
+  held in memory. `replayd` streams its events through it, and the replay
+  tools through `diagnostics/route_events.h`, which also reports unreadable
+  files and turns them into exit code 1. The tools read numeric options with
+  `diagnostics/cli_args.h`, which refuses anything but a whole finite number
+  in range.
+- `recorded_can.h`: the recorded CAN payload (written by `recordd`, read back
+  by `replayd` and the tools, whole frames only).
 - `recordd.cc`: the drive recorder. It encodes the frames `modeld` used and
   writes the CAN and state channels through `recording_writer` and
   `StateRecorder`.
@@ -672,22 +693,26 @@ only in the board build, against `deps/ax630` from
     to 640x480, and VO rotates it for the 480x640 panel with the board's
     flip/mirror.
   - The HUD goes to the graphic layer: it is drawn in the panel's portrait
-    orientation into a cached 480x640 BGRA buffer, and only the 64 px tiles
+    orientation into a cached 480x640 BGRA buffer, and only the 32 px tiles
     drawn this frame or last frame are copied into the visible page of
     `/dev/fb0`.
   - MaixCDK's layer-1 push rotates with IVPS TDP, which smears G/R/A into the
     next pixel for 32-bit BGRA (stair-stepped, fringed edges), so the HUD does
     not use it.
-  - It also turns the backlight on.
+  - It also sets the backlight (`set_backlight`), which only `overlayd` does.
 - `maix_touch.*`: the touchscreen (`hyn_ts`, multi-touch type B) read without
   blocking; reports short taps in screen coordinates, rotated clockwise 90° as
   MaixCDK's `maix_touchscreen_maixcam2.hpp` does.
 - `maix_cmm.*`: physically contiguous CMM blocks shared across processes
   (allocate in one, map by physical address in another, uncached).
+- `maix_frames.h`: the NV12 frame description, stretch-resize setting and
+  uncached block pool that the display, GDC, IVE, encoder and decoder wrappers
+  share.
 - `maix_gdc_warp.*`: the model input warp on the IVPS GDC (`AX_IVPS_Dewarp`,
-  perspective): two 512x256 views from a physical source address, unpacked to
-  YUV6. Uses only MSP SDK headers, not the middleware, so the NPU process
-  initialises AX SYS once.
+  perspective): two 512x256 views from a physical source address (a ring slot,
+  or for replay a CMM buffer allocated on first use), unpacked to YUV6. Uses
+  only MSP SDK headers, not the middleware, so the NPU process initialises AX
+  SYS once.
 - `maix_ive_flow.*`: the flow calibrator's hardware part.
   - Each frame's 1/2 and 1/4 levels come from one VPP call on `modeld`'s own
     IVPS queue; a separate tool, which gets no queue, falls back to an IVE
@@ -730,8 +755,8 @@ only in the board build, against `deps/ax630` from
     the choice and what controlsd loaded;
   - `recordings.py`: the recording files card: the routes on the SD card with
     their sizes, the free space, and deleting routes;
-  - `bev_stream.py`, `backlight.py` (the MaixCAM2 backlight, PWM3) and
-    `static_assets.py`;
+  - `bev_stream.py`, `backlight.py` (reads the MaixCAM2 backlight, PWM3, that
+    `overlayd` sets) and `static_assets.py`;
   - `shm_channel.py` reads the shared-memory channels and `state_layout.py`
     holds the ModelState and ControlState offsets they share;
   - `refusal.py`: the reason a request is refused, sent as a text-catalogue
@@ -754,11 +779,15 @@ only in the board build, against `deps/ax630` from
     learned torque model card on the steering tab) and `recordings_card.js`
     (the recording files card on the recording tab).
   - The BEV tab: `bev_view.js`, `bev.js` (three.js view, ported from
-    sv_recorder_bev), `bev_ego.js` (the ego car; today a black 2017 K7 made in
-    code), `bev_car.js` (the lead's car model), `bev_data.js` (reads the
-    ModelState and ControlState bytes the console streams), `bev_math.js`
-    (the small maths the BEV files share), and `lane_filter.js` (the
-    planner's lane-line filter, for the ego lines the BEV draws).
+    sv_recorder_bev), `bev_gl.js` (its stateless GPU helpers: the colour
+    cache, the per-frame triangle and instance batches, the shared fog
+    uniforms and the shaders), `bev_geometry.js` (the stateless geometry
+    writers: bands, the path corridor, curbs, arrows and polyline reading),
+    `bev_ego.js` (the ego car; today a black 2017 K7 made in code),
+    `bev_car.js` (the lead's car model), `bev_data.js` (reads the ModelState
+    and ControlState bytes the console streams), `bev_math.js` (the small
+    maths the BEV files share), and `lane_filter.js` (the planner's lane-line
+    filter, for the ego lines the BEV draws).
   - three.js 0.186.1 in `three/`.
 - `scripts/*.service`, `install_autostart.sh`, `install_boot_tuning.sh`: the
   systemd units (`edgepilot.service`, `edgepilot-drivers.service`,
@@ -790,12 +819,15 @@ only in the board build, against `deps/ax630` from
   MaixCAM2 intrinsics (see [Camera intrinsics](camera-intrinsics.md)), the
   IMU-to-camera extrinsic estimate, the model-view preview and the 12x7
   chessboard image.
-- `tools/control/`: `fit_lateral_params.py` (torque regression and
-  actuator-lag estimate from drives, both on the wheel speed as openpilot's
-  torqued and lagd use `vEgo`; its `fit` reads the 1 Hz log line and only
-  approximates torqued, so with a recording use `replay_lateral_learners`,
-  which runs the real learner) and `export_can_fixture.py` (recorded CAN →
-  `gtest_lateral_controller` fixture).
+- `tools/control/`: `fit_lateral_params.py` (torque regression from the
+  controlsd log on the wheel speed, as openpilot's torqued uses `vEgo`; it
+  reads the 1 Hz log line and only approximates torqued, so with a recording
+  use `replay_lateral_learners`, which runs the real learner, and
+  `replay_localization` for the actuator delay), `export_can_fixture.py`
+  (recorded CAN → `gtest_lateral_controller` fixture) and `make_can_golden.py`
+  (the bytes of the frames edgepilot sends and the torque limiter, built with
+  a local opendbc's packer and upstream formulas → `tests/hyundai_can_golden.h`
+  for `gtest_car`).
 - `tools/rehearsal/compare_rehearsal.py`: compares a board rehearsal's
   recording with the route it replayed ([Rehearsal](rehearsal.md)).
 - `tools/ui/hud_tools.py`: extracts `hud_snapshot` inputs from a route and
@@ -806,8 +838,9 @@ only in the board build, against `deps/ax630` from
 - `tests/`: host unit tests (`gtest_*.cc`, googletest + CTest), one
   self-contained file per target, each registered by one
   `add_host_test(<name> <libraries>)` line in `tests/CMakeLists.txt`, and the
-  Python checks `check_web_console.py`, `check_recording_reader.py` and
-  `check_docs.py`, registered beside them. `check_web_console.py` also runs
+  Python checks `check_web_console.py`, `check_manager.py`,
+  `check_recording_reader.py` and `check_docs.py`, registered beside them.
+  `check_web_console.py` also runs
   `check_bev_lane_filter.mjs`. `scripts/run_host_tests.sh` runs them all. See
   [Host tests](../tests/README.md).
 - `tests/check_docs.py`: the documentation check run by `ctest`. It checks the

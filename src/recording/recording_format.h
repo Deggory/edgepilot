@@ -3,43 +3,13 @@
 #include <cstdint>
 #include <cstring>
 
-// v2: ModelState에서 소비자가 없던 lateral_target/lateral_plan(308 B)을
-// 제거해 페이로드가 4384 -> 4076 B로 줄었다. v1 녹화와 호환되지 않는다.
-// v3: 이벤트 로그를 route 단위 events.bin 하나에서 60초 청크 events/NNN.bin
-// 으로 분할했다. route 단위 파일은 CAN 로깅(~0.5 MB/s)만으로 30분이면 988 MB
-// tmpfs 스테이징을 가득 채워 남은 주행의 기록을 전부 죽였다. 레코드/헤더
-// 레이아웃은 v2와 동일하고 각 청크가 EventFileHeader로 시작한다.
-// v4: openpilot v0.9.4 모델로 옮기면서 그 모델이 내지 않는 stop_line(28 B)을
-// ModelState에서 뺐다.
-// v5: 소비자가 없던 plan_position_stds/plan_orientations(792 B)를
-// ModelState에서 뺐다. 페이로드가 4048 -> 3256 B로 줄어 v4 이하 녹화와
-// 호환되지 않는다. LearnerState(6)는 v5에 더한 타입이라 모르는 리더는 건너뛴다.
-// v6: ModelState 끝에 plan_yaw/plan_yaw_rate(264 B).
-// v7: ModelState 끝에 camera_offset_m/camera_height_m(8 B, 워프에 쓴 카메라 장착).
-// v8: ModelState 끝에 gas_press_probs/brake_press_probs(48 B, 모델 meta의 페달 예측).
-// v9: 파일 머리 매직을 EDGELOG1(이벤트 로그)·EDGEIDX1(프레임 인덱스)로 바꿨다. 레이아웃은 v8과
-//     같고, v8 이하 녹화는 예전 매직 그대로 읽는다.
-// v10: ModelState 끝에 flow_calibration(56 B, 광류 보정기의 섀도 상태).
-// v11: flow_calibration 끝에 mount_changes·window_parallax·estimate_blocks·rejected_windows(72 B가 됨), 그
-//      뒤에 calibration_source(32 B,
-//      워프 보정의 출처와 포즈 보정기 자신의 추정). calibration은 이제 출처와 상관없이 워프에 쓴 값이다.
-// v12: ModelState 끝에 lead_flow(32 B, 광류로 잰 앞차 확대율).
-// v13: ModelState 끝에 lead_track(24 B, 모델 앞차와 확대율을 섞은 앞차 추적).
-constexpr uint32_t kRecordingVersion = 13;
+// v14(2026-10-19): ModelState에서 고정 격자(model_t, 차선·도로 경계의 x)와 plan에서 나오는 lane_t, 상수였던
+// best_plan·plan_probability, 읽는 곳이 없던 brake_press_probs를 뺐다.
+// 그 전 녹화(v5~v13)는 모두 이 형식으로 다시 썼으므로(docs/recording.md) 리더는 이 버전만 읽는다.
+constexpr uint32_t kRecordingVersion = 14;
 
-// 파일 머리 매직. 리더는 v8 이하 녹화의 예전 매직(kLegacy*)도 받는다.
 constexpr char kEventLogMagic[8] = {'E', 'D', 'G', 'E', 'L', 'O', 'G', '1'};
 constexpr char kFrameIndexMagic[8] = {'E', 'D', 'G', 'E', 'I', 'D', 'X', '1'};
-constexpr char kLegacyEventLogMagic[8] = {'K', '2', '3', '0', 'L', 'O', 'G', '1'};
-constexpr char kLegacyFrameIndexMagic[8] = {'K', '2', '3', '0', 'I', 'D', 'X', '1'};
-
-inline bool is_event_log_magic(const char *magic) {
-    return std::memcmp(magic, kEventLogMagic, 8) == 0 || std::memcmp(magic, kLegacyEventLogMagic, 8) == 0;
-}
-
-inline bool is_frame_index_magic(const char *magic) {
-    return std::memcmp(magic, kFrameIndexMagic, 8) == 0 || std::memcmp(magic, kLegacyFrameIndexMagic, 8) == 0;
-}
 
 // 세그먼트 영상은 H.264(segments/NNN/road.h264, manifest의 video_codec "h264")다. 보드 디코더가
 // H.264를 풀어 녹화를 그대로 리허설에 쓴다.
@@ -53,11 +23,8 @@ enum class RecordType : uint16_t {
     LearnerState = 6,
     Imu = 7,
     Localization = 8,
-    // 2026-10-15~18 녹화에만 있는 차선선 플러그인 결과(LaneState). 그 기능은 없어졌고 읽는 쪽은 건너뛴다. 번호를 남겨
-    // 두어야 그 녹화를 끝까지 읽는다(EventLogReader는 범위 밖 타입을 끊긴 꼬리로 본다).
-    RetiredLaneState = 9,
 };
-constexpr uint16_t kLastRecordType = static_cast<uint16_t>(RecordType::RetiredLaneState);
+constexpr uint16_t kLastRecordType = static_cast<uint16_t>(RecordType::Localization);
 
 #pragma pack(push, 1)
 struct EventFileHeader {
@@ -111,6 +78,8 @@ struct FrameIndexRecord {
 };
 #pragma pack(pop)
 
+static_assert(sizeof(EventFileHeader) == 32);
 static_assert(sizeof(EventRecordHeader) == 16);
+static_assert(sizeof(FrameIndexHeader) == 48);
 static_assert(sizeof(RecordedCanFrame) == 84);
 static_assert(sizeof(FrameIndexRecord) == 40);

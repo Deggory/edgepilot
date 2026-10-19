@@ -11,9 +11,8 @@
 #include <limits>
 #include <string>
 
-// engage 차단 사유 → HUD 라벨. HUD 상태줄과 engage 거부 토스트가 같은 표를
-// 쓰도록 여기 한 벌만 둔다. 모르는 사유면 nullptr을 돌려주고, 표시 방식은
-// 호출부가 정한다.
+// 결합 차단 사유 → HUD 라벨. HUD 상태줄과 결합 거부 토스트가 같은 표를 쓰도록 여기 한 벌만 둔다. 표에 없는
+// 이름(다른 빌드의 controlsd)은 그대로 돌려준다.
 const char *engage_block_label(const char *block);
 
 // 깜빡이 애니메이션은 켜진 순간을 0으로 하는 단계 수로 그린다. 단계 진행은
@@ -54,7 +53,7 @@ struct HudState {
     float radar_lead_relative_speed_mps = 0.0f;
     DepartureAlertType departure_alert_type = DepartureAlertType::none;
     bool green_light_alert_armed = false;
-    char engage_reject_label[48] = {};  // 비어 있지 않으면 engage 거부 알림(사유 라벨)
+    char engage_reject_label[48] = {};  // 비어 있지 않으면 결합 거부 알림(사유 라벨)
     bool tpms_valid = false;
     int tpms_unit = 0;
     float tpms_pressure_fl = 0.0f;
@@ -94,7 +93,7 @@ struct HudState {
     bool recording = false;     // recordd가 route를 쓰는 중
     bool storage_full = false;  // SD 여유가 예비분 밑이라 녹화를 거부했거나 멈춤
     bool storage_slow = false;  // SD가 기록을 따라오지 못해(tmpfs 스테이징이 참) 녹화를 멈춤
-    bool debug_card = false;    // HUD 진단 수치 카드. 화면 왼쪽 열을 눌러 켜고 끈다(시작은 꺼짐)
+    bool debug_card = false;    // HUD 진단 수치 카드. 화면 왼쪽 열을 눌러 켜고 끈다(처음에는 꺼져 있다)
     // 학습값(진단 카드). learner_fresh가 아니면 "--".
     bool learner_fresh = false;
     bool params_valid = false;  // paramsd: SR·강성·평균 오프셋이 다 유효
@@ -120,8 +119,8 @@ struct HudState {
     float lane_center_offset_m = std::numeric_limits<float>::quiet_NaN();
 };
 
-// 받은 ModelState를 렌더러가 그리는 모델 출력과 투영으로 되돌린다(overlayd·hud_snapshot). lead는
-// t=0 하나뿐이고 road_transform은 ModelState에 없다.
+// 받은 ModelState에서 렌더러가 그리는 것(plan 점, 차선 확률과 점, 도로 가장자리, t=0 앞차)만 모델 출력으로
+// 되돌린다(overlayd·hud_snapshot).
 ParsedModelOutput parsed_from_model_state(const ModelState &state);
 ProjectionState projection_from_model_state(const ModelState &state);
 
@@ -146,7 +145,7 @@ struct HudAlertCard {
     bool empty() const { return title.empty(); }
 };
 
-// 이 HUD 상태에서 띄울 알림 카드 하나. 우선순위는 engage 거부 > 해제 예고 > 조향 결함 > panda 결함 >
+// 이 HUD 상태에서 띄울 알림 카드 하나. 우선순위는 결합 거부 > 해제 예고 > 조향 결함 > panda 결함 >
 // 조향 쉼(85도) > 조향 한계 > 서비스 대기 > 차선 변경 대기 > 출발 감지이고, 없으면 빈 카드다.
 // model_ok는 결함 카드의 연결 줄(MODEL/CAR/PANDA)에 쓴다.
 HudAlertCard hud_select_alert(const HudState &hud, bool model_ok);

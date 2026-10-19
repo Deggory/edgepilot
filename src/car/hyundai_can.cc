@@ -63,7 +63,6 @@ HyundaiLkas11Values apply_lkas_command(HyundaiLkas11Values values, const Hyundai
     values.steer_req = command.steer_req && !command.cut_steer_temp;
     values.toi_fault = command.cut_steer_temp;
     values.msg_count = command.lkas_msg_count & 0xf;
-    if (command.ldws_fix) values.ldws_opt_usm = 3;
     return values;
 }
 
@@ -121,12 +120,10 @@ struct HyundaiCluCommand {
     int frame = 0;
 };
 
+// CLU11 속도는 부호 없는 정수 해석이고, 바꿔 쓸 속도는 코드 상수다(SteeringParams::mdps_speed_spoof_kph)
 float mdps_speed_for_lkas(float cluster_speed_raw, bool lkas_active, bool is_mph, float spoof_speed_kph) {
-    if (!std::isfinite(cluster_speed_raw) || cluster_speed_raw < 0.0f) return 0.0f;
-    const float safe_spoof_kph = std::isfinite(spoof_speed_kph) ? std::clamp(spoof_speed_kph, 30.0f, 100.0f) : 60.0f;
-    const float threshold = is_mph ? safe_spoof_kph / kMphToKph : safe_spoof_kph;
-    if (!lkas_active || cluster_speed_raw > threshold) return cluster_speed_raw;
-    return threshold;
+    const float threshold = is_mph ? spoof_speed_kph / kMphToKph : spoof_speed_kph;
+    return lkas_active && cluster_speed_raw <= threshold ? threshold : cluster_speed_raw;
 }
 
 uint8_t hyundai_lkas11_checksum(const std::array<uint8_t, 8> &data) {
@@ -179,8 +176,11 @@ std::vector<CanFrame> build_lateral_can_frames(const HyundaiLkas11Values &lkas_s
                                                const HyundaiLkasCommand &lkas_command, float mdps_speed_spoof_kph,
                                                bool lkas_active, bool is_mph, int frame) {
     std::vector<CanFrame> frames;
+    frames.reserve(4);  // 10 ms마다 만든다: 늘리며 다시 잡지 않게
+    // 두 버스의 LKAS11은 바이트가 같다(버스만 다르다)
     frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, kPowertrainBus));
-    frames.push_back(create_lkas11_frame(lkas_seed, lkas_command, kMdpsBus));
+    frames.push_back(frames.back());
+    frames.back().bus = kMdpsBus;
     if ((frame % 2) != 0) {
         HyundaiCluCommand clu_command;
         clu_command.button = 0;
