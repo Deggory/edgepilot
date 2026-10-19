@@ -1,13 +1,15 @@
 #pragma once
 
 // 녹화 route 읽기(replayd 리허설): 세그먼트마다 프레임 인덱스(frames.bin)로 영상(road.h264) 프레임
-// 목록을 만들고(ReplayRoute), 이벤트 로그에서 CanRx와 PandaState를 시각 순으로 흘려 읽는다(ReplayEvents).
+// 목록을 만들고(ReplayRoute), 이벤트 로그에서 고른 레코드를 시각 순으로 흘려 읽는다(ReplayEvents). 녹화의 카메라
+// 지연은 ModelState에서 앞서 읽는다(RecordedCameraDelay).
 
 #include "recording/recording_format.h"
 #include "recording/time_ordered_events.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,7 +62,7 @@ public:
     std::vector<VideoFrame> frames;
 };
 
-// route의 CanRx와 PandaState를 from_ns부터 기록 시각 순으로 흘려 읽는다(TimeOrderedEvents, 0.5초 창). route 전체를
+// route에서 types 레코드를 from_ns부터 기록 시각 순으로 흘려 읽는다(TimeOrderedEvents, 0.5초 창). route 전체를
 // 메모리에 올리지 않는다: 51분 route면 약 1.7 GB였고 보드 RAM은 447 MB라 클립을 손으로 잘라야 했다. from_ns보다
 // kLeadNs 넘게 앞서 시작하는 청크 가운데 마지막 것부터 연다(그 앞 청크는 읽지 않는다). 끊긴 꼬리와 읽지 못한 청크는
 // stderr에 알린다.
@@ -69,7 +71,7 @@ public:
     using Event = TimeOrderedEvents::Record;
     static constexpr uint64_t kLeadNs = 2'000'000'000ULL;
 
-    ReplayEvents(const std::string &route_dir, uint64_t from_ns);
+    ReplayEvents(const std::string &route_dir, uint64_t from_ns, std::initializer_list<RecordType> types);
 
     // 다음 이벤트. 없으면 nullptr. pop()까지 같은 이벤트다.
     const Event *peek();
@@ -79,7 +81,26 @@ public:
 private:
     std::unique_ptr<TimeOrderedEvents> stream_;
     uint64_t from_ns_;
+    uint32_t types_ = 0;  // 1 << RecordType
     size_t chunks_ = 0;
     Event current_;  // 스트림에서 옮겨 받는다(페이로드를 복사하지 않는다)
     bool have_ = false;
+};
+
+// 녹화에서 프레임이 센서 시각부터 프레임 링에 들어오기까지 걸린 시간. 낮에 약 24 ms, 밤에 약 43 ms(노출이
+// 길다)로 프레임마다 다르다. modeld는 프레임을 받자마자 돌리므로 ModelState의 model_timestamp_ns − 촬영 시각 −
+// model_execution_ms가 그 값이다(2026-10-19 보드에서 링 발행 시각과 0.5 ms 안으로 같았다). ModelState는 프레임보다
+// 늦게 기록되므로 replayd의 이벤트와 따로 앞서 읽는다.
+class RecordedCameraDelay {
+public:
+    RecordedCameraDelay(const std::string &route_dir, uint64_t from_ns)
+        : models_(route_dir, from_ns, {RecordType::ModelState}) {}
+
+    // 촬영 시각이 capture_ns인 프레임의 지연. 프레임은 촬영 시각 순으로 묻는다. 그 프레임의 ModelState가 없으면
+    // 직전 값(처음이면 0)이다.
+    uint64_t at(uint64_t capture_ns);
+
+private:
+    ReplayEvents models_;
+    uint64_t delay_ns_ = 0;
 };

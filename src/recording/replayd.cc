@@ -2,11 +2,12 @@
 // 자리에서 돌고(manager.py EDGEPILOT_REPLAY_ROUTE), modeld·controlsd·overlayd·recordd는
 // 차에서와 똑같이 돈다.
 //  - 영상: segments/NNN/road.h264를 프레임 인덱스로 한 프레임씩 VDEC에
-//    넣고, 디코딩된 프레임을 IVPS로 프레임 링 슬롯(CMM)에 복사해 roadAiFrame을 낸다.
+//    넣고, 디코딩된 프레임을 IVPS로 프레임 링 슬롯(CMM)에 복사해 roadAiFrame을 낸다. 차에서처럼 촬영 시각을
+//    찍고, 녹화에서 그 프레임이 링에 들어오기까지 걸린 만큼(RecordedCameraDelay) 기다렸다 낸다.
 //  - CAN·판다 상태: events/NNN.bin의 CanRx와 PandaState를 기록 시각 순으로 흘려 읽어(ReplayEvents, route를
 //    메모리에 올리지 않는다) 같은 시간축으로 판다 채널에 낸다(pandad처럼 CAN은 녹화용 로그 큐에도
 //    넣는다). controlsd의 송신 요청은 보내지 않고 송신 로그로만 넘긴다(recordd가 기록한다).
-// 타임스탬프는 모두 지금 시각으로 바꾼다. 녹화 시각은 재생 간격을 정하는 데만 쓴다.
+// 녹화 시각은 재생 시간축으로 옮긴다: 프레임의 촬영 시각은 그대로 옮기고, CAN·판다 상태는 내는 시각을 찍는다.
 // 사용: replayd <route> [start_s] [duration_s]   (duration 0 = 끝까지)
 #include "common/build_version.h"
 #include "common/ipc_channels.h"
@@ -24,6 +25,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,7 +57,8 @@ int main(int argc, char *argv[]) {
         if (first == route.frames.size()) throw std::runtime_error("no keyframe after start");
         const uint64_t t0 = route.frames[first].capture_ns;
         const uint64_t t_end = duration_s > 0 ? t0 + static_cast<uint64_t>(duration_s * 1e9) : UINT64_MAX;
-        ReplayEvents events(route_dir, t0);
+        ReplayEvents events(route_dir, t0, {RecordType::CanRx, RecordType::PandaState});
+        RecordedCameraDelay camera_delay(route_dir, t0);
 
         LatestChannel frame_pub, panda_pub;
         FrameRing ring;
@@ -84,6 +87,12 @@ int main(int argc, char *argv[]) {
         auto due = [&](uint64_t recorded_ns) { return base + (recorded_ns - t0); };
         std::vector<uint8_t> packet;
         CanBatch rx, tx;  // 한 배치가 21.5 KB라 1 kHz 루프 밖에 둔다
+        // 링에 실었지만 녹화의 카메라 지연이 지나지 않아 아직 내지 않은 프레임(밤에는 지연이 한 프레임 가깝다)
+        struct Pending {
+            unsigned slot;
+            uint64_t frame_id, capture_ns, publish_ns;
+        };
+        std::deque<Pending> pending;
         uint64_t frame_id = 0, sent = 0, decode_errors = 0, can_batches = 0, tx_batches = 0;
         uint64_t dropped_outputs = 0, last_output_ns = monotonic_now_ns();
         size_t next_frame = first;
@@ -99,21 +108,14 @@ int main(int argc, char *argv[]) {
                 else
                     ++decode_errors;
             }
-            // 넣은 프레임이 아직 다 나오지 않았으면 다음 슬롯에 받는다.
+            // 넣은 프레임이 아직 다 나오지 않았으면 다음 슬롯에 받는다. pts는 넣을 때 준 녹화 촬영 시각이다.
             if (sent > frame_id + dropped_outputs) {
                 const unsigned slot = static_cast<unsigned>(frame_id % ring.slot_count());
                 ring.begin_write(slot);
                 uint64_t pts = 0;
                 if (decoder.receive_to(slots[slot].phys, &pts, 0)) {
                     ring.end_write(slot, frame_id);
-                    RoadAiFrame meta;
-                    meta.frame_id = frame_id++;
-                    meta.timestamp_ns = monotonic_now_ns();
-                    meta.slot = slot;
-                    meta.width = route.width;
-                    meta.height = route.height;
-                    frame_pub.publish(&meta, sizeof(meta));
-                    ++window_frames;
+                    pending.push_back({slot, frame_id++, pts, due(pts) + camera_delay.at(pts)});
                     last_output_ns = now;
                 } else {
                     ring.end_write(slot, UINT64_MAX);
@@ -122,6 +124,18 @@ int main(int argc, char *argv[]) {
                         last_output_ns = now;
                     }
                 }
+            }
+            while (!pending.empty() && now >= pending.front().publish_ns) {
+                const Pending &p = pending.front();
+                RoadAiFrame meta;
+                meta.frame_id = p.frame_id;
+                meta.timestamp_ns = due(p.capture_ns);
+                meta.slot = p.slot;
+                meta.width = route.width;
+                meta.height = route.height;
+                frame_pub.publish(&meta, sizeof(meta));
+                ++window_frames;
+                pending.pop_front();
             }
             // CAN·판다 상태(기록 시각 순으로 흘려 읽는다)
             for (const ReplayEvents::Event *event = events.peek();
@@ -148,7 +162,7 @@ int main(int argc, char *argv[]) {
                 ++tx_batches;
             }
             const bool done = (next_frame >= route.frames.size() || route.frames[next_frame].capture_ns >= t_end) &&
-                              sent <= frame_id + dropped_outputs;
+                              sent <= frame_id + dropped_outputs && pending.empty();
             if (now - window >= 1000000000ULL) {
                 std::fprintf(stderr, "replayd: fps=%.2f t=%.1fs frames=%llu errors=%llu can=%llu tx=%llu          \r",
                              window_frames * 1e9 / (now - window), (now - base) / 1e9,

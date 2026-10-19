@@ -1,5 +1,6 @@
 #include "recording/replay_route.h"
 
+#include "common/ipc_messages.h"
 #include "recording/event_log_reader.h"
 
 #include <dirent.h>
@@ -81,7 +82,9 @@ ReplayRoute::~ReplayRoute() {
         if (s.file) std::fclose(s.file);
 }
 
-ReplayEvents::ReplayEvents(const std::string &route_dir, uint64_t from_ns) : from_ns_(from_ns) {
+ReplayEvents::ReplayEvents(const std::string &route_dir, uint64_t from_ns, std::initializer_list<RecordType> types)
+    : from_ns_(from_ns) {
+    for (const RecordType type : types) types_ |= 1u << static_cast<unsigned>(type);
     std::vector<std::string> paths = numbered_entries(route_dir + "/events", ".bin");
     // 청크는 시각 순이다. 첫 레코드가 from_ns - kLeadNs 이전인 마지막 청크부터 읽는다: 레코드는 파일에 늦어도
     // 0.5초 안에 쓰이므로 그 앞 청크에 from_ns 이후의 레코드는 없다.
@@ -105,11 +108,24 @@ ReplayEvents::ReplayEvents(const std::string &route_dir, uint64_t from_ns) : fro
 
 const ReplayEvents::Event *ReplayEvents::peek() {
     while (!have_ && stream_->next(&current_)) {
-        const auto type = static_cast<RecordType>(current_.header.type);
-        have_ =
-            (type == RecordType::CanRx || type == RecordType::PandaState) && current_.header.timestamp_ns >= from_ns_;
+        have_ = (types_ >> current_.header.type & 1u) && current_.header.timestamp_ns >= from_ns_;
     }
     return have_ ? &current_ : nullptr;
+}
+
+uint64_t RecordedCameraDelay::at(uint64_t capture_ns) {
+    for (const ReplayEvents::Event *e = models_.peek(); e; e = models_.peek()) {
+        ModelState model;
+        if (read_record(e->payload, &model)) {
+            if (model.capture_timestamp_ns > capture_ns) break;
+            // 촬영 시각을 링에 넣을 때 찍던 2026-09-25~27 녹화는 0에 가깝다(가장 작은 값 0.03 ms)
+            if (model.capture_timestamp_ns == capture_ns)
+                delay_ns_ = model.model_timestamp_ns - model.capture_timestamp_ns -
+                            static_cast<uint64_t>(model.model_execution_ms * 1e6);
+        }
+        models_.pop();
+    }
+    return delay_ns_;
 }
 
 bool read_h264_frame(FILE *file, uint64_t header_bytes, uint64_t offset, uint32_t size, bool keyframe,

@@ -648,7 +648,8 @@ the event log are described in [Recording](recording.md).
   place of `camerad` and `pandad` ([Rehearsal](rehearsal.md)). `ReplayRoute`
   reads the route (frame indexes, the frames with their parameter sets, and the
   CAN/Panda events in time order) without the decoder, so `gtest_recording`
-  reads back a route the writer made.
+  reads back a route the writer made. `RecordedCameraDelay` reads ahead in the
+  recorded `ModelState` for each frame's camera delay.
 
 ### `src/panda`
 

@@ -1,5 +1,5 @@
 """런타임 프로세스 상태: 매니저가 1초마다 내는 ManagerState(프로세스 이름과 실행 여부, src/common/ipc_messages.h),
-실행 파일에 새긴 빌드 버전(src/common/build_version.h), 파라미터를 바꿨을 때 다시 읽으라고 신호를 보낼 프로세스 찾기."""
+실행 파일에 새긴 빌드 버전(src/common/build_version.h), 파라미터 파일을 읽을 프로세스가 도는지."""
 from __future__ import annotations
 
 import os

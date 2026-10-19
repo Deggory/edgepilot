@@ -642,6 +642,16 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
         writer.write_can(RecordType::CanTx, synthetic_batch(t0 + 26'000'000ULL, 1, 0));
         writer.write_state(RecordType::PandaState, t0 + kMinute + 10'000'000ULL, panda.data(),
                            panda.size());  // 다음 청크
+        // 프레임 0과 2의 모델 출력(프레임 1은 없음): 모델 시각 − 촬영 시각 − 실행 시간이 녹화의 카메라 지연
+        ModelState model;
+        model.capture_timestamp_ns = written[0].ts;
+        model.model_timestamp_ns = written[0].ts + 62'000'000ULL;
+        model.model_execution_ms = 18.5f;
+        writer.write_state(RecordType::ModelState, model.model_timestamp_ns, &model, sizeof(model));
+        model.capture_timestamp_ns = written[2].ts;
+        model.model_timestamp_ns = written[2].ts + 70'000'000ULL;
+        model.model_execution_ms = 20.0f;
+        writer.write_state(RecordType::ModelState, model.model_timestamp_ns, &model, sizeof(model));
         writer.set_enabled(false, t0 + 2 * kMinute);
         writer.close();
     }
@@ -682,9 +692,9 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
     ASSERT_TRUE(route.read_frame(route.frames[4], &out));
     ASSERT_EQ(out, packet(4));
 
-    // 이벤트는 CanRx와 PandaState만, 청크를 넘어 시각 순으로 흘려 읽는다
+    // 이벤트는 고른 종류(CanRx와 PandaState)만, 청크를 넘어 시각 순으로 흘려 읽는다
     const auto read_events = [&](uint64_t from_ns, size_t *chunks) {
-        ReplayEvents events(root + "/recordings/" + routes[0], from_ns);
+        ReplayEvents events(root + "/recordings/" + routes[0], from_ns, {RecordType::CanRx, RecordType::PandaState});
         *chunks = events.chunks();
         std::vector<ReplayEvents::Event> out;
         for (const ReplayEvents::Event *e = events.peek(); e; e = events.peek()) {
@@ -705,6 +715,12 @@ TEST(ReplayRoute, ReadsTheWrittenRouteBack) {
     ASSERT_TRUE(decode_recorded_can(events[1].payload.data(), events[1].payload.size(), 0, &batch));
     EXPECT_EQ(batch.count, 2);
     EXPECT_EQ(events[2].header.timestamp_ns, t0 + kMinute + 10'000'000ULL);
+    // 녹화 카메라 지연은 그 프레임의 모델 출력에서, 모델 출력이 없는 프레임은 직전 값
+    RecordedCameraDelay delay(root + "/recordings/" + routes[0], t0);
+    EXPECT_EQ(delay.at(written[0].ts), 43'500'000ULL);
+    EXPECT_EQ(delay.at(written[1].ts), 43'500'000ULL);
+    EXPECT_EQ(delay.at(written[2].ts), 50'000'000ULL);
+    EXPECT_EQ(delay.at(written[3].ts), 50'000'000ULL);
     // 중간에서 시작하면 그 앞의 이벤트는 내지 않고, 2초 넘게 앞선 청크는 열지 않는다
     events = read_events(t0 + kMinute + 5'000'000ULL, &chunks);
     EXPECT_EQ(chunks, 2u) << "다음 청크가 시작보다 2초 넘게 앞서지 않는다";

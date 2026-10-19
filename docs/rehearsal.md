@@ -16,12 +16,12 @@ flowchart TB
     subgraph clip["clip"]
         direction LR
         video["segments/NNN/road.h264"]
-        events["events/NNN.bin<br>CanRx, PandaState"]
+        events["events/NNN.bin<br>CanRx, PandaState,<br>ModelState"]
     end
     subgraph replayd["replayd"]
         direction LR
         vdec["VDEC<br>H.264 decoder"]
-        pace["same timeline<br>new timestamps"]
+        pace["same timeline<br>recorded camera delay"]
     end
     video --> vdec
     events --> pace
@@ -50,6 +50,20 @@ flowchart TB
   hardware decoder (VDEC) at the recorded capture intervals and copies each
   frame into the CMM frame ring with IVPS, where the camera would put it. The
   CPU never touches pixels.
+- **Frame timing as in the car:** each frame carries its recorded capture time,
+  moved onto the replay timeline, and is published once its recorded camera
+  delay has passed: the time from the sensor's timestamp to the frame ring,
+  about 24 ms by day and 43 ms at night (longer exposure). `modeld` runs a
+  frame as soon as it arrives, so the delay is the recorded `ModelState`'s
+  `model_timestamp_ns` minus the capture time minus `model_execution_ms`; on
+  the board that matched the ring time within 0.5 ms. `replayd` reads those
+  records ahead of the frames. The plan age and the order of frames against CAN
+  are then the car's: on a night clip on 2026-10-19 the rehearsal's delay was
+  the recorded one plus 0.6 ms (p50, at most 1.8 ms, the loop's 1 ms step).
+  Before that, `replayd` stamped a frame when it came out of the decoder, so
+  plans looked 24-43 ms fresher than in the car. The decoder hands back the
+  capture time it was given as the frame's PTS, exactly and in order (all 2328
+  frames of that rehearsal).
 - **CAN and panda state:** publishes the recorded `CanRx` batches and
   `PandaState` on the same timeline, into the queues `pandad` feeds (and the
   recorder's CAN log queue). It reads them as it goes, in recorded-time order
@@ -57,8 +71,8 @@ flowchart TB
   before the start, so its memory does not grow with the route.
 - **Transmit:** `controlsd`'s send requests are **not transmitted**; they go to
   the send log only, so a rehearsal is always shadow.
-- Timestamps are rewritten to the current time; recorded times only set the
-  pacing. When the clip ends it idles so the manager does not restart it.
+- CAN and panda state are stamped when they are published. When the clip ends
+  `replayd` idles so the manager does not restart it.
 
 The manager starts `replayd` under the name `camerad` and leaves out `pandad`,
 `imud` and `locationd`.
@@ -69,9 +83,10 @@ The manager starts `replayd` under the name `camerad` and leaves out `pandad`,
 into `/root/edgepilot` by hand, and again when it changes: the upload leaves the
 old one in place.
 
-`replayd` reads the `EDGEIDX1` frame index (recording v9 and later). An older
-binary finds no frames in newer routes
-([Troubleshooting](#troubleshooting)).
+`replayd` reads recording version 14 only, like the other readers; routes made
+before 2026-10-19 were rewritten to it
+([Recording](recording.md#rewritten-recordings)). An older binary finds no
+frames in newer routes ([Troubleshooting](#troubleshooting)).
 
 ## 2. Cut a clip
 
