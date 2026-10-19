@@ -282,6 +282,41 @@ TEST(LateralPlanner, LaneProbabilityAdjustmentsDifferFromUpstream) {
     EXPECT_EQ(frames, 6) << "0.9에서 한 프레임 0.1씩: 여섯 번째 프레임에 0.3 밑";
 }
 
+// 모델 차선 std는 차선이 또렷해도 0.4를 잠깐 넘는다. 블렌드 가중치는 그 프레임에 내려가지만, 모델 경로 대체는
+// std가 0.5초(10프레임) 넘게 높을 때만 한다(판정은 최근 10프레임 std의 최솟값을 본다).
+TEST(LateralPlanner, BriefLaneStdSpikeKeepsTheLanes) {
+    const float v = 20.0f;
+    const auto model_for = [&](float std) {
+        ModelState ms{};
+        ms.valid = 1;
+        for (int i = 0; i < kTrajectorySize; ++i) {
+            ms.plan[i] = {v * model_t_idx(i), 0.0f, 0.0f};
+            ms.lanes[1][i] = {-1.75f, 0.0f};
+            ms.lanes[2][i] = {1.75f, 0.0f};
+        }
+        ms.lane_probabilities[1] = ms.lane_probabilities[2] = 0.9f;
+        ms.lane_stds[1] = ms.lane_stds[2] = std;
+        ms.desire_state[0] = 1.0f;
+        return ms;
+    };
+    LateralPlanner planner{SteeringParams{}};
+    LateralTarget r;
+    for (int i = 0; i < 40; ++i) r = planner.update(model_for(0.05f), VehicleCanState{}, v, 0.0f, true, false);
+    ASSERT_FALSE(r.laneless_mode);
+    for (int i = 0; i < 9; ++i) {
+        r = planner.update(model_for(0.6f), VehicleCanState{}, v, 0.0f, true, false);
+        ASSERT_FALSE(r.laneless_mode) << "frame " << i;
+    }
+    EXPECT_LT(r.lane_d_prob, 0.1f) << "차선 가중치는 그 프레임의 std로 내려간다";
+    for (int i = 0; i < 20; ++i) r = planner.update(model_for(0.05f), VehicleCanState{}, v, 0.0f, true, false);
+    int frames = 0;
+    while (!r.laneless_mode && frames < 40) {
+        r = planner.update(model_for(0.6f), VehicleCanState{}, v, 0.0f, true, false);
+        ++frames;
+    }
+    EXPECT_EQ(frames, 15) << "창이 높은 std로 다 차는 10번째 프레임부터 초당 2로 내려가 15번째 프레임에 0.3 밑";
+}
+
 // lane_path_weight는 Lane 모드 MPC가 차선 중심에서 벗어난 위치를 되돌리는 세기다. 차가 차선 중심에서
 // 0.3 m 오른쪽에 있으면 가중치 3이 1보다 왼쪽(음) 곡률을 더 크게 요구한다.
 TEST(LateralPlanner, LanePathWeightStrengthensCentering) {

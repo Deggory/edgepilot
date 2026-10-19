@@ -14,7 +14,7 @@ flowchart TB
     gtest(["googletest v1.18.0<br>first configure, SHA256 pinned"]) --> configure
     configure --> build["build the host_tests target<br>38 gtest_* executables"]
     build --> ctest["ctest<br>from the repository root"]
-    ctest --> cpp["build-host/bin/gtest_*<br>356 cases"]
+    ctest --> cpp["build-host/bin/gtest_*<br>357 cases"]
     ctest --> py["Python checks<br>check_web_console.py, check_manager.py<br>check_recording_reader.py<br>check_docs.py"]
     py -.-> mjs["check_bev_lane_filter.mjs<br>jsc or node, if present"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
@@ -30,7 +30,7 @@ flowchart TB
 ```
 
 The script configures `build-host`, builds the `host_tests` target and runs
-everything with `ctest`: 356 C++ cases and 4 Python checks. googletest v1.18.0
+everything with `ctest`: 357 C++ cases and 4 Python checks. googletest v1.18.0
 is downloaded on the first configure (its SHA256 is pinned).
 
 `./scripts/run_host_tests.sh --linux` does the same in `build-linux-test/`
@@ -90,7 +90,7 @@ the root as well.
 | `gtest_lateral_mpc` | 1 | Lateral MPC optimality: the dynamics and the cost are implemented separately, and the gradient is checked at the converged point of 8 scenarios ([Verification](../docs/verification.md#lateral-mpc-solver)) |
 | `gtest_lateral_nn` | 26 | The learned torque model (`docs/lateral-nn.md`): the repository model and every model in `models/lateral_nn/` load (the loader re-evaluates their test vectors), refused files (format, names, non-finite values, output clip, windows beyond the history, a wrong test vector, a non-boolean `friction_free`, a `curve_gain` outside 0..1), a collapsed net giving NaN instead of a clip bound, the run-time inputs from a plan and the history, the same inputs as the training code on every library model's `input_tests`, the inverse vehicle model, the torque controller's blend, the curve friction kept only for a friction-free model and the curve gain's ramps (lateral acceleration 0.2→0.6 m/s², 30→50 km/h), and in the lateral controller the switch, the model, the 1 s ramp kept through a model swap, the 80° hold limit on the model's inputs, the 3 m/s floor, a NaN plan, the linear feed-forward during lane changes, turns and blinkers (left out of training), and the roll inputs equal to the bank estimate over g. |
 | `gtest_lateral_nn_select` | 5 | Choosing the model file (`params/lateral_nn.json`): the name rule, the selection file and the environment override, the selector switching, keeping and reporting a model, and no model when nothing is selected. |
-| `gtest_lateral_planner` | 8 | The lateral planner: laneless (openpilot `get_curvature_from_plan`), lane change (upstream desire_helper), no desire from a blinker below the minimum speed, where `path_offset_m` applies, `lane_path_weight`, Lane mode's stretch without lanes matching laneless, the handover blend, a blinker alone keeping the model path fallback, and the lane probability adjustments where they differ from upstream |
+| `gtest_lateral_planner` | 9 | The lateral planner: laneless (openpilot `get_curvature_from_plan`), lane change (upstream desire_helper), no desire from a blinker below the minimum speed, where `path_offset_m` applies, `lane_path_weight`, Lane mode's stretch without lanes matching laneless, the handover blend, a blinker alone keeping the model path fallback, the lane probability adjustments where they differ from upstream, and a lane-line std rise under 0.5 s lowering the lane weight without switching to the model path |
 | `gtest_lateral_torque` | 13 | The torque lateral controller: a request buffer as long as the steering delay, the speed-dependent gain (KP_INTERP) and its low-speed straight scale (turns and turn exits keep the full gain), the friction dead zone that fades out from 40 to 60 km/h, upstream PID integrator limits (stopped while saturated, reset when inactive), live bank and latAccelOffset feedforward, the use of learned values (opendbc `calc_curvature`, the upstream latAccelFactor structure); non-finite inputs giving zero torque |
 | `gtest_lead_flow` | 6 | The hardware-independent part of the lead expansion rate: projecting the box of the lead's rear (including the mount offset) and rejecting it when out of range; choosing corners at source resolution; a similarity RANSAC that drops background points. On a synthetic approach scene drawn with a textured board: points that drift at each step brought back with the template from 10 frames earlier, matching the closing speed; points that fail the forward-backward check dropped, the gaps refilled and the window continued; the window restarted when the lead changes or frames drop |
 | `gtest_lead_tracker` | 5 | The lead track (a Kalman filter of the model distance and the flow expansion rate): on a noisy approaching lead the distance shake falls a lot, and it finds the true closing speed even when it starts from an under-read relative speed; one jumping distance is dropped, and five frames in a row elsewhere restart on a different lead; with the expansion rate the relative speed is more accurate and steadier at the same delay; jumping expansion rates and repeats of the same window-end frame are not used; it restarts when there is no lead or frames drop, and starts from 0 when the ego speed is unknown |

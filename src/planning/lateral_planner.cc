@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -133,14 +134,27 @@ public:
         const auto std_mod = [](double value) {
             return value <= 0.15 ? 1.0 : value >= 0.4 ? 0.0 : (0.4 - value) / 0.25;
         };
+        // 모델 경로 대체 판정은 std를 최근 0.5초의 최솟값으로 본다. 차선이 또렷해도 std가 0.4를 잠깐 넘어(15경로에서
+        // 확률 0.5 넘는 프레임의 20~60%가 std 보정 1 미만) 그때마다 대체로 넘어갔다 왔다(분당 3회, 60%가 1초
+        // 안). 높은 std의 차선은 실제로 덜 맞으므로(LKA14와의 오차 p50 3.9 cm → std 0.4~0.6에서 8.5 cm) 블렌드
+        // 가중치는 그 프레임의 std로 낮추고, 0.5초 넘게 이어질 때만 경로 출처를 바꾼다. 확률이 떨어지는 교차로는 그대로다.
+        left_std_history_[std_history_index_] = left_std_;
+        right_std_history_[std_history_index_] = right_std_;
+        std_history_index_ = (std_history_index_ + 1) % kSwitchStdFrames;
+        const double left_switch =
+            left_prob * std_mod(*std::min_element(left_std_history_.begin(), left_std_history_.end()));
+        const double right_switch =
+            right_prob * std_mod(*std::min_element(right_std_history_.begin(), right_std_history_.end()));
         left_prob *= std_mod(left_std_);
         right_prob *= std_mod(right_std_);
         // 차선 std는 std_mod 밴드(0.15~0.40)를 0.10초에 가로지른다(실측 2.43/s).
         // 그대로 쓰면 블렌드 가중치와 랜리스 전환이 같은 프레임에 통째로 뒤집힌다.
-        // 둘의 공통 입력을 늦춘다. 평균 가중치는 바뀌지 않는다.
+        // 둘의 입력을 늦춘다. 평균 가중치는 바뀌지 않는다.
         const double prob_step = kProbRatePerS * kDtModel;
         left_prob_eff_ = std::clamp(left_prob, left_prob_eff_ - prob_step, left_prob_eff_ + prob_step);
         right_prob_eff_ = std::clamp(right_prob, right_prob_eff_ - prob_step, right_prob_eff_ + prob_step);
+        left_switch_prob_ = std::clamp(left_switch, left_switch_prob_ - prob_step, left_switch_prob_ + prob_step);
+        right_switch_prob_ = std::clamp(right_switch, right_switch_prob_ - prob_step, right_switch_prob_ + prob_step);
         left_prob = left_prob_eff_;
         right_prob = right_prob_eff_;
 
@@ -193,8 +207,8 @@ public:
         return path;
     }
 
-    // 랜리스 전환 판정값. 블렌드와 같은 유효 확률을 써서 두 판정이 어긋나지 않게 한다.
-    double mean_effective_probability() const { return (left_prob_eff_ + right_prob_eff_) * 0.5; }
+    // 모델 경로 대체 판정값: 블렌드와 같은 보정이되 std는 최근 0.5초의 최솟값이다(update_probabilities).
+    double mean_switch_probability() const { return (left_switch_prob_ + right_switch_prob_) * 0.5; }
     // 로그/분석용 관측값 노출. left_prob()/right_prob()는 폭·std 보정 전의 값이다: 모델 확률에 차선 변경·회전
     // 페이드(scale_near_probability)를 곱한 것.
     double near_left_y() const { return left_y_[0]; }
@@ -216,6 +230,14 @@ private:
     static constexpr double kWidthLearnMinCertainty = 0.25;
     // 유효 확률 변화율 상한(1/s). 0→1에 0.5초.
     static constexpr double kProbRatePerS = 2.0;
+    // 대체 판정이 std를 보는 창(모델 20 Hz로 0.5초)
+    static constexpr size_t kSwitchStdFrames = 10;
+    // 아직 받지 않은 칸은 최솟값에 들지 않는다
+    static std::array<double, kSwitchStdFrames> filled_history() {
+        std::array<double, kSwitchStdFrames> history;
+        history.fill(std::numeric_limits<double>::infinity());
+        return history;
+    }
     std::array<double, kTrajectorySize> lane_t_{};
     std::array<double, kTrajectorySize> lane_x_{};
     std::array<double, kTrajectorySize> left_y_{};
@@ -226,6 +248,11 @@ private:
     double right_prob_ = 0.0;
     double left_prob_eff_ = 0.0;
     double right_prob_eff_ = 0.0;
+    double left_switch_prob_ = 0.0;
+    double right_switch_prob_ = 0.0;
+    std::array<double, kSwitchStdFrames> left_std_history_ = filled_history();
+    std::array<double, kSwitchStdFrames> right_std_history_ = filled_history();
+    size_t std_history_index_ = 0;
     double left_std_ = 0.0;
     double right_std_ = 0.0;
     double lane_width_ = 3.7;
@@ -377,7 +404,7 @@ struct LateralPlanner::Impl {
     // Lane 모드에서 이번 프레임에 모델 경로를 따를지(차선이 안 보일 때) 정하고, 출력 인계 비율 plan_mix를
     // 그쪽으로 옮긴다.
     bool update_path_source() {
-        const double lane_probability = lane_planner.mean_effective_probability();
+        const double lane_probability = lane_planner.mean_switch_probability();
         // 차선을 실제로 빼는 변경 단계(Starting, Finishing)에서는 모델 경로로 빠지지 않는다: 그동안 차선 확률을 줄여
         // 0.3 밑으로 떨어지기 때문이다. 깜빡이만 켠 단계(PreLaneChange)는 차선을 빼지 않으므로 평소 규칙을 따른다
         // (예전에는 이 단계에서도 대체를 꺼, 차선이 약한 출구 분기에서 깜빡이를 켜면 약한 차선이 경로에 섞였다).
