@@ -217,6 +217,28 @@ renders.
   (12.0.1, what the diagrams were checked with), so a new Mermaid release does
   not change the verdicts; when you raise it, draw every diagram again.
 
+## Brand
+
+The icon is a pilot's wings with the road running through them: the green
+perspective road is the HUD's lane-mode path colour (`#30d158`) on the web
+console's bar colour (`#16191c`). The wordmark is drawn, not set in a font:
+round-capped strokes of the icon's weight, with the `i` of `pilot` as the same
+green road under its vanishing point. The sources are in `docs/images/brand/`:
+
+| File | Use |
+| --- | --- |
+| `edgepilot-icon.svg` | the icon from about 48 px up |
+| `edgepilot-icon-small.svg` | 16 and 32 px: two wing strokes, thicker, so they stay apart (the web console favicon, `static/icon.svg`) |
+| `edgepilot-wordmark.svg`, `-dark.svg` | the name alone, for light and dark backgrounds |
+| `edgepilot-lockup.svg`, `-dark.svg` | icon and name, as at the top of the README |
+| `edgepilot-social.png` | GitHub's social preview, 1280x640, uploaded in the repository settings |
+
+The PNGs are screenshots of the SVGs in headless Chrome, for example
+`chrome --headless=new --force-device-scale-factor=1 --window-size=180,180
+--screenshot=out.png page.html`. The web console's `apple-touch-icon.png`
+(180x180) is the large icon without its rounded corners, which the phone draws
+itself.
+
 ## Versions
 
 - No file carries its own version or change log. Git history is the record.

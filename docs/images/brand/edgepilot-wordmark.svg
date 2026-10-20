@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 358 96">
+  <title>edgepilot</title>
+  <path d="M8 50H40A16 16 0 1 0 35.31 61.31M88 50A16 16 0 1 1 56 50A16 16 0 1 1 88 50ZM88 10V66M136 50A16 16 0 1 1 104 50A16 16 0 1 1 136 50ZM136 34V74A16 16 0 0 1 106.1 82M152 50H184A16 16 0 1 0 179.31 61.31M232 50A16 16 0 1 1 200 50A16 16 0 1 1 232 50ZM200 34V90M271 10V66M319 50A16 16 0 1 1 287 50A16 16 0 1 1 319 50ZM341 16V60A10 10 0 0 0 351 70M331 34H351" fill="none" stroke="#16191c" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="252" cy="18" r="5.5" fill="#1fb24a"/><path d="M244.5 70 252 32 259.5 70Z" fill="#1fb24a"/>
+</svg>

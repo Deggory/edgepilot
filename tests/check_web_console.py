@@ -1602,8 +1602,10 @@ class StaticPageTest(unittest.TestCase):
     def test_page_modules_and_three_resolve(self):
         page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         imports = json.loads(re.search(r'<script type="importmap">(.*?)</script>', page, re.S).group(1))["imports"]
+        assets = StaticAssets()
         for url in [*imports.values(), *re.findall(r'(?:src|href)="(/static/[^"]+)"', page)]:
             self.assertTrue((STATIC_DIR / Path(url).relative_to("/static")).is_file(), url)
+            self.assertIsNotNone(assets.get(str(Path(url).relative_to("/static"))), f"{url}: the server does not serve it")
         self.assertIn('src="/static/console.js"', page)
         for module in [*STATIC_DIR.glob("*.js"), *STATIC_DIR.glob("three/*.js")]:
             text = module.read_text(encoding="utf-8")

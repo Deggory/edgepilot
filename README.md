@@ -1,4 +1,9 @@
-# edgepilot · MaixCAM2
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/edgepilot-lockup-dark.svg">
+    <img src="docs/images/brand/edgepilot-lockup.svg" alt="edgepilot · MaixCAM2" height="72">
+  </picture>
+</h1>
 
 <table>
   <tr>
