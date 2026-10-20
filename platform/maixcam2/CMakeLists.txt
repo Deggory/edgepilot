@@ -20,6 +20,7 @@ add_library(maixcam2_media STATIC
   "${MAIX_MSP_OVERRIDE}/common_hw.c")
 target_include_directories(maixcam2_media SYSTEM PRIVATE ${MAIX_INCLUDES})
 target_include_directories(maixcam2_media PUBLIC "${PROJECT_SOURCE_DIR}/platform")
+target_include_directories(maixcam2_media PRIVATE "${PROJECT_SOURCE_DIR}/src")  # hud/hud_tiles.h
 target_compile_options(maixcam2_media PRIVATE ${PROJECT_WARNINGS})
 set_source_files_properties(
   "${MAIX_MSP_OVERRIDE}/common_vin.c" "${MAIX_MSP_OVERRIDE}/common_isp.c"

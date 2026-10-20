@@ -77,7 +77,6 @@ int main(int argc, char *argv[]) {
             if (!cmm_alloc(&slots[i], ring.frame_bytes(), "replay_ring"))
                 throw std::runtime_error("frame ring CMM alloc failed");
             ring.set_slot_phys(i, slots[i].phys);
-            ring.attach_slot(i, slots[i].virt);
         }
         std::fprintf(stderr, "replayd: %s from %.1f s (%zu frames, CAN/panda events from %zu chunks), %ux%u\n",
                      route_dir.c_str(), (t0 - route_start) / 1e9, route.frames.size() - first, events.chunks(),

@@ -160,7 +160,7 @@ class WarpPair:
 
     def set_calibration(self, rpy: np.ndarray, camera_offset_m: float = 0.0,
                         camera_height_m: float = CAMERA_HEIGHT_M):
-        """보정(rpy)과 카메라 장착(modeld set_camera_mount: 오른쪽 이동, 높이). 녹화 v7부터 ModelState에 있다."""
+        """보정(rpy)과 카메라 장착(modeld set_camera_mount: 오른쪽 이동, 높이). 녹화된 ModelState에 둘 다 있다."""
         rpy = np.asarray(rpy, dtype=np.float32)
         mount = (float(camera_offset_m), float(camera_height_m))
         if (self._med is None or not np.allclose(self._med.rpy, rpy, atol=1e-7)

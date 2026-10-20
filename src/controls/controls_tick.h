@@ -9,7 +9,8 @@
 // - 플래너는 on_model에서 이번 틱 CAN이 반영된 차량 상태와 직전 틱의 실제 곡률·active를 받아 그 자리에서
 //   계산하고, 같은 틱의 step이 그 결과를 쓴다(평균 약 0.1 ms, MPC는 반복 없는 고정 연산; 2026-10-13 보드).
 //   예전에는 작업 스레드가 계산해 새 플랜이 한 틱(10 ms) 늦게 쓰였고, 재생 도구·검사와도 그만큼 달랐다.
-// - step의 now_ns는 공유 상태를 다 읽은 직후의 시각이다(그 사이 발행된 모델도 신선하게 본다).
+// - step의 now_ns는 공유 상태를 다 읽은 직후의 시각이다(그 사이 발행된 모델도 신선하게 본다). 컨트롤러는 plan 나이도
+//   이 시각으로 잰다.
 // - 학습기 갱신은 송신 뒤라 적합·직렬화 틱이 CAN 송신을 늦추지 않고, 결과는 다음 틱의 컨트롤러가
 //   쓴다.
 
@@ -28,7 +29,8 @@
 #include <optional>
 #include <string>
 
-// 결합·해제·거부 이벤트 id와 전이 로그. id는 0을 건너뛰어 HUD가 새 이벤트를 구분한다.
+// 결합·해제·거부 이벤트 id(ControlsTick::update_events가 갱신하고 전이를 로그에 남긴다). id는 0을 건너뛰어 HUD가 새
+// 이벤트를 구분한다.
 struct EngageEvents {
     uint32_t engage_id = 0;
     uint32_t disengage_id = 0;
@@ -37,9 +39,6 @@ struct EngageEvents {
     bool have_previous = false;
     bool previous_engaged = false;
     bool previous_active = false;
-
-    void update(const LateralControlResult &result, const VehicleCanState &vehicle, const PandaGateOutput &panda,
-                const PandaState &panda_state, const PathHoldOutput &held, const ModelState &model, uint64_t now_ns);
 };
 
 // 이번 틱에 읽은 locationd 상태. 채널이 아직 없으면 open이 거짓이다.
@@ -80,12 +79,10 @@ public:
     // 컨트롤러·알림·크루즈를 돌려 이번 틱의 ControlState(timestamp_ns 제외)를 만든다. 보낼 프레임은
     // result().frames, 보낼지는 result().should_send다.
     ControlState step(double now_s, uint64_t now_ns);
-    // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영.
-    // 저장 주기가 됐고 내용이 마지막 저장과 다르면 저장할 내용을, 새 LearnerState가 나왔으면 그것도 담아 돌려준다.
+    // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영. 같은 틱의 step 다음에 부른다(컨트롤러의 신선도 판정을
+    // 쓴다). 저장 주기가 됐고 내용이 마지막 저장과 다르면 저장할 내용을, 새 LearnerState가 나왔으면 그것도 담아
+    // 돌려준다. 실패한 쓰기는 BackgroundWriter가 다시 쓴다.
     LearnerOutputs update_learners(double now_s);
-    // 학습 파일 쓰기가 실패했다(BackgroundWriter::failures가 늘었다). kLearnerRetryS 뒤 두 파일을 내용이 같아도 다시
-    // 내놓는다. 그대로 두면 주차 중처럼 내용이 바뀌지 않는 동안 실패한 파일을 다시 쓰지 않는다.
-    void learner_write_failed(double now_s);
     // 끝낼 때: 마지막 저장 뒤 바뀐 학습값(paramsd 60초·torqued 12초 주기 사이의 것). locationd처럼 끝낼 때도 남긴다.
     LearnerOutputs final_learner_outputs();
 
@@ -103,7 +100,15 @@ public:
     LateralPlanner &planner() { return planner_; }
 
 private:
-    LateralControllerConfig config_;  // 조향 파라미터와 제어 타이밍은 여기에 있다
+    // step의 단계들. 입력은 멤버(이번 틱 상태)에서 읽고, 인자는 step의 지역값이다.
+    void update_events(const PathHoldOutput &held, uint64_t now_ns);
+    // overlayd/recordd가 읽는 100 Hz 스냅샷(timestamp_ns 제외)
+    ControlState make_control_state(const DepartureAlertOutput &departure_alert, bool radar_lead_fresh,
+                                    float ego_speed_kph, double now_s) const;
+    // 학습기·컨트롤러 상태를 HUD와 웹 콘솔이 읽는 LearnerState로(timestamp_ns 제외)
+    LearnerState make_learner_state() const;
+    const SteeringParams &steering() const { return controller_.config().steering_params; }
+
     AdaptiveCruiseConfig cruise_;
     LateralPlanner planner_;
     LateralController controller_;
@@ -130,9 +135,7 @@ private:
     uint32_t last_logged_alert_event_id_ = 0;
     uint64_t logged_nonfinite_ticks_ = 0;  // 로그에 남긴 토크 0(유한하지 않은 입력) 틱 수
     // 마지막으로 저장하라고 넘긴(처음에는 시작 때 읽은) 학습 파일 내용. 같은 내용은 다시 쓰지 않는다: 주차 중에도
-    // torqued가 88 KB를 12초마다 SD에 다시 쓰고 있었다(상류는 주행 중에만 돈다). 쓰기가 실패하면
-    // learner_write_failed가 비우고 다시 내놓게 한다(locationd의 lagd 저장과 같다).
+    // torqued가 88 KB를 12초마다 SD에 다시 쓰고 있었다(상류는 주행 중에만 돈다).
     std::string saved_vehicle_json_;
     std::string saved_torque_cache_;
-    double learner_retry_at_s_ = 0.0;  // 0이 아니면 이 시각에 두 학습 파일을 다시 내놓는다
 };

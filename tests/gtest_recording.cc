@@ -96,12 +96,17 @@ TEST(RecordingWriter, RouteMetadataReachesTheCardAtStart) {
         RecordingWriter writer(recordings, params, 1280, 720, 20, 8000000);
         writer.set_enabled(true, 5'000'000'000ULL);
         bool arrived = false;
-        // 옮기기는 fdatasync를 거치므로 병렬 시험의 부하에서는 2초를 넘기도 했다. 도착하면 곧바로 나온다.
+        // 옮기기는 fdatasync를 거치므로 병렬 시험의 부하에서는 2초를 넘기도 했다. 도착하면 곧바로 나온다. 아직 없는
+        // 파일은 실패가 아니라 기다릴 일이라 read_file(없으면 실패를 남긴다) 대신 크기만 본다.
+        const auto has_content = [](const std::string &path) {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(path, error);
+            return !error && size > 0;
+        };
         for (int i = 0; i < 1000 && !arrived; ++i) {
             const std::vector<std::string> routes = list_dir(recordings);
-            arrived = routes.size() == 1 &&
-                      !read_file(recordings + "/" + routes[0] + "/params/steering.json").empty() &&
-                      !read_file(recordings + "/" + routes[0] + "/manifest.json").empty();
+            arrived = routes.size() == 1 && has_content(recordings + "/" + routes[0] + "/params/steering.json") &&
+                      has_content(recordings + "/" + routes[0] + "/manifest.json");
             if (!arrived) usleep(10'000);
         }
         EXPECT_TRUE(arrived) << "녹화 중에 params와 manifest가 SD 쪽에 있다";

@@ -32,10 +32,7 @@ ParsedModelOutput distinct_output() {
         out.road_edges[edge].std = 0.3f + edge;
     }
     for (int i = 0; i < kDesireLen; ++i) out.meta.desire_state[i] = 0.1f * i;
-    for (int i = 0; i < kMetaPressHorizons; ++i) {
-        out.meta.gas_press[i] = 0.05f * i;
-        out.meta.brake_press[i] = 0.9f - 0.1f * i;
-    }
+    for (int i = 0; i < kMetaPressHorizons; ++i) out.meta.gas_press[i] = 0.05f * i;
     out.leads.global_probabilities = {0.7f, 0.6f, 0.5f};
     for (int t = 0; t < kLeadMhpSelection; ++t) out.leads.predictions[t].points[0] = {30.0f + t, 0.5f, 12.0f, -0.5f};
     for (int i = 0; i < 3; ++i) {

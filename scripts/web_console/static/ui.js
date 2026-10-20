@@ -10,7 +10,7 @@ export function el(spec, attributes = {}, ...children) {
   const [tag, ...classes] = spec.split(".");
   const node = document.createElement(tag || "div");
   if (classes.length) node.className = classes.join(" ");
-  for (const [name, value] of Object.entries(attributes || {})) {
+  for (const [name, value] of Object.entries(attributes)) {
     if (value === undefined || value === null || value === false) continue;
     if (name.startsWith("on") && typeof value === "function") node.addEventListener(name.slice(2), value);
     else if (name === "dataset") Object.assign(node.dataset, value);
@@ -33,7 +33,7 @@ function svg(tag, attributes = {}) {
 // (levels)이 있는 SVG 하나이고, 이름이 곧 CSS 클래스라 색·굵기·점선은 스타일 시트가 정한다(굵기는 차트 크기와 상관없이
 // vector-effect: non-scaling-stroke). 한 번 만들고 draw()로 다시 그린다:
 //   x, y      [처음, 끝] 범위(데이터 단위). y 범위 밖의 값은 끝에 붙인다
-//   data      {선 이름: [[x, y], ...]}. 값이 없는 점(NaN)에서 선을 끊는다
+//   data      {선 이름: [[x, y], ...]}, 선마다 있다. 값이 없는 점(NaN)에서 선을 끊는다
 //   at        {기준선 이름: y}. 없거나 NaN이면 그 선을 숨긴다
 //   inset     위아래 여백(차트 높이에 대한 비율)
 export function sparkline({className = "", height = 60, series = [], levels = [], label = ""}) {
@@ -43,11 +43,11 @@ export function sparkline({className = "", height = 60, series = [], levels = []
   const paths = new Map(series.map(name => [name, element.appendChild(svg("path", {class: name}))]));
   return {
     element,
-    draw({x: [x0, x1], y: [lo, hi], data = {}, at = {}, inset = 0}) {
+    draw({x: [x0, x1], y: [lo, hi], data, at = {}, inset = 0}) {
       const px = v => ((v - x0) / (x1 - x0 || 1)) * 100;
       const py = v => height * (inset + (1 - 2 * inset) * (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo || 1)));
       for (const [name, path] of paths) {
-        path.setAttribute("d", gapPath((data[name] || []).map(([u, v]) => [px(u), Number.isFinite(v) ? py(v) : NaN])));
+        path.setAttribute("d", gapPath(data[name].map(([u, v]) => [px(u), Number.isFinite(v) ? py(v) : NaN])));
       }
       for (const [name, line] of lines) {
         const v = at[name];
@@ -205,6 +205,16 @@ export function pollingCard(title, {url, intervalMs, render, actions = []}) {
     card.fail(error);
   });
   return {element: card.element, show, redraw: () => latest && show(latest), start: polling.start, stop: polling.stop};
+}
+
+// 이름마다 한 줄인 목록(학습 토크 모델, 주행 기록)을 names에 맞춘다. rows는 이름 -> make(이름)이 만든 줄({element,
+// ...})이다. 이름 목록이 바뀔 때만 줄을 다시 만든다: 폴링마다 갈아 끼우면 누르는 사이에 바뀐 줄이 탭이나 체크를 놓치고
+// 키보드 초점도 사라진다.
+export function syncRows(list, rows, names, make) {
+  if (names.join("\n") === [...rows.keys()].join("\n")) return;
+  rows.clear();
+  for (const name of names) rows.set(name, make(name));
+  list.replaceChildren(...[...rows.values()].map(row => row.element));
 }
 
 // 버튼 하나의 요청. confirm(확인 창 줄 목록, 첫 줄이 질문)이 있으면 먼저 묻는다. 도는 동안 busy(true), 끝나면

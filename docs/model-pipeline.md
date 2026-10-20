@@ -36,8 +36,8 @@ On the board one frame takes:
 | whole `modeld` frame | ~19.5 ms |
 
 `EDGEPILOT_PROFILE=1` prints the average wall time of the warp, input, NPU and
-output stages every 30 frames. The warp step waits for each view's
-`AX_IVPS_Dewarp` call and then unpacks the view into YUV6 planes on the CPU.
+output stages every 30 frames. The warp step waits for both views'
+`AX_IVPS_Dewarp` calls and then unpacks the views into YUV6 planes on the CPU.
 The GDC engine itself is busy for only 2 × 0.3 ms of it
 ([Hardware engines](runtime.md#hardware-engines)).
 
@@ -109,15 +109,19 @@ The warp is followed by packing into the YUV6 plane order
 
 `platform/maixcam2/maix_gdc_warp.*` runs `AX_IVPS_Dewarp` in perspective mode,
 reading the ring slot straight from its physical address and producing two
-512x256 NV12 views, then unpacks them into the newest history slot with NEON
+512x256 NV12 views in one cached output block, which it invalidates once per
+frame. It then unpacks them into the newest history slot with NEON
 (`src/model/yuv6_pack.h`, 16 columns at a time; a byte loop took about 6 times
-as long). `src/model/model_input_transform.*` builds the two homographies. The
+as long). Storing each vector a second time, straight into the newest half of
+the model input, saved 0.27 ms of copying but made the unpack 0.46 ms slower on
+the board (2026-10-21), so the history is copied in before each run.
+`src/model/model_input_transform.*` builds the two homographies. The
 GDC must come up: without it `modeld` exits and the manager restarts it.
 Against the CPU warp that earlier builds carried (openpilot's OpenCL
 interpolation in fixed point), Y differed by at most 1 LSB and U/V by 0.4 LSB on
 average; on a replay the plan lateral offset at 2 s against the fp32 host
-reference differed by 0.0005 m. Replay (`EDGEPILOT_REPLAY_NV12`) copies each
-frame into a CMM buffer that the GDC reads.
+reference differed by 0.0005 m. Replay (`EDGEPILOT_REPLAY_NV12`) reads each
+frame from the file straight into a CMM buffer that the GDC reads.
 
 The calibration service updates the warp's rpy after every frame, matching
 openpilot's `cameraOdometry -> liveCalibration -> modeld` loop, so each frame

@@ -203,7 +203,6 @@ int main(int argc, char **argv) {
         }
     }
     uint64_t tick_ns = first_record_ns;
-    tick.controller().set_clock([&tick_ns] { return tick_ns; });
     const uint64_t start_ns = tick_ns;
 
     std::FILE *dump = dump_path.empty() ? nullptr : std::fopen(dump_path.c_str(), "w");

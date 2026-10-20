@@ -5,6 +5,7 @@ import ast
 import asyncio
 import gzip
 import json
+import math
 import os
 import re
 import shutil
@@ -28,17 +29,18 @@ from scripts.web_console.calibration_control import (
     CalibrationControl,
 )
 from scripts.web_console.learner_monitor import (
+    GRAVITY,
     LEARNER_FIELDS,
     LEARNER_FLAGS,
     LEARNER_STATE,
     LEARNER_TOPIC,
+    LEARNER_TREND_COLUMNS,
     LOCALIZATION_FIELDS,
     LOCALIZATION_FLAGS,
     LOCALIZATION_INPUT_FLAGS,
     LOCALIZATION_STATE,
     LOCALIZATION_TOPIC,
     LearnerMonitor,
-    LearnerStateReader,
     LocalizationReader,
 )
 from scripts.web_console.lateral_nn_models import (
@@ -171,6 +173,41 @@ def control_payload(**values) -> bytes:
     for name, value in values.items():
         struct.pack_into(CONTROL_FORMATS.get(name, "<I"), payload, CONTROL_STATE_AT[name], value)
     return bytes(payload)
+
+
+# 로더가 값을 자르는 Json*Field 표: 그룹 -> (소스, 표 이름들)
+RUNTIME_CLAMP_TABLES = {
+    "steering": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
+    "adaptive_cruise": ("src/controls/adaptive_cruise.cc", ("kAdaptiveFloats",)),
+    "recording": ("src/recording/recordd.cc", ("kRecordingInts",)),
+    "display": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
+}
+
+
+def runtime_clamps(group: str) -> dict:
+    """그룹의 로더 표에 있는 {키: (최저, 최고)}."""
+    source, tables = RUNTIME_CLAMP_TABLES[group]
+    text = (ROOT / source).read_text(encoding="utf-8")
+    row = re.compile(r'\{"(\w+)",\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?,\s*&\w+::\w+\}')
+    clamps = {}
+    for table in tables:
+        body = re.search(table + r"\[\] = \{(.*?)\n\};", text, re.S).group(1)
+        clamps.update({key: (float(low), float(high)) for key, low, high in row.findall(body)})
+    return clamps
+
+
+def metadata_keys(group: str, key: str, meta: dict) -> set:
+    """항목 하나의 메타데이터에서 나오는 문구 키(param_state.js describe가 만든다). unit.<단위>는 언어마다 다르게 쓰는
+    단위에만 있어 따로 본다."""
+    fields = ["label", "description", "increase", "decrease"] + (["learned_role"] if meta.get("learned") else [])
+    keys = {f"param.{group}.{key}.{field}" for field in fields}
+    keys.update(f"toggle.{name}" for name in meta.get("labels", []))
+    keys.add(f"section.{meta['section']}")
+    if meta.get("caution"):
+        keys.add(f"caution.{meta['caution']}")
+    for kind in ("unused", "role"):
+        keys.update(f"{kind}.{condition['text']}" for condition in meta.get(kind, []))
+    return keys
 
 
 # ------------------------------------------------------------ 파라미터
@@ -350,8 +387,8 @@ class ParamStoreTest(unittest.TestCase):
 
 class ParamMetadataTest(unittest.TestCase):
     def test_repository_params_have_complete_ui_metadata(self):
-        """항목마다 섹션이 있고 두 언어 모두 이름·설명·효과 문구가 있으며, 섹션은 그 항목이 나오는 탭(파일 그룹,
-        tab="vehicle"이면 차량 특성 탭)의 섹션이고, 빈 섹션이 없다."""
+        """항목마다 섹션이 있고 두 언어 모두 그 항목의 문구(metadata_keys)가 있으며, 섹션은 그 항목이 나오는 탭(파일
+        그룹, tab="vehicle"이면 차량 특성 탭)의 섹션이고, 빈 섹션이 없다."""
         catalogs = {lang: catalog(lang) for lang in LANGUAGES}
         tabs = {}
         for group, spec in PARAM_GROUPS.items():
@@ -362,16 +399,11 @@ class ParamMetadataTest(unittest.TestCase):
             for key, value in params.items():
                 meta = metadata[key]
                 self.assertTrue(meta.get("section"), f"{group}.{key}.section")
-                fields = ["label", "description", "increase", "decrease"]
-                fields += ["learned_role"] if meta.get("learned") else []
                 for lang, texts in catalogs.items():
-                    for field in fields:
-                        name = f"param.{group}.{key}.{field}"
+                    for name in metadata_keys(group, key, meta):
                         self.assertTrue(texts.get(name), f"{lang}: {name}")
                     if not meta.get("learned"):
                         self.assertNotIn(f"param.{group}.{key}.learned_role", texts, f"{lang}: {group}.{key}")
-                    if meta.get("caution"):
-                        self.assertTrue(texts.get(f"caution.{meta['caution']}"), f"{lang}: caution.{meta['caution']}")
                 self.assertIn(meta.get("tab", group), {group, "vehicle"}, f"{group}.{key}")
                 if meta.get("card"):
                     # 차량 특성 탭의 전용 카드가 자기 API로 바꾸는 항목: 섹션은 파일 그룹의 것이지만 그 탭에 카드가
@@ -455,21 +487,10 @@ class ParamMetadataTest(unittest.TestCase):
     def test_ui_ranges_match_runtime_clamps(self):
         """로더는 Json*Field 표대로 값을 자른다. 편집기도 같은 min/max를 보여야 하고, 아니면 런타임이 말없이
         바꾸는 값을 받아들인다."""
-        row = re.compile(r'\{"(\w+)",\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?,\s*&\w+::\w+\}')
-        tables = {
-            "steering": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
-            "adaptive_cruise": ("src/controls/adaptive_cruise.cc", ("kAdaptiveFloats",)),
-            "recording": ("src/recording/recordd.cc", ("kRecordingInts",)),
-            "display": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
-        }
-        for group, (source, names) in tables.items():
-            text = (ROOT / source).read_text(encoding="utf-8")
-            runtime = {}
-            for name in names:
-                body = re.search(name + r"\[\] = \{(.*?)\n\};", text, re.S)
-                self.assertIsNotNone(body, f"{source}: {name}")
-                runtime.update({key: (float(low), float(high)) for key, low, high in row.findall(body.group(1))})
-            self.assertTrue(runtime, f"{source}: no rows parsed")
+        self.assertEqual(set(RUNTIME_CLAMP_TABLES), set(PARAM_GROUPS))
+        for group in PARAM_GROUPS:
+            runtime = runtime_clamps(group)
+            self.assertTrue(runtime, f"{group}: no rows parsed")
             ui = {key: meta for key, meta in PARAM_METADATA[group].items() if "min" in meta}
             self.assertEqual(set(runtime), set(ui), group)
             for key, (low, high) in runtime.items():
@@ -478,13 +499,6 @@ class ParamMetadataTest(unittest.TestCase):
     def test_params_readme_ranges_match_runtime_clamps(self):
         """params/README.md의 Range 열이 로더 표(Json*Field)와 같아야 한다: 문서만 보고 넣은 값이 말없이 잘렸다
         (예전 hold angle 0~180, 로더는 0~84)."""
-        row = re.compile(r'\{"(\w+)",\s*(-?[\d.]+)f?,\s*(-?[\d.]+)f?,\s*&\w+::\w+\}')
-        tables = {
-            "steering.json": ("src/controls/control_params.cc", ("kSteeringInts", "kSteeringFloats")),
-            "adaptive_cruise.json": ("src/controls/adaptive_cruise.cc", ("kAdaptiveFloats",)),
-            "recording.json": ("src/recording/recordd.cc", ("kRecordingInts",)),
-            "display.json": ("src/common/device_settings.h", ("kDeviceSettingsFloats",)),
-        }
         readme = (ROOT / "params" / "README.md").read_text(encoding="utf-8")
         sections = dict(re.findall(r"^## (\S+\.json)\n(.*?)(?=^## |\Z)", readme, re.S | re.M))
 
@@ -492,16 +506,11 @@ class ParamMetadataTest(unittest.TestCase):
             scale = {"k": 1e3, "M": 1e6}.get(text[-1], 1.0)
             return float(text.rstrip("kM")) * scale
 
-        for name, (source, tables_in_source) in tables.items():
-            text = (ROOT / source).read_text(encoding="utf-8")
-            runtime = {}
-            for table in tables_in_source:
-                body = re.search(table + r"\[\] = \{(.*?)\n\};", text, re.S).group(1)
-                runtime.update({key: (float(low), float(high)) for key, low, high in row.findall(body)})
+        for group, spec in PARAM_GROUPS.items():
             documented = {key: (number(low), number(high)) for key, low, high in
                           re.findall(r"^\| `(\w+)` \|[^|]*\|[^|]*\| (-?[\d.]+[kM]?) to (-?[\d.]+[kM]?) \|",
-                                     sections[name], re.M)}
-            self.assertEqual(documented, runtime, name)
+                                     sections[spec["file"]], re.M)}
+            self.assertEqual(documented, runtime_clamps(group), spec["file"])
 
     def test_ui_text_names_no_particular_car(self):
         """다른 차도 붙일 수 있게 화면 문구는 차종을 말하지 않는다. 한글이 바로 붙는 "K7은"도 잡는다."""
@@ -569,15 +578,7 @@ class I18nCatalogTest(unittest.TestCase):
         # 메타데이터에서 나오는 키(param_state.js가 만든다)
         for group, items in PARAM_METADATA.items():
             for key, meta in items.items():
-                fields = ["label", "description", "increase", "decrease"]
-                fields += ["learned_role"] if meta.get("learned") else []
-                used.update(f"param.{group}.{key}.{field}" for field in fields)
-                used.update(f"toggle.{name}" for name in meta.get("labels", []))
-                used.add(f"section.{meta['section']}")
-                if meta.get("caution"):
-                    used.add(f"caution.{meta['caution']}")
-                for kind in ("unused", "role"):
-                    used.update(f"{kind}.{condition['text']}" for condition in meta.get(kind, []))
+                used.update(metadata_keys(group, key, meta))
                 if meta.get("unit") and f"unit.{meta['unit']}" in keys:
                     used.add(f"unit.{meta['unit']}")
         for group, spec in PARAM_GROUPS.items():
@@ -685,20 +686,23 @@ class LearnerStateTest(unittest.TestCase):
         self.assertEqual([int(bit) for _, bit in bits], list(range(len(LEARNER_FLAGS))))
         self.assertIn(f'kLearnerStateTopic[] = "{LEARNER_TOPIC}";', cpp())
 
-    def test_reader_decodes_and_skips_torn_writes(self):
+    def monitor(self) -> LearnerMonitor:
+        return LearnerMonitor(str(self.path))
+
+    def test_monitor_decodes_and_skips_torn_writes(self):
         self.publish(4, timestamp_ns=5_000_000_000, flags=0b1000000011, steer_ratio=14.88,
                      bucket_points=[12, 204, 464, 1440, 1500, 1036, 292, 49])
-        reader = LearnerStateReader(str(self.path))
-        seq, _, state = reader.read()
-        self.assertEqual(seq, 4)
+        monitor = self.monitor()
+        stamp, state = monitor.sample()
+        self.assertEqual(stamp, 123)
         self.assertAlmostEqual(state["steer_ratio"], 14.88, places=5)
         self.assertEqual(state["bucket_points"][4], 1500)
         self.assertTrue(state["flags"]["vehicle_inputs_ok"] and state["flags"]["vehicle_valid"])
         self.assertTrue(state["flags"]["use_vehicle"] and not state["flags"]["use_torque"])
         self.publish(5, steer_ratio=1.0)  # 쓰는 중
-        self.assertIsNone(reader.read())
+        self.assertIsNone(monitor.sample())
         self.path.unlink()
-        self.assertIsNone(reader.read())
+        self.assertIsNone(monitor.sample())
 
     def test_reader_follows_a_channel_that_grows_in_place(self):
         """생산자는 있던 공유 메모리 파일을 제자리에서 늘린다(ftruncate, 같은 inode). 새 배포의 더 큰 메시지를 옛 매핑의
@@ -716,7 +720,7 @@ class LearnerStateTest(unittest.TestCase):
     def test_runtime_facts_follow_a_fresh_state(self):
         """파라미터 안내가 보는 런타임 사실: controlsd가 학습한 토크 모델을 읽었는지(플래그). 상태가 없거나 낡으면
         None이다(그때는 어느 조건도 참이 아니다)."""
-        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        monitor = self.monitor()
         self.assertEqual(monitor.runtime_facts(), {"lateral_nn_loaded": None})
         self.assertEqual(set(monitor.runtime_facts()), set(RUNTIME_FACTS))
         loaded = 1 << LEARNER_FLAGS.index("lateral_nn_loaded")
@@ -730,19 +734,21 @@ class LearnerStateTest(unittest.TestCase):
     def test_polled_status_carries_the_runtime_facts(self):
         """페이지는 폴링 응답의 runtime으로 안내를 갱신한다(param_state.updateRuntime). 페이지를 연 뒤에 controlsd가
         모델을 읽어도 안내가 따라온다."""
-        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        monitor = self.monitor()
         self.assertEqual(monitor.status()["runtime"], {"lateral_nn_loaded": None})
         publish(self.path, learner_payload(flags=1 << LEARNER_FLAGS.index("lateral_nn_loaded")), seq=2)
         self.assertEqual(monitor.status()["runtime"], {"lateral_nn_loaded": True})
         publish(self.path, learner_payload(flags=0), seq=4, stamp=123)  # 낡은 상태는 모른다(None)
         self.assertEqual(monitor.status()["runtime"], {"lateral_nn_loaded": None})
         server = (WEB_CONSOLE / "console_server.py").read_text(encoding="utf-8")
-        self.assertEqual(server.count('"runtime": learners.runtime_facts()'), 3)  # 파라미터와 학습 토크 모델 둘
+        self.assertEqual(server.count('"runtime": learners.runtime_facts()'), 1)  # 파라미터
+        self.assertIn('"runtime": learner["runtime"]', server)  # 학습 토크 모델(GET·POST가 같이 쓴다)
+        self.assertEqual(server.count("return lateral_nn_status()"), 2)
         for module in ("lateral_nn_card.js", "vehicle_view.js"):
             self.assertIn("updateRuntime(", (WEB_CONSOLE / "static" / module).read_text(encoding="utf-8"), module)
 
     def test_monitor_keeps_one_trend_row_per_publish(self):
-        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        monitor = self.monitor()
         self.assertFalse(monitor.status()["available"])
         self.publish(2, timestamp_ns=1_000_000_000, lat_accel_factor=4.44)
         monitor.sample()
@@ -751,10 +757,33 @@ class LearnerStateTest(unittest.TestCase):
         status = monitor.status()
         self.assertTrue(status["available"])
         self.assertEqual([row[0] for row in monitor.trend()["rows"]], [1.0, 2.0])
-        self.assertAlmostEqual(status["trend_row"][7], 4.40, places=5)
+        self.assertAlmostEqual(status["trend_row"][LEARNER_TREND_COLUMNS.index("lat_accel_factor")], 4.40, places=5)
+
+    def test_trend_columns_and_bank_match_the_page(self):
+        """추이 행의 열과 편경사 롤 환산은 서버(learner_trend_row)와 페이지(vehicle_view.js TREND_COLUMNS, 편경사 보정
+        카드의 GRAVITY 식)가 따로 안다: 열마다 그 이름의 값이 들어가고, 페이지의 열 이름·순서와 식이 같아야 한다."""
+        self.publish(2, timestamp_ns=3_000_000_000, steer_ratio=15.5, angle_offset_average_deg=0.25,
+                     angle_offset_deg=0.5, roll_rad=0.01, road_bank_lat_accel=-0.2, lat_accel_factor_raw=2.5,
+                     lat_accel_factor=2.75)
+        row = dict(zip(LEARNER_TREND_COLUMNS, self.monitor().status()["trend_row"]))
+        expected = {"time_s": 3.0, "steer_ratio": 15.5, "angle_offset_average_deg": 0.25, "angle_offset_deg": 0.5,
+                    "roll_deg": math.degrees(0.01), "bank_roll_deg": math.degrees(0.2 / GRAVITY),
+                    "lat_accel_factor_raw": 2.5, "lat_accel_factor": 2.75}
+        self.assertEqual(set(row), set(expected))
+        for name, value in expected.items():
+            self.assertAlmostEqual(row[name], value, places=3, msg=name)
+        page = (STATIC_DIR / "vehicle_view.js").read_text(encoding="utf-8")
+        columns = re.findall(r'"(\w+)"', re.search(r"const TREND_COLUMNS = \[(.*?)\];", page, re.S).group(1))
+        self.assertEqual(columns, list(LEARNER_TREND_COLUMNS))
+        charts = re.search(r"const TREND_CHARTS = \[\n(.*?)\n\];", page, re.S).group(1)
+        series = re.findall(r'\["(\w+)", "\w+"\]', charts)
+        self.assertTrue(series)
+        self.assertLessEqual(set(series), set(columns) - {"time_s"})
+        self.assertEqual(float(re.search(r"const GRAVITY = ([\d.]+);", page).group(1)), GRAVITY)
+        self.assertIn("deg(-s.road_bank_lat_accel / GRAVITY)", page)
 
     def test_monitor_trend_rows_are_a_second_apart_and_cut_by_time(self):
-        monitor = LearnerMonitor(LearnerStateReader(str(self.path)))
+        monitor = self.monitor()
         # 요청마다 sample이 불려도 행은 0.9초 이상 떨어져야 쌓인다
         for seq, stamp_s in enumerate((1.0, 1.3, 1.6, 2.0, 2.5, 3.1), start=1):
             self.publish(2 * seq, timestamp_ns=int(stamp_s * 1e9))
@@ -959,9 +988,10 @@ class LateralNnModelsTest(unittest.TestCase):
                          "숫자는 수로 정렬, 규칙 밖 이름은 뺀다")
 
     def test_select_writes_the_choice_and_refuses_unknown(self):
-        self.assertEqual(self.models.status()["selection_error"], "none")
+        self.assertEqual(self.models.status(controlsd_running=True)["selection_error"], "none")
         (self.models_dir / "k7_hev_v4.json").write_text("{}")  # 고르기는 파일 내용을 읽지 않는다
-        status = self.models.select("k7_hev_v4")
+        self.models.select("k7_hev_v4")
+        status = self.models.status(controlsd_running=True)
         self.assertEqual(json.loads(self.selection.read_text()), {"model": "k7_hev_v4"})
         self.assertEqual((status["selected"], status["selection_error"]), ("k7_hev_v4", ""))
         for name in ("k7_hev_v9", "../steering"):
@@ -973,17 +1003,14 @@ class LateralNnModelsTest(unittest.TestCase):
     def test_status_reports_default_and_controlsd(self):
         self.default.parent.mkdir()
         self.default.write_text(json.dumps({"model": "k7_hev_v3"}))
-        self.assertIsNone(self.models.status()["controlsd"])
+        self.assertIsNone(self.models.status(controlsd_running=True)["controlsd"])
         self.status_file.write_text(json.dumps({"selected": "k7_hev_v4", "loaded": "k7_hev_v3", "path": "",
                                                 "error": "k7_hev_v4: bad", "inputs": 33, "unix_time": 1}))
-        status = self.models.status()
+        status = self.models.status(controlsd_running=True)
         self.assertEqual(status["default"], "k7_hev_v3")
         self.assertEqual(status["controlsd"]["loaded"], "k7_hev_v3")
         # controlsd는 읽을 때만 상태 파일을 쓴다: 멈춘 뒤에는 남은 파일을 쓰는 중으로 보이지 않는다
-        running = False
-        models = LateralNnModels(self.models_dir, self.selection, self.default, str(self.status_file),
-                                 controlsd_running=lambda: running)
-        self.assertIsNone(models.status()["controlsd"])
+        self.assertIsNone(self.models.status(controlsd_running=False)["controlsd"])
 
 
 class RecordingsTest(unittest.TestCase):
@@ -1035,8 +1062,7 @@ class RecordingsTest(unittest.TestCase):
         recordd = cpp(ROOT / "src" / "recording" / "recordd.cc")
         writer = cpp(ROOT / "src" / "recording" / "recording_writer.cc")
         self.assertIn(f'env_string("EDGEPILOT_RECORD_ROOT", "{RECORD_ROOT}")', recordd)
-        self.assertIn('std::getenv("EDGEPILOT_RECORD_STAGING")', writer)
-        self.assertIn(f': "{STAGING_ROOT}";', writer)
+        self.assertIn(f'env_string("EDGEPILOT_RECORD_STAGING", "{STAGING_ROOT}")', writer)
         self.assertEqual(MIN_FREE_BYTES, 5 * 1024 ** 3)
         self.assertIn("kMinimumFreeBytes = 5ULL * 1024 * 1024 * 1024;", writer)
         self.assertIn(f"kMinimumFreePercent = {MIN_FREE_PERCENT};", writer)

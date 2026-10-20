@@ -10,6 +10,7 @@
 #include "controls/lateral_nn_select.h"
 
 #include <signal.h>
+#include <sys/resource.h>
 
 #include <algorithm>
 #include <chrono>
@@ -24,18 +25,11 @@ namespace {
 
 volatile sig_atomic_t g_stop = 0;
 
-bool open_when_ready(LatestChannel *channel, const char *topic, size_t size, bool create) {
+// 채널이 열릴 때까지 1초마다 다시 연다. size는 LatestChannel이면 내용 크기, CanQueue면 슬롯 수다.
+template <class Channel>
+bool open_when_ready(Channel *channel, const char *topic, size_t size, bool create) {
     while (!g_stop) {
         if (channel->open(topic, size, create)) return true;
-        std::fprintf(stderr, "controlsd: waiting for %s\n", topic);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    return false;
-}
-
-bool open_when_ready(CanQueue *queue, const char *topic, bool create) {
-    while (!g_stop) {
-        if (queue->open(topic, kCanQueueSlots, create)) return true;
         std::fprintf(stderr, "controlsd: waiting for %s\n", topic);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
@@ -49,6 +43,25 @@ void fill_send_batch(CanBatch *batch, const std::vector<CanFrame> &frames) {
         dst->data_len = src.length;
         std::copy_n(src.data.begin(), src.length, dst->data);
     });
+}
+
+// 한 틱이 한 일(1초 창에서 가장 느린 틱의 것을 남긴다): 새 모델로 플래너, torqued 적합(4 Hz), 학습 저장(paramsd 60초·
+// torqued 12초마다 직렬화), 파라미터·학습 토크 모델 재적용. 아무것도 아니면 plain이다.
+enum TickWork : unsigned { kWorkModel = 1U, kWorkFit = 2U, kWorkSave = 4U, kWorkParams = 8U };
+
+std::string work_names(unsigned work) {
+    static constexpr const char *kNames[] = {"model", "fit", "save", "params"};
+    std::string names;
+    for (unsigned i = 0; i < 4; ++i)
+        if (work & (1U << i)) names += (names.empty() ? "" : "+") + std::string(kNames[i]);
+    return names.empty() ? "plain" : names;
+}
+
+// 제어 스레드가 지금까지 빼앗긴(비자발) 문맥 전환 수. 1초에 한 번 읽는다.
+long involuntary_switches() {
+    struct rusage usage{};
+    getrusage(RUSAGE_THREAD, &usage);
+    return usage.ru_nivcsw;
 }
 
 // 1초 창의 루프 통계. 창이 끝나면 한 줄로 찍고 비운다.
@@ -65,17 +78,23 @@ struct TickStats {
     // 예정 시각보다 늦게 깨어난 최댓값. 실시간 우선순위가 필요한지는 이 꼬리로 판단한다(커널이 다른 일로 늦게
     // 깨우면 일 자체가 짧아도 LKAS 프레임이 밀린다).
     double wake_max_us = 0.0;
+    unsigned slowest_work = 0;  // work_max_us 틱이 한 일(TickWork)
 
-    void account(double work_us, bool missed, double wake_late_us) {
+    void account(double work_us, bool missed, double wake_late_us, unsigned work) {
         work_sum_us += work_us;
-        work_max_us = std::max(work_max_us, work_us);
+        if (work_us > work_max_us) {
+            work_max_us = work_us;
+            slowest_work = work;
+        }
         wake_max_us = std::max(wake_max_us, wake_late_us);
         ++ticks;
         if (missed) ++misses;
     }
 
+    // switches는 창 동안 제어 스레드가 선점된 횟수다. 한 틱의 계산은 수십 µs인데 work_max가 ms라면 그 틱이 한 일
+    // (slow=)과 선점(nivcsw=)으로 가린다.
     void log(double window_s, unsigned long long tx_depth, unsigned long long rx_depth, unsigned param_generation,
-             const ControlsTick &tick) {
+             long switches, const ControlsTick &tick) {
         const LateralControlResult &result = tick.result();
         const PandaGateOutput &panda = tick.panda();
         const LateralTarget &target = tick.target();
@@ -96,7 +115,7 @@ struct TickStats {
             "laneC=%.3f laneW=%.2f lane=%.2f/%.2f "
             "lprob=%.2f/%.2f/%.2f lstd=%.2f/%.2f "
             "cluster=%.1f wheel=%.1f cruise=%u max=%.1f cmd=%.1f target=%.1f "
-            "lead=%u/%.1f/%.1f button=%d pedal=%d/%d block=%s\n",
+            "lead=%u/%.1f/%.1f button=%d pedal=%d/%d block=%s slow=%s nivcsw=%ld\n",
             ticks / window_s, work_sum_us / std::max(1U, ticks), work_max_us, wake_max_us, misses, can_frames,
             generated_frames, publish_errors, send_queue_full, stale_can_batches, tx_depth, rx_depth, param_generation,
             result.engaged ? 1 : 0, result.active ? 1 : 0, panda.ready ? 1 : 0, panda.controls_allowed ? 1 : 0,
@@ -110,7 +129,8 @@ struct TickStats {
             adaptive_cruise.active ? 1U : 0U, adaptive_cruise.maximum_speed_kph, adaptive_cruise.commanded_speed_kph,
             adaptive_cruise.target_speed_kph, adaptive_cruise.lead_valid ? 1U : 0U, cruise_input.vision_lead_distance_m,
             cruise_input.vision_lead_relative_speed_mps, adaptive_cruise.command_button, vehicle.gas,
-            vehicle.driver_override, block_reason_name(result.active_block));
+            vehicle.driver_override, block_reason_name(result.active_block), work_names(slowest_work).c_str(),
+            switches);
         *this = TickStats{};
     }
 };
@@ -131,10 +151,10 @@ int main() {
         LatestChannel localization_sub;
         bool localization_open = false;
         double next_localization_open_s = 0.0;
-        if (!open_when_ready(&can_sub, kCanTopic, true) ||
+        if (!open_when_ready(&can_sub, kCanTopic, kCanQueueSlots, true) ||
             !open_when_ready(&model_sub, kModelStateTopic, sizeof(ModelState), false) ||
             !open_when_ready(&panda_state_sub, kPandaStateTopic, sizeof(PandaState), true) ||
-            !open_when_ready(&sendcan_pub, kSendCanTopic, true) ||
+            !open_when_ready(&sendcan_pub, kSendCanTopic, kCanQueueSlots, true) ||
             !open_when_ready(&control_state_pub, kControlStateTopic, sizeof(ControlState), true) ||
             !open_when_ready(&learner_state_pub, kLearnerStateTopic, sizeof(LearnerState), true)) {
             return 0;
@@ -149,9 +169,8 @@ int main() {
         std::fprintf(stderr, "controlsd: params steering=%s adaptive=%s %s\n", param_paths.steering.c_str(),
                      param_paths.cruise.c_str(), control_params_summary(params).c_str());
         // paramsd·torqued. 사전값은 시작 때 파라미터로 고정한다. 복원이 거부된 저장은 상류처럼
-        // 지운다(torqued는 깨진 캐시만, 튜닝이 바뀐 캐시는 둔다).
+        // 지운다(torqued는 깨진 캐시만, 튜닝이 바뀐 캐시는 둔다). 실패한 쓰기는 learner_store가 다시 쓴다.
         BackgroundWriter learner_store("controlsd: learner write");
-        uint64_t learner_failures = 0;
         const std::string vehicle_learn_path = param_path("live_parameters.json");
         const std::string torque_learn_path = param_path("live_torque_parameters.bin");
         const std::string vehicle_learn_json = read_text_file(vehicle_learn_path);
@@ -184,6 +203,7 @@ int main() {
             std::fprintf(stderr, "controlsd: lateral nn off: %s\n", nn_selector.last_error().c_str());
         }
         TickStats stats;
+        long switches_at_log = involuntary_switches();
         uint64_t model_seq = 0;
         uint64_t panda_state_seq = 0;
 
@@ -203,13 +223,18 @@ int main() {
             next_tick += std::chrono::milliseconds(10);
             const auto work_start = Clock::now();
             const double now_s = std::chrono::duration<double>(work_start - start).count();
+            unsigned work = 0;  // 이번 틱이 한 일(TickWork)
 
             if (const auto reloaded = param_watcher.poll(work_start, params)) {
                 params = *reloaded;
                 tick.apply_params(params);
+                work |= kWorkParams;
             }
             std::shared_ptr<const LateralNnModel> next_nn;
-            if (nn_selector.poll(work_start, &next_nn)) tick.set_lateral_nn(next_nn);
+            if (nn_selector.poll(work_start, &next_nn)) {
+                tick.set_lateral_nn(next_nn);
+                work |= kWorkParams;
+            }
 
             // 신선도는 꺼낸 직후의 시각으로 잰다(pandad 송신 스레드와 같다). 틱 시작 시각이면 그 뒤에 들어온
             // 묶음이 미래 시각이라 버려졌다.
@@ -221,7 +246,10 @@ int main() {
                 stats.can_frames += can_batch.count;
             }
             // seq가 그대로면 복사하지 않는다(read_new, 기다리지 않음)
-            if (model_sub.read_new(&model_seq, &model, sizeof(model), 0)) tick.on_model(model);
+            if (model_sub.read_new(&model_seq, &model, sizeof(model), 0)) {
+                tick.on_model(model);
+                work |= kWorkModel;
+            }
             if (panda_state_sub.read_new(&panda_state_seq, &panda_state, sizeof(panda_state), 0))
                 tick.on_panda(panda_state);
             // locationd가 없어도 제어는 그대로라 붙을 때까지 1초마다 다시 열어 본다.
@@ -231,15 +259,14 @@ int main() {
             }
             LocalizationRead localization;
             localization.open = localization_open;
-            if (localization_open) {
+            if (localization_open)
                 localization.read = localization_sub.read(&localization.state, sizeof(localization.state));
-                localization.read_ns = monotonic_now_ns();
-            }
+            // IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 locationd 나이와 freshness 판정에는 공유 상태를
+            // 다 읽은 직후의 시간을 사용한다.
+            const uint64_t read_ns = monotonic_now_ns();
+            localization.read_ns = read_ns;
             tick.on_localization(localization, now_s);
-
-            // IPC를 읽는 동안 새 모델/Panda 상태가 발행될 수 있으므로 freshness
-            // 판정에는 공유 상태를 읽은 직후의 시간을 사용한다.
-            ControlState control_state = tick.step(now_s, monotonic_now_ns());
+            ControlState control_state = tick.step(now_s, read_ns);
             control_state.timestamp_ns = monotonic_now_ns();
             if (!control_state_pub.publish(&control_state, sizeof(control_state))) {
                 ++stats.publish_errors;
@@ -260,24 +287,24 @@ int main() {
             LearnerOutputs learned = tick.update_learners(now_s);
             if (learned.vehicle_json) learner_store.write(vehicle_learn_path, std::move(*learned.vehicle_json));
             if (learned.torque_cache) learner_store.write(torque_learn_path, std::move(*learned.torque_cache));
-            // 쓰기 실패(SD 오류 등)는 내용이 같아도 다시 쓰게 한다
-            if (learner_store.failures() != learner_failures) {
-                learner_failures = learner_store.failures();
-                tick.learner_write_failed(now_s);
-            }
+            if (learners.torque_published()) work |= kWorkFit;
+            if (learners.vehicle_persist_due() || learners.torque_persist_due()) work |= kWorkSave;
             if (learned.learner_state) {
                 learned.learner_state->timestamp_ns = monotonic_now_ns();
                 if (!learner_state_pub.publish(&*learned.learner_state, sizeof(LearnerState))) ++stats.publish_errors;
             }
 
             const auto work_end = Clock::now();
-            stats.account(std::chrono::duration<double, std::micro>(work_end - work_start).count(),
-                          work_end > next_tick,
-                          std::max(0.0, std::chrono::duration<double, std::micro>(work_start - scheduled).count()));
+            stats.account(
+                std::chrono::duration<double, std::micro>(work_end - work_start).count(), work_end > next_tick,
+                std::max(0.0, std::chrono::duration<double, std::micro>(work_start - scheduled).count()), work);
             if (work_end - log_start >= std::chrono::seconds(1)) {
+                const long switches = involuntary_switches();
                 stats.log(std::chrono::duration<double>(work_end - log_start).count(),
                           static_cast<unsigned long long>(sendcan_pub.depth()),
-                          static_cast<unsigned long long>(can_sub.depth()), param_watcher.generation(), tick);
+                          static_cast<unsigned long long>(can_sub.depth()), param_watcher.generation(),
+                          switches - switches_at_log, tick);
+                switches_at_log = switches;
                 log_start = work_end;
             }
 

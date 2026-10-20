@@ -20,21 +20,21 @@ public:
     // CPU로 채울 소스 NV12 버퍼(src_width*src_height*3/2, 캐시 가능 CMM, 재생용). 처음 부를 때 잡는다.
     uint8_t *source();
     unsigned long long source_phys() const { return src_phys_; }
-    size_t source_bytes() const { return src_bytes_; }
 
     // src_phys의 CMM 블록에서 두 시점을 워프해 각 YUV6(6*128*256 바이트)에 쓴다. source()면 캐시를 먼저 내보낸다.
     bool warp(unsigned long long src_phys, const float med_projection[9], const float sbig_projection[9],
               uint8_t *med_yuv6, uint8_t *sbig_yuv6);
 
 private:
-    bool warp_one(unsigned long long src_phys, const float projection[9], int dst, uint8_t *yuv6);
+    bool dewarp(unsigned long long src_phys, const float projection[9], int view);
 
     int src_w_, src_h_;
     size_t src_bytes_;
     unsigned long long src_phys_ = 0;  // AX_U64
     uint8_t *src_virt_ = nullptr;
-    unsigned long long dst_phys_[2] = {};
-    uint8_t *dst_virt_[2] = {};
+    // 두 시점의 NV12 출력을 한 블록에 이어 둔다(캐시 무효화를 프레임마다 같은 범위로 한 번)
+    unsigned long long dst_phys_ = 0;
+    uint8_t *dst_virt_ = nullptr;
 };
 
 #endif

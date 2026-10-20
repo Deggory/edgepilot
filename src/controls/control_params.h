@@ -4,14 +4,14 @@
 #include "controls/adaptive_cruise.h"
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 
 // controlsd가 읽는 조향 런타임 파라미터. params/steering.json이 출처다. 다만 상류(opendbc
 // CarControllerParams, 모듈 상수)에서도 코드에 박힌 차량·통신 상수는 여기 필드로만 두고 파일에서 읽지
-// 않는다(필드마다 적었다. ControlTiming은 전부 그렇다). 테스트와 재생 도구는 이 필드를 바꿔 쓴다.
-// CAN 계층(car/)은 이 헤더를 보지 않는다 — 토크 제한은 lateral_controller.cc가 HyundaiSteeringLimits로
-// 바꿔 넘긴다.
+// 않는다(필드마다 적었다). 테스트와 재생 도구는 이 필드를 바꿔 쓴다. 조향 토크 한계는 상류처럼 상수다
+// (car/hyundai_can.h의 kHyundaiSteer*).
 
 // 기본값은 params/steering.json(K7 YG HEV 실차 검증값)과 일치시킨다. 로드 실패는
 // controlsd가 throw하므로 이 값은 파일 폴백이 아니라, JSON에 키가 빠졌을 때와
@@ -19,17 +19,6 @@
 struct SteeringParams {
     bool enabled = true;
 
-    // panda의 hyundai safety가 같은 숫자를 강제한다(safety_hyundai.h: MAX_STEER 384,
-    // MAX_RATE_UP 3, MAX_RATE_DOWN 7, DRIVER_TORQUE_ALLOWANCE 50, DRIVER_TORQUE_FACTOR 2).
-    // 올리면 panda가 프레임을 거부하고 내리면 순정보다 약해지기만 하므로 런타임에서
-    // 읽지 않는다. steer_driver_factor는 panda에 대응 항이 없어 1이 아니면 우리 계산만
-    // 어긋난다. 바꾸려면 panda 펌웨어와 함께 바꾸고 여기를 고친다.
-    int steer_max = 384;
-    int steer_delta_up = 3;
-    int steer_delta_down = 7;
-    int steer_driver_allowance = 50;
-    int steer_driver_multiplier = 2;
-    int steer_driver_factor = 1;
     // 저속에서도 MDPS가 LKAS 토크를 받도록 MDPS 버스 CLU11에 쓰는 속도. 상류에는 없는 기능이고, 커뮤니티
     // 포크(openpilot_c2)도 60 km/h(38 mph)를 코드에 박아 둔다. 파일에서 읽지 않는다.
     float mdps_speed_spoof_kph = 60.0f;
@@ -106,27 +95,23 @@ struct SteeringParams {
     float center_to_front_m() const;
 };
 
-// 제어 타이밍. 전부 파일에서 읽지 않는 고정값이다.
-struct ControlTiming {
-    // 낡음 판정은 상류도 고정 규칙이다(메시지 주기의 10배, CAN 버스는 0.5초). 모델 경로는 그보다 엄격하게
-    // 250 ms, 차량 CAN 상태는 버스와 같은 500 ms를 쓴다.
-    int model_timeout_ms = 250;
-    int vehicle_state_timeout_ms = 500;
-    // 해제 뒤 순정 LKAS로 넘기기 전에 0 토크 프레임을 이어 보내는 시간(openpilot_c2의 기본 인계 시간과
-    // 같다). 상류는 LKAS11을 늘 보내므로 대응 값이 없다.
-    int inactive_release_ms = 3000;
-};
+// 제어 타이밍(파일에서 읽지 않는 고정값). 낡음 판정은 상류도 고정 규칙이다(메시지 주기의 10배, CAN 버스는 0.5초).
+// 모델 경로는 그보다 엄격하게 250 ms, 차량 CAN 상태는 버스와 같은 500 ms를 쓴다.
+constexpr double kModelTimeoutS = 0.25;
+constexpr uint64_t kModelTimeoutNs = static_cast<uint64_t>(kModelTimeoutS * 1e9);
+constexpr double kVehicleStateTimeoutS = 0.5;
+// 해제 뒤 순정 LKAS로 넘기기 전에 0 토크 프레임을 이어 보내는 시간(openpilot_c2의 기본 인계 시간과 같다). 상류는
+// LKAS11을 늘 보내므로 대응 값이 없다.
+constexpr double kInactiveReleaseS = 3.0;
 
 // params/steering.json을 읽어 SteeringParams에 반영한다.
 bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error);
 // steering.json에서 읽는 키 가운데 a와 b가 다른 첫 키. 같으면 빈 문자열(기본값이 파일과 같은지 보는 테스트용).
 std::string first_steering_param_difference(const SteeringParams &a, const SteeringParams &b);
 
-// controlsd의 런타임 파라미터 두 파일(steering/adaptive_cruise.json)과 코드 고정값(timing). 파일은 한꺼번에
-// 읽고 한꺼번에 바꾼다.
+// controlsd의 런타임 파라미터 두 파일(steering/adaptive_cruise.json). 한꺼번에 읽고 한꺼번에 바꾼다.
 struct ControlParams {
     SteeringParams steering;
-    ControlTiming timing;
     AdaptiveCruiseConfig cruise;
 };
 

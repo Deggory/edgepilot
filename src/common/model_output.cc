@@ -55,11 +55,9 @@ bool ParsedLeads::primary(int time_idx, float min_probability, ParsedLeadPoint *
     return true;
 }
 
-ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
+ParsedModelOutput ModelOutputParser::parse(const float *raw) {
     ParsedModelOutput output;
-    // axmodel 계약이 2576 float로 고정이라 부분 길이를 받아줄 이유가 없다.
-    output.valid = raw.size() >= static_cast<size_t>(kModelOutputFloats);
-    if (!output.valid) return output;
+    output.valid = true;
 
     for (int i = 0; i < kTrajectorySize; ++i) {
         const int mean_base = kPlanOffset + i * kPlanWidth;
@@ -115,20 +113,18 @@ ParsedModelOutput ModelOutputParser::parse(const std::vector<float> &raw) {
         output.leads.global_probabilities[sel] = sigmoid(raw[kLeadProbOffset + sel]);
     }
 
-    softmax(raw.data() + kDesireStateOffset, output.meta.desire_state.data(), kDesireLen);
-    for (int i = 0; i < kMetaPressHorizons; ++i) {
+    softmax(raw + kDesireStateOffset, output.meta.desire_state.data(), kDesireLen);
+    for (int i = 0; i < kMetaPressHorizons; ++i)
         output.meta.gas_press[i] = sigmoid(raw[kMetaOffset + kMetaGasPressIndex + i * kMetaPressStride]);
-        output.meta.brake_press[i] = sigmoid(raw[kMetaOffset + kMetaBrakePressIndex + i * kMetaPressStride]);
-    }
 
-    const float *pose_src = raw.data() + kPoseOffset;
+    const float *pose_src = raw + kPoseOffset;
     for (int i = 0; i < 3; ++i) {
         output.pose.trans[i] = pose_src[i];
         output.pose.rot[i] = pose_src[3 + i];
         output.pose.trans_std[i] = std::exp(pose_src[6 + i]);
         output.pose.rot_std[i] = std::exp(pose_src[9 + i]);
     }
-    const float *road_src = raw.data() + kRoadTransformOffset;  // 평균 6, 이어서 log std 6
+    const float *road_src = raw + kRoadTransformOffset;  // 평균 6, 이어서 log std 6
     for (int i = 0; i < 3; ++i) {
         output.pose.road_trans[i] = road_src[i];
         output.pose.road_trans_std[i] = std::exp(road_src[6 + i]);

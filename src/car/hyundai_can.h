@@ -6,18 +6,20 @@
 
 #include "car/can_frame.h"
 
-// 토크 한계. 값은 SteeringParams(control_params.h)에서 오고, Panda safety와 같은지는 gtest_panda_firmware가 본다.
-struct HyundaiSteeringLimits {
-    int steer_max = 0;
-    int steer_delta_up = 0;
-    int steer_delta_down = 0;
-    int steer_driver_allowance = 0;
-    int steer_driver_multiplier = 0;
-    int steer_driver_factor = 1;
-};
+// 조향 토크 한계(상류 opendbc hyundai CarControllerParams의 대부분 HKG 값, 런타임 파라미터가 아니다). panda의 hyundai
+// safety가 같은 숫자를 강제한다(safety_hyundai.h: MAX_STEER 384, MAX_RATE_UP 3, MAX_RATE_DOWN 7,
+// DRIVER_TORQUE_ALLOWANCE 50, DRIVER_TORQUE_FACTOR 2, gtest_panda_firmware가 대조한다). 올리면 panda가 프레임을 거부하고
+// 내리면 순정보다 약해지기만 한다. steer_driver_factor는 panda에 대응 항이 없어 1이 아니면 우리 계산만 어긋난다.
+// 바꾸려면 panda 펌웨어와 함께 바꾼다.
+constexpr int kHyundaiSteerMax = 384;
+constexpr int kHyundaiSteerDeltaUp = 3;
+constexpr int kHyundaiSteerDeltaDown = 7;
+constexpr int kHyundaiSteerDriverAllowance = 50;
+constexpr int kHyundaiSteerDriverMultiplier = 2;
+constexpr int kHyundaiSteerDriverFactor = 1;
 
-int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque,
-                                      const HyundaiSteeringLimits &limits);
+// opendbc apply_driver_steer_torque_limits: 운전자 토크 허용과 레이트 한계를 건 토크.
+int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque);
 
 struct HyundaiLkas11Values {
     int ldws_active_mode = 0;

@@ -18,7 +18,8 @@ TEST(JsonValue, ParsesEveryKind) {
     ASSERT_EQ(b.size(), 4U);
     EXPECT_TRUE(b[0].is_bool() && b[0].boolean());
     EXPECT_TRUE(b[1].is_bool() && !b[1].boolean());
-    EXPECT_TRUE(b[2].is_null());
+    EXPECT_FALSE(b[2].is_bool() || b[2].is_number() || b[2].is_string() || b[2].is_array() || b[2].is_object())
+        << "null";
     EXPECT_DOUBLE_EQ(b[3].number(), -0.25);
     EXPECT_EQ(v.find("c")->find("d")->string(), "x");
     EXPECT_TRUE(v.find("e")->is_array() && v.find("e")->array().empty());

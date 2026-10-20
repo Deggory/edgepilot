@@ -4,16 +4,14 @@
 // 모델은 읽혀도 쓰이지 않는다.
 import {codeText, t} from "./i18n.js";
 import {onParamsChanged, updateRuntime, valueOf} from "./param_state.js";
-import {api, badges, el, helpText, note, pollingCard, runAction, section} from "./ui.js";
+import {api, badges, el, helpText, note, pollingCard, runAction, section, syncRows} from "./ui.js";
 
 const fileName = name => (name ? `${name}.json` : "–");
 
 export function createLateralNnCard() {
   const list = el("div.nn-models");
   const about = helpText(t("lateral_nn.about"), "card-note");  // 한 번 만들어 펼친 상태가 폴링에 접히지 않게
-  // 이름 -> {button, tags}. 목록이 바뀔 때만 줄을 다시 만든다: 2초마다 갈아 끼우면 누르는 사이에 바뀐 줄이 탭을 놓치고
-  // 키보드 초점도 사라진다.
-  const rows = new Map();
+  const rows = new Map();  // 이름 -> {element(버튼), tags}(ui.js syncRows)
   let latest = null;
   let busy = false;
 
@@ -26,7 +24,7 @@ export function createLateralNnCard() {
       busy: on => {
         busy = on;
         rows.forEach(row => {
-          row.button.disabled = on;
+          row.element.disabled = on;
         });
       },
       call: () => api.post("/api/lateral_nn", {model: name}),
@@ -36,27 +34,22 @@ export function createLateralNnCard() {
     if (result) card.show(result);
   };
 
-  const syncRows = names => {
-    if (names.join("\n") === [...rows.keys()].join("\n")) return;
-    rows.clear();
-    for (const name of names) {
-      const tags = el("span.badge-row");
-      rows.set(name, {tags, button: el("button.nn-model", {type: "button", onclick: () => choose(name)},
-                                       el("code.nn-model-name", {text: fileName(name)}), tags)});
-    }
-    list.replaceChildren(...[...rows.values()].map(row => row.button));
+  const makeRow = name => {
+    const tags = el("span.badge-row");
+    return {tags, element: el("button.nn-model", {type: "button", onclick: () => choose(name)},
+                              el("code.nn-model-name", {text: fileName(name)}), tags)};
   };
 
   const render = s => {
     latest = s;
     updateRuntime(s.runtime);
     const status = s.controlsd;  // controlsd가 돌지 않으면 null
-    syncRows(s.models);
+    syncRows(list, rows, s.models, makeRow);
     for (const [name, row] of rows) {
       const loaded = status?.loaded === name;
       const selected = s.selected === name;
-      row.button.setAttribute("aria-pressed", String(selected));
-      row.button.disabled = busy;
+      row.element.setAttribute("aria-pressed", String(selected));
+      row.element.disabled = busy;
       row.tags.replaceChildren(...badges([
         loaded ? [t("common.in_use"), "good"] : null,
         !selected || loaded ? null

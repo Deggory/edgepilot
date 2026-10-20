@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -22,7 +23,7 @@ struct Surface {
     int height;
     std::vector<uint32_t> pixels;
     std::vector<uint16_t> coverage;
-    std::vector<uint16_t> damage;
+    std::vector<uint32_t> damage;
 
     Surface(int w, int h) : width(w), height(h), pixels(static_cast<size_t>(w) * h, 0) {}
     HudCanvas canvas() { return HudCanvas(pixels.data(), width, height, width * 4, coverage, damage); }
@@ -42,9 +43,9 @@ TEST(HudCanvas, BlendMatchesStraightAlphaOver) {
     const uint32_t srcs[] = {hud_argb(255, 255, 255, 255), hud_argb(150, 12, 14, 18), hud_argb(40, 255, 176, 32)};
     for (uint32_t dst : dsts) {
         for (uint32_t src : srcs) {
-            Surface s(1, 1);
-            s.pixels[0] = dst;
-            s.canvas().fill_rect(0, 0, 1, 1, src);
+            Surface s(5, 1);  // 넷씩 묶어 칠하는 화소와 남는 화소 하나
+            std::fill(s.pixels.begin(), s.pixels.end(), dst);
+            s.canvas().fill_rect(0, 0, 5, 1, src);
             const double sa = (src >> 24) / 255.0, da = (dst >> 24) / 255.0;
             const double oa = sa + da * (1.0 - sa);
             // 합성 알파와 색이 부동소수 기준식과 1 안쪽으로 같다
@@ -53,6 +54,7 @@ TEST(HudCanvas, BlendMatchesStraightAlphaOver) {
                 const double expected = (channel(src, shift) * sa + channel(dst, shift) * da * (1.0 - sa)) / oa;
                 EXPECT_NEAR(channel(s.pixels[0], shift), expected, 1.0) << std::hex << dst << " " << src;
             }
+            for (uint32_t p : s.pixels) EXPECT_EQ(p, s.pixels[4]) << "넷씩 묶어 칠해도 하나씩 합성한 것과 같다";
         }
     }
 }
@@ -78,7 +80,7 @@ TEST(HudCanvas, PolygonCoverageMatchesArea) {
 TEST(HudCanvas, FadedPolygonFadesTowardFar) {
     Surface s(40, 120);
     const HudPoint rect[] = {{0, 10}, {40, 10}, {40, 110}, {0, 110}};
-    s.canvas().fill_polygon_faded(rect, 4, hud_argb(200, 48, 209, 88), 110.0f, 10.0f, 0.1f);
+    s.canvas().fill_polygon(rect, 4, hud_argb(200, 48, 209, 88), 110.0f, 10.0f, 0.1f);
     // 가까운 행은 원래 알파, 먼 행은 그 0.1배
     EXPECT_NEAR(s.at(20, 109) >> 24, 200, 3);
     EXPECT_NEAR(s.at(20, 10) >> 24, 20, 3);
@@ -100,18 +102,23 @@ TEST(HudCanvas, RoundRectStraightRowsMatchPolygon) {
 }
 
 TEST(HudCanvas, ClearOnlyDamagedTiles) {
-    Surface s(640, 60);
-    HudCanvas canvas = s.canvas();
-    canvas.clear(false);
-    canvas.fill_rect(10, 5, 20, 10, hud_argb(255, 255, 0, 0));               // 칸 0
-    canvas.text(600, 30, "OK", kHudBodyFont, hud_argb(255, 255, 255, 255));  // 칸 9
-    s.pixels[50 * 640 + 300] = hud_argb(255, 1, 2, 3);                       // 캔버스 밖에서 쓴 화소
-    canvas.clear(true);
-    // 그린 칸은 비고, 그리지 않은 칸(직접 쓴 화소)은 그대로다
-    for (int y = 0; y < 60; ++y)
-        for (int x = 0; x < 640; ++x)
-            if (!(y == 50 && x == 300)) ASSERT_EQ(s.at(x, y), 0u) << x << "," << y;
-    EXPECT_EQ(s.at(300, 50), hud_argb(255, 1, 2, 3));
+    for (int width : {640, 480}) {  // 32 px 칸 20개, 세로 패널 버퍼 폭은 16 px 칸 30개
+        Surface s(width, 60);
+        HudCanvas canvas = s.canvas();
+        EXPECT_EQ(canvas.tile_shift(), width == 640 ? 5 : 4);
+        std::fill(s.pixels.begin(), s.pixels.end(), hud_argb(255, 9, 9, 9));
+        canvas.clear(false);
+        EXPECT_EQ(s.ink(), 0.0) << "처음에는 마지막 칸까지 전부 지운다";
+        canvas.fill_rect(10, 5, 20, 10, hud_argb(255, 255, 0, 0));                      // 첫 칸
+        canvas.text(width - 30, 30, "OK", kHudBodyFont, hud_argb(255, 255, 255, 255));  // 마지막 칸
+        s.pixels[50 * width + 300] = hud_argb(255, 1, 2, 3);                            // 캔버스 밖에서 쓴 화소
+        canvas.clear(true);
+        // 그린 칸은 비고, 그리지 않은 칸(직접 쓴 화소)은 그대로다
+        for (int y = 0; y < 60; ++y)
+            for (int x = 0; x < width; ++x)
+                if (!(y == 50 && x == 300)) ASSERT_EQ(s.at(x, y), 0u) << x << "," << y;
+        EXPECT_EQ(s.at(300, 50), hud_argb(255, 1, 2, 3));
+    }
 }
 
 TEST(HudCanvas, TextWidthAndInk) {

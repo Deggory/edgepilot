@@ -26,6 +26,9 @@ public:
     // 이전 세션이 route 도중 죽어 스테이징에 남긴 route를 전부 SD로 회수한다.
     void recover(const std::string &staging_root, const std::string &root);
     void enqueue_file(std::string from, std::string to);
+    // 원본을 남기고 복사만 한다. 나중에 같은 경로에 다시 쓰고 옮길 파일(route를 열 때의 manifest)이 옮기기 도중에
+    // 새로 쓰인 내용까지 지우지 않게 한다.
+    void enqueue_copy(std::string from, std::string to);
     void enqueue_tree(std::string from, std::string to);
     // 큐를 다 비운 뒤 스레드를 끝낸다. 여러 번 불러도 된다.
     void stop();
@@ -34,12 +37,13 @@ public:
 private:
     struct Job {
         bool tree = false;  // true면 디렉토리 전체 이동
+        bool keep = false;  // true면 복사만 하고 원본을 지우지 않는다
         std::string from;
         std::string to;
     };
     void enqueue(Job &&job);
     void loop();
-    void move_file(const std::string &from, const std::string &to);
+    void move_file(const std::string &from, const std::string &to, bool keep = false);
     void move_tree(const std::string &from, const std::string &to);
 
     std::mutex mutex_;

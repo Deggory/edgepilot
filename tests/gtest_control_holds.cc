@@ -95,7 +95,6 @@ TEST(ControlHolds, PandaHealthHold) {
     out = explicit_off.update(off, t0 + 10000000ULL, false);
     // 신선하고 전송이 준비된 controls_allowed=0은 홀드하지 않는다
     ASSERT_TRUE(out.ready_raw);
-    ASSERT_TRUE(out.controls_off_explicit);
     ASSERT_FALSE(out.hold_applied);
     ASSERT_TRUE(out.ready);
     ASSERT_FALSE(out.controls_allowed);

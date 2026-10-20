@@ -17,24 +17,27 @@ struct Buf {
     size_t size = 0;
 };
 
-// 캐시 CMM: CPU가 점을 쓰고 결과·응답을 읽는다(쓰기 뒤 flush, 하드웨어가 쓴 뒤 invalidate)
-Buf alloc_buf(size_t size) {
+// CMM 블록. 캐시 가능한 것은 0으로 시작하고, CPU가 결과·응답을 읽기 전에 invalidate한다. CPU가 쓰기만 하는 것(LK
+// 시작점)은 캐시 없이 잡아(maix_cmm처럼) flush가 없다. 그 버퍼는 track이 쓴 점까지만 IVE가 읽는다.
+Buf alloc_buf(size_t size, bool cached = true) {
     Buf b;
     void *v = nullptr;
-    if (AX_SYS_MemAllocCached(&b.phys, &v, static_cast<AX_U32>(size), 128,
-                              reinterpret_cast<const AX_S8 *>("ive_flow")) != 0)
-        throw std::runtime_error("IVE flow buffer alloc failed");
+    const auto *token = reinterpret_cast<const AX_S8 *>("ive_flow");
+    const AX_S32 r = cached ? AX_SYS_MemAllocCached(&b.phys, &v, static_cast<AX_U32>(size), 128, token)
+                            : AX_SYS_MemAlloc(&b.phys, &v, static_cast<AX_U32>(size), 128, token);
+    if (r != 0) throw std::runtime_error("IVE flow buffer alloc failed");
     b.virt = static_cast<uint8_t *>(v);
     b.size = size;
-    std::memset(b.virt, 0, size);
-    AX_SYS_MflushCache(b.phys, b.virt, static_cast<AX_U32>(size));
+    if (cached) {
+        std::memset(b.virt, 0, size);
+        AX_SYS_MflushCache(b.phys, b.virt, static_cast<AX_U32>(size));
+    }
     return b;
 }
 void free_buf(Buf &b) {
     if (b.virt) AX_SYS_MemFree(b.phys, b.virt);
     b = Buf{};
 }
-void flush(const Buf &b) { AX_SYS_MflushCache(b.phys, b.virt, static_cast<AX_U32>(b.size)); }
 void invalidate(const Buf &b) { AX_SYS_MinvalidateCache(b.phys, b.virt, static_cast<AX_U32>(b.size)); }
 
 AX_IVE_IMAGE_T image(AX_U64 phys, uint8_t *virt, int w, int h, int stride, AX_IVE_IMAGE_TYPE_E type) {
@@ -54,6 +57,8 @@ AX_IVE_MEM_INFO_T mem(const Buf &b) {
     m.u32Size = static_cast<AX_U32>(b.size);
     return m;
 }
+// 블록 안의 offset부터 size 바이트
+Buf part(const Buf &b, size_t offset, size_t size) { return Buf{b.phys + offset, b.virt + offset, size}; }
 AX_IVE_DATA_T data(AX_U64 phys, uint8_t *virt, int w, int h, int stride) {
     AX_IVE_DATA_T d = {};
     d.u64PhyAddr = phys;
@@ -95,7 +100,13 @@ struct IveFlow::Impl {
     int cur = 0;      // 현재 프레임 자리(push가 바꾼다), 이전 프레임은 1 - cur
     bool vpp = true;  // 축소 단을 VPP로 만든다(실패하면 IVE로 물러나 그대로 간다)
     Buf blur;         // IVE 축소 단의 가우시안 결과(IVE로 물러날 때 잡는다)
-    Buf gx, gy, resp, corners, pts, nxt, status;
+    Buf gx, gy, resp, corners;
+    Buf pts;  // LK 시작점(캐시 없음)
+    // LK 출력 한 블록: 끝점(PointQ) kMaxPoints개, 이어서 128바이트 경계에서 상태 kMaxPoints바이트. invalidate가 한
+    // 번이다(범위가 바뀌는 호출은 한 번에 약 40 µs).
+    static constexpr size_t kNextBytes = kMaxPoints * sizeof(PointQ);
+    static constexpr size_t kStatusOffset = (kNextBytes + 127) / 128 * 128;
+    Buf lk_out;
     AX_IVE_FILTER_CTRL_T gauss{};
     AX_IVE_SOBEL_CTRL_T sobel_x{}, sobel_y{};
     AX_IVE_LK_OPTICAL_FLOW_PYR_CTRL_T lk{};
@@ -104,7 +115,7 @@ struct IveFlow::Impl {
     ~Impl() {
         for (Frame &f : frames)
             for (Buf &b : f.level) free_buf(b);
-        for (Buf *b : {&blur, &gx, &gy, &resp, &corners, &pts, &nxt, &status}) free_buf(*b);
+        for (Buf *b : {&blur, &gx, &gy, &resp, &corners, &pts, &lk_out}) free_buf(*b);
         if (ive) AX_IVE_Exit();
     }
 
@@ -172,9 +183,8 @@ IveFlow::IveFlow(int width, int height) : impl_(new Impl), width_(width) {
     m.gy = alloc_buf(band);
     m.resp = alloc_buf(band);
     m.corners = alloc_buf(sizeof(AX_IVE_CORNER_DET_MEM_T));
-    m.pts = alloc_buf(kMaxPoints * sizeof(PointQ));
-    m.nxt = alloc_buf(kMaxPoints * sizeof(PointQ));
-    m.status = alloc_buf(kMaxPoints);
+    m.pts = alloc_buf(kMaxPoints * sizeof(PointQ), false);
+    m.lk_out = alloc_buf(Impl::kStatusOffset + kMaxPoints);
 
     // 5x5 [1 4 6 4 1]² / 256 가우시안(Q10): OpenCV pyrDown과 같은 핵
     const int k[5] = {1, 4, 6, 4, 1};
@@ -245,12 +255,11 @@ bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool bac
     Impl &m = *impl_;
     std::fill(ok, ok + n, 0);
     const float top = static_cast<float>(1 << (kLevels - 1));
-    auto *pq = reinterpret_cast<PointQ *>(m.pts.virt);
+    auto *pq = reinterpret_cast<PointQ *>(m.pts.virt);  // 캐시 없는 버퍼라 flush가 필요 없다
     for (int i = 0; i < n; ++i) {
         pq[i].x = static_cast<AX_U32>(std::lround(std::max(0.0f, xy[2 * i]) / top * kQ20));
         pq[i].y = static_cast<AX_U32>(std::lround(std::max(0.0f, xy[2 * i + 1]) / top * kQ20));
     }
-    flush(m.pts);
     const int from = backward ? m.cur : 1 - m.cur;  // 점이 있는 프레임(앞으로면 이전, 거꾸로면 현재)
     const Impl::Frame &prev = m.frames[from], &next = m.frames[1 - from];
     AX_IVE_SRC_IMAGE_T a[kLevels], b[kLevels];
@@ -263,13 +272,13 @@ bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool bac
     }
     m.lk.u16CornerNum = static_cast<AX_U16>(n);
     AX_IVE_SRC_MEM_INFO_T mp = mem(m.pts);
-    AX_IVE_MEM_INFO_T mn = mem(m.nxt);
-    AX_IVE_DST_MEM_INFO_T ms = mem(m.status);
+    AX_IVE_MEM_INFO_T mn = mem(part(m.lk_out, 0, Impl::kNextBytes));
+    AX_IVE_DST_MEM_INFO_T ms = mem(part(m.lk_out, Impl::kStatusOffset, kMaxPoints));
     if (!run([&](AX_IVE_HANDLE *hd) { return AX_IVE_LKOpticalFlowPyr(hd, a, b, &mp, &mn, &ms, &m.lk, AX_FALSE); }))
         return false;
-    invalidate(m.nxt);
-    invalidate(m.status);
-    const auto *nq = reinterpret_cast<const PointQ *>(m.nxt.virt);
+    invalidate(m.lk_out);
+    const auto *nq = reinterpret_cast<const PointQ *>(m.lk_out.virt);
+    const uint8_t *status = m.lk_out.virt + Impl::kStatusOffset;
     for (int i = 0; i < n; ++i) {
         float dx = static_cast<float>(nq[i].x) / kQ20 - xy[2 * i];
         float dy = static_cast<float>(nq[i].y) / kQ20 - xy[2 * i + 1];
@@ -277,7 +286,7 @@ bool IveFlow::track(const float *xy, int n, float *out_xy, uint8_t *ok, bool bac
         if (dy >= 8.0f) dy -= 16.0f;
         out_xy[2 * i] = xy[2 * i] + dx;
         out_xy[2 * i + 1] = xy[2 * i + 1] + dy;
-        ok[i] = m.status.virt[i] != 0 && std::fabs(dx) <= kMaxStepPx && std::fabs(dy) <= kMaxStepPx;
+        ok[i] = status[i] != 0 && std::fabs(dx) <= kMaxStepPx && std::fabs(dy) <= kMaxStepPx;
     }
     return true;
 }

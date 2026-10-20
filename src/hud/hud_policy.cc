@@ -102,17 +102,15 @@ HudSoundDecision HudAlertPolicy::update(const ControlState &control, bool contro
     return decision;
 }
 
-bool TurnSignalClock::update(uint64_t now_ns, HudState *hud) {
+void TurnSignalClock::update(uint64_t now_ns, HudState *hud) {
     if (hud->left_blinker != left_ || hud->right_blinker != right_) {
         left_ = hud->left_blinker;
         right_ = hud->right_blinker;
         start_ns_ = now_ns;
     }
     const bool blinking = hud->left_blinker || hud->right_blinker;
-    const int step = blinking ? static_cast<int>(((now_ns - start_ns_) / kTurnSignalStepNs) % kTurnSignalSteps) : 0;
-    const bool changed = step != hud->turn_signal_step;
-    hud->turn_signal_step = step;
-    return changed && blinking;
+    hud->turn_signal_step =
+        blinking ? static_cast<int>(((now_ns - start_ns_) / kTurnSignalStepNs) % kTurnSignalSteps) : 0;
 }
 
 const char *HudTouch::tap(int x, int y, int width, int height, uint64_t now_ns, HudState *hud) {

@@ -4,7 +4,7 @@
 // 여섯 평면, 각 width/2 x height/2. GDC 워프(maix_gdc_warp) 뒤 프레임마다 두 번(512x256) 돈다. 예전 루프는 출력
 // 포인터 여섯 개가 서로 겹칠 수 있어 컴파일러가 벡터화하지 못했다(프레임마다 바이트 단위로 65,536번). 여기서는
 // __restrict로 겹치지 않는다고 알리고, NEON이 있으면 16열씩 나눠 읽어(vld2q) 쓴다. 바이트 재배치라 NEON과 스칼라
-// 경로의 출력이 같다(gtest_calibration Yuv6Pack).
+// 경로의 출력이 같다(gtest_model_input_transform Yuv6Pack).
 
 #include <cstddef>
 #include <cstdint>

@@ -212,7 +212,7 @@ The processes are described in the order data passes through them.
   the UART4 pins
 - publishes batches of raw samples to `/dev/shm/edgepilot_imu` every 100 ms.
   The axes are the chip's and the gyro bias is not removed; `recordd` records
-  them as `Imu` records (`recording_reader.EventRecord.imu_samples`)
+  them as `Imu` records (`recording_reader.iter_states`)
 - feeds `locationd`, whose pose filter gives paramsd and torqued their yaw
   rate and roll (`use_locationd_learner_inputs` in `params/steering.json`) and
   whose lagd estimate can set the steering delay (`use_live_delay`). Without

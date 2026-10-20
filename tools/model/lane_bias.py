@@ -32,12 +32,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from recording_reader import (RECORD_CONTROL_STATE, RECORD_MODEL_STATE, X_IDXS,
-                              iter_event_records, route_event_files)
+from recording_reader import RECORD_CONTROL_STATE, RECORD_MODEL_STATE, X_IDXS, concat_chunks, iter_states
 
 FIT_POINTS = 20          # 0 .. 75 m. 그 너머는 차선이 흔들린다
 STRAIGHT_PLAN_Y_M = 0.5  # 48 m에서 |plan y|가 이보다 작으면 직진으로 친다
@@ -46,51 +46,38 @@ MIN_LANE_PROB = 0.6
 MAX_DRIVER_TORQUE = 50   # 운전자가 핸들을 살짝 건드린 프레임은 뺀다
 
 
+@dataclass
 class RouteLateral:
-    """프레임별 횡방향 값. 모델 레코드를 control 레코드와 이어 붙였다."""
-
-    def __init__(self):
-        self.lane_offset = []    # [N, TRAJECTORY_SIZE] 인식한 차선 중앙
-        self.plan_y = []         # [N, TRAJECTORY_SIZE] 모델 경로
-        self.left_prob = []
-        self.right_prob = []
-        self.camera_offset = []  # [N] 워프 카메라 오프셋(v6 이하 녹화는 params 스냅샷의 값)
-        self.model_ts = []
-        self.control = {k: [] for k in
-                        ("ts", "active", "cluster_speed_kph", "steer_deg",
-                         "desired_curv", "actual_curv", "driver_torque")}
-
-    def finish(self):
-        for key in ("lane_offset", "plan_y", "left_prob", "right_prob", "camera_offset"):
-            setattr(self, key, np.array(getattr(self, key)))
-        self.model_ts = np.array(self.model_ts, np.uint64)
-        self.control = {k: np.array(v) for k, v in self.control.items()}
-        return self
+    """모델 레코드마다의 횡방향 값과 control 레코드의 값."""
+    lane_offset: np.ndarray    # [N, TRAJECTORY_SIZE] 인식한 차선 중앙
+    plan_y: np.ndarray         # [N, TRAJECTORY_SIZE] 모델 경로
+    left_prob: np.ndarray
+    right_prob: np.ndarray
+    camera_offset: np.ndarray  # [N] 워프에 쓴 카메라 오프셋
+    model_ts: np.ndarray
+    control: dict[str, np.ndarray]
 
 
 def read_route_lateral(route: Path) -> RouteLateral:
-    out = RouteLateral()
-    for path in route_event_files(route):
-        for rec in iter_event_records(path):
-            if rec.type == RECORD_MODEL_STATE:
-                model = rec.model_state()
-                lanes = model["lanes"]  # (y, z)
-                out.lane_offset.append((lanes[1, :, 0] + lanes[2, :, 0]) / 2.0)
-                out.plan_y.append(model["plan"][:, 1].copy())  # 뷰는 청크 버퍼 전체를 붙잡는다
-                out.left_prob.append(float(model["lane_probabilities"][1]))
-                out.right_prob.append(float(model["lane_probabilities"][2]))
-                out.camera_offset.append(float(model["camera_offset_m"]))
-                out.model_ts.append(int(model["capture_timestamp_ns"]))
-            elif rec.type == RECORD_CONTROL_STATE:
-                state = rec.control_state()
-                out.control["ts"].append(rec.timestamp_ns)
-                out.control["active"].append(int(state["active"]))
-                out.control["cluster_speed_kph"].append(float(state["cluster_speed_kph"]))
-                out.control["steer_deg"].append(float(state["steering_angle_deg"]))
-                out.control["desired_curv"].append(float(state["desired_curvature"]))
-                out.control["actual_curv"].append(float(state["actual_curvature"]))
-                out.control["driver_torque"].append(int(state["driver_torque"]))
-    return out.finish()
+    models, controls = [], []
+    for chunk in iter_states(route, RECORD_MODEL_STATE, RECORD_CONTROL_STATE):
+        _, model = chunk[RECORD_MODEL_STATE]
+        control_ts, state = chunk[RECORD_CONTROL_STATE]
+        lanes = model["lanes"]  # (y, z)
+        models.append({"lane_offset": (lanes[:, 1, :, 0] + lanes[:, 2, :, 0]) / 2.0,
+                       "plan_y": model["plan"][:, :, 1].copy(),
+                       "left_prob": model["lane_probabilities"][:, 1].astype(float),
+                       "right_prob": model["lane_probabilities"][:, 2].astype(float),
+                       "camera_offset": model["camera_offset_m"].astype(float),
+                       "model_ts": model["capture_timestamp_ns"].copy()})
+        controls.append({"ts": control_ts.astype(np.int64),
+                         "active": state["active"].astype(np.int64),
+                         "cluster_speed_kph": state["cluster_speed_kph"].astype(float),
+                         "steer_deg": state["steering_angle_deg"].astype(float),
+                         "desired_curv": state["desired_curvature"].astype(float),
+                         "actual_curv": state["actual_curvature"].astype(float),
+                         "driver_torque": state["driver_torque"].astype(np.int64)})
+    return RouteLateral(**concat_chunks(models), control=concat_chunks(controls))
 
 
 def route_offsets(route: Path) -> dict[str, float]:

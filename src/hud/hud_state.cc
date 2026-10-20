@@ -1,8 +1,8 @@
 #include "hud/hud_state.h"
 
+#include "car/hyundai_can.h"
 #include "common/utils_math.h"
 #include "controls/control_block.h"
-#include "controls/control_params.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -94,9 +94,9 @@ void hud_apply_control_state(const ControlState &control, bool fresh, HudState *
     hud->desired_torque = c.desired_torque;
     hud->apply_torque = c.apply_torque;
     hud->driver_torque = c.driver_torque;
-    // steer_max는 panda가 강제하는 고정값이라 런타임에서 바뀌지 않는다(control_params.h). 운전자 토크는 이를 넘기도
+    // steer_max는 panda가 강제하는 고정값이라 런타임에서 바뀌지 않는다(car/hyundai_can.h). 운전자 토크는 이를 넘기도
     // 한다(녹화). 녹화로 확인한 부호: apply_torque 양수 = 왼쪽 조향(조향각·모델 plan과 같은 방향).
-    const float steer_max = static_cast<float>(SteeringParams{}.steer_max);
+    const float steer_max = static_cast<float>(kHyundaiSteerMax);
     hud->steer_torque_fraction = std::clamp(static_cast<float>(c.apply_torque) / steer_max, -1.0f, 1.0f);
     hud->driver_torque_fraction = std::clamp(static_cast<float>(c.driver_torque) / steer_max, -1.0f, 1.0f);
     std::snprintf(hud->active_block, sizeof(hud->active_block), "%s", fresh ? c.active_block : "control_stale");

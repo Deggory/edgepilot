@@ -26,13 +26,10 @@ void ReplayNv12Source::read_exact(char *dst, size_t size, const char *label) {
         throw std::runtime_error(std::string("short replay header read: ") + label + ": " + path_);
 }
 
-bool ReplayNv12Source::read(Nv12Frame &frame) {
-    if (eof()) return false;
-    frame.width = width_;
-    frame.height = height_;
-    frame.data.resize(frame_bytes_);
-    file_.read(reinterpret_cast<char *>(frame.data.data()), static_cast<std::streamsize>(frame.data.size()));
-    if (file_.gcount() != static_cast<std::streamsize>(frame.data.size()))
+bool ReplayNv12Source::read(uint8_t *dst) {
+    if (frames_read_ >= frame_count_) return false;
+    file_.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(frame_bytes_));
+    if (file_.gcount() != static_cast<std::streamsize>(frame_bytes_))
         throw std::runtime_error("short replay frame read: " + path_);
     ++frames_read_;
     return true;

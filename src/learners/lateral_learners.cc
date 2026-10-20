@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-#include "common/utils_time.h"
+#include "car/hyundai_can.h"
 
 namespace {
 
@@ -66,8 +66,7 @@ LateralLearners::LateralLearners(const SteeringParams &params, const std::string
       bias_(init_.yaw_bias_rad_s),
       vehicle_(constants_, init_.steer_ratio, init_.stiffness_factor, rad(init_.angle_offset_deg), options),
       torque_(torque_tuning(params), params.steer_actuator_delay, seed, torque_cache,
-              params.use_locationd_learner_inputs),
-      steer_max_(params.steer_max) {}
+              params.use_locationd_learner_inputs) {}
 
 void LateralLearners::set_localizer(bool use, const LocalizerSample &sample) {
     use_localizer_ = use;
@@ -110,20 +109,19 @@ bool LateralLearners::localizer_at(double t_s, LocalizerSample *out) const {
     return true;
 }
 
-void LateralLearners::update(const VehicleCanState &vehicle, double now_s, double timeout_s, double speed_mps,
-                             bool lat_active, int apply_torque, bool steering_pressed) {
-    const bool esp_fresh = signal_time_fresh(vehicle.esp12_time_s, now_s, timeout_s);
+void LateralLearners::update(const VehicleCanState &vehicle, double now_s, bool vehicle_fresh, bool esp12_fresh,
+                             double speed_mps, bool lat_active, int apply_torque, bool steering_pressed) {
     Tick tick;
     VehicleParamsInput &in = tick.vin;
     in.t_s = now_s;
-    in.inputs_fresh = vehicle_state_fresh(vehicle, now_s, timeout_s) && esp_fresh && std::isfinite(speed_mps);
+    in.inputs_fresh = vehicle_fresh && esp12_fresh && std::isfinite(speed_mps);
     in.steering_angle_deg = vehicle.steering_angle_deg;
     in.speed_mps = std::isfinite(speed_mps) ? speed_mps : 0.0;
     in.gear = vehicle.gear;
-    in.yaw_rate_valid = esp_fresh && vehicle.yaw_rate_valid;
+    in.yaw_rate_valid = esp12_fresh && vehicle.yaw_rate_valid;
     // 바이어스 추정은 locationd를 쓰는 동안에도 정차마다 따라간다(ESP12로 돌아갈 때를 위해)
     in.yaw_rate_rad_s = bias_.update(now_s, in.speed_mps, in.yaw_rate_valid, vehicle.yaw_rate_rad_s);
-    in.lat_accel_valid = esp_fresh && vehicle.lat_accel_valid;
+    in.lat_accel_valid = esp12_fresh && vehicle.lat_accel_valid;
     in.lat_accel_mps2 = -vehicle.lat_accel_mps2;  // 반전 저장돼 있다
 
     // torqued는 컨트롤러 관례(우측 양수)로 돌린다. 보낸 토크는 출력 부호를 되돌리고
@@ -133,7 +131,7 @@ void LateralLearners::update(const VehicleCanState &vehicle, double now_s, doubl
     tin.t_s = now_s;
     tin.inputs_fresh = in.inputs_fresh;
     tin.lat_active = lat_active;
-    tin.steer_torque = static_cast<double>(kTorqueOutputSign * apply_torque) / steer_max_;
+    tin.steer_torque = static_cast<double>(kTorqueOutputSign * apply_torque) / kHyundaiSteerMax;
     tin.speed_mps = in.speed_mps;
     tin.steer_override = steering_pressed;
 

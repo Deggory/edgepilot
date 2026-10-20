@@ -19,8 +19,6 @@ inline bool env_flag(const char *name, bool default_value = false) {
     return !(lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off" || lowered == "n");
 }
 
-inline bool env_present(const char *name) { return std::getenv(name) != nullptr; }
-
 inline unsigned env_unsigned(const char *name, unsigned default_value) {
     const char *value = std::getenv(name);
     if (!value || value[0] == '\0') return default_value;

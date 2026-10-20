@@ -42,11 +42,10 @@ TEST(ModelOutputParser, Master) {
         raw[kPoseOffset + i] = 20.0f + i;
         raw[kPoseOffset + 6 + i] = std::log(0.05f);
     }
-    // openpilot Meta: GAS_PRESS = meta[31:55:4], BRAKE_PRESS = meta[32:55:4](로짓). 2초 칸만 크게
+    // openpilot Meta: GAS_PRESS = meta[31:55:4](로짓). 2초 칸만 크게
     raw[kMetaOffset + kMetaGasPressIndex + 1 * kMetaPressStride] = 2.0f;
-    raw[kMetaOffset + kMetaBrakePressIndex + 0 * kMetaPressStride] = 3.0f;
     raw[kMetaOffset + 33] = 4.0f;  // 같은 칸 줄의 왼쪽 깜빡이 예측: 페달로 읽히면 안 된다
-    const ParsedModelOutput parsed = ModelOutputParser::parse(raw);
+    const ParsedModelOutput parsed = ModelOutputParser::parse(raw.data());
     ParsedLeadPoint lead;
     float lead_prob = 0.0f;
     ASSERT_TRUE(parsed.valid);
@@ -62,13 +61,8 @@ TEST(ModelOutputParser, Master) {
     ASSERT_GT(parsed.meta.desire_state[3], parsed.meta.desire_state[0]);
     ASSERT_NEAR(parsed.meta.gas_press[1], 1.0f / (1.0f + std::exp(-2.0f)), 1e-6f);
     ASSERT_NEAR(parsed.meta.gas_press[0], 0.5f, 1e-6f) << "로짓 0은 확률 0.5";
-    ASSERT_NEAR(parsed.meta.brake_press[0], 1.0f / (1.0f + std::exp(-3.0f)), 1e-6f);
-    for (int i = 1; i < kMetaPressHorizons; ++i) ASSERT_NEAR(parsed.meta.brake_press[i], 0.5f, 1e-6f) << i;
     ASSERT_NEAR(parsed.pose.trans[2], 22.0f, 1e-6f);
     ASSERT_NEAR(parsed.pose.trans_std[0], 0.05f, 1e-6f);
-    ASSERT_TRUE(ModelOutputParser::parse(std::vector<float>(kModelOutputFloats + 2, 0.0f)).valid)
-        << "더 긴 버퍼는 받아준다";
-    ASSERT_FALSE(ModelOutputParser::parse(std::vector<float>(100, 0.0f)).valid);
 }
 
 // 회전 desire(1, 2)는 회전이 끝나면(다른 desire가 오면) 이력에서 지운다. 차선 변경 펄스는 상류처럼 남긴다.
@@ -264,8 +258,9 @@ int main(int argc, char *argv[]) {
 
     uint32_t raw_size = 0;
     uint32_t frame_count = 0;
-    if (!read_exact(file, &raw_size) || !read_exact(file, &frame_count) || raw_size == 0) {
-        std::cerr << "bad raw dump header\n";
+    if (!read_exact(file, &raw_size) || !read_exact(file, &frame_count) ||
+        raw_size < static_cast<uint32_t>(kModelOutputFloats)) {
+        std::cerr << "bad raw dump header (frames shorter than the model output)\n";
         return 1;
     }
 
@@ -276,12 +271,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    const ParsedModelOutput parsed = ModelOutputParser::parse(raw);
-    if (!parsed.valid) {
-        std::cerr << "raw dump is shorter than the model output\n";
-        return 1;
-    }
-
+    const ParsedModelOutput parsed = ModelOutputParser::parse(raw.data());
     ParsedLeadPoint lead;
     const bool have_lead = parsed.leads.primary(0, 0.0f, &lead);
     std::cout << "raw_size=" << raw_size << " frames=" << frame_count << " lane0_prob=" << parsed.lanes[0].probability

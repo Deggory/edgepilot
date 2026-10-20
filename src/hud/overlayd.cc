@@ -15,7 +15,6 @@
 #include "maixcam2/maix_touch.h"
 
 #include <signal.h>
-#include <unistd.h>
 
 #include <cmath>
 #include <cstdio>
@@ -40,11 +39,11 @@ void on_test_sound_signal(int) { ++g_test_sound_requests; }
 constexpr int kOutW = MaixDisplay::kWidth;
 constexpr int kOutH = MaixDisplay::kHeight;
 constexpr uint64_t kStateFreshNs = 2000000000ULL;
-// 오버레이(HUD 그림, CPU)는 상태가 바뀔 때 모델과 같은 20 Hz로 다시 그린다.
-// 상한을 50 ms가 아닌 45 ms로 두어 모델 출력 도착이 5 ms 루프만큼 흔들려도 프레임을
-// 건너뛰지 않는다. 영상은 하드웨어 레이어라 카메라 프레임마다 올린다.
-constexpr uint64_t kOverlayIntervalNs = 45000000ULL;
-constexpr useconds_t kPollUs = 5000;
+// 오버레이(HUD 그림, CPU)는 새 모델 출력이 오면 곧바로(20 Hz) 다시 그린다. 모델이 멈춰도 속도·알림이
+// 따라가도록 지난번에 그린 지 100 ms가 지나면 그린다. 영상은 하드웨어 레이어라 카메라 프레임마다 올린다.
+constexpr uint64_t kMaxDrawIntervalNs = 100000000ULL;
+// 루프는 새 모델 출력을 이만큼까지 기다리고 돈다(카메라 프레임, 터치, 다른 상태).
+constexpr int kPollMs = 5;
 
 struct StageStats {
     uint64_t total_ns = 0;
@@ -85,32 +84,32 @@ public:
 
         uint64_t window_start = monotonic_now_ns();
         while (!g_stop) {
-            const uint64_t loop_start = monotonic_now_ns();
-            pending_redraw_ = update_model() || pending_redraw_;
-            pending_redraw_ = update_aux_state() || pending_redraw_;
-            pending_redraw_ = turn_signal_clock_.update(loop_start, &hud_) || pending_redraw_;
-            pending_redraw_ = update_touch(loop_start) || pending_redraw_;
+            const bool new_model = update_model();
+            poll_states();
+            // 시계는 루프에 한 번, 스냅샷을 다 받은 뒤에 읽는다(방금 받은 상태가 미래 시각으로 보이지 않게).
+            const uint64_t now = monotonic_now_ns();
+            refresh_hud_state(now, new_model);
+            turn_signal_clock_.update(now, &hud_);
+            update_touch(now);
             play_test_sound();
-            apply_device_settings(loop_start);
+            apply_device_settings(now);
             update_preview();
-            if (pending_redraw_ && loop_start - last_overlay_draw_ns_ >= kOverlayIntervalNs) {
-                pending_redraw_ = false;
-                last_overlay_draw_ns_ = loop_start;
+            if (new_model || now - last_overlay_draw_ns_ >= kMaxDrawIntervalNs) {
+                last_overlay_draw_ns_ = now;
                 draw_overlay();
             }
 
-            const uint64_t now = monotonic_now_ns();
             if (now - window_start >= 1000000000ULL) {
                 const double seconds = (now - window_start) / 1e9;
                 hud_.preview_fps = static_cast<float>(preview_frames_ / seconds);
                 hud_.overlay_fps = static_cast<float>(overlay_frames_ / seconds);
                 hud_.model_fps = static_cast<float>(model_updates_ / seconds);
                 system_monitor_.sample(&hud_);
-                pending_redraw_ = true;
-                char profile_text[64] = "";
+                char profile_text[96] = "";
                 if (profile_)
-                    std::snprintf(profile_text, sizeof(profile_text), " draw=%.2fms video=%.2fms",
-                                  overlay_stats_.avg_ms_and_reset(), present_stats_.avg_ms_and_reset());
+                    std::snprintf(profile_text, sizeof(profile_text), " draw=%.2fms video=%.2fms lag=%.1fms",
+                                  overlay_stats_.avg_ms_and_reset(), present_stats_.avg_ms_and_reset(),
+                                  lag_stats_.avg_ms_and_reset());
                 std::fprintf(stderr,
                              "overlay: preview=%.2f model=%.2f overlay=%.2f%s cpu=%.1f%% mem=%.1f%% temp=%.1fC "
                              "errors=%u          \r",
@@ -120,8 +119,6 @@ public:
                 preview_frames_ = overlay_frames_ = model_updates_ = 0;
                 window_start = now;
             }
-
-            usleep(kPollUs);
         }
         return 0;
     }
@@ -160,7 +157,11 @@ private:
         // 모델 상태가 없으면 출력이 무효라 투영을 쓰는 장면은 그리지 않는다
         renderer_.draw(target, have_model_state_ ? latest_output_ : ParsedModelOutput{}, latest_projection_, hud_);
         display_.end_overlay(renderer_.last_damage().data(), renderer_.last_tile_shift());
-        if (profile_) overlay_stats_.add(monotonic_now_ns() - draw_start);
+        if (profile_) {
+            overlay_stats_.add(monotonic_now_ns() - draw_start);
+            // 모델 출력이 나온 때부터 그 출력을 그리기 시작할 때까지
+            if (have_model_state_) lag_stats_.add(draw_start - model_state_.latest().model_timestamp_ns);
+        }
         ++overlay_frames_;
     }
 
@@ -188,79 +189,61 @@ private:
         device_settings_read_ = true;
     }
 
+    // 새 모델 출력을 kPollMs까지 기다려 받는다. 받았으면 true.
     bool update_model() {
-        if (!model_state_.poll()) return false;
+        if (!model_state_.poll(kPollMs)) return false;
         const ModelState &model = model_state_.latest();
         ++model_updates_;
-        have_model_state_ = model.valid != 0 && fresh(model.model_timestamp_ns, monotonic_now_ns());
         latest_output_ = parsed_from_model_state(model);
         latest_projection_ = projection_from_model_state(model);
-        const float lane_center =
-            have_model_state_ ? lane_center_offset_m(latest_output_) : std::numeric_limits<float>::quiet_NaN();
-        hud_.lane_center_offset_m = smooth_lane_center_offset(hud_.lane_center_offset_m, lane_center);
         return true;
     }
 
-    // 새 panda/control/manager/record/학습기/locationd 스냅샷이 있으면 true. 모델이 멈춰도
-    // 속도·토스트가 제어 상태를 따라가도록 재그리기 트리거가 된다.
-    bool update_aux_state() {
-        bool changed = panda_state_.poll();
-        changed = control_state_.poll() || changed;
-        changed = manager_state_.poll() || changed;
-        changed = record_state_.poll() || changed;
-        changed = learner_state_.poll() || changed;
-        changed = localization_state_.poll() || changed;
-        refresh_hud_state();
-        return changed;
+    // 새 panda/control/manager/record/학습기/locationd 스냅샷을 받는다.
+    void poll_states() {
+        panda_state_.poll();
+        control_state_.poll();
+        manager_state_.poll();
+        record_state_.poll();
+        learner_state_.poll();
+        localization_state_.poll();
     }
 
-    // 터치로 네트워크·진단 카드를 여닫고(HudTouch) 탭은 로그에 남긴다. 화면이 바뀌면 true.
-    bool update_touch(uint64_t now_ns) {
-        const bool was_open = hud_.network_card, was_debug = hud_.debug_card;
+    // 터치로 네트워크·진단 카드를 여닫고(HudTouch) 탭은 로그에 남긴다.
+    void update_touch(uint64_t now_ns) {
         int x = 0, y = 0;
         if (touch_.poll_tap(&x, &y)) {
             const char *action = hud_touch_.tap(x, y, kOutW, kOutH, now_ns, &hud_);
             std::fprintf(stderr, "\noverlayd: tap x=%d y=%d %s\n", x, y, action);
         }
         hud_touch_.expire(now_ns, &hud_);
-        return hud_.network_card != was_open || hud_.debug_card != was_debug;
     }
 
-    static bool fresh(uint64_t timestamp_ns, uint64_t now) {
-        return timestamp_fresh_ns(timestamp_ns, now, kStateFreshNs);
-    }
-
-    struct Freshness {
-        bool model = false;
-        bool panda = false;
-        bool control = false;
-        bool manager = false;
-        bool record = false;
-        bool learner = false;
-        bool localization = false;
-    };
-
-    Freshness freshness(uint64_t now) const {
-        return {fresh(model_state_.latest().model_timestamp_ns, now), fresh(panda_state_.latest().timestamp_ns, now),
-                fresh(control_state_.latest().timestamp_ns, now),     fresh(manager_state_.latest().timestamp_ns, now),
-                fresh(record_state_.latest().timestamp_ns, now),      fresh(learner_state_.latest().timestamp_ns, now),
-                fresh(localization_state_.latest().timestamp_ns, now)};
-    }
-
-    // 최신 스냅샷을 HUD 상태로 옮기고, 이 프레임의 알림음을 낸다(HudAlertPolicy).
-    void refresh_hud_state() {
-        const uint64_t now = monotonic_now_ns();
-        const Freshness f = freshness(now);
-        have_model_state_ = model_state_.latest().valid != 0 && f.model;
-        hud_apply_panda_state(panda_state_.latest(), f.panda, &hud_);
-        hud_apply_control_state(control_state_.latest(), f.control, &hud_);
-        hud_apply_model_state(model_state_.latest(), f.model, &hud_);
-        hud_apply_manager_state(manager_state_.latest(), f.manager, have_model_state_, &hud_);
-        hud_apply_record_state(record_state_.latest(), f.record, &hud_);
-        hud_apply_learner_state(learner_state_.latest(), f.learner, &hud_);
-        hud_apply_localization_state(localization_state_.latest(), f.localization, &hud_);
-        play_alert(
-            alert_policy_.update(control_state_.latest(), f.control, panda_state_.latest(), f.panda, now, &hud_));
+    // 최신 스냅샷을 HUD 상태로 옮기고, 이 프레임의 알림음을 낸다(HudAlertPolicy). 차선 안 위치는 새 모델
+    // 출력마다 한 번 거른다.
+    void refresh_hud_state(uint64_t now, bool new_model) {
+        auto fresh = [now](uint64_t timestamp_ns) { return timestamp_fresh_ns(timestamp_ns, now, kStateFreshNs); };
+        const ModelState &model = model_state_.latest();
+        const bool model_fresh = fresh(model.model_timestamp_ns);
+        have_model_state_ = model.valid != 0 && model_fresh;
+        if (new_model) {
+            const float lane_center =
+                have_model_state_ ? lane_center_offset_m(latest_output_) : std::numeric_limits<float>::quiet_NaN();
+            hud_.lane_center_offset_m = smooth_lane_center_offset(hud_.lane_center_offset_m, lane_center);
+        }
+        const bool panda_fresh = fresh(panda_state_.latest().timestamp_ns);
+        const bool control_fresh = fresh(control_state_.latest().timestamp_ns);
+        hud_apply_panda_state(panda_state_.latest(), panda_fresh, &hud_);
+        hud_apply_control_state(control_state_.latest(), control_fresh, &hud_);
+        hud_apply_model_state(model, model_fresh, &hud_);
+        hud_apply_manager_state(manager_state_.latest(), fresh(manager_state_.latest().timestamp_ns), have_model_state_,
+                                &hud_);
+        hud_apply_record_state(record_state_.latest(), fresh(record_state_.latest().timestamp_ns), &hud_);
+        hud_apply_learner_state(learner_state_.latest(), fresh(learner_state_.latest().timestamp_ns), &hud_);
+        hud_apply_localization_state(localization_state_.latest(), fresh(localization_state_.latest().timestamp_ns),
+                                     &hud_);
+        play_alert(alert_policy_.update(control_state_.latest(), control_fresh, panda_state_.latest(), panda_fresh, now,
+                                        &hud_));
     }
 
     void play_test_sound() {
@@ -324,7 +307,6 @@ private:
     ParsedModelOutput latest_output_{};
     ProjectionState latest_projection_{};
     bool have_model_state_ = false;
-    bool pending_redraw_ = true;
     unsigned errors_ = 0;
 
     unsigned preview_frames_ = 0;
@@ -333,6 +315,7 @@ private:
 
     StageStats overlay_stats_;
     StageStats present_stats_;
+    StageStats lag_stats_;
     SystemMonitor system_monitor_;
     HudAlertPolicy alert_policy_;
     TurnSignalClock turn_signal_clock_;

@@ -124,9 +124,12 @@ The active route is written to tmpfs (`/tmp/record_staging`,
 `EDGEPILOT_RECORD_STAGING`), so SD card latency spikes cannot block the writer.
 Each closed file is moved to `recordings/` in the install directory on the SD
 card (`EDGEPILOT_RECORD_ROOT`); the rest of the route follows when it closes.
-The parameter snapshot, the model copy and a first `manifest.json` are moved as
-soon as the route starts, so a drive that ends with the power cut still keeps
-them; the closing manifest replaces the first one.
+The parameter snapshot, the model copy and a first `manifest.json` reach the
+card as soon as the route starts, so a drive that ends with the power cut still
+keeps them; the closing manifest replaces the first one. The first manifest is
+copied, not moved: a move deletes its source when it finishes, and on a route
+closed within moments of starting it deleted the closing manifest written to
+the same path in the meantime, leaving `"complete": false` on the card.
 
 - The mover copies 1 MiB at a time, syncs each chunk, keeps to 3 MiB/s, and
   runs at idle IO priority. A plain copy piled up dirty pages and held the SD
@@ -214,7 +217,7 @@ Record header (16 B):
   in rehearsal `replayd` logs them instead.
 - An `Imu` record holds only the samples of that batch, not the whole buffer.
 - The IMU axes are the chip's and the gyro bias is not removed
-  (`recording_reader.EventRecord.imu_samples`).
+  (`recording_reader.iter_states`).
 - `ModelState` leaves out what can be derived: the model's time grid
   (`model_t_idx`), the distance of every lane-line and road-edge point (the
   openpilot `X_IDXS` grid, `model_x_idx`, so a point is only its `y` and `z`)
@@ -289,13 +292,16 @@ now fits the turned lane lines back onto the fixed distance grid.
 ## Readers
 
 - `tools/model/recording_reader.py` reads version 14 only. It checks each
-  payload's size against the struct, so a layout changed without a version bump
-  fails instead of decoding garbage. `EventRecord.model_state()` reads a
-  `ModelState` by field name; `model_lanes()` adds the fixed `X_IDXS` distance
-  back to the lane points.
-- `lane_bias.py`, `lane_benchmark.py`, `hud_tools.py` and
-  `export_can_fixture.py` all walk the event log through its
-  `iter_event_records`.
+  state payload's size against the struct, so a layout changed without a
+  version bump fails instead of decoding garbage. `iter_states` reads the
+  record types a tool asks for, one 60 s chunk at a time, into NumPy record
+  arrays read by field name: a row per state record, or per CAN frame or IMU
+  sample of a batch, with the record's log time.
+- `lane_bias.py`, `lane_benchmark.py`, `hud_tools.py`,
+  `estimate_imu_extrinsic.py`, `make_m2_data.py` and `compare_rehearsal.py`
+  read the event log through `iter_states`; `export_can_fixture.py` walks one
+  chunk record by record with `iter_event_records`. Both index a chunk with the
+  same `record_index`.
 - In C++, `src/recording/event_log_reader.h` reads the event log for the
   diagnostic tools and `replayd`, and `read_record` copies a fixed-size state
   record into its struct.

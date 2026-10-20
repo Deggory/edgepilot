@@ -220,16 +220,40 @@ struct LeadIo {
     float ego_mps = std::numeric_limits<float>::quiet_NaN();  // 자차 속도, 모르면 NaN(추적 시작에만 쓴다)
 };
 
-// engaged는 controlsd 결합 상태, use_flow는 보정 출처 설정. 워프에 쓴 보정(출처와 상관없이)이 calibration,
-// 출처와 포즈 보정기 자신의 추정이 calibration_source, 광류 상태가 flow_calibration이다.
-void publish_output(LatestChannel &model_pub, SupercomboModel &model, const ParsedModelOutput &parsed,
-                    CalibrationService &calibration, const CameraMount &mount, uint64_t frame_id,
-                    uint64_t capture_timestamp_ns, float model_ms, float v_ego, bool engaged, bool use_flow,
-                    const LeadIo &lead) {
-    calibration.update(parsed, v_ego, engaged, use_flow);
-    float input_rpy[3];
+// 두 루프(라이브·재생)가 같이 쓰는 모델 쪽: 모델, 기기 설정, 보정, 카메라 장착(이 순서로 만든다. 모델의 세션이
+// AX_SYS_Init을 한다). 프레임마다 prepare_frame → 실행 → publish.
+struct ModelLoop {
+    SupercomboModel model;
+    ModeldSettings settings;
+    CalibrationService calibration;
+    CameraMount mount;
+
+    ModelLoop(const AppConfig &config, bool live)
+        : model(config.axmodel_path.c_str(), config),
+          settings(live),
+          calibration(config, settings.get().calibration_use_flow),
+          mount(settings.get()) {}
+
+    // 실행 직전. 워프 보정은 보정 서비스의 지금 값이다: 첫 프레임은 시작 값, 그 뒤는 직전 프레임 출력으로
+    // publish가 갱신한 값(openpilot cameraOdometry -> liveCalibration -> modeld 고리). 서비스는 publish에서만 바뀐다.
+    void prepare_frame() {
+        float rpy[3];
+        calibration.input_rpy(rpy);
+        model.set_input_calibration(rpy);
+        mount.apply(model, settings.get());
+    }
+
+    // engaged는 controlsd 결합 상태. 워프에 쓴 보정(출처와 상관없이)이 calibration, 출처와 포즈 보정기 자신의
+    // 추정이 calibration_source, 광류 상태가 flow_calibration이다.
+    void publish(LatestChannel &model_pub, const ParsedModelOutput &parsed, uint64_t frame_id,
+                 uint64_t capture_timestamp_ns, float model_ms, float v_ego, bool engaged, const LeadIo &lead);
+};
+
+void ModelLoop::publish(LatestChannel &model_pub, const ParsedModelOutput &parsed, uint64_t frame_id,
+                        uint64_t capture_timestamp_ns, float model_ms, float v_ego, bool engaged, const LeadIo &lead) {
+    calibration.update(parsed, v_ego, engaged, settings.get().calibration_use_flow);
+    float input_rpy[3];  // 다음 카메라 프레임의 워프 보정(광류 작업의 앞차 상자도 이것으로 투영한다)
     calibration.input_rpy(input_rpy);
-    model.set_input_calibration(input_rpy);
 
     const ProjectionState projection = calibration.projection();
 
@@ -275,34 +299,26 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     std::fprintf(stderr, "modeld replay input format=NV12 frames=%u file=%s\n", source.frame_count(),
                  config.replay_nv12_path.c_str());
 
-    SupercomboModel model(config.axmodel_path.c_str(), replay_config);
-    const ModeldSettings settings(false);
-    CalibrationService calibration(config, settings.get().calibration_use_flow);
-    float initial_rpy[3] = {};
-    calibration.input_rpy(initial_rpy);
-    model.set_input_calibration(initial_rpy);
-    CameraMount mount(settings.get());
-
-    Nv12Frame frame;
+    ModelLoop loop(replay_config, false);
     std::vector<float> raw;
     RawOutputDump raw_dump(std::getenv("EDGEPILOT_RAW_DUMP"));
     unsigned processed = 0;
     unsigned errors = 0;
     RateWindow window;
 
-    while (!g_stop && source.read(frame)) {
-        mount.apply(model, settings.get());
+    // 프레임은 GDC 소스 CMM에 바로 읽는다
+    while (!g_stop && source.read(loop.model.replay_frame())) {
+        loop.prepare_frame();
         const uint64_t t0 = monotonic_now_ns();
-        const bool ok = model.run_frame_nv12(frame.data.data(), raw);
+        const bool ok = loop.model.run_replay_frame(raw);
         const uint64_t t1 = monotonic_now_ns();
         if (ok) {
             raw_dump.append(raw);
-            ParsedModelOutput parsed = ModelOutputParser::parse(raw);
+            ParsedModelOutput parsed = ModelOutputParser::parse(raw.data());
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             // 재생은 처리 시각으로 찍으므로 앞차 추적(시간 간격이 필요하다)은 돌리지 않는다
             const LeadIo lead;
-            publish_output(model_pub, model, parsed, calibration, mount, processed, monotonic_now_ns(), model_ms, 0.0f,
-                           false, settings.get().calibration_use_flow, lead);
+            loop.publish(model_pub, parsed, processed, monotonic_now_ns(), model_ms, 0.0f, false, lead);
             ++processed;
         } else {
             ++errors;
@@ -328,14 +344,13 @@ struct RingSlotMaps {
     uint8_t *virt[kFrameSlots] = {};
     size_t size = 0;
 
-    void attach(FrameRing &ring, unsigned slot) {
+    void attach(const FrameRing &ring, unsigned slot) {
         const unsigned long long p = ring.slot_phys(slot);
         if (p == phys[slot] && virt[slot]) return;
         if (virt[slot]) cmm_unmap(virt[slot], size);
         size = ring.frame_bytes();
         virt[slot] = cmm_map(p, size);
         phys[slot] = p;
-        ring.attach_slot(slot, virt[slot]);
     }
     ~RingSlotMaps() {
         for (unsigned i = 0; i < kFrameSlots; ++i) cmm_unmap(virt[i], size);
@@ -354,13 +369,7 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
     }
     if (!frame_ring.valid()) return 1;
 
-    SupercomboModel model(config.axmodel_path.c_str(), config);
-    ModeldSettings settings(true);
-    CalibrationService calibration(config, settings.get().calibration_use_flow);
-    float initial_rpy[3] = {};
-    calibration.input_rpy(initial_rpy);
-    model.set_input_calibration(initial_rpy);
-    CameraMount mount(settings.get());
+    ModelLoop loop(config, true);
     EgoStateReader ego;
     // 링 슬롯의 CPU 매핑(광류 작업의 앞차 점 고르기). 광류 작업보다 먼저 선언해 나중에 없앤다.
     RingSlotMaps slot_maps;
@@ -374,12 +383,12 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
         try {
             const FlowIntrinsics k{config.input_warp_fx, config.input_warp_fy, config.input_warp_cx,
                                    config.input_warp_cy};
-            flow =
-                std::make_unique<FlowWorker>(k, static_cast<int>(frame_ring.width()),
-                                             static_cast<int>(frame_ring.height()), &calibration.stored_flow_blocks());
-            // 보정 서비스가 상태를 읽고 블록을 저장하고 초기화를 보낸다. 워커는 calibration보다 늦게 선언돼 먼저
+            flow = std::make_unique<FlowWorker>(k, static_cast<int>(frame_ring.width()),
+                                                static_cast<int>(frame_ring.height()),
+                                                &loop.calibration.stored_flow_blocks());
+            // 보정 서비스가 상태를 읽고 블록을 저장하고 초기화를 보낸다. 워커는 loop보다 늦게 선언돼 먼저
             // 없어지지만, 그 뒤에는 update를 부르지 않고 서비스의 소멸자도 측정원을 건드리지 않는다.
-            calibration.attach_flow(flow.get());
+            loop.calibration.attach_flow(flow.get());
             std::fprintf(stderr, "modeld: flow calibration and lead flow on (VPP/IVE pyramid, IVE LK)\n");
         } catch (const std::exception &e) {
             std::fprintf(stderr, "modeld: flow calibration and lead flow off: %s\n", e.what());
@@ -418,10 +427,10 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             ++errors;
             continue;
         }
-        settings.poll();
+        loop.settings.poll();
         ego.poll();
-        model.set_desire(ego.desire());
-        mount.apply(model, settings.get());
+        loop.model.set_desire(ego.desire());
+        loop.prepare_frame();
         if (flow) {
             // Y 평면이 슬롯 앞에 있다(NV12). IVE가 복사를 마친 뒤 슬롯이 그대로인지 seqlock으로 본다.
             slot_maps.attach(frame_ring, meta.slot);  // 슬롯마다 한 번 매핑한다
@@ -444,19 +453,19 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
 
         const uint64_t t0 = monotonic_now_ns();
         // GDC가 읽는 동안 슬롯이 덮어써졌으면 모델 상태(이미지·특징 큐)에 넣기 전에 버린다.
-        const bool ok = model.run_frame_phys(
+        const bool ok = loop.model.run_frame_phys(
             slot_phys, raw, [&] { return frame_ring.read_still_valid(meta.slot, meta.frame_id, slot_seq); });
         const uint64_t t1 = monotonic_now_ns();
         if (ok) {
-            ParsedModelOutput parsed = ModelOutputParser::parse(raw);
+            ParsedModelOutput parsed = ModelOutputParser::parse(raw.data());
             const float model_ms = static_cast<float>((t1 - t0) / 1000000.0);
             LeadIo lead;
             lead.flow = flow ? flow->lead_state() : LeadFlowState{};
             lead.next = &last_lead;
             lead.tracker = &lead_tracker;
             if (ego.vehicle_fresh()) lead.ego_mps = ego.v_ego();
-            publish_output(model_pub, model, parsed, calibration, mount, meta.frame_id, meta.timestamp_ns, model_ms,
-                           ego.v_ego(), ego.engaged(), settings.get().calibration_use_flow, lead);
+            loop.publish(model_pub, parsed, meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego(), ego.engaged(),
+                         lead);
             ++processed;
         } else {
             ++errors;

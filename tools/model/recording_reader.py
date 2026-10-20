@@ -8,11 +8,13 @@
 from __future__ import annotations
 
 import struct
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 
 
 # recording_format.h kRecordingVersion: recordd가 쓰는 배치(check_recording_reader.py가 대조한다). 옛 녹화는 모두 이
@@ -108,15 +110,6 @@ LEARNER_STATE = np.dtype([
     ("road_bank_lat_accel", "<f4"),
     ("prior_steer_ratio", "<f4"), ("prior_lat_accel_factor", "<f4"), ("prior_friction", "<f4"),
     ("bucket_points", "<i2", (8,)), ("plan_delay_s", "<f4"),
-])
-
-# ModelState의 앞부분(frame_id ..). 머리만 볼 도구가 쓴다.
-MODEL_STATE_HEAD = np.dtype([
-    ("frame_id", "<u8"),
-    ("capture_timestamp_ns", "<u8"),
-    ("model_timestamp_ns", "<u8"),
-    ("model_execution_ms", "<f4"),
-    ("valid", "<u4"),
 ])
 
 CALIBRATION_STATE = np.dtype([
@@ -235,13 +228,6 @@ class SegmentInfo:
     frames: np.ndarray  # FRAME_INDEX_RECORD 배열
 
 
-@dataclass
-class RouteEvents:
-    control: np.ndarray            # CONTROL_STATE 레코드들
-    control_log_ts: np.ndarray     # control 레코드의 이벤트 머리 타임스탬프
-    model_capture_ts: np.ndarray   # 모델 상태의 촬영 시각
-
-
 def read_segment_index(segment_dir: Path) -> SegmentInfo:
     data = (segment_dir / "frames.bin").read_bytes()
     magic, version, header_size, record_size, width, height, fps = struct.unpack_from(
@@ -348,102 +334,144 @@ def decode_route_yuv(segments: list[SegmentInfo]):
         raise ValueError(f"parser produced {au_index} AUs, expected {len(au_records)}")
 
 
+class RouteVideo:
+    """frame_id로 영상 프레임 하나를 RGB로 꺼낸다(ffmpeg). 세그먼트마다 SPS/PPS가 파일 앞에 있고 키프레임이 1 s마다
+    있어, 앞 키프레임부터 그 프레임까지만 디코딩한다."""
+
+    def __init__(self, route: Path):
+        self.segments: list[SegmentInfo] = route_segments(route)
+        self.where: dict[int, tuple[int, int]] = {}
+        for s, segment in enumerate(self.segments):
+            for i, frame_id in enumerate(segment.frames["frame_id"]):
+                self.where[int(frame_id)] = (s, i)
+        self._cached: tuple[int, bytes] | None = None
+
+    def _bytes(self, s: int) -> bytes:
+        if self._cached is None or self._cached[0] != s:
+            self._cached = (s, segment_video(self.segments[s].path).read_bytes())
+        return self._cached[1]
+
+    def frame_rgb(self, frame_id: int) -> np.ndarray | None:
+        if frame_id not in self.where:
+            return None
+        s, i = self.where[frame_id]
+        segment, frames = self.segments[s], self.segments[s].frames
+        key = i
+        while key > 0 and not frames[key]["flags"] & 1:
+            key -= 1
+        data = self._bytes(s)
+        stream = data[:int(frames[0]["file_offset"])] + \
+            data[int(frames[key]["file_offset"]):int(frames[i]["file_offset"]) + int(frames[i]["packet_size"])]
+        result = subprocess.run(["ffmpeg", "-v", "error", "-f", "h264", "-i", "pipe:0", "-fps_mode", "passthrough",
+                                 "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+                                input=stream, capture_output=True, check=False)
+        size = segment.width * segment.height * 3
+        decoded = len(result.stdout) // size
+        if decoded != i - key + 1:
+            print(f"  frame {frame_id}: decoded {decoded} frames, expected {i - key + 1}; skipped")
+            return None
+        return np.frombuffer(result.stdout[-size:], np.uint8).reshape(segment.height, segment.width, 3)
+
+
 def route_event_files(route_dir: Path) -> list[Path]:
     """기록 순서대로 놓은 이벤트 로그 파일(events/의 60 s 청크)."""
     return sorted((route_dir / "events").glob("*.bin"))
 
 
-@dataclass
-class EventRecord:
-    """이벤트 로그 레코드 하나. ``payload``는 청크를 복사 없이 가리키는 뷰다."""
-    path: Path
-    timestamp_ns: int
-    type: int
-    payload: memoryview
-
-    def _record(self, dtype: np.dtype, what: str) -> np.void:
-        if len(self.payload) != dtype.itemsize:
-            raise ValueError(f"{self.path}: {what} payload {len(self.payload)} != {dtype.itemsize}; the layout "
-                             f"changed without a recording-version bump")
-        return np.frombuffer(self.payload, dtype, count=1)[0]
-
-    def control_state(self) -> np.void:
-        if len(self.payload) != CONTROL_STATE_SIZE:
-            raise ValueError(f"{self.path}: control state payload {len(self.payload)} "
-                             f"!= {CONTROL_STATE_SIZE}; ControlState changed without a "
-                             f"recording-version bump")
-        return np.frombuffer(self.payload, CONTROL_STATE, count=1)[0]
-
-    def learner_state(self) -> np.void:
-        return self._record(LEARNER_STATE, "learner state")
-
-    def model_state(self) -> np.void:
-        return self._record(MODEL_STATE, "model state")
-
-    def model_lanes(self) -> tuple[np.ndarray, np.ndarray]:
-        """ModelState의 차선 네 개(왼쪽 바깥부터) [4, 33, 3](x = X_IDXS, y 오른쪽 +, z)와 그 확률 [4]의 사본."""
-        model = self.model_state()
-        points = np.empty((4, TRAJECTORY_SIZE, 3), np.float32)
-        points[..., 0] = X_IDXS
-        points[..., 1:] = model["lanes"]
-        return points, model["lane_probabilities"].copy()
-
-    def camera_mount(self) -> tuple[float, float]:
-        """이 ModelState의 워프에 쓴 카메라 장착(오른쪽 오프셋 m, 높이 m)."""
-        model = self.model_state()
-        return float(model["camera_offset_m"]), float(model["camera_height_m"])
-
-    def imu_samples(self) -> np.ndarray:
-        """IMU 레코드의 샘플(칩 원래 축, 자이로 바이어스 제거 전) 사본. 머리의 count만큼 들어 있지 않으면 빈 배열."""
-        if len(self.payload) >= IMU_BATCH_HEAD.size:
-            count = IMU_BATCH_HEAD.unpack_from(self.payload, 0)[1]
-            if IMU_BATCH_HEAD.size + count * IMU_SAMPLE.itemsize <= len(self.payload):
-                return np.frombuffer(self.payload, IMU_SAMPLE, count, IMU_BATCH_HEAD.size).copy()
-        return np.zeros(0, IMU_SAMPLE)
+# 이벤트 청크의 레코드 색인 한 줄: 머리 시각, 타입, 페이로드의 파일 안 위치와 크기.
+RECORD_INDEX = np.dtype([("timestamp_ns", "<u8"), ("type", "<u2"), ("offset", "<i8"), ("size", "<u4")])
 
 
-def iter_event_records(path: Path) -> Iterator[EventRecord]:
-    """이벤트 청크 하나의 모든 레코드를 파일 순서대로 낸다. 끊긴 꼬리(깔끔하지 않게 멈춰 잘린
-    레코드, tmpfs가 차서 0으로 채워진 구간)에서 C++ EventLogReader처럼 끝난다: 레코드가 파일을 넘거나
-    타입이 범위 밖이거나 MAX_RECORD_PAYLOAD보다 길다. 머리보다 짧은 파일은 아무것도 내지 않고, 매직이나
-    버전이 다르면 예외를 던진다. 레코드의 payload(와 그 위의 frombuffer)는 청크 버퍼를 가리키는 뷰라, 오래 쥘
-    값은 복사한다: 뷰 하나가 청크 전체를 붙잡는다."""
-    data = path.read_bytes()
+def record_index(path: Path, data: bytes) -> np.ndarray:
+    """이벤트 청크 하나(data는 path의 바이트)의 레코드 색인(RECORD_INDEX, 파일 순서). 끊긴 꼬리(깔끔하지 않게 멈춰 잘린
+    레코드, tmpfs가 차서 0으로 채워진 구간)에서 C++ EventLogReader처럼 끝난다: 레코드가 파일을 넘거나 타입이 범위
+    밖이거나 MAX_RECORD_PAYLOAD보다 길다. 머리보다 짧은 파일은 빈 색인이고, 매직이나 버전이 다르면 예외를 던진다."""
     if len(data) < 16:
-        return
+        return np.zeros(0, RECORD_INDEX)
     magic, version, header_size = struct.unpack_from("<8sII", data, 0)
     if magic != EVENT_LOG_MAGIC or version != RECORDING_VERSION:
         raise ValueError(f"{path}: event log is {magic!r} v{version}, not v{RECORDING_VERSION}")
-    view = memoryview(data)
+    rows = []
     offset, end = header_size, len(data)
     while offset + EVENT_RECORD_HEADER.size <= end:
         ts, rtype, _flags, size = EVENT_RECORD_HEADER.unpack_from(data, offset)
         offset += EVENT_RECORD_HEADER.size
         if not 1 <= rtype <= LAST_RECORD_TYPE or size > MAX_RECORD_PAYLOAD or offset + size > end:
             break
-        yield EventRecord(path, ts, rtype, view[offset:offset + size])
+        rows.append((ts, rtype, offset, size))
         offset += size
+    return np.array(rows, RECORD_INDEX)
 
 
-def read_route_events(route_dir: Path) -> RouteEvents | None:
-    paths = [p for p in route_event_files(route_dir) if p.stat().st_size > 32]
-    if not paths:
-        return None
+@dataclass
+class EventRecord:
+    """이벤트 로그 레코드 하나. ``payload``는 청크를 복사 없이 가리키는 뷰다."""
+    timestamp_ns: int
+    type: int
+    payload: memoryview
 
-    controls, control_ts, model_cts = [], [], []
-    for path in paths:
-        for rec in iter_event_records(path):
-            if rec.type == RECORD_CONTROL_STATE:
-                controls.append(rec.control_state().copy())  # 뷰는 청크 버퍼 전체를 붙잡는다
-                control_ts.append(rec.timestamp_ns)
-            elif rec.type == RECORD_MODEL_STATE:
-                model_cts.append(np.frombuffer(rec.payload, MODEL_STATE_HEAD, count=1)[0]["capture_timestamp_ns"])
 
-    if not model_cts and not controls:
-        return None
-    return RouteEvents(
-        control=np.array(controls, dtype=CONTROL_STATE),
-        control_log_ts=np.array(control_ts, dtype=np.uint64),
-        model_capture_ts=np.array(model_cts, dtype=np.uint64),
-    )
+def iter_event_records(path: Path) -> Iterator[EventRecord]:
+    """이벤트 청크 하나의 레코드를 파일 순서대로 낸다(record_index가 멈추는 곳까지). 레코드의 payload(와 그 위의
+    frombuffer)는 청크 버퍼를 가리키는 뷰라, 오래 쥘 값은 복사한다: 뷰 하나가 청크 전체를 붙잡는다."""
+    data = path.read_bytes()
+    view = memoryview(data)
+    for ts, rtype, offset, size in record_index(path, data).tolist():
+        yield EventRecord(ts, rtype, view[offset:offset + size])
 
+
+# 고정 크기 상태 레코드: 타입 -> (dtype, 페이로드 크기). ControlState 페이로드는 C++ 꼬리 패딩만큼 dtype보다 길다.
+STATE_RECORDS = {
+    RECORD_MODEL_STATE: (MODEL_STATE, MODEL_STATE.itemsize),
+    RECORD_CONTROL_STATE: (CONTROL_STATE, CONTROL_STATE_SIZE),
+    RECORD_LEARNER_STATE: (LEARNER_STATE, LEARNER_STATE.itemsize),
+    RECORD_LOCALIZATION: (LOCALIZATION_STATE, LOCALIZATION_STATE.itemsize),
+}
+# 묶음 레코드: 타입 -> (머리 크기, 항목 dtype). recordd는 머리 뒤에 count개 항목만 쓰므로 항목이 페이로드를 꼭 채운다.
+BATCH_RECORDS = {
+    RECORD_CAN_RX: (RECORDED_CAN_BATCH_HEAD.size, RECORDED_CAN_FRAME),
+    RECORD_CAN_TX: (RECORDED_CAN_BATCH_HEAD.size, RECORDED_CAN_FRAME),
+    RECORD_IMU: (IMU_BATCH_HEAD.size, IMU_SAMPLE),
+}
+
+
+def chunk_states(path: Path, *types: int) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """이벤트 청크 하나에서 타입마다 (머리 시각 [n] u64, 레코드 [n])을 파일 순서로 읽는다. 상태 레코드(STATE_RECORDS)는
+    레코드 하나가 한 줄이고, 묶음 레코드(BATCH_RECORDS)는 CAN 프레임이나 IMU 샘플(칩 원래 축, 자이로 바이어스 제거 전)
+    하나가 한 줄이며 그 레코드의 머리 시각을 받는다. 줄은 고급 인덱싱으로 뽑은 사본이라 청크 버퍼를 붙잡지 않는다.
+    상태 레코드 크기가 dtype과 다르면(녹화 버전을 올리지 않고 배치가 바뀌었다) 예외를 던진다."""
+    data = path.read_bytes()
+    index = record_index(path, data)
+    out = {}
+    for rtype in types:
+        mine = index[index["type"] == rtype]
+        if rtype in BATCH_RECORDS:
+            head, dtype = BATCH_RECORDS[rtype]
+            counts = ((mine["size"] - head) // dtype.itemsize).astype(np.int64)
+            item = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
+            offsets = np.repeat(mine["offset"] + head, counts) + item * dtype.itemsize
+            ts = np.repeat(mine["timestamp_ns"], counts)
+        else:
+            dtype, size = STATE_RECORDS[rtype]
+            if (mine["size"] != size).any():
+                raise ValueError(f"{path}: record type {rtype} payload != {size} bytes; the layout changed without "
+                                 f"a recording-version bump")
+            offsets, ts = mine["offset"], mine["timestamp_ns"]
+        if len(offsets):
+            rows = sliding_window_view(np.frombuffer(data, np.uint8), dtype.itemsize)[offsets]
+        else:  # 항목 하나보다 짧은 청크(머리만 있는 청크)에는 창을 만들 수 없다
+            rows = np.zeros((0, dtype.itemsize), np.uint8)
+        out[rtype] = (ts, rows.view(dtype)[:, 0])
+    return out
+
+
+def iter_states(route_dir: Path, *types: int) -> Iterator[dict[int, tuple[np.ndarray, np.ndarray]]]:
+    """route의 이벤트 청크(60 s)마다 chunk_states(..., *types)를 기록 순서로 낸다."""
+    for path in route_event_files(route_dir):
+        yield chunk_states(path, *types)
+
+
+def concat_chunks(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    """청크마다 뽑은 {이름: 배열}을 이름마다 이어 붙인다. 뽑은 값은 새 배열이어야 한다: 레코드 필드의 뷰는 그 청크의
+    레코드 배열 전체를 붙잡아, 이어 붙일 때까지 route 전체가 메모리에 남는다."""
+    return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}

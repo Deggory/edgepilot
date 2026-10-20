@@ -200,25 +200,24 @@ CanFrame create_cruise_button_frame(const HyundaiClu11Values &clu_seed, int butt
     return create_clu11_frame(clu_seed, command, kPowertrainBus);
 }
 
-int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque,
-                                      const HyundaiSteeringLimits &limits) {
+int apply_hyundai_steer_torque_limits(int desired_torque, int last_torque, int driver_torque) {
     const int driver_max_torque =
-        limits.steer_max +
-        (limits.steer_driver_allowance + driver_torque * limits.steer_driver_factor) * limits.steer_driver_multiplier;
+        kHyundaiSteerMax +
+        (kHyundaiSteerDriverAllowance + driver_torque * kHyundaiSteerDriverFactor) * kHyundaiSteerDriverMultiplier;
     const int driver_min_torque =
-        -limits.steer_max +
-        (-limits.steer_driver_allowance + driver_torque * limits.steer_driver_factor) * limits.steer_driver_multiplier;
+        -kHyundaiSteerMax +
+        (-kHyundaiSteerDriverAllowance + driver_torque * kHyundaiSteerDriverFactor) * kHyundaiSteerDriverMultiplier;
 
-    const int max_steer_allowed = std::max(std::min(limits.steer_max, driver_max_torque), 0);
-    const int min_steer_allowed = std::min(std::max(-limits.steer_max, driver_min_torque), 0);
+    const int max_steer_allowed = std::max(std::min(kHyundaiSteerMax, driver_max_torque), 0);
+    const int min_steer_allowed = std::min(std::max(-kHyundaiSteerMax, driver_min_torque), 0);
     int apply_torque = clamp_int(desired_torque, min_steer_allowed, max_steer_allowed);
 
     if (last_torque > 0) {
-        apply_torque = clamp_int(apply_torque, std::max(last_torque - limits.steer_delta_down, -limits.steer_delta_up),
-                                 last_torque + limits.steer_delta_up);
+        apply_torque = clamp_int(apply_torque, std::max(last_torque - kHyundaiSteerDeltaDown, -kHyundaiSteerDeltaUp),
+                                 last_torque + kHyundaiSteerDeltaUp);
     } else {
-        apply_torque = clamp_int(apply_torque, last_torque - limits.steer_delta_up,
-                                 std::min(last_torque + limits.steer_delta_down, limits.steer_delta_up));
+        apply_torque = clamp_int(apply_torque, last_torque - kHyundaiSteerDeltaUp,
+                                 std::min(last_torque + kHyundaiSteerDeltaDown, kHyundaiSteerDeltaUp));
     }
     return apply_torque;
 }

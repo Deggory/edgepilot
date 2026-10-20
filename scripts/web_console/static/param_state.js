@@ -88,8 +88,8 @@ function holds(condition, group) {
 export function conditionNotes(group, key) {
   const meta = metaFor(group, key);
   return {
-    unused: (meta.unused || []).filter(condition => holds(condition, group)).map(condition => condition.text),
-    role: (meta.role || []).filter(condition => holds(condition, group)).map(condition => condition.text),
+    unused: meta.unused.filter(condition => holds(condition, group)).map(condition => condition.text),
+    role: meta.role.filter(condition => holds(condition, group)).map(condition => condition.text),
   };
 }
 

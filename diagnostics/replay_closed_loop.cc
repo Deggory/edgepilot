@@ -184,6 +184,8 @@ public:
         head_ = (head_ + 1) % buffer_.size();
         return buffer_[head_];
     }
+    // 지연선 전체를 value로 채운다(그 값이 계속 들어온 것처럼)
+    void fill(float value) { std::fill(buffer_.begin(), buffer_.end(), value); }
 
 private:
     std::vector<float> buffer_;
@@ -195,8 +197,7 @@ private:
 // 응답을 낸다.
 class Plant {
 public:
-    Plant(float wn, float zeta, const float *gain, int delay_frames)
-        : wn_(wn), zeta_(zeta), delay_(static_cast<size_t>(std::max(0, delay_frames)) + 1, 0.0f) {
+    Plant(float wn, float zeta, const float *gain, int delay_frames) : wn_(wn), zeta_(zeta), delay_(delay_frames) {
         std::copy(gain, gain + kGainNodes, gain_);
     }
 
@@ -212,9 +213,7 @@ public:
     }
 
     float step(float a_cmd, float v) {
-        delay_[head_] = a_cmd;
-        head_ = (head_ + 1) % delay_.size();
-        const float u = delay_[head_] * gain_at(v);
+        const float u = delay_.push(a_cmd) * gain_at(v);
         const float acc = wn_ * wn_ * (u - a_) - 2.0f * zeta_ * wn_ * a_dot_;
         a_dot_ += acc * static_cast<float>(kDtCtrl);
         a_ += a_dot_ * static_cast<float>(kDtCtrl);
@@ -225,14 +224,13 @@ public:
     void resync(float a) {
         a_ = a;
         a_dot_ = 0.0f;
-        std::fill(delay_.begin(), delay_.end(), a);
+        delay_.fill(a);
     }
 
 private:
     float wn_, zeta_;
     float gain_[kGainNodes] = {};
-    std::vector<float> delay_;
-    size_t head_ = 0;
+    DelayLine delay_;
     float a_ = 0.0f;
     float a_dot_ = 0.0f;
 };
@@ -267,6 +265,23 @@ void transform_model(ModelState &ms, float dy, float dpsi) {
     for (auto &lane : ms.lanes) regrid(lane);
     for (auto &edge : ms.road_edges) regrid(edge);
 }
+
+// 재현 점수의 합: 시뮬 횡가속도(a_sim)가 실측(a_rec)을 얼마나 설명하는가.
+struct Score {
+    long n = 0;
+    double err2 = 0.0, sum = 0.0, sum2 = 0.0;
+    void add(double a_sim, double a_rec) {
+        ++n;
+        err2 += (a_sim - a_rec) * (a_sim - a_rec);
+        sum += a_rec;
+        sum2 += a_rec * a_rec;
+    }
+    // 1 − 오차 제곱합 / 실측 분산(분산이 0이면 0)
+    double r2() const {
+        const double var = sum2 - sum * sum / static_cast<double>(n);
+        return var > 0.0 ? 1.0 - err2 / var : 0.0;
+    }
+};
 
 // 녹화에서 그대로 가져오는 외생 입력. 시뮬이 바꿀 수 없는 것들이다.
 struct Exogenous {
@@ -331,10 +346,7 @@ int main(int argc, char **argv) {
                      "warning: nn_feedforward is on but no --lateral-nn model is given; the replay uses the "
                      "linear feed-forward\n");
     }
-    constexpr uint64_t kControllerNowNs = 1'000'000'000'000ULL;  // plan 나이를 재는 컨트롤러 시계(고정)
-    controller.set_clock([] { return kControllerNowNs; });
     PathHoldGate path_gate;
-    const uint64_t model_timeout_ns = static_cast<uint64_t>(ControlTiming{}.model_timeout_ms) * 1'000'000ULL;
     long laf_ignored_learner_states = 0;  // --laf를 줬는데 녹화가 torqued를 써 컨트롤러가 학습 배율을 쓴 LearnerState
     TorqueController inverse_model;
 
@@ -384,13 +396,11 @@ int main(int argc, char **argv) {
     bool resynced_prev = true;
     // 재현 점수: 자유 주행 구간에서 시뮬 횡가속도가 실측을 얼마나 설명하는가.
     // 구간 시작 0.5초는 재동기화 과도라 뺀다.
-    long score_n = 0;
-    double score_err2 = 0.0, score_sum = 0.0, score_sum2 = 0.0;
+    Score score;
     // 속도 대역별 점수. 단일 이득으로는 저속과 고속이 같이 안 맞는다.
     constexpr int kBands = 4;
     const float band_edges[kBands + 1] = {0.0f, 20.0f, 35.0f, 55.0f, 200.0f};
-    long band_n[kBands] = {};
-    double band_err2[kBands] = {}, band_sum[kBands] = {}, band_sum2[kBands] = {};
+    Score bands[kBands];
     // 운전자 토크는 hands-off에서도 노이즈가 크다(활성 중 p50 14, p90 156).
     // 단일 임계로 자르면 구간이 0.06초로 부서진다. 컨트롤러처럼 히스테리시스와
     // 해제 지연을 둔다.
@@ -436,21 +446,19 @@ int main(int argc, char **argv) {
             localization.lag_status == static_cast<uint32_t>(LateralLagStatus::Estimated);
         controller.set_live_delay(localization.lateral_delay_s, delay_fresh);
 
-        // plan 나이는 컨트롤러가 자기 시계로 잰다. 그 시계를 고정해 두고 캡처 시각을 나이만큼
-        // 앞당겨, 호스트 시간과 무관하게 결정론적으로 만든다.
-        LateralTarget t = target;
-        if (t.valid) t.capture_timestamp_ns = kControllerNowNs - static_cast<uint64_t>(age_s * 1e9);
+        // 경로 게이트와 plan 나이의 시각: 녹화 시각(sim_t)으로 잰 나이만큼 캡처 시각 뒤(호스트 시간과 무관하다)
         const uint64_t path_now_ns = ms_sim.capture_timestamp_ns + static_cast<uint64_t>(age_s * 1e9);
         // controlsd(ControlsTick)처럼 무효 plan 한 프레임은 PathHoldGate가 덮는다
-        LateralPath path = have_model ? path_gate.update(ms_sim, path_now_ns, model_timeout_ns).path : LateralPath{};
+        LateralPath path = have_model ? path_gate.update(ms_sim, path_now_ns, kModelTimeoutNs).path : LateralPath{};
 
-        const LateralControlResult r = controller.update(path, t, vehicle, sim_t, frame++, true, true);
+        const LateralControlResult r =
+            controller.update(path, target, vehicle, sim_t, frame++, true, true, path_now_ns);
         lat_active_prev = r.lat_active;
         steering_pressed_prev = r.steering_pressed;
 
         // 토크 -> 요청 횡가속도. 부호는 kTorqueOutputSign의 역이다(±1이라 같은 값을 곱한다).
         const float a_cmd = static_cast<float>(kTorqueOutputSign * r.apply_torque) /
-                            ((1.0f / plant_lat_accel_factor) * static_cast<float>(steering.steer_max));
+                            ((1.0f / plant_lat_accel_factor) * static_cast<float>(kHyundaiSteerMax));
         const float a_act = plant.step(a_cmd, v_mps);
         k_sim = a_act / (v_clamped * v_clamped);
 
@@ -497,16 +505,10 @@ int main(int argc, char **argv) {
             if (++segment_frames > 50) {
                 const double a_sim = static_cast<double>(k_sim) * v_clamped * v_clamped;
                 const double a_rec = static_cast<double>(ex.k_rec) * v_clamped * v_clamped;
-                ++score_n;
-                score_err2 += (a_sim - a_rec) * (a_sim - a_rec);
-                score_sum += a_rec;
-                score_sum2 += a_rec * a_rec;
+                score.add(a_sim, a_rec);
                 for (int b = 0; b < kBands; ++b) {
                     if (ex.v_kph >= band_edges[b] && ex.v_kph < band_edges[b + 1]) {
-                        ++band_n[b];
-                        band_err2[b] += (a_sim - a_rec) * (a_sim - a_rec);
-                        band_sum[b] += a_rec;
-                        band_sum2[b] += a_rec * a_rec;
+                        bands[b].add(a_sim, a_rec);
                         break;
                     }
                 }
@@ -619,18 +621,14 @@ int main(int argc, char **argv) {
                      "warning: --laf did not reach the controller in %ld LearnerState records: the recording uses "
                      "torqued (use --torque to replace the learned factor)\n",
                      laf_ignored_learner_states);
-    if (score_n > 1) {
-        const double var = score_sum2 - score_sum * score_sum / static_cast<double>(score_n);
-        const double rmse = std::sqrt(score_err2 / static_cast<double>(score_n));
-        const double r2 = var > 0.0 ? 1.0 - score_err2 / var : 0.0;
-        std::printf("n=%ld rmse=%.4f r2=%.4f", score_n, rmse, r2);
+    if (score.n > 1) {
+        std::printf("n=%ld rmse=%.4f r2=%.4f", score.n, std::sqrt(score.err2 / static_cast<double>(score.n)),
+                    score.r2());
         for (int b = 0; b < kBands; ++b) {
-            if (band_n[b] < 2) {
+            if (bands[b].n < 2)
                 std::printf(" b%d=nan", b);
-                continue;
-            }
-            const double bv = band_sum2[b] - band_sum[b] * band_sum[b] / static_cast<double>(band_n[b]);
-            std::printf(" b%d=%.4f", b, bv > 0.0 ? 1.0 - band_err2[b] / bv : 0.0);
+            else
+                std::printf(" b%d=%.4f", b, bands[b].r2());
         }
         std::printf("\n");
     } else {

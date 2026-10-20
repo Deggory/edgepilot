@@ -67,8 +67,8 @@ private:
 // 재그리기 빈도와 무관하게 시각으로 센다.
 class TurnSignalClock {
 public:
-    // hud의 깜빡이로 단계를 hud->turn_signal_step에 쓴다. 깜빡이는 동안 단계가 바뀌었으면 true.
-    bool update(uint64_t now_ns, HudState *hud);
+    // hud의 깜빡이로 단계를 hud->turn_signal_step에 쓴다.
+    void update(uint64_t now_ns, HudState *hud);
 
 private:
     bool left_ = false;

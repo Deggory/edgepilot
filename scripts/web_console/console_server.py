@@ -81,7 +81,7 @@ def create_app(stopping: Callable[[], bool]) -> FastAPI:
     calibration = CalibrationControl(store)
     panda = PandaUpdate()
     assets = StaticAssets()
-    lateral_nn = LateralNnModels(controlsd_running=lambda: learners.fresh_state() is not None)
+    lateral_nn = LateralNnModels()
     recordings = Recordings()
 
     application = FastAPI(title="edgepilot web console", docs_url="/docs")
@@ -146,14 +146,20 @@ def create_app(stopping: Callable[[], bool]) -> FastAPI:
     def set_calibration_source(request: CalibrationSourceRequest) -> Dict[str, Any]:
         return calibration.set_source(request.use_flow)
 
-    # 학습 토크 모델 카드는 runtime(lateral_nn_loaded)으로 파라미터 안내를 갱신한다
+    # 학습 토크 모델 카드: controlsd가 도는지는 학습 상태의 신선도로 보고, 페이지는 runtime(lateral_nn_loaded)으로
+    # 파라미터 안내를 갱신한다. 학습 상태는 응답마다 한 번 읽는다.
+    def lateral_nn_status() -> Dict[str, Any]:
+        learner = learners.status()
+        return {**lateral_nn.status(controlsd_running=not learner["stale"]), "runtime": learner["runtime"]}
+
     @application.get("/api/lateral_nn")
     def get_lateral_nn() -> Dict[str, Any]:
-        return {**lateral_nn.status(), "runtime": learners.runtime_facts()}
+        return lateral_nn_status()
 
     @application.post("/api/lateral_nn")
     def set_lateral_nn(request: LateralNnRequest) -> Dict[str, Any]:
-        return {**lateral_nn.select(request.model), "runtime": learners.runtime_facts()}
+        lateral_nn.select(request.model)
+        return lateral_nn_status()
 
     @application.get("/api/panda")
     def get_panda() -> Dict[str, Any]:

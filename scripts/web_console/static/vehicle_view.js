@@ -12,7 +12,7 @@ import {
   runAction, section, segmented, setBadge, sgn, sparkline, staleBadge,
 } from "./ui.js";
 
-const GRAVITY = 9.81;
+const GRAVITY = 9.81;  // 편경사 롤 환산. learner_monitor.py와 같은 값과 식이다(check_web_console.py가 대조)
 const steering = () => params().params.steering;
 const restored = flag => (flag ? t("vehicle.restored") : t("vehicle.fresh"));
 const lagConfirmed = localization => Boolean(localization) && localization.state.lag_status === 1;
@@ -446,15 +446,20 @@ function calibrationCard() {
 }
 
 // ------------------------------------------------------------ 추이
-// title·dashed는 문구 키. series는 [추이 행의 열, 선 이름(console.css .trend .<이름>)]이고, levels는 기준선: ref는 점선
-// (dashed가 무엇인지 말한다: 수동값 또는 학습의 사전값), low·high는 그 허용 폭이다. span은 y 범위의 최소 폭.
+// 서버가 내는 추이 행의 열(learner_monitor.py LEARNER_TREND_COLUMNS와 같은 순서, check_web_console.py가 대조). 첫 열이
+// 시각(s)이다.
+const TREND_COLUMNS = ["time_s", "steer_ratio", "angle_offset_average_deg", "angle_offset_deg", "roll_deg",
+                       "bank_roll_deg", "lat_accel_factor_raw", "lat_accel_factor"];
+// title·dashed는 문구 키. series는 [추이 행의 열 이름, 선 이름(console.css .trend .<이름>)]이고, levels는 기준선: ref는
+// 점선(dashed가 무엇인지 말한다: 수동값 또는 학습의 사전값), low·high는 그 허용 폭이다. span은 y 범위의 최소 폭.
 const TREND_CHARTS = [
-  {title: "vehicle.trend_ratio", series: [[1, "main"]], levels: m => ({ref: m.steer_ratio}),
+  {title: "vehicle.trend_ratio", series: [["steer_ratio", "main"]], levels: m => ({ref: m.steer_ratio}),
    dashed: "vehicle.trend_dashed_manual", span: 0.2, digits: 2},
-  {title: "vehicle.trend_offset", series: [[2, "main"], [3, "thin"]], levels: m => ({ref: m.angle_offset_deg}),
-   dashed: "vehicle.trend_dashed_manual", span: 0.2, digits: 2},
-  {title: "vehicle.trend_roll", series: [[4, "main"], [5, "dash"]], levels: () => ({}), span: 0.5, digits: 2},
-  {title: "vehicle.trend_torque", series: [[7, "main"], [6, "raw"]],
+  {title: "vehicle.trend_offset", series: [["angle_offset_average_deg", "main"], ["angle_offset_deg", "thin"]],
+   levels: m => ({ref: m.angle_offset_deg}), dashed: "vehicle.trend_dashed_manual", span: 0.2, digits: 2},
+  {title: "vehicle.trend_roll", series: [["roll_deg", "main"], ["bank_roll_deg", "dash"]], levels: () => ({}),
+   span: 0.5, digits: 2},
+  {title: "vehicle.trend_torque", series: [["lat_accel_factor", "main"], ["lat_accel_factor_raw", "raw"]],
    levels: (m, s) => ({ref: s.prior_lat_accel_factor, low: s.prior_lat_accel_factor * 0.7, high: s.prior_lat_accel_factor * 1.3}),
    dashed: "vehicle.trend_dashed_prior", span: 0.2, digits: 2},
 ];
@@ -462,9 +467,10 @@ const TREND_CHARTS = [
 // 추이 카드 하나: 제목과 지금 값, 차트(ui.js sparkline), 그린 범위와 점선의 뜻. 한 번 만들고 1초마다 update로 그린다.
 function trendCard(chart) {
   const title = t(chart.title);
+  const series = chart.series.map(([column, name]) => [TREND_COLUMNS.indexOf(column), name]);
   const now = el("span.trend-now", {text: DASH});
   const range = el("span"), dashed = el("span");
-  const plot = sparkline({height: 30, series: chart.series.map(([, name]) => name), levels: ["ref", "low", "high"], label: title});
+  const plot = sparkline({height: 30, series: series.map(([, name]) => name), levels: ["ref", "low", "high"], label: title});
   const element = el("article.card.trend", {}, el("div.trend-head", {}, el("span", {text: title}), now), plot.element,
                      el("div.trend-range", {}, range, dashed));
   // 원시 torqued 배율의 0은 아직 계산하지 못한 값이다
@@ -475,11 +481,11 @@ function trendCard(chart) {
       const end = rows.length ? rows[rows.length - 1][0] : 0;
       const shown = rows.filter(row => row[0] >= end - windowS);
       const at = chart.levels(manual, state);
-      const data = Object.fromEntries(chart.series.map(([index, name]) => [name, shown.map(row => [row[0], value(row, index, name)])]));
+      const data = Object.fromEntries(series.map(([index, name]) => [name, shown.map(row => [row[0], value(row, index, name)])]));
       const y = fitRange([...Object.values(at), ...Object.values(data).flat().map(([, v]) => v)], {minSpan: chart.span, pad: 0.08});
       plot.draw({x: [end - windowS, end], y, data, at});
       const last = shown[shown.length - 1];
-      now.textContent = last ? chart.series.map(([index, name]) => num(value(last, index, name), chart.digits)).join(" / ") : DASH;
+      now.textContent = last ? series.map(([index, name]) => num(value(last, index, name), chart.digits)).join(" / ") : DASH;
       range.textContent = `${num(y[0], chart.digits)} ~ ${num(y[1], chart.digits)}`;
       dashed.textContent = Number.isFinite(at.ref) ? t(chart.dashed, {value: num(at.ref, chart.digits)}) : t("vehicle.trend_window");
     },

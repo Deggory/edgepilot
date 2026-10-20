@@ -146,8 +146,7 @@ int TorqueEstimator::total_points() const {
 std::vector<std::array<double, 2>> TorqueEstimator::points() const {
     std::vector<std::array<double, 2>> out;
     out.reserve(total_points());
-    for (const Bucket &b : buckets_)
-        for (int i = 0; i < b.count; ++i) out.push_back(b.at(i));
+    for (const Bucket &b : buckets_) b.for_each([&](const std::array<double, 2> &p) { out.push_back(p); });
     return out;
 }
 
@@ -173,9 +172,10 @@ int TorqueEstimator::valid_percent() const {
 }
 
 void TorqueEstimator::estimate_params(double *slope, double *offset, double *friction) {
-    fit_points_.clear();  // 예약해 둔 버퍼를 재사용한다. 점은 복사하지 않고 가리킨다(최대 12,000개를 4 Hz로 섞는다)
-    for (const Bucket &b : buckets_)
-        for (int i = 0; i < b.count; ++i) fit_points_.push_back(&b.at(i));
+    // 예약해 둔 버퍼를 재사용한다. 점은 복사하지 않고 가리킨다(최대 12,000개를 4 Hz로 섞는다)
+    fit_points_.resize(static_cast<size_t>(total_points()));
+    size_t k = 0;
+    for (const Bucket &b : buckets_) b.for_each([&](const std::array<double, 2> &p) { fit_points_[k++] = &p; });
     const int total = static_cast<int>(fit_points_.size());
     int n = total;
     if (!fit_all_points_ && total > kFitPointsTotal) {  // rng.choice(replace=False): 부분 셔플
@@ -341,13 +341,17 @@ std::string TorqueEstimator::serialize(const TorqueParams &p) const {
     put(&out, static_cast<float>(p.lat_accel_offset));
     put(&out, static_cast<float>(p.friction));
     put(&out, static_cast<float>(p.decay));
-    put(&out, static_cast<uint32_t>(total_points()));
-    for (const Bucket &b : buckets_) {
-        for (int i = 0; i < b.count; ++i) {
-            put(&out, static_cast<float>(b.at(i)[0]));
-            put(&out, static_cast<float>(b.at(i)[1]));
-        }
-    }
+    const uint32_t n = static_cast<uint32_t>(total_points());
+    put(&out, n);
+    // 점은 크기를 한 번 잡고 채운다(4바이트씩 붙이면 24,000번 append다)
+    size_t pos = out.size();
+    out.resize(pos + static_cast<size_t>(n) * 2 * sizeof(float));
+    for (const Bucket &b : buckets_)
+        b.for_each([&](const std::array<double, 2> &p) {
+            const float xy[2] = {static_cast<float>(p[0]), static_cast<float>(p[1])};
+            std::memcpy(&out[pos], xy, sizeof(xy));
+            pos += sizeof(xy);
+        });
     return out;
 }
 

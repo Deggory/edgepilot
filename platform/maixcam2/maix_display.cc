@@ -1,6 +1,7 @@
 #include "maixcam2/maix_display.h"
 
 #include "ax_middleware.hpp"
+#include "hud/hud_tiles.h"
 #include "maix_app.hpp"
 #include "maixcam2/maix_frames.h"
 
@@ -132,8 +133,8 @@ struct MaixDisplay::Impl {
     AX_POOL dst_pool = AX_INVALID_POOLID;
     Framebuffer fb;
     std::vector<uint32_t> canvas;      // 세로 HUD 그림판(kHeight x kWidth)
-    std::vector<uint16_t> last_dirty;  // 지난번 옮긴 칸(행마다 비트)
-    bool copy_all = true;              // 다음엔 전부 옮긴다(처음, 칸 정보 없음)
+    std::vector<uint32_t> last_dirty;  // 지난번 옮긴 칸(행마다 비트)
+    bool copy_all = true;              // 다음엔 전부 옮긴다(처음, 또는 지난번에 칸 정보 없이 옮겼다)
 };
 
 namespace {
@@ -240,28 +241,24 @@ MaixDisplay::OverlayBuffer MaixDisplay::begin_overlay() {
 
 // 그림판 행마다 이번(dirty)과 지난번에 그린 칸을 합쳐, 이어진 칸끼리 한 번에 fb0로 옮긴다. 지난번
 // 칸은 이번에 지워져 0이 된 자리라 함께 옮겨야 한다.
-void MaixDisplay::end_overlay(const uint16_t *dirty, int tile_shift) {
+void MaixDisplay::end_overlay(const uint32_t *dirty, int tile_shift) {
     Framebuffer &fb = impl_->fb;
     constexpr int kRowBytes = kHeight * 4;
     for (int y = 0; y < kWidth; ++y) {
         const uint8_t *src =
             reinterpret_cast<const uint8_t *>(impl_->canvas.data()) + static_cast<size_t>(y) * kRowBytes;
         uint8_t *dst = fb.page + static_cast<size_t>(y) * fb.line;
-        uint16_t &last = impl_->last_dirty[y];
+        uint32_t &last = impl_->last_dirty[y];
         if (!dirty || impl_->copy_all) {
             std::memcpy(dst, src, kRowBytes);
-            last = dirty ? dirty[y] : 0xffffu;
+            last = dirty ? dirty[y] : 0;
             continue;
         }
-        uint32_t tiles = static_cast<uint32_t>(dirty[y] | last);
-        last = dirty[y];
-        while (tiles) {
-            const int first = __builtin_ctz(tiles);
-            const int end = first + __builtin_ctz(~(tiles >> first));  // 이어진 칸의 끝(제외)
+        for_each_tile_run(dirty[y] | last, [&](int first, int end) {
             const int x0 = (first << tile_shift) * 4, x1 = std::min(kRowBytes, (end << tile_shift) * 4);
-            if (x0 < x1) std::memcpy(dst + x0, src + x0, static_cast<size_t>(x1 - x0));
-            tiles &= ~((1u << end) - (1u << first));
-        }
+            std::memcpy(dst + x0, src + x0, static_cast<size_t>(x1 - x0));
+        });
+        last = dirty[y];
     }
-    impl_->copy_all = false;
+    impl_->copy_all = !dirty;
 }

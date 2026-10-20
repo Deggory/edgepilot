@@ -2,7 +2,7 @@
 // 고른 것을 지운다. 10초마다 읽는다(서버가 route를 훑어 크기를 낸다). 녹화 중이거나 SD로 옮기는 중인 route는 고를 수
 // 없고, 서버도 받지 않는다.
 import {codeText, locale, t} from "./i18n.js";
-import {actionButton, api, badges, DASH, el, helpText, note, pollingCard, runAction, section} from "./ui.js";
+import {actionButton, api, badges, DASH, el, helpText, note, pollingCard, runAction, section, syncRows} from "./ui.js";
 
 const INTERVAL_MS = 10000;
 const CONFIRM_LISTED = 8;  // 확인 창에 이름을 늘어놓는 수
@@ -49,8 +49,8 @@ export function createRecordingsCard() {
   const selectAllRow = el("label.recordings-all", {}, selectAll, el("span", {text: t("recordings.select_all")}));
   const about = helpText(t("recordings.about"), "card-note");  // 한 번 만들어 펼친 상태가 폴링에 접히지 않게
   const button = actionButton({icon: "✕", danger: true, onclick: () => remove()});
-  // 이름 -> {row, box, length, size, tags}. 목록이 바뀔 때만 줄을 다시 만든다: 10초마다 갈아 끼우면 누르던 체크가
-  // 사라진다. 고른 이름은 다음 상태에도 남고, 없어진 route는 고르기에서 빠진다.
+  // 이름 -> {element, box, length, size, tags}(ui.js syncRows). 고른 이름은 다음 상태에도 남고, 없어진 route는
+  // 고르기에서 빠진다.
   const rows = new Map();
   const selected = new Set();
   let latest = null;
@@ -77,31 +77,26 @@ export function createRecordingsCard() {
     }
   };
 
-  const syncRows = names => {
-    if (names.join("\n") === [...rows.keys()].join("\n")) return;
-    rows.clear();
-    for (const name of names) {
-      const {date, time} = started(name);
-      const box = el("input", {type: "checkbox", "aria-label": t("recordings.choose", {name})});
-      box.addEventListener("change", () => {
-        if (box.checked) selected.add(name);
-        else selected.delete(name);
-        refreshSelection();
-      });
-      const row = {box, length: el("span.recording-length"), size: el("span.recording-size"), tags: el("span.badge-row")};
-      row.element = el("label.recording",
-        {title: name},
-        box,
-        el("span.recording-start", {}, el("code", {text: date}), el("span", {text: time})),
-        row.length, row.size, row.tags);
-      rows.set(name, row);
-    }
-    list.replaceChildren(...[...rows.values()].map(row => row.element));
+  const makeRow = name => {
+    const {date, time} = started(name);
+    const box = el("input", {type: "checkbox", "aria-label": t("recordings.choose", {name})});
+    box.addEventListener("change", () => {
+      if (box.checked) selected.add(name);
+      else selected.delete(name);
+      refreshSelection();
+    });
+    const row = {box, length: el("span.recording-length"), size: el("span.recording-size"), tags: el("span.badge-row")};
+    row.element = el("label.recording",
+      {title: name},
+      box,
+      el("span.recording-start", {}, el("code", {text: date}), el("span", {text: time})),
+      row.length, row.size, row.tags);
+    return row;
   };
 
   const render = s => {
     latest = s;
-    syncRows(s.routes.map(route => route.name));
+    syncRows(list, rows, s.routes.map(route => route.name), makeRow);
     for (const route of s.routes) {
       const row = rows.get(route.name);
       row.length.textContent = route.busy ? DASH : length(route);

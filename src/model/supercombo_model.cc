@@ -96,8 +96,7 @@ void SupercomboModel::set_input_calibration(const float rpy[3]) {
 
 uint64_t SupercomboModel::profile_stamp() const { return profile_ ? monotonic_now_ns() : 0; }
 
-bool SupercomboModel::run_frame_nv12(const uint8_t *nv12, std::vector<float> &raw_output) {
-    std::memcpy(gdc_.source(), nv12, gdc_.source_bytes());
+bool SupercomboModel::run_replay_frame(std::vector<float> &raw_output) {
     return run_frame_phys(gdc_.source_phys(), raw_output, [] { return true; });
 }
 

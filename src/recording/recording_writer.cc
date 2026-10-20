@@ -1,6 +1,7 @@
 #include "recording/recording_writer.h"
 
 #include "common/lateral_nn_path.h"
+#include "common/utils_process.h"
 #include "recording/recorded_can.h"
 
 #include <dirent.h>
@@ -14,7 +15,6 @@
 
 #include <cerrno>
 #include <chrono>
-#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -155,11 +155,15 @@ void StagingMover::recover(const std::string &staging_root, const std::string &r
 }
 
 void StagingMover::enqueue_file(std::string from, std::string to) {
-    enqueue(Job{false, std::move(from), std::move(to)});
+    enqueue(Job{false, false, std::move(from), std::move(to)});
 }
 
 void StagingMover::enqueue_tree(std::string from, std::string to) {
-    enqueue(Job{true, std::move(from), std::move(to)});
+    enqueue(Job{true, false, std::move(from), std::move(to)});
+}
+
+void StagingMover::enqueue_copy(std::string from, std::string to) {
+    enqueue(Job{false, true, std::move(from), std::move(to)});
 }
 
 void StagingMover::enqueue(Job &&job) {
@@ -206,19 +210,19 @@ void StagingMover::loop() {
         if (job.tree) {
             move_tree(job.from, job.to);
         } else {
-            move_file(job.from, job.to);
+            move_file(job.from, job.to, job.keep);
         }
     }
 }
 
-void StagingMover::move_file(const std::string &from, const std::string &to) {
+void StagingMover::move_file(const std::string &from, const std::string &to, bool keep) {
     const size_t slash = to.rfind('/');
     if (slash != std::string::npos) make_directories(to.substr(0, slash));
     if (!copy_file(from, to, &unthrottled_)) {
         std::fprintf(stderr, "recordd: move failed %s -> %s: %s\n", from.c_str(), to.c_str(), std::strerror(errno));
         return;
     }
-    unlink(from.c_str());
+    if (!keep) unlink(from.c_str());
 }
 
 void StagingMover::move_tree(const std::string &from, const std::string &to) {
@@ -250,8 +254,7 @@ RecordingWriter::RecordingWriter(std::string root, std::string params_directory,
       height_(height),
       fps_(fps),
       bitrate_(bitrate) {
-    const char *staging = std::getenv("EDGEPILOT_RECORD_STAGING");
-    staging_root_ = staging && staging[0] != '\0' ? staging : "/tmp/record_staging";
+    staging_root_ = env_string("EDGEPILOT_RECORD_STAGING", "/tmp/record_staging");
     // 이전 세션이 route 도중 죽었으면 스테이징 잔여가 tmpfs(램)를 계속
     // 점유한다. 시작할 때 남아 있는 route를 SD로 회수한다.
     mover_.recover(staging_root_, root_);
@@ -410,10 +413,12 @@ bool RecordingWriter::start_route(uint64_t now_ns) {
     snapshot_params();
     write_manifest(false);
     // params·모델 사본과 첫 manifest는 바로 SD로 보낸다. route를 닫을 때까지 tmpfs에만 두면 시동을 끄는 보통의
-    // 끝(전원이 바로 끊긴다)에 통째로 사라졌다(2026-09-25~10-14 route 31개 가운데 5개). manifest는 닫을 때 다시 쓴다.
+    // 끝(전원이 바로 끊긴다)에 통째로 사라졌다(2026-09-25~10-14 route 31개 가운데 5개). manifest는 닫을 때 다시 쓰고
+    // route째 옮기므로 여기서는 복사만 한다: 옮기기(복사 뒤 지우기)가 늦어 그사이 닫히면 새로 쓴 최종 manifest를
+    // 지웠다(빨리 끈 route는 SD에 complete=false가 남았다).
     mover_.enqueue_tree(route_path_ + "/params", final_route_path_ + "/params");
     mover_.enqueue_tree(route_path_ + "/models", final_route_path_ + "/models");
-    mover_.enqueue_file(route_path_ + "/manifest.json", final_route_path_ + "/manifest.json");
+    mover_.enqueue_copy(route_path_ + "/manifest.json", final_route_path_ + "/manifest.json");
     next_storage_check_ns_ = now_ns + kStorageCheckIntervalNs;
     active_.store(true);
     std::fprintf(stderr, "recordd: recording started route=%s staging=%s\n", final_route_path_.c_str(),

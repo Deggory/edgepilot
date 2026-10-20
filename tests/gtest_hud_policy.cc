@@ -173,14 +173,16 @@ TEST(HudSound, Sounds) {
 TEST(TurnSignalClock, StepsFromTheBlinkerChange) {
     TurnSignalClock clock;
     HudState hud;
-    ASSERT_FALSE(clock.update(1000 * kMs, &hud));
-    hud.left_blinker = true;
-    ASSERT_FALSE(clock.update(1000 * kMs, &hud)) << "켠 순간은 단계 0";
+    clock.update(1000 * kMs, &hud);
     ASSERT_EQ(hud.turn_signal_step, 0);
-    ASSERT_FALSE(clock.update(1049 * kMs, &hud));
-    ASSERT_TRUE(clock.update(1050 * kMs, &hud)) << "50 ms마다 한 단계";
-    ASSERT_EQ(hud.turn_signal_step, 1);
-    ASSERT_TRUE(clock.update(1000 * kMs + 24 * 50 * kMs, &hud));
+    hud.left_blinker = true;
+    clock.update(1000 * kMs, &hud);
+    ASSERT_EQ(hud.turn_signal_step, 0) << "켠 순간은 단계 0";
+    clock.update(1049 * kMs, &hud);
+    ASSERT_EQ(hud.turn_signal_step, 0);
+    clock.update(1050 * kMs, &hud);
+    ASSERT_EQ(hud.turn_signal_step, 1) << "50 ms마다 한 단계";
+    clock.update(1000 * kMs + 24 * 50 * kMs, &hud);
     ASSERT_EQ(hud.turn_signal_step, kTurnSignalSteps - 1);
     clock.update(1000 * kMs + 25 * 50 * kMs, &hud);
     ASSERT_EQ(hud.turn_signal_step, 0) << "kTurnSignalSteps마다 처음으로";
@@ -189,9 +191,8 @@ TEST(TurnSignalClock, StepsFromTheBlinkerChange) {
     clock.update(2000 * kMs, &hud);
     ASSERT_EQ(hud.turn_signal_step, 0);
     hud.left_blinker = hud.right_blinker = false;
-    clock.update(2120 * kMs, &hud);
-    ASSERT_EQ(hud.turn_signal_step, 0);
-    ASSERT_FALSE(clock.update(2170 * kMs, &hud)) << "깜빡이가 꺼져 있으면 다시 그리지 않는다";
+    clock.update(2170 * kMs, &hud);
+    ASSERT_EQ(hud.turn_signal_step, 0) << "깜빡이가 꺼져 있으면 단계 0";
 }
 
 TEST(HudTouch, CardsToggleAndTheNetworkCardTimesOut) {

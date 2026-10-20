@@ -11,7 +11,6 @@ PandaGateOutput PandaHealthGate::update(const PandaState &state, uint64_t now_ns
                               state.safety_param == kExpectedPandaSafetyParam;
     out.ready_raw = transport_ready && safety_ready;
     const bool controls_allowed_raw = out.ready_raw && state.controls_allowed != 0;
-    out.controls_off_explicit = out.ready_raw && state.controls_allowed == 0;
     if (out.ready_raw) {
         have_last_ready_ = true;
         last_controls_allowed_ = controls_allowed_raw;

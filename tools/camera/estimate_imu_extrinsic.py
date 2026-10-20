@@ -25,27 +25,21 @@ MIN_SPEED = 4.0        # m/s
 
 
 def load(route: Path):
-    ctl_t, ctl_v, pose, imu = [], [], [], []
-    for path in rr.route_event_files(route):
-        if path.stat().st_size <= 32:
-            continue
-        for rec in rr.iter_event_records(path):
-            if rec.type == rr.RECORD_CONTROL_STATE:
-                c = rec.control_state()
-                ctl_t.append(c["timestamp_ns"] * 1e-9)
-                ctl_v.append(c["ego_speed_kph"] / 3.6)
-            elif rec.type == rr.RECORD_MODEL_STATE:
-                model = rec.model_state()
-                cap = int(model["capture_timestamp_ns"])
-                p, cal = model["pose"], model["calibration"]
-                if p["valid"] and cal["status"] == 1:
-                    rotation = rotation_from_rpy(float(cal["roll"]), float(cal["pitch"]), float(cal["yaw"]))
-                    pose.append((cap * 1e-9 - CAMODO_DELAY_S, *(rotation @ p["rot"].astype(float))))
-            elif rec.type == rr.RECORD_IMU:
-                imu.append(rec.imu_samples())
-    if not imu or not pose:
+    parts = []
+    for chunk in rr.iter_states(route, rr.RECORD_CONTROL_STATE, rr.RECORD_MODEL_STATE, rr.RECORD_IMU):
+        _, c = chunk[rr.RECORD_CONTROL_STATE]
+        _, model = chunk[rr.RECORD_MODEL_STATE]
+        model = model[(model["pose"]["valid"] != 0) & (model["calibration"]["status"] == 1)]
+        cal = model["calibration"]
+        rot = [rotation_from_rpy(float(r), float(p), float(y)) @ v
+               for r, p, y, v in zip(cal["roll"], cal["pitch"], cal["yaw"], model["pose"]["rot"].astype(float))]
+        parts.append({"ctl_t": c["timestamp_ns"] * 1e-9, "ctl_v": c["ego_speed_kph"] / 3.6,
+                      "pose": np.c_[model["capture_timestamp_ns"] * 1e-9 - CAMODO_DELAY_S, np.reshape(rot, (-1, 3))],
+                      "imu": chunk[rr.RECORD_IMU][1]})
+    v = rr.concat_chunks(parts)
+    if not len(v["imu"]) or not len(v["pose"]):
         raise SystemExit(f"{route}: no IMU or pose records")
-    return np.array(ctl_t), np.array(ctl_v), np.array(pose), np.concatenate(imu)
+    return v["ctl_t"], v["ctl_v"], v["pose"], v["imu"]
 
 
 def smooth(x, n):

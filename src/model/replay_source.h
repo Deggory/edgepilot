@@ -5,21 +5,14 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
-#include <vector>
-
-struct Nv12Frame {
-    unsigned width = 0;
-    unsigned height = 0;
-    std::vector<uint8_t> data;
-};
 
 // SCNV12R1 재생 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용.
 class ReplayNv12Source {
 public:
     explicit ReplayNv12Source(const std::string &path);
 
-    bool read(Nv12Frame &frame);
-    bool eof() const { return frames_read_ >= frame_count_; }
+    // 다음 프레임(width*height*3/2 바이트)을 dst(GDC 소스 CMM)에 바로 읽는다. 끝이면 false.
+    bool read(uint8_t *dst);
     unsigned frame_count() const { return frame_count_; }
     unsigned width() const { return width_; }
     unsigned height() const { return height_; }

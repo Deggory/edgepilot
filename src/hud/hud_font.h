@@ -22,7 +22,6 @@ struct HudFont {
     char first;
     int count;
     int ascent;  // 줄 위에서 기준선까지
-    int descent;
 
     // 없는 글자는 nullptr
     const HudGlyph *glyph(char c) const {

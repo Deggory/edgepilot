@@ -6,7 +6,7 @@
 //   스냅샷은 100 ms 더 마지막 판정을 유지한다. 그래서 pandad가 멈추면 마지막 판정이 최대 약
 //   1.2초 간다. 신선하고 전송 준비된 controls_allowed=0은 절대 유지하지 않는다.
 // - 잘못된 plan 프레임 하나는 150 ms까지 마지막 유효 경로로 덮는다. 모델
-//   freshness 타임아웃(기본 250 ms)은 그대로 하드 게이트다.
+//   freshness 타임아웃(kModelTimeoutNs, 250 ms)은 그대로 하드 게이트다.
 
 #include <cstdint>
 
@@ -25,7 +25,6 @@ constexpr uint64_t kPathInvalidHoldNs = 150000000ULL;
 struct PandaGateOutput {
     bool state_fresh = false;
     bool ready_raw = false;
-    bool controls_off_explicit = false;
     bool hold_applied = false;
     bool ready = false;
     bool controls_allowed = false;

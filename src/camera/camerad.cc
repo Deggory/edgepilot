@@ -45,7 +45,6 @@ int main() {
             if (!cmm_alloc(&slots[i], frame_ring.frame_bytes(), "frame_ring"))
                 throw std::runtime_error("frame ring CMM alloc failed");
             frame_ring.set_slot_phys(i, slots[i].phys);
-            frame_ring.attach_slot(i, slots[i].virt);
         }
         uint64_t frame_id = 0;
         unsigned errors = 0;

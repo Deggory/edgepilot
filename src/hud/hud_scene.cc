@@ -71,6 +71,7 @@ void draw_ribbon(HudCanvas &canvas, const std::array<ModelPoint, kTrajectorySize
     }
     if (n < 2) return;
 
+    static_assert(2 * kTrajectorySize <= kHudMaxPolygonPoints);
     HudPoint polygon[2 * kTrajectorySize];
     for (int i = 0; i < n; ++i) {
         polygon[i] = left[i];
@@ -78,7 +79,7 @@ void draw_ribbon(HudCanvas &canvas, const std::array<ModelPoint, kTrajectorySize
     }
     const float near_y = std::max(left[0].y, right[0].y);
     const float far_y = std::min(left[n - 1].y, right[n - 1].y);
-    canvas.fill_polygon_faded(polygon, 2 * n, color, near_y, far_y, kFarAlpha);
+    canvas.fill_polygon(polygon, 2 * n, color, near_y, far_y, kFarAlpha);
 }
 
 uint32_t path_color(const HudState &hud) {

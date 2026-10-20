@@ -28,14 +28,14 @@ public:
               const HudState &hud);
     // 마지막 draw가 그린 칸: 버퍼 행마다 (1 << last_tile_shift()) 폭 칸의 비트. 화면 쪽이 바뀐
     // 칸만 옮길 때 지난번 것과 합쳐 쓴다.
-    const std::vector<uint16_t> &last_damage() const { return damage_; }
+    const std::vector<uint32_t> &last_damage() const { return damage_; }
     int last_tile_shift() const { return tile_shift_; }
 
 private:
     const void *map_ = nullptr;     // 지난번에 그린 버퍼
-    std::vector<uint16_t> damage_;  // 그 버퍼에 그린 칸
+    std::vector<uint32_t> damage_;  // 그 버퍼에 그린 칸
     std::vector<uint16_t> coverage_;
-    int tile_shift_ = 5;
+    int tile_shift_ = 4;
 };
 
 // 터치 좌표(화면 px)가 오른쪽 위 상태 알약(녹화·와이파이) 쪽인지. 손가락 크기만큼 넉넉하게

@@ -87,7 +87,6 @@ class CalibrationControl:
             "status": status_name(CALIBRATION_STATUS, pose["status"]),
             "valid_blocks": pose["valid_blocks"],
             "rpy_deg": [degrees(v) for v in pose["rpy"]],
-            "spread_deg": [degrees(v) for v in pose["spread"]],
             "flow": {
                 "status": status_name(FLOW_STATUS, flow["status"]),
                 "windows": flow["windows"], "blocks": flow["blocks"], "estimate_blocks": flow["estimate_blocks"],

@@ -1,6 +1,7 @@
 #include "recording/replay_route.h"
 
 #include "common/ipc_messages.h"
+#include "common/utils_file.h"
 #include "recording/event_log_reader.h"
 
 #include <dirent.h>
@@ -27,22 +28,10 @@ std::vector<std::string> numbered_entries(const std::string &dir, const char *su
     return names;
 }
 
-std::vector<uint8_t> read_file(const std::string &path) {
-    std::vector<uint8_t> data;
-    FILE *f = std::fopen(path.c_str(), "rb");
-    if (!f) return data;
-    std::fseek(f, 0, SEEK_END);
-    data.resize(static_cast<size_t>(std::ftell(f)));
-    std::fseek(f, 0, SEEK_SET);
-    if (std::fread(data.data(), 1, data.size(), f) != data.size()) data.clear();
-    std::fclose(f);
-    return data;
-}
-
 }  // namespace
 
 bool read_frame_index(const std::string &seg_dir, FrameIndex *out) {
-    const std::vector<uint8_t> index = read_file(seg_dir + "/frames.bin");
+    const std::string index = read_text_file(seg_dir + "/frames.bin");
     if (index.size() < sizeof(FrameIndexHeader)) return false;
     FrameIndexHeader header;
     std::memcpy(&header, index.data(), sizeof(header));

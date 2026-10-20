@@ -31,21 +31,16 @@ static_assert(kLateralNnLatestS + kMaxPlanAgeCompS <= 10.0f * (kLateralControlN 
                                                           1e-4f,
               "lateral NN inputs must stay inside the plan");
 
-// SteeringParams의 토크 제한을 CAN 계층 표현으로 옮긴다.
-HyundaiSteeringLimits hyundai_limits(const SteeringParams &params) {
-    HyundaiSteeringLimits out;
-    out.steer_max = params.steer_max;
-    out.steer_delta_up = params.steer_delta_up;
-    out.steer_delta_down = params.steer_delta_down;
-    out.steer_driver_allowance = params.steer_driver_allowance;
-    out.steer_driver_multiplier = params.steer_driver_multiplier;
-    out.steer_driver_factor = params.steer_driver_factor;
-    return out;
+// plan 나이: 근거 프레임 캡처 시각부터 now_ns까지. lag 보상과 staleness gate가 함께 쓴다. 타임스탬프가 없으면(테스트,
+// 초기값) 0으로 둔다.
+float plan_age_s(const LateralTarget &target, uint64_t now_ns) {
+    if (!target.valid || target.capture_timestamp_ns == 0 || now_ns <= target.capture_timestamp_ns) return 0.0f;
+    return static_cast<float>(static_cast<double>(now_ns - target.capture_timestamp_ns) * 1e-9);
 }
 
 }  // namespace
 
-LateralController::LateralController(LateralControllerConfig config) : config_(config), clock_(monotonic_now_ns) {}
+LateralController::LateralController(LateralControllerConfig config) : config_(config) {}
 
 // 제어 상태를 유지한 채 런타임 파라미터를 즉시 교체한다.
 void LateralController::update_params(const SteeringParams &steering_params) {
@@ -81,7 +76,7 @@ LiveLateralParams LateralController::live_params() const {
 // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
 LateralControlResult LateralController::update(const LateralPath &path, const LateralTarget &target,
                                                const VehicleCanState &vehicle_state, double now_s, int frame,
-                                               bool panda_ready, bool panda_controls_allowed) {
+                                               bool panda_ready, bool panda_controls_allowed, uint64_t now_ns) {
     nn_evaluated_ = false;
     const bool engage_requested =
         !config_.force_engaged && !engaged_ && vehicle_state.clu_button == 0 && last_button_ == kCruiseButtonSet;
@@ -93,15 +88,14 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     const LateralPath gated_path = debounce_path(path, now_s);
     result.path_usable = gated_path.usable_for_steering;
     result.seeds_ready = seed_frames_ready(vehicle_state);
-    result.vehicle_fresh = vehicle_state_fresh(vehicle_state, now_s,
-                                               static_cast<double>(config_.timing.vehicle_state_timeout_ms) / 1000.0);
+    result.vehicle_fresh = vehicle_state_fresh(vehicle_state, now_s, kVehicleStateTimeoutS);
+    result.esp12_fresh = signal_time_fresh(vehicle_state.esp12_time_s, now_s, kVehicleStateTimeoutS);
     result.cluster_speed_kph = cluster_speed_kph(vehicle_state);
-    const float raw_speed_kph =
-        vehicle_speed_kph(vehicle_state, now_s, static_cast<double>(config_.timing.vehicle_state_timeout_ms) / 1000.0);
+    const float raw_speed_kph = vehicle_speed_kph(vehicle_state, now_s, kVehicleStateTimeoutS);
     result.control_speed_kph = static_cast<float>(v_ego_filter_.update(raw_speed_kph / 3.6) * 3.6);
     const float speed_mps = result.control_speed_kph / 3.6f;
     const LiveLateralParams live = live_params();
-    const float plan_age = plan_age_s(target);
+    const float plan_age = plan_age_s(target, now_ns);
     // 노이즈가 있는 운전자 조향 토크를 openpilot 방식으로 거른다
     const bool steering_pressed =
         steering_pressed_.update(vehicle_state.driver_torque, config_.steering_params.steering_pressed_threshold);
@@ -109,13 +103,13 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     if (steering_pressed) last_steering_pressed_s_ = now_s;
     const bool wheels_stopped = vehicle_standstill(vehicle_state);
     result.steer_fault = vehicle_state.steer_fault_temporary;
-    const bool steer_fault_alert = update_steer_fault_alert(result.steer_fault, steering_pressed, wheels_stopped);
+    const BlockReason soft_reason =
+        soft_disable_reason(update_steer_fault_alert(result.steer_fault, steering_pressed, wheels_stopped));
     result.active_block =
         active_block_reason(gated_path, target, vehicle_state, result.seeds_ready, result.vehicle_fresh, panda_ready,
-                            panda_controls_allowed, result.control_speed_kph, plan_age, steer_fault_alert);
+                            panda_controls_allowed, result.control_speed_kph, plan_age, soft_reason);
     const BlockKind kind = block_kind(result.active_block);
-    resolve_engagement(kind, soft_disable_reason(steer_fault_alert) != BlockReason::None, logical_engaged,
-                       engage_requested, now_s, &result);
+    resolve_engagement(kind, soft_reason != BlockReason::None, logical_engaged, engage_requested, now_s, &result);
     // 가용성 대기와 입력 끊김 동안에는 토크만 0으로 하고 steer_req/MDPS 속도 스푸프는
     // 유지한다 — 매 정차마다 끊기면 MDPS/클러스터가 천이 경보를 낸다.
     // 결함/해제는 즉시 끊는다.
@@ -138,23 +132,20 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
         wheels_stopped;
     const bool steering = result.active && !result.large_angle_hold && !result.steer_fault && !standstill;
     result.lat_active = steering;
-    const bool yaw_rate_valid =
-        signal_time_fresh(vehicle_state.esp12_time_s, now_s,
-                          static_cast<double>(config_.timing.vehicle_state_timeout_ms) / 1000.0) &&
-        vehicle_state.yaw_rate_valid;
+    const bool yaw_rate_valid = result.esp12_fresh && vehicle_state.yaw_rate_valid;
     road_bank_.update(0.01f, speed_mps, vehicle_state.lat_accel_mps2, vehicle_state.lat_accel_valid,
                       vehicle_state.yaw_rate_rad_s, yaw_rate_valid);
 
+    const CurvatureBounds hold = hold_angle_bounds(speed_mps, steering, steering_pressed, live);
     bool curvature_limited = false;
     float plan_curvature = 0.0f;
-    result.desired_curvature =
-        clip_curvature(speed_mps, prev_desired_curvature_,
-                       requested_curvature(target, vehicle_state, speed_mps, plan_age, steering, steering_pressed,
-                                           yaw_rate_valid, live, &plan_curvature),
-                       live.use_vehicle ? live.roll_rad : 0.0f, &curvature_limited);
+    result.desired_curvature = clip_curvature(speed_mps, prev_desired_curvature_,
+                                              requested_curvature(target, vehicle_state, speed_mps, plan_age, steering,
+                                                                  yaw_rate_valid, live, hold, &plan_curvature),
+                                              live.use_vehicle ? live.roll_rad : 0.0f, &curvature_limited);
     prev_desired_curvature_ = result.desired_curvature;
     const float nn_feedforward =
-        lateral_nn_feedforward(target, vehicle_state, speed_mps, plan_age, steering, steering_pressed, live);
+        lateral_nn_feedforward(target, vehicle_state, speed_mps, plan_age, steering, live, hold);
 
     // 토크 제어기의 측정과 요청(조향하지 않는 틱에도 요청 버퍼와 저크 필터를 갱신한다)
     TorqueController::Inputs torque_in;
@@ -180,11 +171,9 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
         result.apply_torque = 0;
     }
 
-    // 결합 중이거나 해제 직후(inactive_release_ms) 동안은 토크 0으로 계속 보내 MDPS가 부드럽게 놓게
-    // 한다.
-    result.should_send = result.seeds_ready &&
-                         (result.active || result.engaged ||
-                          now_s - last_disengage_s_ < static_cast<double>(config_.timing.inactive_release_ms) / 1000.0);
+    // 결합 중이거나 해제 직후(kInactiveReleaseS) 동안은 토크 0으로 계속 보내 MDPS가 부드럽게 놓게 한다.
+    result.should_send =
+        result.seeds_ready && (result.active || result.engaged || now_s - last_disengage_s_ < kInactiveReleaseS);
     // 보내는 요청 비트: 큰 조향각에서 요청을 끈 동안은 내리고, cut_steer_temp(상류 2프레임 컷)는 패커가 내린다
     const bool steer_req_bit = steer_request && !result.large_angle_hold;
     if (result.should_send) {
@@ -196,7 +185,7 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     steer_req_sent_ = result.should_send && steer_req_bit && !result.cut_steer_temp;
     last_torque_ = result.apply_torque;
     // 상류는 컨트롤러 출력(CC.actuators.torque)과 보낸 토크(actuatorsOutput.torque)를 정규화해 비교한다
-    const float steer_max = static_cast<float>(config_.steering_params.steer_max);
+    const float steer_max = static_cast<float>(kHyundaiSteerMax);
     steer_limited_by_safety_ =
         std::fabs(result.normalized_output * steer_max - static_cast<float>(result.apply_torque)) >
         kSteerLimitedBySafetyThreshold * steer_max;
@@ -221,19 +210,6 @@ LateralPath LateralController::debounce_path(const LateralPath &path, double now
     LateralPath gated_path = path;
     gated_path.usable_for_steering = path_usable_debounced_;
     return gated_path;
-}
-
-// plan 나이: 근거 프레임 캡처 시각부터 지금까지. lag 보상과 staleness
-// gate가 함께 쓴다. 타임스탬프가 없으면(테스트, 초기값) 0으로 둔다.
-float LateralController::plan_age_s(const LateralTarget &target) const {
-    float plan_age_s = 0.0f;
-    if (target.valid && target.capture_timestamp_ns != 0) {
-        const uint64_t control_now_ns = clock_();
-        if (control_now_ns > target.capture_timestamp_ns) {
-            plan_age_s = static_cast<float>(static_cast<double>(control_now_ns - target.capture_timestamp_ns) * 1e-9);
-        }
-    }
-    return plan_age_s;
 }
 
 // 결합과 Panda 유예를 풀고 제어 상태를 처음으로 돌린다(해제·결합 거부·CANCEL 공통).
@@ -288,14 +264,9 @@ void LateralController::resolve_engagement(BlockKind kind, bool soft_condition, 
         }
     }
 
-    if (engage_requested && (kind == BlockKind::Hard || kind == BlockKind::Reject || kind == BlockKind::SoftDisable ||
-                             kind == BlockKind::Interrupt)) {
-        // 차량/컨트롤러의 정적 gate는 실제 결합 요청 실패로 처리한다.
-        disengage(now_s);
-        result->engaged = config_.force_engaged;
-        result->engage_rejected = true;
-    }
-
+    // 차량/컨트롤러의 정적 gate는 실제 결합 요청 실패로 처리한다(그 요청의 Panda 유예는 위에서 내렸다).
+    bool rejected = engage_requested && (kind == BlockKind::Hard || kind == BlockKind::Reject ||
+                                         kind == BlockKind::SoftDisable || kind == BlockKind::Interrupt);
     if (panda_engage_pending_) {
         const bool panda_waiting = kind == BlockKind::Transient;
         const bool grace_elapsed = now_s - panda_engage_pending_s_ >= kPandaEngageGraceS;
@@ -306,10 +277,13 @@ void LateralController::resolve_engagement(BlockKind kind, bool soft_condition, 
             // 정적 실패를 저장했다가 gate가 해소되면 조용히 결합하지 않는다. Panda에는
             // 짧은 비동기 health handshake 유예만 허용하며, 완료되지 않으면 실제 차단
             // 사유를 한 번 보고한다.
-            disengage(now_s);
-            result->engaged = config_.force_engaged;
-            result->engage_rejected = true;
+            rejected = true;
         }
+    }
+    if (rejected) {
+        disengage(now_s);
+        result->engaged = config_.force_engaged;
+        result->engage_rejected = true;
     }
     result->active = kind == BlockKind::None || (kind == BlockKind::SoftDisable && soft_disabling);
 }
@@ -317,8 +291,8 @@ void LateralController::resolve_engagement(BlockKind kind, bool soft_condition, 
 // 클립 전 목표 곡률. 상류 controlsd: 활성이면 plan, 비활성이면 실제 곡률을 클립에 넣는다. 재활성 때
 // 목표가 실제 곡률에서 한계 안으로 출발하고, 비활성 중의 잘못된 plan 값이 넘어오지 않는다.
 float LateralController::requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state,
-                                             float speed_mps, float plan_age_s, bool steering, bool steering_pressed,
-                                             bool yaw_rate_valid, const LiveLateralParams &live,
+                                             float speed_mps, float plan_age_s, bool steering, bool yaw_rate_valid,
+                                             const LiveLateralParams &live, const CurvatureBounds &hold,
                                              float *plan_curvature) {
     const SteeringParams &control_params = config_.steering_params;
     float requested_curvature = steering ? lag_adjusted_curvature(target, speed_mps, plan_age_s, plan_delay_s())
@@ -332,24 +306,25 @@ float LateralController::requested_curvature(const LateralTarget &target, const 
     // 유지한다. 운전자가 조향 중이면 묶지 않는다: 교차로에서 더 감는 운전자를 80도 쪽으로 밀지
     // 않고, 85도 위에서는 시간 규칙이 그대로 적용된다. 횡가속 한계가 더 좁은 약 35 km/h 위에서는
     // 걸리지 않는다.
-    float lo = 0.0f, hi = 0.0f;
-    if (hold_angle_bounds(speed_mps, steering, steering_pressed, live, &lo, &hi))
-        requested_curvature = std::clamp(requested_curvature, lo, hi);
+    if (hold.active) requested_curvature = std::clamp(requested_curvature, hold.lo, hold.hi);
     return requested_curvature;
 }
 
-bool LateralController::hold_angle_bounds(float speed_mps, bool steering, bool steering_pressed,
-                                          const LiveLateralParams &live, float *lo, float *hi) {
+LateralController::CurvatureBounds LateralController::hold_angle_bounds(float speed_mps, bool steering,
+                                                                        bool steering_pressed,
+                                                                        const LiveLateralParams &live) {
     const SteeringParams &control_params = config_.steering_params;
     const float hold_angle_deg = control_params.avoid_lkas_fault_hold_angle_deg;
+    CurvatureBounds bounds;
     // 조향 중이면 바퀴 속도가 유효하다(낡으면 vehicle_state_stale로 조향하지 않는다)
     if (!steering || steering_pressed || !control_params.avoid_lkas_fault_enabled || !(hold_angle_deg > 0.0f))
-        return false;
+        return bounds;
     const float left = torque_controller_.curvature_at_angle(speed_mps, hold_angle_deg, control_params, live);
     const float right = torque_controller_.curvature_at_angle(speed_mps, -hold_angle_deg, control_params, live);
-    *lo = std::min(left, right);
-    *hi = std::max(left, right);
-    return true;
+    bounds.active = true;
+    bounds.lo = std::min(left, right);
+    bounds.hi = std::max(left, right);
+    return bounds;
 }
 
 // 토크 제어기의 진단값을 결과에 옮긴다.
@@ -380,18 +355,16 @@ void LateralController::set_lateral_nn(std::shared_ptr<const LateralNnModel> mod
 //   틱은 모델도 NaN이라 선형 피드포워드를 쓴다. 조향각(δ): 그 곡률을 차량 모델로 뒤집은 각도(학습 SR·강성·영점).
 // - roll: 편경사 추정 / g(학습 데이터와 같은 추정기). long: ESP12 종가속.
 float LateralController::lateral_nn_feedforward(const LateralTarget &target, const VehicleCanState &vehicle_state,
-                                                float speed_mps, float plan_age_s, bool steering, bool steering_pressed,
-                                                const LiveLateralParams &live) {
+                                                float speed_mps, float plan_age_s, bool steering,
+                                                const LiveLateralParams &live, const CurvatureBounds &hold) {
     if (!lateral_nn_) return NAN;
     const float speed = std::isfinite(speed_mps) ? std::max(speed_mps, 0.0f) : 0.0f;
     const float age = clamp_float(plan_age_s, 0.0f, kMaxPlanAgeCompS);
     const float roll_rad = live.use_vehicle ? live.roll_rad : 0.0f;
-    float hold_lo = -kMaxCurvature, hold_hi = kMaxCurvature;
-    hold_angle_bounds(speed, steering, steering_pressed, live, &hold_lo, &hold_hi);
     const auto curvature_at = [&](float delta_s) {
         const float curvature = interp_lateral(delta_s + age, target.curvatures);
         if (!std::isfinite(curvature)) return NAN;
-        return limit_curvature(speed, std::clamp(curvature, hold_lo, hold_hi), roll_rad);
+        return limit_curvature(speed, std::clamp(curvature, hold.lo, hold.hi), roll_rad);
     };
     const float speed_sq = speed * speed;
     const TorqueController::AngleMap angle = torque_controller_.angle_map(speed, config_.steering_params, live);
@@ -425,10 +398,10 @@ void LateralController::steer(const VehicleCanState &vehicle_state, const Torque
         control_params.avoid_lkas_fault_enabled &&
         std::fabs(vehicle_state.steering_angle_deg) >= control_params.avoid_lkas_fault_max_angle_deg;
     // steer()는 조향 중(큰 조향각에서 요청을 끈 동안이 아닐 때)에만 불린다
-    int torque_cap = control_params.steer_max;
+    int torque_cap = kHyundaiSteerMax;
     if (fault_angle_frames_ > 0) {
         torque_cap =
-            std::min(torque_cap, control_params.steer_delta_down *
+            std::min(torque_cap, kHyundaiSteerDeltaDown *
                                      std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
     }
     TorqueController::Inputs in = torque_in;
@@ -443,8 +416,8 @@ void LateralController::steer(const VehicleCanState &vehicle_state, const Torque
     const int raw_torque = torque_controller_.update(in, control_params, nn);
     result->desired_torque = std::clamp(raw_torque, -torque_cap, torque_cap);
     copy_torque_state(result);
-    result->apply_torque = apply_hyundai_steer_torque_limits(
-        result->desired_torque, last_torque_, vehicle_state.driver_torque, hyundai_limits(control_params));
+    result->apply_torque =
+        apply_hyundai_steer_torque_limits(result->desired_torque, last_torque_, vehicle_state.driver_torque);
     result->steer_saturated =
         update_saturation(*result, plan_curvature, speed_mps, now_s, steering_pressed, curvature_limited);
     result->lat_saturated = lac_saturated_;
@@ -598,7 +571,7 @@ bool LateralController::plan_matches_wheel(const LateralTarget &target, float sp
 BlockReason LateralController::active_block_reason(const LateralPath &path, const LateralTarget &target,
                                                    const VehicleCanState &vehicle_state, bool seeds_ready,
                                                    bool vehicle_fresh, bool panda_ready, bool panda_controls_allowed,
-                                                   float speed_kph, float plan_age_s, bool steer_fault_alert) const {
+                                                   float speed_kph, float plan_age_s, BlockReason soft_reason) const {
     // 순서 규칙: 데이터 유효성 -> 차량 결함(즉시 해제) -> 핸드셰이크 ->
     // 가용성 대기. 결함이 뒤로 밀리면 앞선 일시적 사유가 결함을 가리고, 그
     // 사이 결합이 유예되어 톤만 울렸다가 해제된다.
@@ -628,12 +601,10 @@ BlockReason LateralController::active_block_reason(const LateralPath &path, cons
     if (!target.valid || !target.mpc_solution_valid) return BlockReason::LateralPlanInvalid;
     // 모델 경로 gate는 모델 발행 시각만 본다. 플랜은 근거 프레임 캡처 시각으로도 막아, 늦게 발행된
     // 낡은 프레임의 플랜도 쓰지 않는다.
-    if (target.capture_timestamp_ns != 0 &&
-        plan_age_s > static_cast<float>(config_.timing.model_timeout_ms) / 1000.0f) {
+    if (target.capture_timestamp_ns != 0 && plan_age_s > static_cast<float>(kModelTimeoutS))
         return BlockReason::LateralPlanStale;
-    }
     // SoftDisable 사유는 맨 끝에 둔다.
-    return soft_disable_reason(steer_fault_alert);
+    return soft_reason;
 }
 
 // openpilot steerTempUnavailable, calibrationIncomplete/Recalibrating/Invalid, paramsdTemporaryError. MDPS 고장

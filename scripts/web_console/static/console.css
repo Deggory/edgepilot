@@ -170,7 +170,7 @@ main {
 .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 10px; }
 .card-title { margin: 0 6px 0 0; font-size: 16px; line-height: 1.3; font-weight: 750; letter-spacing: 0; }
 .badge-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.card-head > .switch-control, .card-head > .segmented { margin-left: auto; }
+.card-head > .segmented { margin-left: auto; }
 .badge { padding: 2px 9px; border-radius: 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .badge.good { background: var(--good-bg); color: var(--good); }
 .badge.warn { background: var(--warn-bg); color: var(--warn); }
@@ -209,7 +209,6 @@ main {
 .info-table td.value { color: #fff; font-weight: 750; }
 .info-table td.note { color: var(--faint); font-size: 12px; }
 .info-table td.warn { color: var(--warn); }
-.info-table td.bad { color: var(--bad); }
 
 /* 학습 토크 모델 목록: 줄 하나(파일 이름과 배지)가 고르는 버튼(고른 것은 aria-pressed) */
 .nn-models { display: flex; flex-direction: column; gap: 6px; }

@@ -225,7 +225,7 @@ The columns are:
 
 - time, wheel speed, `active`/`desire`/`block`, steering angle;
 - driver and applied torque (`tq_norm` is sign-corrected and divided by
-  `steer_max`);
+  the torque limit, 384);
 - ESP12 lateral and longitudinal acceleration and yaw rate;
 - the live bank estimate and its roll equivalent;
 - requested and measured curvature;
@@ -307,8 +307,8 @@ writes each frame as an `EDGEARGB` file and prints the draw timings:
 To draw a recorded moment instead of the synthetic scenes:
 
 1. `python3 tools/ui/hud_tools.py inputs <route_dir> <out_dir>` extracts a
-   `ModelState` / `ControlState` pair (the current v13 layout; older records
-   are zero-filled), plus the matching camera frame when the route copy has its
+   recorded `ModelState` / `ControlState` pair, plus the matching camera frame
+   (decoded from the keyframe before it) when the route copy has its
    `segments/`.
 2. `hud_snapshot --model model.bin --control control.bin --out /tmp/hud` draws
    that pair.

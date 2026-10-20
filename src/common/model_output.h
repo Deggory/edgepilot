@@ -57,10 +57,9 @@ constexpr int kPlanWidth = 15;
 constexpr int kPlanYawIndex = 11;
 constexpr int kPlanYawRateIndex = 14;
 constexpr int kDesireStateOffset = 2566;
-// meta 안의 페달 예측(openpilot constants.Meta). GAS_PRESS = meta[31:55:4], BRAKE_PRESS = meta[32:55:4]:
-// 운전자가 0, 2, 4, 6, 8, 10초 뒤 가속·브레이크 페달을 밟고 있을 확률(로짓, sigmoid).
+// meta 안의 가속 페달 예측(openpilot constants.Meta GAS_PRESS = meta[31:55:4]): 운전자가 0, 2, 4, 6, 8, 10초 뒤
+// 가속 페달을 밟고 있을 확률(로짓, sigmoid). 바로 뒤 칸(32부터)은 브레이크 페달인데 읽는 곳이 없어 풀지 않는다.
 constexpr int kMetaGasPressIndex = 31;
-constexpr int kMetaBrakePressIndex = 32;
 constexpr int kMetaPressStride = 4;
 // 출력 끝의 두 칸은 쓰지 않는다(output_slices 밖).
 constexpr int kOutputPadding = 2;
@@ -127,9 +126,8 @@ constexpr int kMetaPressHorizons = 6;  // 0, 2, 4, 6, 8, 10 s
 
 struct ParsedMeta {
     std::array<float, kDesireLen> desire_state{};
-    // 운전자가 그 시각에 가속·브레이크 페달을 밟고 있을 확률(openpilot disengagePredictions.gas/brakePressProbs)
+    // 운전자가 그 시각에 가속 페달을 밟고 있을 확률(openpilot disengagePredictions.gasPressProbs)
     std::array<float, kMetaPressHorizons> gas_press{};
-    std::array<float, kMetaPressHorizons> brake_press{};
 };
 
 struct ParsedLeadPoint {
@@ -175,7 +173,8 @@ struct ParsedModelOutput {
 
 class ModelOutputParser {
 public:
-    static ParsedModelOutput parse(const std::vector<float> &raw);
+    // raw는 모델 출력 하나(kModelOutputFloats개)
+    static ParsedModelOutput parse(const float *raw);
 };
 
 #endif

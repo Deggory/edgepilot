@@ -29,13 +29,16 @@ constexpr uint32_t hud_fade(uint32_t color, float scale) {
 
 enum class HudAlign { left, center, right };
 
+// fill_polygon이 받는 점(변)의 최대 수. 가장 큰 다각형은 궤적 띠(33쌍 = 66점, hud_scene.cc)다.
+constexpr int kHudMaxPolygonPoints = 72;
+
 class HudCanvas {
 public:
     // width·height는 화면(가로) 크기, stride는 버퍼 행 바이트. transpose면 버퍼가 세로 패널 방향이다(버퍼 행 =
     // 화면 x, 버퍼 열 = 화면 y). coverage는 버퍼 한 행 너비 이상의 작업 공간(그릴 때마다 비워 둔다). damage는 이
-    // 버퍼의 행마다 그린 가로 칸(폭/16 이상, 최소 32 px)의 비트로, 버퍼와 함께 이어 쓴다.
+    // 버퍼의 행마다 그린 가로 칸(16 px, 행이 31칸을 넘으면 두 배씩)의 비트로, 버퍼와 함께 이어 쓴다.
     HudCanvas(void *pixels, int width, int height, int stride_bytes, std::vector<uint16_t> &coverage,
-              std::vector<uint16_t> &damage, bool transpose = false);
+              std::vector<uint32_t> &damage, bool transpose = false);
 
     int width() const { return width_; }
     int height() const { return height_; }
@@ -48,11 +51,10 @@ public:
     // 모서리만 다각형으로 칠한다. 좌표가 모두 정수면 모서리 사이 곧은 부분은 fill_rect로 바로
     // 칠한다(카드·칩 대부분).
     void fill_round_rect(float x, float y, float w, float h, float radius, uint32_t color);
-    // 다각형(짝홀 규칙)을 칠한다. 도로 띠처럼 먼 쪽을 흐리게 하려면 fade_far를 쓰는데, 화면
-    // near_y 높이에서 원래 알파, far_y 높이에서 far_alpha배가 되도록 줄인다.
-    void fill_polygon(const HudPoint *points, int count, uint32_t color);
-    void fill_polygon_faded(const HudPoint *points, int count, uint32_t color, float near_y, float far_y,
-                            float far_alpha);
+    // 다각형(짝홀 규칙, 점 kHudMaxPolygonPoints개까지)을 칠한다. near_y != far_y면 도로 띠처럼 먼 쪽을
+    // 흐리게 한다: 화면 near_y 높이에서 원래 알파, far_y 높이에서 far_alpha배.
+    void fill_polygon(const HudPoint *points, int count, uint32_t color, float near_y = 0.0f, float far_y = 0.0f,
+                      float far_alpha = 1.0f);
     // 글자 상자의 왼쪽 위(정렬 기준점 x, 줄 위 y)에 쓴다. 카드 없이 영상 위에 쓰는 글은
     // shadow로 1 px 아래 오른쪽에 그림자를 깐다. 쓴 폭을 돌려준다.
     int text(int x, int y, std::string_view text, const HudFont &font, uint32_t color, HudAlign align = HudAlign::left,
@@ -64,7 +66,6 @@ private:
     HudPoint to_buffer(HudPoint p) const;  // 화면 점 → 버퍼 점(연속 좌표)
     void mark(int y, int x0, int x1);      // y행 [x0, x1)을 그렸다
     void fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color);
-    void fill_rows(const HudPoint *points, int count, uint32_t color, float near_y, float far_y, float far_alpha);
     void glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color);
 
     uint8_t *base_;
@@ -75,8 +76,8 @@ private:
     int stride_;
     bool transpose_;
     std::vector<uint16_t> &coverage_;  // 한 행의 부표본 커버리지 합(0..256)
-    std::vector<uint16_t> &damage_;    // 행마다 그린 칸 비트
-    int tile_shift_ = 5;               // 칸 폭 = 1 << tile_shift_
+    std::vector<uint32_t> &damage_;    // 행마다 그린 칸 비트
+    int tile_shift_ = 4;               // 칸 폭 = 1 << tile_shift_
 };
 
 #endif

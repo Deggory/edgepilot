@@ -40,7 +40,7 @@ The hardware composes the two layers for the 480x640 portrait panel.
   drawn by the CPU renderer in the panel's portrait orientation into a cached
   buffer. There is no rotation pass: IVPS TDP rotation smears 32-bit BGRA
   edges (it spread G, R and A into the neighbouring pixels, which gave the path
-  stepped edges and a bright rim). Only the 32 px tiles drawn this frame or
+  stepped edges and a bright rim). Only the 16 px tiles drawn this frame or
   last frame are cleared and copied into the visible fb0 page.
 
 The renderer draws in 640x480 screen coordinates and the canvas transposes them
@@ -50,25 +50,29 @@ anti-aliased.
 
 ## Redraw timing
 
-The HUD is redrawn when something it shows has changed, at most every 45 ms,
-which gives 20 Hz with the model:
+The HUD is redrawn as soon as a new model output arrives, which gives 20 Hz,
+and otherwise 100 ms after the last draw:
 
 ```mermaid
 flowchart LR
-    snap["new snapshot<br>model, control,<br>panda, manager,<br>record, learner,<br>localization"] --> pending["redraw pending"]
-    blink["turn-signal step<br>50 ms clock"] --> pending
-    tap["a tap opens or<br>closes a card"] --> pending
-    second["once a second<br>FPS, board state"] --> pending
-    pending --> draw["draw the HUD<br>at most every 45 ms"]
+    model["new model output<br>20 Hz"] -- "draw now" --> draw["draw the HUD"]
+    floor["100 ms since<br>the last draw"] -- "draw now" --> draw
+    state["control, panda, manager,<br>record, learner, localization,<br>taps, turn-signal step"] -. "shown at<br>the next draw" .-> draw
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
     classDef pixel fill:#e7f5f4,stroke:#1f9e9a,color:#1f2328
-    class snap,blink,tap,second,pending proc
+    class model,floor,state proc
     class draw pixel
 ```
 
-- `overlayd`'s loop runs about every 5 ms and checks the triggers each time.
-- The limit is 45 ms rather than 50 ms so that model outputs arriving up to
-  one loop late do not skip a frame.
+- `overlayd`'s loop waits up to 5 ms for the next model output, so an output
+  is drawn as soon as it is read. Drawing on a fixed 45 ms clock instead
+  showed each output about 25 ms late on average (up to about 50 ms), because
+  controlsd's 100 Hz state kept a redraw always pending.
+- The other states, taps and the turn-signal step are read on every loop and
+  show at the next draw. The 100 ms floor keeps the speed, alerts and cards
+  moving when the model stops.
+- With `EDGEPILOT_PROFILE=1` the status line's `lag=` is the mean time from a
+  model output to the start of the draw that shows it.
 - The turn-signal animation has its own 50 ms clock, counted from when the
   blinker changed, so it does not depend on how often the HUD redraws.
 - A state older than 2 s counts as stale, and its values are zeroed: the speed

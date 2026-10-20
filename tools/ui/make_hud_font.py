@@ -38,7 +38,7 @@ SPECS = [
 
 def render(spec: Spec):
     font = ImageFont.load_default(size=spec.size)
-    ascent, descent = font.getmetrics()
+    ascent, _ = font.getmetrics()
     first, last = min(spec.chars), max(spec.chars)
     glyphs, nibbles = [], []
     for code in range(ord(first), ord(last) + 1):
@@ -58,7 +58,7 @@ def render(spec: Spec):
     if len(nibbles) % 2:
         nibbles.append(0)
     packed = bytes(nibbles[i] << 4 | nibbles[i + 1] for i in range(0, len(nibbles), 2))
-    return first, last, ascent + spec.stroke, descent + spec.stroke, glyphs, packed
+    return first, last, ascent + spec.stroke, glyphs, packed
 
 
 def hex_rows(data: bytes, per_row: int = 24) -> str:
@@ -72,15 +72,14 @@ def main() -> None:
     parts = ["// tools/ui/make_hud_font.py가 Pillow 기본 글꼴(Aileron Regular, CC0)로 만든 파일이다.\n"
              "// 고치지 말고 스크립트를 다시 돌린다. hud_font.cc만 include한다.\n"]
     for spec in SPECS:
-        first, last, ascent, descent, glyphs, packed = render(spec)
+        first, last, ascent, glyphs, packed = render(spec)
         rows = ",\n".join(f"    {{{o}, {w}, {h}, {l}, {t}, {a}}}" for o, w, h, l, t, a in glyphs)
         parts.append(
             f"// {spec.name}: {spec.size} px, 획 {spec.stroke}, '{first}'..'{last}', {len(packed)}바이트\n"
             f"constexpr HudGlyph k{spec.name}Glyphs[] = {{\n{rows},\n}};\n"
             f"constexpr uint8_t k{spec.name}Packed[] = {{\n{hex_rows(packed)}\n}};\n"
             f"constexpr char k{spec.name}First = {ord(first)};\n"
-            f"constexpr int k{spec.name}Ascent = {ascent};\n"
-            f"constexpr int k{spec.name}Descent = {descent};\n")
+            f"constexpr int k{spec.name}Ascent = {ascent};\n")
     out.write_text("\n".join(parts))
     print(f"wrote {out} ({out.stat().st_size} bytes)")
 

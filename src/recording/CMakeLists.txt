@@ -8,5 +8,5 @@ if(EDGEPILOT_BUILD_RUNTIME)
   configure_board_target(recordd common recording utils_json maixcam2_venc)
 
   add_executable(replayd replayd.cc)
-  configure_board_target(replayd common recording maixcam2_vdec maixcam2_gdc)
+  configure_board_target(replayd common recording maixcam2_vdec maixcam2_cmm)
 endif()

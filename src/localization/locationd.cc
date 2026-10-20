@@ -62,9 +62,8 @@ int main() {
     uint64_t next_persist_ns = monotonic_now_ns() + kPersistIntervalNs;
     uint64_t next_log_ns = monotonic_now_ns() + kLogIntervalNs;
     unsigned long long batches = 0, published = 0;
-    BackgroundWriter writer("locationd: write");
-    std::string last_saved = lag_cache;  // writer에 마지막으로 넘긴 내용
-    uint64_t write_failures = 0;
+    BackgroundWriter writer("locationd: write");  // 실패한 쓰기는 writer가 다시 쓴다
+    std::string last_saved = lag_cache;           // writer에 마지막으로 넘긴 내용
     LocalizationState last{};
     LocationInputCounters last_counters;
     const auto d = [](uint64_t now_count, uint64_t before) {
@@ -72,12 +71,7 @@ int main() {
     };
 
     // 조향 지연 캐시는 바뀌었을 때만 writer 스레드에 넘긴다(SD가 바빠도 IMU 루프가 막히지 않는다).
-    // 쓰기가 실패했으면 다음 번에 같은 내용이라도 다시 넘긴다.
     auto persist = [&]() {
-        if (writer.failures() != write_failures) {
-            write_failures = writer.failures();
-            last_saved.clear();
-        }
         const std::string json = pipeline.lag().cache_json();
         if (json == last_saved) return;
         writer.write(lag_path, json);
@@ -143,8 +137,7 @@ int main() {
             last_counters = c;
         }
     }
-    writer.flush();  // 하던 쓰기가 실패했으면 failures()에 잡혀 아래 persist가 다시 넘긴다
-    persist();
+    persist();  // writer를 없앨 때 남은 일과 실패한 쓰기를 마친다
     std::fprintf(stderr, "locationd: done\n");
     return 0;
 }

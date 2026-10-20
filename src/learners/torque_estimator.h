@@ -3,6 +3,7 @@
 // openpilot torqued(TorqueEstimator) 이식. 점의 요레이트·롤 출처(ESP12/locationd)를 캐시에 남기고
 // 출처가 바뀐 캐시는 배율·마찰만 이어 쓴다.
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -96,7 +97,14 @@ private:
         std::vector<std::array<double, 2>> points = std::vector<std::array<double, 2>>(kPointsPerBucket);
         int head = 0;
         int count = 0;
-        const std::array<double, 2> &at(int i) const { return points[(head + i) % kPointsPerBucket]; }
+        // 오래된 점부터 f(점)을 부른다. 링의 두 구간을 차례로 돌아 점마다 나머지 연산을 하지 않는다(적합 4 Hz, 저장
+        // 12초마다 최대 12,000점).
+        template <class F>
+        void for_each(F f) const {
+            const int first = std::min(count, kPointsPerBucket - head);
+            for (int i = 0; i < first; ++i) f(points[head + i]);
+            for (int i = 0; i < count - first; ++i) f(points[i]);
+        }
     };
     struct Filter {  // FirstOrderFilter(dt = DT_MDL)
         double x = 0.0;

@@ -77,6 +77,9 @@ GDC, within 1 LSB).
 ### `recording_reader.py`
 
 It is checked against the C++ asserts by `tests/check_recording_reader.py`.
+`iter_states` reads a route's event log one 60 s chunk at a time into NumPy
+record arrays, and `RouteVideo` decodes one frame by `frame_id` from the
+keyframe before it (`lane_benchmark.py` and `tools/ui/hud_tools.py`).
 `scripts/web_console/` keeps its own standard-library copy of the layouts it
 shows, checked by `tests/check_web_console.py`. ControlState's field at offset
 56 is `cluster_speed_kph`, the cluster's display speed; `ego_speed_kph` is the

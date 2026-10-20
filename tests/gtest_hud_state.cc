@@ -1,7 +1,7 @@
 // hud_state: 공유 상태 스냅샷 → HUD 상태 매핑과 알림 카드 선택(우선순위). 보드 없이, OpenCV 없이
 // 돈다.
+#include "car/hyundai_can.h"
 #include "controls/control_block.h"
-#include "controls/control_params.h"
 #include "hud/hud_state.h"
 
 #include <gtest/gtest.h>
@@ -135,7 +135,7 @@ TEST(HudState, ManeuverFlagsMapping) {
     ASSERT_EQ(hud.lane_change, 1);
     ASSERT_EQ(hud.lane_change_direction, 1);
     ASSERT_FALSE(hud.steer_paused);
-    ASSERT_NEAR(hud.driver_torque_fraction, -96.0f / SteeringParams{}.steer_max, 1e-6f);
+    ASSERT_NEAR(hud.driver_torque_fraction, -96.0f / kHyundaiSteerMax, 1e-6f);
     c.hud_flags = kHudFlagLaneChanging | kHudFlagSteerPaused | kHudFlagSteerPausedByDriver;
     hud_apply_control_state(c, true, &hud);
     ASSERT_EQ(hud.lane_change, 2);

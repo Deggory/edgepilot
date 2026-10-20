@@ -137,7 +137,7 @@ class Recordings:
     def status(self) -> Dict[str, Any]:
         routes = self.routes()
         return {"routes": routes, "total_bytes": sum(route["bytes"] for route in routes), "disk": self.disk(),
-                "recording": self.recording(), "root": str(self.root)}
+                "recording": self.recording()}
 
     def delete(self, names: List[str]) -> Dict[str, Any]:
         """고른 route들을 지우고 새 상태와 지운 이름, 비운 크기를 돌려준다. 하나라도 받을 수 없으면 아무것도 지우지

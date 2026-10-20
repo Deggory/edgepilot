@@ -4,9 +4,9 @@
 (tools/model/model_warp.py, src/common/app_config.h의 MaixCAM2 내부 파라미터)에 통과시킨 것, 타워별 5프레임
 이미지 이력(t-4와 t), controlsd가 보낸 desire 펄스(src/model/model_temporal.h와 같은 desire_step: 상승 에지, 회전이
 끝나면 회전 펄스 지우기, 100틱을 25로 max-pool), fp32 코어를 순서대로 돌려 얻은 코어 자신의 96틱 hidden-state 이력.
-런타임과 다른 점: 보정과 카메라 장착은 그 구간 녹화의 중앙값 하나를 쓴다(보드는 프레임마다 그때 값). 워프는 CPU
-대체 경로의 포팅이고 보드 기본은 GDC다(docs/verification.md가 둘의 차이를 잰다). H.264를 다시 풀어 얻은 프레임이라
-보드가 본 원본 프레임과도 압축만큼 다르다.
+런타임과 다른 점: 보정과 카메라 장착은 그 구간 녹화의 중앙값 하나를 쓴다(보드는 프레임마다 그때 값). 워프는 예전
+빌드의 CPU 워프를 옮긴 것이고 보드는 GDC로 워프한다(docs/verification.md가 둘의 차이를 잰다). H.264를 다시 풀어 얻은
+프레임이라 보드가 본 원본 프레임과도 압축만큼 다르다.
 
   make_m2_data.py calib <spec.json> <out_dir>
       Pulsar2 캘리브레이션 세트(<out_dir>/<tensor>.tar 안의 NNNN.npy, batch 축이 있는 float32).
@@ -42,21 +42,18 @@ TENSORS = ("input_imgs", "big_input_imgs", "desire", "features_buffer", "traffic
 
 
 def recorded(route_dir: Path):
-    """ControlState(시각, desire)와 모든 ModelState의 보정, 카메라 장착."""
-    cs_t, cs_des, m_t, rpy, mount = [], [], [], [], []
-    for path in rr.route_event_files(route_dir):
-        for rec in rr.iter_event_records(path):
-            if rec.type == rr.RECORD_CONTROL_STATE:
-                c = rec.control_state()
-                cs_t.append(c["timestamp_ns"] * 1e-9)
-                cs_des.append(int(c["desire"]))
-            elif rec.type == rr.RECORD_MODEL_STATE:
-                model = rec.model_state()
-                m_t.append(model["capture_timestamp_ns"] * 1e-9)
-                cal = model["calibration"]
-                rpy.append(np.array([cal["roll"], cal["pitch"], cal["yaw"]], np.float32))
-                mount.append(rec.camera_mount())
-    return np.array(cs_t), np.array(cs_des), np.array(m_t), np.array(rpy), np.array(mount)
+    """ControlState(시각, desire)와 모든 ModelState의 시각, 보정, 카메라 장착."""
+    parts = []
+    for chunk in rr.iter_states(route_dir, rr.RECORD_CONTROL_STATE, rr.RECORD_MODEL_STATE):
+        _, c = chunk[rr.RECORD_CONTROL_STATE]
+        _, model = chunk[rr.RECORD_MODEL_STATE]
+        cal = model["calibration"]
+        parts.append({"cs_t": c["timestamp_ns"] * 1e-9, "cs_des": c["desire"].astype(np.int64),
+                      "m_t": model["capture_timestamp_ns"] * 1e-9,
+                      "rpy": np.stack([cal["roll"], cal["pitch"], cal["yaw"]], 1),
+                      "mount": np.stack([model["camera_offset_m"], model["camera_height_m"]], 1).astype(float)})
+    v = rr.concat_chunks(parts)
+    return v["cs_t"], v["cs_des"], v["m_t"], v["rpy"], v["mount"]
 
 
 def route_segments(spec: dict, route: str, segs: list[str]) -> tuple[Path, list[Path]]:

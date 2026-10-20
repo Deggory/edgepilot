@@ -136,7 +136,6 @@ bool FrameRing::open(bool create, unsigned width, unsigned height, unsigned slot
 void FrameRing::close() {
     region_.close();
     header_ = nullptr;
-    for (auto &virt : slot_virt_) virt = nullptr;
 }
 
 uint64_t FrameRing::slot_phys(unsigned index) const {
@@ -145,10 +144,6 @@ uint64_t FrameRing::slot_phys(unsigned index) const {
 
 void FrameRing::set_slot_phys(unsigned index, uint64_t phys) {
     if (header_ && index < kFrameSlots) header_->slot_phys[index] = phys;
-}
-
-void FrameRing::attach_slot(unsigned index, uint8_t *virt) {
-    if (index < kFrameSlots) slot_virt_[index] = virt;
 }
 
 void FrameRing::begin_write(unsigned index) {
@@ -175,49 +170,10 @@ bool FrameRing::read_begin(unsigned index, uint64_t frame_id, uint64_t *seq) con
 }
 
 bool FrameRing::read_still_valid(unsigned index, uint64_t frame_id, uint64_t seq) const {
+    // CPU가 슬롯 매핑에서 읽은 것(앞차 광류)이 아래 seq 확인보다 늦게 보이지 않게 한다(ARM은 약한 순서)
+    std::atomic_thread_fence(std::memory_order_acquire);
     return header_->slot_seq[index].load(std::memory_order_acquire) == seq &&
            header_->slot_frame_id[index].load(std::memory_order_acquire) == frame_id;
-}
-
-namespace {
-
-// seqlock 재시도 껍데기. copy는 슬롯이 안정적일 때만 호출되고, 복사 도중
-// 생산자가 슬롯을 덮었으면 결과를 버리고 다시 시도한다.
-template <typename Copy>
-bool copy_slot_guarded(const FrameRingHeader &header, unsigned index, uint64_t frame_id, const uint8_t *source,
-                       Copy copy) {
-    constexpr unsigned kCopyAttempts = 8;
-    const std::atomic<uint64_t> &sequence = header.slot_seq[index];
-    const std::atomic<uint64_t> &stored_frame_id = header.slot_frame_id[index];
-    for (unsigned attempt = 0; attempt < kCopyAttempts; ++attempt) {
-        const uint64_t before = sequence.load(std::memory_order_acquire);
-        if (before == 0 || (before & 1ULL) != 0) continue;
-        const uint64_t before_frame_id = stored_frame_id.load(std::memory_order_acquire);
-        if (before_frame_id != frame_id) {
-            if (before_frame_id > frame_id) return false;
-            continue;
-        }
-
-        copy(source);
-
-        // 복사한 읽기가 뒤의 seq 확인보다 늦게 보이지 않게 한다(ARM은 약한 순서).
-        std::atomic_thread_fence(std::memory_order_acquire);
-        const uint64_t after = sequence.load(std::memory_order_acquire);
-        const uint64_t after_frame_id = stored_frame_id.load(std::memory_order_acquire);
-        if (before == after && (after & 1ULL) == 0 && after_frame_id == frame_id) return true;
-    }
-    return false;
-}
-
-}  // namespace
-
-bool FrameRing::copy_slot(unsigned index, uint64_t frame_id, uint8_t *destination, size_t size) const {
-    if (!header_ || !destination || index >= header_->slot_count || size != header_->frame_bytes) return false;
-
-    const uint8_t *source = slot_virt_[index];
-    if (!source) return false;
-    return copy_slot_guarded(*header_, index, frame_id, source,
-                             [&](const uint8_t *from) { std::memcpy(destination, from, size); });
 }
 
 LatestChannel::~LatestChannel() { close(); }
@@ -310,7 +266,7 @@ bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) 
         const uint32_t payload_size = header_->payload_size.load(std::memory_order_acquire);
         if (payload_size == 0 || payload_size > payload_capacity) return false;
         std::memcpy(payload, payload_, payload_size);
-        // 복사한 읽기가 뒤의 seq 확인보다 늦게 끝나지 않게 한다(FrameRing::read와 같다).
+        // 복사한 읽기가 뒤의 seq 확인보다 늦게 끝나지 않게 한다(FrameRing::read_still_valid와 같다).
         std::atomic_thread_fence(std::memory_order_acquire);
         const uint64_t after = header_->seq.load(std::memory_order_relaxed);
         if (before == after && (after & 1ULL) == 0) {

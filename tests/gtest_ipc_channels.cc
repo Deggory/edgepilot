@@ -286,7 +286,17 @@ TEST(Subscription, StaleHeaderIsNotAttached) {
     ASSERT_EQ(subscription.latest().value, 9u);
 }
 
-// 프레임 링: 슬롯의 seqlock과 frame_id로 덮어쓰인 슬롯을 거른다. 하드웨어 대신 힙 버퍼를 슬롯으로 붙인다.
+// CPU로 슬롯을 읽는 소비자(modeld 앞차 광류)의 순서: read_begin → 슬롯 매핑에서 읽기 → read_still_valid.
+// 하드웨어 대신 힙 버퍼가 슬롯 매핑이다.
+bool read_slot(const FrameRing &ring, unsigned slot, uint64_t frame_id, const std::vector<uint8_t> &mapped,
+               std::vector<uint8_t> &out) {
+    uint64_t seq = 0;
+    if (!ring.read_begin(slot, frame_id, &seq)) return false;
+    std::memcpy(out.data(), mapped.data(), out.size());
+    return ring.read_still_valid(slot, frame_id, seq);
+}
+
+// 프레임 링: 슬롯의 seqlock과 frame_id로 덮어쓰인 슬롯을 거른다.
 TEST(FrameRing, CopiesOnlyTheAskedFrameAndSeesOverwrites) {
     const std::string name = "/ep_ring_" + std::to_string(getpid());
     struct Unlink {
@@ -299,32 +309,27 @@ TEST(FrameRing, CopiesOnlyTheAskedFrameAndSeesOverwrites) {
     ASSERT_TRUE(producer.open(true, kW, kH, kSlots, name.c_str()));
     ASSERT_TRUE(consumer.open(false, kW, kH, kSlots, name.c_str()));
     ASSERT_EQ(consumer.frame_bytes(), slots[0].size());
-    for (unsigned i = 0; i < kSlots; ++i) {
-        producer.attach_slot(i, slots[i].data());
-        consumer.attach_slot(i, slots[i].data());
-    }
     std::vector<uint8_t> out(slots[0].size());
-    EXPECT_FALSE(consumer.copy_slot(0, 0, out.data(), out.size())) << "아직 쓰지 않은 슬롯";
+    EXPECT_FALSE(read_slot(consumer, 0, 0, slots[0], out)) << "아직 쓰지 않은 슬롯";
 
     producer.begin_write(1);
     std::fill(slots[1].begin(), slots[1].end(), 7);
     producer.end_write(1, 7);
-    ASSERT_TRUE(consumer.copy_slot(1, 7, out.data(), out.size()));
+    ASSERT_TRUE(read_slot(consumer, 1, 7, slots[1], out));
     EXPECT_EQ(out, slots[1]);
-    EXPECT_FALSE(consumer.copy_slot(1, 6, out.data(), out.size())) << "다른 프레임이 들어 있는 슬롯";
-    EXPECT_FALSE(consumer.copy_slot(1, 7, out.data(), out.size() - 1)) << "크기가 다른 버퍼";
+    EXPECT_FALSE(read_slot(consumer, 1, 6, slots[1], out)) << "다른 프레임이 들어 있는 슬롯";
 
-    // 하드웨어가 직접 읽을 때: 읽는 동안 덮어쓰였으면 read_still_valid가 거짓이다
+    // 읽는 동안 덮어쓰였으면 read_still_valid가 거짓이다
     uint64_t seq = 0;
     ASSERT_TRUE(consumer.read_begin(1, 7, &seq));
     producer.begin_write(1);
     EXPECT_FALSE(consumer.read_begin(1, 7, &seq)) << "쓰는 중인 슬롯은 읽기를 시작하지 않는다";
     producer.end_write(1, 9);
     EXPECT_FALSE(consumer.read_still_valid(1, 7, seq)) << "읽는 사이 다음 프레임이 들어왔다";
-    EXPECT_FALSE(consumer.copy_slot(1, 7, out.data(), out.size()));
+    EXPECT_FALSE(read_slot(consumer, 1, 7, slots[1], out));
 }
 
-// 동시성: 생산자가 슬롯을 계속 덮어쓰는 동안 소비자가 복사한 프레임은 언제나 한 프레임 전체다(찢어진 복사가 없다)
+// 동시성: 생산자가 슬롯을 계속 덮어쓰는 동안 소비자가 읽어 낸 프레임은 언제나 한 프레임 전체다(찢어진 읽기가 없다)
 TEST(FrameRing, ConcurrentCopiesAreNeverTorn) {
     const std::string name = "/ep_ring_race_" + std::to_string(getpid());
     struct Unlink {
@@ -336,8 +341,6 @@ TEST(FrameRing, ConcurrentCopiesAreNeverTorn) {
     FrameRing producer, consumer;
     ASSERT_TRUE(producer.open(true, kW, kH, 1, name.c_str()));
     ASSERT_TRUE(consumer.open(false, kW, kH, 1, name.c_str()));
-    producer.attach_slot(0, slot.data());
-    consumer.attach_slot(0, slot.data());
     std::atomic<uint64_t> latest{0};
     std::atomic<bool> stop{false};
     std::thread writer([&] {
@@ -359,7 +362,7 @@ TEST(FrameRing, ConcurrentCopiesAreNeverTorn) {
     const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
     while (std::chrono::steady_clock::now() < until) {
         const uint64_t id = latest.load(std::memory_order_acquire);
-        if (id == 0 || !consumer.copy_slot(0, id, out.data(), out.size())) continue;
+        if (id == 0 || !read_slot(consumer, 0, id, slot, out)) continue;
         ++copies;
         if (std::any_of(out.begin(), out.end(), [&](uint8_t b) { return b != static_cast<uint8_t>(id); })) ++torn;
     }

@@ -2,7 +2,6 @@
 // 소스와 맞는지. 펌웨어의 health 패킷은 board/health.h를 그대로 가져와 대조한다.
 #include "car/can_frame.h"
 #include "car/hyundai_can.h"
-#include "controls/control_params.h"
 #include "panda/panda_firmware.h"
 #include "panda/panda_protocol.h"
 
@@ -211,13 +210,12 @@ TEST(PandaProtocol, HealthPacketIsTheFirmwares) {
 // 우리가 내는 토크 한계와 보내는 프레임은 Panda safety(hyundaiCommunity)가 강제하는 것과 같아야 한다. 다르면
 // Panda가 프레임을 막아 조향이 끊기거나(한계를 넘거나 목록에 없는 프레임), 순정보다 약해진다.
 TEST(PandaSafety, SteeringLimitsAndFramesMatchTheFirmware) {
-    const SteeringParams params;
     const std::string hyundai = "board/safety/safety_hyundai.h";
-    EXPECT_EQ(params.steer_max, const_int(hyundai, "HYUNDAI_MAX_STEER"));
-    EXPECT_EQ(params.steer_delta_up, const_int(hyundai, "HYUNDAI_MAX_RATE_UP"));
-    EXPECT_EQ(params.steer_delta_down, const_int(hyundai, "HYUNDAI_MAX_RATE_DOWN"));
-    EXPECT_EQ(params.steer_driver_allowance, const_int(hyundai, "HYUNDAI_DRIVER_TORQUE_ALLOWANCE"));
-    EXPECT_EQ(params.steer_driver_multiplier, const_int(hyundai, "HYUNDAI_DRIVER_TORQUE_FACTOR"));
+    EXPECT_EQ(kHyundaiSteerMax, const_int(hyundai, "HYUNDAI_MAX_STEER"));
+    EXPECT_EQ(kHyundaiSteerDeltaUp, const_int(hyundai, "HYUNDAI_MAX_RATE_UP"));
+    EXPECT_EQ(kHyundaiSteerDeltaDown, const_int(hyundai, "HYUNDAI_MAX_RATE_DOWN"));
+    EXPECT_EQ(kHyundaiSteerDriverAllowance, const_int(hyundai, "HYUNDAI_DRIVER_TORQUE_ALLOWANCE"));
+    EXPECT_EQ(kHyundaiSteerDriverMultiplier, const_int(hyundai, "HYUNDAI_DRIVER_TORQUE_FACTOR"));
     const std::string community = source("board/safety/safety_hyundai_community.h");
     EXPECT_NE(community.find("max_limit_check(desired_torque, HYUNDAI_MAX_STEER, -HYUNDAI_MAX_STEER)"),
               std::string::npos)

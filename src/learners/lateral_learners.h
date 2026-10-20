@@ -56,9 +56,10 @@ public:
                     uint64_t seed, const VehicleParamsOptions &options = {});
 
     // speed_mps는 controlsd가 거른 vEgo(상류 paramsd·torqued도 carState.vEgo를 쓴다). 휠 속도가 낡으면
-    // NaN이고 그 틱의 입력은 신선하지 않다.
-    void update(const VehicleCanState &vehicle, double now_s, double timeout_s, double speed_mps, bool lat_active,
-                int apply_torque, bool steering_pressed);
+    // NaN이고 그 틱의 입력은 신선하지 않다. vehicle_fresh·esp12_fresh는 컨트롤러의 같은 틱 판정이다
+    // (LateralControlResult, kVehicleStateTimeoutS).
+    void update(const VehicleCanState &vehicle, double now_s, bool vehicle_fresh, bool esp12_fresh, double speed_mps,
+                bool lat_active, int apply_torque, bool steering_pressed);
 
     // use_vehicle = paramsd가 한 번이라도 냈다(상류 sm.seen). use_torque = 봉투가 유효한
     // torqued 메시지를 받은 적이 있다. 토크 값은 그 뒤 봉투가 유효한 메시지로만 바뀐다
@@ -119,7 +120,6 @@ private:
     YawBiasEstimator bias_;
     VehicleParamsLearner vehicle_;
     TorqueEstimator torque_;
-    int steer_max_ = 1;
     LiveLateralParams live_{};
     bool vehicle_published_ = false;
     bool torque_published_ = false;

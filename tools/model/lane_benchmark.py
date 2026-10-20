@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,8 +39,7 @@ import numpy as np
 
 from model_warp import maixcam2_intrinsics, rotation_from_rpy
 from recording_reader import (RECORD_CAN_RX, RECORD_CONTROL_STATE, RECORD_MODEL_STATE, TRAJECTORY_SIZE, X_IDXS,
-                              SegmentInfo, can_frames, iter_event_records, route_event_files, route_segments,
-                              segment_video)
+                              RouteVideo, concat_chunks, iter_states)
 
 LKA14_ADDRESS, CAMERA_BUS = 0x484, 2
 ESP12_ADDRESS, VEHICLE_BUS = 0x220, 0
@@ -98,48 +96,35 @@ class RouteData:
 
 
 def read_route(route: Path) -> RouteData:
-    lka_t, lka_raw, yaw_t, yaw = [], [], [], []
-    mt, mlt, fid, lanes, prob, rpy, offset, source = [], [], [], [], [], [], [], []
-    ct, speed, steer, hud, blinker = [], [], [], [], []
-    for path in route_event_files(route):
-        if path.stat().st_size <= 32:
-            continue
-        for rec in iter_event_records(path):
-            if rec.type == RECORD_CAN_RX:
-                frames = can_frames(rec.payload)
-                frames = frames[frames["flags"] == 0]
-                for f in frames[(frames["address"] == LKA14_ADDRESS) & (frames["src"] == CAMERA_BUS)]:
-                    lka_t.append(rec.timestamp_ns)
-                    lka_raw.append(int.from_bytes(f["data"][:8].tobytes(), "little"))
-                for f in frames[(frames["address"] == ESP12_ADDRESS) & (frames["src"] == VEHICLE_BUS)]:
-                    raw = int.from_bytes(f["data"][:8].tobytes(), "little")
-                    yaw_t.append(rec.timestamp_ns)
-                    yaw.append(((raw >> 40) & 0x1FFF) * 0.01 - 40.95)
-            elif rec.type == RECORD_MODEL_STATE:
-                model = rec.model_state()
-                points, probs = rec.model_lanes()
-                cal = model["calibration"]
-                mt.append(int(model["capture_timestamp_ns"]))
-                mlt.append(rec.timestamp_ns)
-                fid.append(int(model["frame_id"]))
-                lanes.append(points[1:3])
-                prob.append(probs[1:3])
-                rpy.append((cal["roll"], cal["pitch"], cal["yaw"]))
-                offset.append(float(model["camera_offset_m"]))
-                source.append(int(model["calibration_source"]["source"]))
-            elif rec.type == RECORD_CONTROL_STATE:
-                state = rec.control_state()
-                ct.append(rec.timestamp_ns)
-                speed.append(float(state["ego_speed_kph"]))
-                steer.append(float(state["steering_angle_deg"]))
-                hud.append(int(state["hud_flags"]))
-                blinker.append(bool(state["left_blinker"] or state["right_blinker"]))
-    return RouteData(
-        np.array(lka_t, np.int64), np.array(lka_raw, np.uint64), np.array(yaw_t, np.int64), np.array(yaw),
-        np.array(mt, np.int64), np.array(mlt, np.int64), np.array(fid, np.int64),
-        np.array(lanes, np.float64).reshape(-1, 2, TRAJECTORY_SIZE, 3), np.array(prob, np.float64).reshape(-1, 2),
-        np.array(rpy, np.float64).reshape(-1, 3), np.array(offset, np.float64), np.array(source, np.int64),
-        np.array(ct, np.int64), np.array(speed), np.array(steer), np.array(hud, np.int64), np.array(blinker))
+    parts = []
+    for chunk in iter_states(route, RECORD_CAN_RX, RECORD_MODEL_STATE, RECORD_CONTROL_STATE):
+        frame_t, frames = chunk[RECORD_CAN_RX]
+        raw = frames["data"][:, :8].copy().view("<u8")[:, 0]  # 8바이트 리틀 엔디언
+        received = frames["flags"] == 0
+        lka = received & (frames["address"] == LKA14_ADDRESS) & (frames["src"] == CAMERA_BUS)
+        esp = received & (frames["address"] == ESP12_ADDRESS) & (frames["src"] == VEHICLE_BUS)
+        model_t, model = chunk[RECORD_MODEL_STATE]
+        lanes = np.empty((len(model), 2, TRAJECTORY_SIZE, 3))
+        lanes[..., 0] = X_IDXS.astype(np.float32)  # 녹화에 없는 x(X_IDXS 격자)를 차선 점으로 되붙인다
+        lanes[..., 1:] = model["lanes"][:, 1:3]
+        cal = model["calibration"]
+        control_t, state = chunk[RECORD_CONTROL_STATE]
+        parts.append({
+            "lka_t": frame_t[lka].astype(np.int64), "lka_raw": raw[lka],
+            "yaw_t": frame_t[esp].astype(np.int64),
+            "yaw_rate": ((raw[esp] >> np.uint64(40)) & np.uint64(0x1FFF)) * 0.01 - 40.95,
+            "model_t": model["capture_timestamp_ns"].astype(np.int64), "model_log_t": model_t.astype(np.int64),
+            "frame_id": model["frame_id"].astype(np.int64), "lanes": lanes,
+            "lane_prob": model["lane_probabilities"][:, 1:3].astype(np.float64),
+            "rpy": np.stack([cal["roll"], cal["pitch"], cal["yaw"]], 1).astype(np.float64),
+            "camera_offset": model["camera_offset_m"].astype(np.float64),
+            "cal_source": model["calibration_source"]["source"].astype(np.int64),
+            "control_t": control_t.astype(np.int64), "speed_kph": state["ego_speed_kph"].astype(np.float64),
+            "steer_deg": state["steering_angle_deg"].astype(np.float64),
+            "hud_flags": state["hud_flags"].astype(np.int64),
+            "blinker": (state["left_blinker"] != 0) | (state["right_blinker"] != 0),
+        })
+    return RouteData(**concat_chunks(parts))
 
 
 def decode_lka14(raw: np.ndarray) -> dict[str, np.ndarray]:
@@ -333,44 +318,6 @@ def series(data: RouteData, a: Aligned, peak: int) -> dict:
                      "camera_quality": values(a.camera_quality[window, i], 1),
                      "model_prob": values(data.lane_prob[window, i], 2)}
     return out
-
-
-class RouteVideo:
-    """frame_id로 영상 프레임 하나를 꺼낸다. 세그먼트마다 SPS/PPS가 파일 앞에 있고 키프레임이 1 s마다 있다."""
-
-    def __init__(self, route: Path):
-        self.segments: list[SegmentInfo] = route_segments(route)
-        self.where: dict[int, tuple[int, int]] = {}
-        for s, segment in enumerate(self.segments):
-            for i, frame_id in enumerate(segment.frames["frame_id"]):
-                self.where[int(frame_id)] = (s, i)
-        self._cached: tuple[int, bytes] | None = None
-
-    def _bytes(self, s: int) -> bytes:
-        if self._cached is None or self._cached[0] != s:
-            self._cached = (s, segment_video(self.segments[s].path).read_bytes())
-        return self._cached[1]
-
-    def frame_rgb(self, frame_id: int) -> np.ndarray | None:
-        if frame_id not in self.where:
-            return None
-        s, i = self.where[frame_id]
-        segment, frames = self.segments[s], self.segments[s].frames
-        key = i
-        while key > 0 and not frames[key]["flags"] & 1:
-            key -= 1
-        data = self._bytes(s)
-        stream = data[:int(frames[0]["file_offset"])] + \
-            data[int(frames[key]["file_offset"]):int(frames[i]["file_offset"]) + int(frames[i]["packet_size"])]
-        result = subprocess.run(["ffmpeg", "-v", "error", "-f", "h264", "-i", "pipe:0", "-fps_mode", "passthrough",
-                                 "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
-                                input=stream, capture_output=True, check=False)
-        size = segment.width * segment.height * 3
-        decoded = len(result.stdout) // size
-        if decoded != i - key + 1:
-            print(f"  frame {frame_id}: decoded {decoded} frames, expected {i - key + 1}; skipped")
-            return None
-        return np.frombuffer(result.stdout[-size:], np.uint8).reshape(segment.height, segment.width, 3)
 
 
 def project(points: np.ndarray, rpy: np.ndarray, camera_offset: float, k: tuple) -> np.ndarray:

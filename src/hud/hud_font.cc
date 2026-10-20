@@ -35,13 +35,12 @@ int HudFont::width(std::string_view text) const {
 }
 
 const HudFont kHudSpeedFont{kSpeedGlyphs, kSpeedPixels.data(), kSpeedFirst, static_cast<int>(std::size(kSpeedGlyphs)),
-                            kSpeedAscent, kSpeedDescent};
+                            kSpeedAscent};
 const HudFont kHudValueFont{kValueGlyphs, kValuePixels.data(), kValueFirst, static_cast<int>(std::size(kValueGlyphs)),
-                            kValueAscent, kValueDescent};
+                            kValueAscent};
 const HudFont kHudTitleFont{kTitleGlyphs, kTitlePixels.data(), kTitleFirst, static_cast<int>(std::size(kTitleGlyphs)),
-                            kTitleAscent, kTitleDescent};
+                            kTitleAscent};
 const HudFont kHudBodyFont{kBodyGlyphs, kBodyPixels.data(), kBodyFirst, static_cast<int>(std::size(kBodyGlyphs)),
-                           kBodyAscent, kBodyDescent};
-const HudFont kHudCaptionFont{kCaptionGlyphs, kCaptionPixels.data(),
-                              kCaptionFirst,  static_cast<int>(std::size(kCaptionGlyphs)),
-                              kCaptionAscent, kCaptionDescent};
+                           kBodyAscent};
+const HudFont kHudCaptionFont{kCaptionGlyphs, kCaptionPixels.data(), kCaptionFirst,
+                              static_cast<int>(std::size(kCaptionGlyphs)), kCaptionAscent};

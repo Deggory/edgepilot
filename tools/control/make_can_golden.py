@@ -28,7 +28,7 @@ LKAS11_FIELDS = ("CF_Lkas_LdwsActivemode", "CF_Lkas_LdwsSysState", "CF_Lkas_SysW
                  "CF_Lkas_ToiFlt", "CF_Lkas_HbaSysState", "CF_Lkas_FcwOpt", "CF_Lkas_HbaOpt", "CF_Lkas_MsgCount",
                  "CF_Lkas_FcwSysState", "CF_Lkas_FcwCollisionWarning", "CF_Lkas_FusionState", "CF_Lkas_Unknown1",
                  "CF_Lkas_FcwOpt_USM", "CF_Lkas_LdwsOpt_USM", "CF_Lkas_Unknown2")
-# params/steering.json 기본값(steer_max, delta_up, delta_down, driver_allowance, driver_multiplier, driver_factor)
+# src/car/hyundai_can.h의 토크 한계 상수(kHyundaiSteerMax, DeltaUp, DeltaDown, DriverAllowance, DriverMultiplier, DriverFactor)
 K7_LIMITS = dict(STEER_MAX=384, STEER_DELTA_UP=3, STEER_DELTA_DOWN=7, STEER_DRIVER_ALLOWANCE=50,
                  STEER_DRIVER_MULTIPLIER=2, STEER_DRIVER_FACTOR=1)
 

@@ -23,12 +23,17 @@ import recording_reader as rr  # noqa: E402
 
 
 def load(route: Path):
-    events = rr.read_route_events(route)
-    if events is None or len(events.control) == 0:
+    """제어 틱의 시각(첫 틱부터 s, 이벤트 머리 시각)과 ControlState들, 모델 상태의 촬영 시각."""
+    parts = []
+    for chunk in rr.iter_states(route, rr.RECORD_CONTROL_STATE, rr.RECORD_MODEL_STATE):
+        control_ts, control = chunk[rr.RECORD_CONTROL_STATE]
+        _, model = chunk[rr.RECORD_MODEL_STATE]
+        parts.append({"ts": control_ts, "control": control, "model_ts": model["capture_timestamp_ns"].copy()})
+    v = rr.concat_chunks(parts)
+    if not len(v["control"]):
         raise SystemExit(f"{route}: no control states")
-    c = events.control
-    t = (events.control_log_ts.astype(np.int64) - int(events.control_log_ts[0])) / 1e9
-    return t, c, events
+    t = (v["ts"].astype(np.int64) - int(v["ts"][0])) / 1e9
+    return t, v["control"], v["model_ts"]
 
 
 def resample(t, values, grid):
@@ -61,7 +66,7 @@ def main():
     args = ap.parse_args()
 
     t_ref, c_ref, _ = load(args.original)
-    t_new, c_new, ev_new = load(args.rehearsal)
+    t_new, c_new, model_ts = load(args.rehearsal)
     lag, speed_err = align(t_ref, c_ref["cluster_speed_kph"], t_new, c_new["cluster_speed_kph"])
     tn = t_new + lag
     inside = (tn >= t_ref[0]) & (tn <= t_ref[-1])
@@ -72,9 +77,9 @@ def main():
     print(f"alignment: rehearsal t + {lag:.2f} s = original t, speed |err| {speed_err:.2f} kph")
     dur = tn[-1] - tn[0]
     print(f"overlap: {dur:.1f} s, {len(tn)} control ticks ({len(tn) / dur:.1f} Hz)")
-    if len(ev_new.model_capture_ts) > 1:
-        mt = (ev_new.model_capture_ts[-1] - ev_new.model_capture_ts[0]) / 1e9
-        print(f"model states: {len(ev_new.model_capture_ts)} ({len(ev_new.model_capture_ts) / mt:.2f} Hz)")
+    if len(model_ts) > 1:
+        mt = (model_ts[-1] - model_ts[0]) / 1e9
+        print(f"model states: {len(model_ts)} ({len(model_ts) / mt:.2f} Hz)")
 
     for field in ("engaged", "active"):
         a, b = ref[field].astype(bool), c_new[field].astype(bool)

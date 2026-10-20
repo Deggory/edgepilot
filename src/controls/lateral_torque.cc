@@ -4,6 +4,7 @@
 #include <cmath>
 #include <utility>
 
+#include "car/hyundai_can.h"
 #include "common/utils_math.h"
 
 namespace {
@@ -86,20 +87,14 @@ std::pair<float, float> scale_tire_stiffness(float mass, float wheelbase, float 
 
 // openpilot LatControlTorque와 같은 형태로 조향 토크를 계산한다.
 int TorqueController::update(const Inputs &in, const SteeringParams &params, const NnFeedforward &nn) {
-    const bool active = in.active, steering_pressed = in.steering_pressed;
-    const bool steer_limited_by_safety = in.steer_limited_by_safety, yaw_rate_valid = in.yaw_rate_valid;
-    const float speed_mps = in.speed_mps, desired_curvature = in.desired_curvature;
-    const float steering_angle_deg = in.steering_angle_deg, lat_delay_s = in.lat_delay_s;
-    const float yaw_rate_rad_s = in.yaw_rate_rad_s, road_bank_lat_accel = in.road_bank_lat_accel;
+    const float speed_mps = in.speed_mps;
     const LiveLateralParams &live = in.live;
-    const float nn_feedforward_torque = nn.torque, nn_weight = nn.weight, nn_curve_gain = nn.curve_gain;
-    const bool nn_curve_friction = nn.curve_friction;
     nn_feedforward_used_ = false;
     const float actual_curvature =
-        estimate_actual_curvature(speed_mps, steering_angle_deg, params, yaw_rate_rad_s, yaw_rate_valid, live);
+        estimate_actual_curvature(speed_mps, in.steering_angle_deg, params, in.yaw_rate_rad_s, in.yaw_rate_valid, live);
 
     const float speed_sq = speed_mps * speed_mps;
-    const float desired_lat_accel = desired_curvature * speed_sq;
+    const float desired_lat_accel = in.desired_curvature * speed_sq;
     const float actual_lat_accel = actual_curvature * speed_sq;
 
     // 버퍼/저크 필터는 active와 무관하게 매 프레임 갱신한다. inactive에서
@@ -107,7 +102,7 @@ int TorqueController::update(const Inputs &in, const SteeringParams &params, con
     request_head_ = (request_head_ + 1) % kRequestBufferLen;
     lat_accel_request_[request_head_] = std::isfinite(desired_lat_accel) ? desired_lat_accel : 0.0f;
     // 상류: delay_frames = int(clip(lat_delay / dt + 1, 1, buffer_len))
-    const int delay_frames = clamp_int(static_cast<int>(lat_delay_s / kDtCtrl) + 1, 1, kRequestBufferLen);
+    const int delay_frames = clamp_int(static_cast<int>(in.lat_delay_s / kDtCtrl) + 1, 1, kRequestBufferLen);
     const auto at = [this](int back) { return (request_head_ - back + 2 * kRequestBufferLen) % kRequestBufferLen; };
     const float expected_lat_accel = lat_accel_request_[at(delay_frames - 1)];
 
@@ -124,7 +119,7 @@ int TorqueController::update(const Inputs &in, const SteeringParams &params, con
     actual_curvature_ = actual_curvature;
     error_ = error;
 
-    if (!active) {  // 비활성(컨트롤러를 끈 것 포함)
+    if (!in.active) {  // 비활성(컨트롤러를 끈 것 포함)
         // 상류(#24606)는 적분기를 지우지 않지만 여기서는 지운다. 2026-09-25~10-06 녹화 18건의 폐루프 재생에서
         // 남긴 적분(재결합 때 0.2~0.33 m/s²)이 정차 뒤 출발에서 차선 중심 오차를 키웠다(10-04 0.079 → 0.120 m,
         // 10-06 0.069 → 0.090 m). 지우면 예전과 같다.
@@ -154,46 +149,45 @@ int TorqueController::update(const Inputs &in, const SteeringParams &params, con
     if (live.use_vehicle)
         feedforward -= live.roll_rad * kGravity;
     else if (params.live_bank_compensation)
-        feedforward += road_bank_lat_accel;
+        feedforward += in.road_bank_lat_accel;
     // opendbc get_friction: 토크 공간 마찰 계수를 latAccelFactor로 횡가속 공간에 옮긴다
     const float friction = tuning.friction * tuning.lat_accel_factor;
     const float friction_term = interp(apply_deadzone(error + kJerkGain * jerk_filtered_, lat_accel_deadzone),
                                        {-kFrictionThreshold, kFrictionThreshold}, {-friction, friction});
     feedforward += friction_term;
     friction_torque_ = friction_term / tuning.lat_accel_factor;
-    const float w = clamp_float(nn_weight, 0.0f, 1.0f);
-    if (std::isfinite(nn_feedforward_torque) && w > 0.0f) {
+    const float w = clamp_float(nn.weight, 0.0f, 1.0f);
+    if (std::isfinite(nn.torque) && w > 0.0f) {
         // 학습한 토크 모델: 목표 궤적에 드는 토크를 직접 낸다. 편향(직진 토크), 롤·편경사(입력)와 동특성(학습한 궤적
         // 창)이 그 안에 있어 위 선형 피드포워드를 대신한다. PID와 같은 횡가속 공간으로 옮겨 섞는다.
         // 마찰 보상은 곡선에서 남긴다: 모델은 추종 오차를 모르므로 차가 늦을 때 붙는 오차 방향 토크를 내지 못한다
         // (2026-10-16 주행에서 곡선 진입 횡가속이 요구의 92~93 %, 선형은 100~109 %). 직선에서는 모델만 쓴다(오차
         // 잡음에 토크가 흔들려 모델의 매끄러움을 잃는다). sunnypilot NNLC의 friction_override와 같은 항이다.
-        // 보낸 토크를 그대로 배운 모델은 그 마찰까지 배웠으므로 더하지 않는다(nn_curve_friction).
+        // 보낸 토크를 그대로 배운 모델은 그 마찰까지 배웠으므로 더하지 않는다(nn.curve_friction).
         // 곡선 이득: 모델은 계획 궤적을 그대로 따르는 토크를 내 곡선에서 늦게 덜 돈다. 선형 피드포워드는 같은 곳에서
-        // 10~20 % 더 내고 PID가 깎는다. 모델 파일의 몫(nn_curve_gain)만큼 곡선의 모델 출력을 키운다.
+        // 10~20 % 더 내고 PID가 깎는다. 모델 파일의 몫(nn.curve_gain)만큼 곡선의 모델 출력을 키운다.
         const float ramp =
             interp(std::fabs(desired_lat_accel), {kNnCurveStartLatAccel, kNnCurveFullLatAccel}, {0.0f, 1.0f});
-        const float curve = nn_curve_friction ? ramp : 0.0f;
+        const float curve = nn.curve_friction ? ramp : 0.0f;
         const float gain =
-            1.0f + nn_curve_gain * ramp *
+            1.0f + nn.curve_gain * ramp *
                        interp(speed_mps, {kNnCurveGainStartSpeedMps, kNnCurveGainFullSpeedMps}, {0.0f, 1.0f});
-        feedforward +=
-            w * (gain * nn_feedforward_torque * tuning.lat_accel_factor + curve * friction_term - feedforward);
+        feedforward += w * (gain * nn.torque * tuning.lat_accel_factor + curve * friction_term - feedforward);
         nn_feedforward_used_ = true;
     }
 
     // 저속 직선에서만 비례 이득을 torque_straight_kp_scale배로 낮춘다. 회전 진입은 지금 요청이, 회전 탈출은 지연
     // 비교 대상이 곡률을 들고 있어 회전 내내 원래 이득이다.
     const float request_curvature =
-        std::max(std::fabs(desired_curvature), std::fabs(expected_lat_accel) / std::max(speed_sq, 1.0f));
+        std::max(std::fabs(in.desired_curvature), std::fabs(expected_lat_accel) / std::max(speed_sq, 1.0f));
     const float straight = interp(request_curvature, {kStraightCurvature, kTurnCurvature}, {1.0f, 0.0f}) *
                            interp(speed_mps, {kStraightKpFullSpeedMps, kStraightKpOffSpeedMps}, {1.0f, 0.0f});
     const float kp =
         scheduled_kp(speed_mps, params.torque_kp) * (1.0f - (1.0f - params.torque_straight_kp_scale) * straight);
 
-    const bool freeze_integrator = steer_limited_by_safety || steering_pressed || speed_mps < 5.0f;
+    const bool freeze_integrator = in.steer_limited_by_safety || in.steering_pressed || speed_mps < 5.0f;
     // 상류 controlsd처럼 유한하지 않은 값은 0 토크로 바꾼다. clamp_float는 NaN을 하한으로 돌려주므로 그대로 두면
-    // 한쪽 최대 토크(steer_max)가 나간다. NaN이 적분기에 남지 않게 PID 상태도 지운다.
+    // 한쪽 최대 토크(kHyundaiSteerMax)가 나간다. NaN이 적분기에 남지 않게 PID 상태도 지운다.
     if (!std::isfinite(error) || !std::isfinite(feedforward) || !std::isfinite(kp) ||
         !std::isfinite(tuning.lat_accel_factor) || tuning.lat_accel_factor <= 0.0f) {
         ++nonfinite_ticks_;
@@ -211,7 +205,7 @@ int TorqueController::update(const Inputs &in, const SteeringParams &params, con
     normalized_output_ = clamp_float(static_cast<float>(kTorqueOutputSign) * output_torque, -1.0f, 1.0f);
     feedforward_ = feedforward;
     // 상류 carcontroller int(round(torque * STEER_MAX)): 파이썬 round는 반올림 짝수다
-    return static_cast<int>(std::nearbyint(normalized_output_ * static_cast<float>(params.steer_max)));
+    return static_cast<int>(std::nearbyint(normalized_output_ * static_cast<float>(kHyundaiSteerMax)));
 }
 
 // 상류 VM.update_params(max(x, 0.1), max(sr, 0.1)). 강성 배율은 타이어 계수에 곱해진다.
@@ -250,8 +244,8 @@ TorqueController::AngleMap TorqueController::angle_map(float speed_mps, const St
 }
 
 // 현재 조향각·속도에서 차량 모델로 실제 곡률을 낸다(상류 controlsd self.curvature, 현대·기아와 같음). 상류처럼
-// 속도와 무관하게 계산하므로 정차 중에도 핸들 각도의 곡률이 나온다. ESP12 요레이트 곡률은 주행 로그(curveYaw,
-// fit_lateral_params.py)에 남기려고 함께 계산한다.
+// 속도와 무관하게 계산하므로 정차 중에도 핸들 각도의 곡률이 나온다. ESP12 요레이트 곡률은 주행 로그(curveYaw)에
+// 남기려고 함께 계산한다.
 float TorqueController::estimate_actual_curvature(float speed_mps, float steering_angle_deg,
                                                   const SteeringParams &params, float yaw_rate_rad_s,
                                                   bool yaw_rate_valid, const LiveLateralParams &live) {

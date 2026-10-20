@@ -1,7 +1,8 @@
-// v2/v3 녹화에서 횡제어 분석/학습용 CSV를 뽑는다. CAN 디코드와 부호 규약은
+// recordd 녹화(이벤트 파일)에서 횡제어 분석/학습용 CSV를 뽑는다. CAN 디코드와 부호 규약은
 // 런타임과 같은 vehicle_can을 그대로 쓴다. 레코드는 기록 시각 순으로 읽는다(TimeOrderedEvents): 행마다 그 시각까지
 // 들어온 CAN과 모델만 본다(controlsd가 그 틱에 본 것).
 // 사용: extract_lateral_dataset <out.csv> <events...>
+#include "car/hyundai_can.h"
 #include "car/vehicle_can.h"
 #include "common/ipc_messages.h"
 #include "common/utils_math.h"
@@ -10,19 +11,18 @@
 #include "controls/lateral_torque.h"
 #include "controls/road_bank.h"
 #include "recorded_vehicle_can.h"
+#include "recording/event_log_reader.h"
 #include "recording/recording_format.h"
 #include "route_events.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <vector>
 
 namespace {
 
-constexpr float kGravity = 9.81f;         // 컨트롤러·학습기와 같다
-constexpr double kVehicleTimeoutS = 0.5;  // ControlTiming 기본값
+constexpr float kGravity = 9.81f;  // 컨트롤러·학습기와 같다
 // openpilot NNFF future_times. 플랜에서 이 시점의 값을 뽑는다.
 constexpr float kFutureTimes[] = {0.3f, 0.6f, 1.0f, 1.5f};
 constexpr int kFutureCount = 4;
@@ -63,8 +63,7 @@ int main(int argc, char **argv) {
                  "roll_p03,roll_p06,roll_p10,roll_p15,model_age,"
                  "toi_active,steer_fault,blinker,eps_out_tq,nn_ff\n");
 
-    const SteeringParams params;  // steer_max 384 (실차 설정과 동일)
-    const float torque_scale = static_cast<float>(kTorqueOutputSign) / static_cast<float>(params.steer_max);
+    const float torque_scale = static_cast<float>(kTorqueOutputSign) / static_cast<float>(kHyundaiSteerMax);
 
     VehicleCanState vehicle{};
     ModelState model{};
@@ -96,15 +95,12 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        if (rh.type != static_cast<uint16_t>(RecordType::ControlState) || rh.payload_size < sizeof(ControlState)) {
-            continue;
-        }
         ControlState cs{};
-        std::memcpy(&cs, buf.data(), sizeof(cs));
+        if (rh.type != static_cast<uint16_t>(RecordType::ControlState) || !read_record(buf, &cs)) continue;
 
-        const float v = vehicle_speed_kph(vehicle, now_s, kVehicleTimeoutS) / 3.6f;
+        const float v = vehicle_speed_kph(vehicle, now_s, kVehicleStateTimeoutS) / 3.6f;
         const bool yaw_fresh =
-            signal_time_fresh(vehicle.esp12_time_s, now_s, kVehicleTimeoutS) && vehicle.yaw_rate_valid;
+            signal_time_fresh(vehicle.esp12_time_s, now_s, kVehicleStateTimeoutS) && vehicle.yaw_rate_valid;
 
         // 편경사: 컨트롤러와 같은 추정기를 100 Hz 대신 ControlState 간격(dt)으로 돌린다.
         const double dt = last_row_s < 0.0 ? 0.0 : now_s - last_row_s;
@@ -123,16 +119,14 @@ int main(int argc, char **argv) {
             model_age = static_cast<float>(now_s - model_time_s);
             float grid[kTrajectorySize];
             float yaw[kTrajectorySize];
-            float plan_roll[kTrajectorySize];
-            // v5 녹화에는 plan orientation이 없다. 요각은 plan 위치의 중앙차분으로,
-            // 롤은 0으로 대신한다(전진 0.5 m 미만이면 heading이 무의미해 0).
+            // 녹화에는 plan orientation이 없다. 요각은 plan 위치의 중앙차분으로 대신하고(전진 0.5 m 미만이면 heading이
+            // 무의미해 0), 미래 롤은 지금의 편경사 롤 그대로다.
             for (int i = 0; i < kTrajectorySize; ++i) {
                 grid[i] = model_t_idx(i);
                 const int prev = std::max(0, i - 1), next = std::min(kTrajectorySize - 1, i + 1);
                 const float dx = model.plan[next].x - model.plan[prev].x;
                 const float dy = model.plan[next].y - model.plan[prev].y;
                 yaw[i] = std::fabs(dx) >= 0.5f ? std::atan2(dy, dx) : 0.0f;
-                plan_roll[i] = 0.0f;
             }
             for (int i = 0; i < kFutureCount; ++i) {
                 const float t = kFutureTimes[i];
@@ -142,14 +136,14 @@ int main(int argc, char **argv) {
                 const float behind = interp_plan(std::max(0.0f, t - kYawDiffHalfWindowS), grid, yaw);
                 const float span = (t + kYawDiffHalfWindowS) - std::max(0.0f, t - kYawDiffHalfWindowS);
                 future_la[i] = span > 1e-6f ? v * (ahead - behind) / span : 0.0f;
-                future_roll[i] = interp_plan(t, grid, plan_roll) + roll;
+                future_roll[i] = roll;
             }
         }
 
         const float des_la = cs.desired_curvature * v * v;
         // EPS 상태: ToiActive는 MDPS가 LKAS 토크를 실제로 받아 쓰는 중이라는 뜻이다(학습 표본 고르기). OutTq는
         // MDPS가 실제로 낸 토크로, 보낸 토크와의 상관으로 부호를 확인한다(nnlc coverage.py). MDPS12가 낡았으면 0.
-        const bool mdps_fresh = signal_time_fresh(vehicle.mdps12_time_s, now_s, kVehicleTimeoutS);
+        const bool mdps_fresh = signal_time_fresh(vehicle.mdps12_time_s, now_s, kVehicleStateTimeoutS);
         const Mdps12Values mdps = decode_mdps12(vehicle.mdps12_seed);
         std::fprintf(out,
                      "%.3f,%.3f,%u,%u,%s,%.2f,%d,%d,%.5f,%.5f,"

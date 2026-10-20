@@ -16,18 +16,6 @@
 
 namespace {
 
-// params/steering.json 기본값(Panda 펌웨어 safety_hyundai.h의 HYUNDAI_MAX_STEER 등과 같다)
-HyundaiSteeringLimits k7_limits() {
-    HyundaiSteeringLimits limits;
-    limits.steer_max = 384;
-    limits.steer_delta_up = 3;
-    limits.steer_delta_down = 7;
-    limits.steer_driver_allowance = 50;
-    limits.steer_driver_multiplier = 2;
-    limits.steer_driver_factor = 1;
-    return limits;
-}
-
 // 보내는 LKAS11(두 버스)은 opendbc 패커와 상류 create_lkas11(기본 분기 체크섬)로 만든 바이트와 같다
 TEST(K7Can, LkasFramesMatchOpendbc) {
     for (const LkasGolden &g : kLkasGolden) {
@@ -69,7 +57,7 @@ TEST(K7Can, Clu11AndMdps12MatchOpendbc) {
 // 토크 제한기는 opendbc apply_driver_steer_torque_limits와 같은 값을 낸다
 TEST(K7Can, TorqueLimiterMatchesOpendbc) {
     for (const TorqueGolden &g : kTorqueGolden)
-        EXPECT_EQ(apply_hyundai_steer_torque_limits(g.desired, g.last, g.driver, k7_limits()), g.expected)
+        EXPECT_EQ(apply_hyundai_steer_torque_limits(g.desired, g.last, g.driver), g.expected)
             << "원하는 " << g.desired << " 지난 " << g.last << " 운전자 " << g.driver;
 }
 
@@ -100,7 +88,7 @@ TEST(K7Can, TorqueLimiterPassesThePandaChecks) {
             driver_ticks = hold(rng);
         }
         desired = std::clamp(desired + desired_step(rng), -600, 600);
-        const int torque = apply_hyundai_steer_torque_limits(desired, last, driver, k7_limits());
+        const int torque = apply_hyundai_steer_torque_limits(desired, last, driver);
         ASSERT_FALSE(firmware_violation(torque, last, driver, driver))
             << "틱 " << tick << ": 원하는 " << desired << " 지난 " << last << " 운전자 " << driver << " -> " << torque;
         last = torque;

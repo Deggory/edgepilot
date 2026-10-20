@@ -157,7 +157,7 @@ scripts/run_host_tests.sh
 ```
 
 Builds `build-host/` with the runtime off and runs every test through `ctest`:
-357 googletest cases, `check_web_console.py`, `check_manager.py`,
+356 googletest cases, `check_web_console.py`, `check_manager.py`,
 `check_recording_reader.py` and `check_docs.py`. It needs neither the board nor
 `deps/`; googletest is downloaded on the first configure. See
 [Host tests](../tests/README.md).

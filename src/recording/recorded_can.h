@@ -30,14 +30,13 @@ inline std::vector<uint8_t> encode_recorded_can(const CanBatch &batch) {
 }
 
 // 페이로드의 프레임을 순서대로 fn(const RecordedCanFrame &)에 넘기고 넘긴 수를 돌려준다.
-// 머리보다 짧으면 아무것도 넘기지 않는다. 머리의 dropped가 필요하면 dropped에 받는다.
+// 머리보다 짧으면 아무것도 넘기지 않는다.
 template <typename Fn>
-uint32_t for_each_recorded_can_frame(const void *payload, size_t size, Fn &&fn, uint32_t *dropped = nullptr) {
+uint32_t for_each_recorded_can_frame(const void *payload, size_t size, Fn &&fn) {
     RecordedCanBatchHeader header;
     if (size < sizeof(header)) return 0;
     const uint8_t *bytes = static_cast<const uint8_t *>(payload);
     std::memcpy(&header, bytes, sizeof(header));
-    if (dropped) *dropped = header.dropped;
     const uint32_t count =
         std::min<uint32_t>(header.count, static_cast<uint32_t>((size - sizeof(header)) / sizeof(RecordedCanFrame)));
     for (uint32_t index = 0; index < count; ++index) {

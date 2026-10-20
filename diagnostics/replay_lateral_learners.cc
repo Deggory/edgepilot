@@ -19,6 +19,7 @@
 #include "cli_args.h"
 #include "common/ipc_messages.h"
 #include "common/utils_file.h"
+#include "common/utils_time.h"
 #include "controls/control_params.h"
 #include "controls/lateral_torque.h"
 #include "controls/steering_pressed.h"
@@ -92,8 +93,6 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    const ControlTiming timing;
-    const double timeout_s = timing.vehicle_state_timeout_ms / 1000.0;
     const std::string cache = torque_cache_path.empty() ? std::string() : read_text_file(torque_cache_path);
     const std::string vehicle_json = vehicle_json_path.empty() ? std::string() : read_text_file(vehicle_json_path);
     const bool use_locationd = source == "steering" ? sp.use_locationd_learner_inputs : source == "locationd";
@@ -171,10 +170,13 @@ int main(int argc, char **argv) {
             learners.set_localizer(use, sample);
         }
         // controlsd처럼 컨트롤러가 거른 vEgo를 준다(상류 carState.vEgo)
-        const double v_ego = speed_filter.update(vehicle_speed_kph(vehicle, now_s, timeout_s) / 3.6);
+        const double v_ego = speed_filter.update(vehicle_speed_kph(vehicle, now_s, kVehicleStateTimeoutS) / 3.6);
         // 녹화에는 latActive가 없다: 큰 조향각에서 요청을 끈 동안과 MDPS 일시 고장을 빼고 active로 어림한다
         const bool lat_active = cs.active != 0 && (cs.hud_flags & kHudFlagSteerPaused) == 0 && cs.steering_fault == 0;
-        learners.update(vehicle, now_s, timeout_s, v_ego, lat_active, cs.apply_torque, pressed);
+        // 신선도도 컨트롤러와 같은 판정이다(LateralControlResult::vehicle_fresh·esp12_fresh)
+        learners.update(vehicle, now_s, vehicle_state_fresh(vehicle, now_s, kVehicleStateTimeoutS),
+                        signal_time_fresh(vehicle.esp12_time_s, now_s, kVehicleStateTimeoutS), v_ego, lat_active,
+                        cs.apply_torque, pressed);
 
         const VehicleParamsInput &in = learners.last_vehicle_input();
         const LiveLateralParams live = learners.live();

@@ -37,7 +37,7 @@ public:
         int stride = 0;
     };
     OverlayBuffer begin_overlay();
-    void end_overlay(const uint16_t *dirty = nullptr, int tile_shift = 0);
+    void end_overlay(const uint32_t *dirty = nullptr, int tile_shift = 0);
     // true면 가운데 4:3 크롭 대신 소스 전체를 비율 그대로 줄여 위아래를 검게 채운다
     // (camcal 미리보기).
     void set_letterbox(bool letterbox) { letterbox_ = letterbox; }

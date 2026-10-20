@@ -334,7 +334,7 @@ TEST(TorqueController, AngleAtCurvatureInvertsCurvatureAtAngle) {
         live.roll_rad = 0.02f;
         for (float speed : {5.0f, 15.0f, 30.0f}) {
             for (float curvature : {-0.02f, -0.002f, 0.0f, 0.002f, 0.02f}) {
-                const float angle = controller.angle_at_curvature(speed, curvature, params, live);
+                const float angle = controller.angle_map(speed, params, live)(curvature);
                 EXPECT_NEAR(controller.curvature_at_angle(speed, angle, params, live), curvature, 1e-6f)
                     << "use_vehicle " << use_vehicle << " v " << speed << " c " << curvature;
             }

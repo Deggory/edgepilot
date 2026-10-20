@@ -2,8 +2,8 @@
 """tools/model/recording_reader.py의 바이너리 배치가 C++ 헤더의 고정값과 같은지 본다:
 ControlState·LearnerState·ModelState의 offsetof 고정값과 크기, LocalizationState·ImuSample·
 CalibrationState 크기, 이벤트 레코드 머리·프레임 인덱스 레코드 크기, 기록 타입 번호, 읽는 녹화 버전 범위. 이벤트
-파일을 고르고 끊긴 꼬리에서 끝내는 규칙이 C++ 리더와 같은지 본다. 도구가 쓰는
-MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지, 그 워프 행렬이
+파일을 고르고 끊긴 꼬리에서 끝내는 규칙이 C++ 리더와 같은지, iter_states가 상태와 CAN·IMU 묶음을 읽는지 본다.
+도구가 쓰는 MaixCAM2 카메라 내부 파라미터(tools/model/model_warp.py)가 src/common/app_config.h와 같은지, 그 워프 행렬이
 런타임(gtest_model_input_transform의 기준값)과 같은지도 본다.
 ctest가 저장소 루트에서 돌린다. 두 도구가 numpy를 쓰므로 numpy가 없으면 77로 끝나고 ctest는 건너뛴 것으로 센다."""
 
@@ -111,8 +111,6 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(dtype_fields(rr.CALIBRATION_SOURCE_STATE), struct_fields("CalibrationSourceState", IPC))
         self.assertEqual(dtype_fields(rr.LEAD_FLOW_STATE), struct_fields("LeadFlowState", IPC))
         self.assertEqual(dtype_fields(rr.LEAD_TRACK_STATE), struct_fields("LeadTrackState", IPC))
-        for name in rr.MODEL_STATE_HEAD.names:
-            self.assertEqual(offset_in(rr.MODEL_STATE_HEAD, name), layout[name], name)
         bits = re.findall(r"constexpr uint32_t kLeadTrack(\w+) = 1u << (\d+);", IPC)
         flags = {name: 1 << int(bit) for name, bit in bits}
         self.assertEqual(flags, {"FlowUsed": rr.LEAD_TRACK_FLOW_USED, "FlowRejected": rr.LEAD_TRACK_FLOW_REJECTED,
@@ -160,43 +158,66 @@ class EventFiles(unittest.TestCase):
                 records = list(rr.iter_event_records(self.event_file(Path(tmp) / f"{name}.bin", tail=tail)))
                 self.assertEqual([(r.timestamp_ns, r.type) for r in records], [(123, rr.RECORD_CONTROL_STATE)], name)
 
-    def test_model_state_records(self):
-        """ModelState 공용 읽기: 이름으로 읽고, 차선은 X_IDXS 격자의 (x, y, z)로 펴며, 장착은 그 프레임의 값이다.
-        크기가 다른 페이로드(옛 녹화)는 받지 않는다."""
-        model = np.zeros((), rr.MODEL_STATE)
-        model["frame_id"] = 42
-        model["lanes"][1, :, 0] = -1.75
-        model["lane_probabilities"] = [.1, .2, .3, .4]
-        model["camera_offset_m"], model["camera_height_m"] = 0.05, 1.3
-        model["lead_track"]["valid"], model["lead_track"]["relative_speed_mps"] = 1, -2.25
-        record = rr.EventRecord(Path("x"), 0, rr.RECORD_MODEL_STATE, memoryview(model.tobytes()))
-        self.assertEqual(int(record.model_state()["frame_id"]), 42)
-        self.assertAlmostEqual(float(record.model_state()["lead_track"]["relative_speed_mps"]), -2.25, places=5)
-        points, probs = record.model_lanes()
-        self.assertEqual(points.shape, (4, rr.TRAJECTORY_SIZE, 3))
-        np.testing.assert_allclose(points[1, :, 0], rr.X_IDXS.astype(np.float32))
-        self.assertAlmostEqual(float(points[1, 5, 1]), -1.75, places=6)
-        self.assertAlmostEqual(float(probs[2]), 0.3, places=6)
-        offset, height = record.camera_mount()
-        self.assertAlmostEqual(offset, 0.05, places=6)
-        self.assertAlmostEqual(height, 1.3, places=6)
-        old = rr.EventRecord(Path("x"), 0, rr.RECORD_MODEL_STATE, memoryview(bytes(3736)))
-        with self.assertRaises(ValueError):
-            old.model_state()
-
     def test_route_without_segments(self):
         """segments/가 없는 route는 영상 세그먼트가 없을 뿐이다(일괄 실행이 멈추지 않는다)."""
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(rr.route_segments(Path(tmp)), [])
 
-    def test_imu_samples(self):
+
+class States(unittest.TestCase):
+    """iter_states: 상태 레코드는 레코드마다, CAN·IMU 묶음은 프레임·샘플마다 한 줄이고 그 레코드의 머리 시각을 받는다.
+    줄은 청크 버퍼를 붙잡지 않는 사본이다. 크기가 다른 상태 페이로드(배치가 바뀌었다)는 받지 않는다."""
+
+    @staticmethod
+    def write_route(root: Path, records: list[tuple[int, int, bytes]]) -> Path:
+        header = struct.pack("<8sIIQQ", b"EDGELOG1", rr.RECORDING_VERSION, struct.calcsize("<8sIIQQ"), 0, 0)
+        (root / "events").mkdir()
+        (root / "events" / "000.bin").write_bytes(header + b"".join(
+            rr.EVENT_RECORD_HEADER.pack(ts, rtype, 0, len(payload)) + payload for ts, rtype, payload in records))
+        (root / "events" / "001.bin").write_bytes(header)  # 머리만 있는 청크
+        return root
+
+    def test_reads_states_and_batches(self):
+        model = np.zeros(2, rr.MODEL_STATE)
+        model["frame_id"] = [42, 43]
+        model["lanes"][0, 1, :, 0] = -1.75
+        model["lead_track"]["relative_speed_mps"][1] = -2.25
+        control = np.zeros(1, rr.CONTROL_STATE)
+        control["ego_speed_kph"] = 61.5
+        frames = np.zeros(2, rr.RECORDED_CAN_FRAME)
+        frames["address"] = [0x251, 0x484]
+        frames["data"][1, :8] = range(1, 9)
         sample = np.zeros(1, rr.IMU_SAMPLE)
         sample["timestamp_ns"] = 7
-        record = rr.EventRecord(Path("x"), 0, rr.RECORD_IMU,
-                                memoryview(rr.IMU_BATCH_HEAD.pack(0, 1, 0) + sample.tobytes()))
-        self.assertEqual(record.imu_samples()["timestamp_ns"].tolist(), [7])
-        record.payload = memoryview(rr.IMU_BATCH_HEAD.pack(0, 2, 0) + sample.tobytes())
-        self.assertEqual(len(record.imu_samples()), 0, "count만큼 들어 있지 않다")
+        records = [(10, rr.RECORD_MODEL_STATE, model[0].tobytes()),
+                   (11, rr.RECORD_CONTROL_STATE, control.tobytes() + bytes(rr.CONTROL_STATE_SIZE - control.nbytes)),
+                   (12, rr.RECORD_CAN_RX, rr.RECORDED_CAN_BATCH_HEAD.pack(2, 0) + frames.tobytes()),
+                   (13, rr.RECORD_IMU, rr.IMU_BATCH_HEAD.pack(0, 1, 0) + sample.tobytes()),
+                   (14, rr.RECORD_MODEL_STATE, model[1].tobytes())]
+        types = (rr.RECORD_MODEL_STATE, rr.RECORD_CONTROL_STATE, rr.RECORD_CAN_RX, rr.RECORD_IMU)
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks = list(rr.iter_states(self.write_route(Path(tmp), records), *types))
+        self.assertEqual(len(chunks), 2)
+        ts, models = chunks[0][rr.RECORD_MODEL_STATE]
+        self.assertEqual((ts.tolist(), models["frame_id"].tolist()), ([10, 14], [42, 43]))
+        self.assertAlmostEqual(float(models["lanes"][0, 1, 5, 0]), -1.75)
+        self.assertAlmostEqual(float(models["lead_track"]["relative_speed_mps"][1]), -2.25)
+        self.assertEqual(models.base.nbytes, models.nbytes, "줄은 청크 버퍼가 아닌 자기 사본을 가리킨다")
+        ts, controls = chunks[0][rr.RECORD_CONTROL_STATE]
+        self.assertEqual((ts.tolist(), controls["ego_speed_kph"].tolist()), ([11], [61.5]))
+        ts, can = chunks[0][rr.RECORD_CAN_RX]
+        self.assertEqual((ts.tolist(), can["address"].tolist()), ([12, 12], [0x251, 0x484]))
+        self.assertEqual(can["data"][1, :8].tolist(), list(range(1, 9)))
+        ts, imu = chunks[0][rr.RECORD_IMU]
+        self.assertEqual((ts.tolist(), imu["timestamp_ns"].tolist()), ([13], [7]))
+        for rtype in types:
+            self.assertEqual(len(chunks[1][rtype][1]), 0, rtype)
+
+    def test_rejects_a_changed_state_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            route = self.write_route(Path(tmp), [(1, rr.RECORD_MODEL_STATE, bytes(3736))])
+            with self.assertRaises(ValueError):
+                list(rr.iter_states(route, rr.RECORD_MODEL_STATE))
 
 
 class CanRecords(unittest.TestCase):

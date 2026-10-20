@@ -1,6 +1,8 @@
 // paramsd·torqued 이식 검사: 필터 수학, 합성 주행 수렴, 게이트, 출력 제한, 저장/복원.
+#include "car/hyundai_can.h"
 #include "car/vehicle_can.h"
 #include "common/ipc_messages.h"
+#include "common/utils_time.h"
 #include "learners/lateral_learners.h"
 #include "learners/localizer_inputs.h"
 
@@ -745,6 +747,14 @@ VehicleCanState driving_vehicle(double t) {
     return v;
 }
 
+// controlsd처럼 컨트롤러가 같은 틱에 낸 신선도(kVehicleStateTimeoutS)와 휠 속도로 학습기를 돌린다(조향 중, 핸들 조작
+// 없음).
+void update_learners(LateralLearners *l, const VehicleCanState &vehicle, double now, int apply_torque) {
+    l->update(vehicle, now, vehicle_state_fresh(vehicle, now, kVehicleStateTimeoutS),
+              signal_time_fresh(vehicle.esp12_time_s, now, kVehicleStateTimeoutS),
+              vehicle_speed_kph(vehicle, now, kVehicleStateTimeoutS) / 3.6, true, apply_torque, false);
+}
+
 // controlsd·재생 도구 공용 판단: 스위치·0.5초·필터 유효면 쓴다. inputsOK는 보지 않는다(상류 paramsd).
 TEST(LateralLearners, LocalizerSampleFrom) {
     LocalizationState loc;
@@ -808,7 +818,7 @@ struct LocalizerDrive {
         } else {
             l.set_localizer(use, LocalizerSample{});
         }
-        l.update(vehicle, now, 0.5, vehicle_speed_kph(vehicle, now, 0.5) / 3.6, true, 0, false);
+        update_learners(&l, vehicle, now, 0);
     }
 };
 
@@ -936,7 +946,7 @@ TEST(LateralLearners, TorqueLagFollowsLateralDelay) {
         vehicle = driving_vehicle(1.0 + 0.01 * i);
         vehicle.yaw_rate_valid = true;
         vehicle.lat_accel_valid = true;
-        l.update(vehicle, 1.0 + 0.01 * i, 0.5, vehicle_speed_kph(vehicle, 1.0 + 0.01 * i, 0.5) / 3.6, true, 100, false);
+        update_learners(&l, vehicle, 1.0 + 0.01 * i, 100);
         ASSERT_TRUE(std::isfinite(l.torque_params().lat_accel_factor));
     }
 }
@@ -957,7 +967,7 @@ TEST(LateralLearners, LearnersGlue) {
         ASSERT_EQ(l.torque_restore_status(), TorqueRestore::None);
         ASSERT_FALSE(l.live().use_vehicle);
         ASSERT_FALSE(l.live().use_torque);
-        l.update(vehicle, 1.0, 0.5, vehicle_speed_kph(vehicle, 1.0, 0.5) / 3.6, true, 100, false);
+        update_learners(&l, vehicle, 1.0, 100);
         // paramsd 입력의 부호·배율은 재생 도구와 같다
         ASSERT_TRUE(l.last_vehicle_input().inputs_fresh);
         ASSERT_NEAR(l.last_vehicle_input().lat_accel_mps2, 0.4, 1e-6);
@@ -965,7 +975,7 @@ TEST(LateralLearners, LearnersGlue) {
         // 좌회전(보낸 토크 +, ESP12 요레이트 +)은 torqued에서 둘 다 음수다(우측 양수 관례)
         {
             // torqued는 컨트롤러 좌표계라 오프셋이 torque_lat_accel_offset과 같은 방향이다
-            ASSERT_LT(std::fabs(l.last_torque_input().steer_torque + 100.0 / sp.steer_max), 1e-12);
+            ASSERT_LT(std::fabs(l.last_torque_input().steer_torque + 100.0 / kHyundaiSteerMax), 1e-12);
             ASSERT_EQ(l.last_torque_input().yaw_rate_rad_s, -l.last_vehicle_input().yaw_rate_rad_s);
             ASSERT_GT(l.last_vehicle_input().yaw_rate_rad_s, 0.0);
         }
@@ -986,7 +996,7 @@ TEST(LateralLearners, LearnersGlue) {
         VehicleCanState stale = vehicle;
         for (long i = 1; i <= 40; ++i) {
             const double now = 1.0 + 0.01 * i + 5.0;
-            l.update(stale, now, 0.5, vehicle_speed_kph(stale, now, 0.5) / 3.6, true, 100, false);
+            update_learners(&l, stale, now, 100);
         }
         // 낡은 torqued 메시지는 적용 값을 바꾸지 않는다
         ASSERT_FALSE(l.torque_params().inputs_ok);

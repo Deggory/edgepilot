@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -40,7 +39,6 @@ constexpr int kSilentSteerWarningFrames = 150;
 struct LateralControllerConfig {
     bool force_engaged = false;
     SteeringParams steering_params{};
-    ControlTiming timing{};
 };
 
 struct LateralControlResult {
@@ -54,6 +52,8 @@ struct LateralControlResult {
     bool path_usable = false;
     bool seeds_ready = false;
     bool vehicle_fresh = false;
+    // ESP12(요레이트·횡가속)가 kVehicleStateTimeoutS 안에 왔다. 학습기가 같은 판정을 쓴다.
+    bool esp12_fresh = false;
     float cluster_speed_kph = 0.0f;
     // 상류 vEgo: 휠 속도 평균을 칼만 필터로 거른 속도. 휠 속도가 낡으면 NaN이다.
     float control_speed_kph = 0.0f;
@@ -103,6 +103,7 @@ public:
 
     // 제어 상태를 유지한 채 런타임 파라미터를 즉시 교체한다.
     void update_params(const SteeringParams &steering_params);
+    const LateralControllerConfig &config() const { return config_; }
 
     // 학습기의 최신 출력. use_*는 값이 있다는 뜻이고 실제 사용은 스위치가 정한다.
     // 차량 값을 쓰는 중 vehicle_valid가 거짓이면 차단한다(상류 paramsdTemporaryError). 보정이 끝나지 않았으면
@@ -119,9 +120,6 @@ public:
     bool live_delay_in_use() const;
     // 목표 곡률을 읽는 경로 지연: lagd 사용 중이면 추정값(0.15~0.65 s), 아니면 steer_actuator_delay
     float plan_delay_s() const;
-    // plan 나이를 잴 시계(monotonic_now_ns와 같은 시간축). 기본은 monotonic_now_ns이고, 검사와 재생
-    // 도구가 기록 시각으로 바꾼다.
-    void set_clock(std::function<uint64_t()> clock) { clock_ = std::move(clock); }
     // 학습한 토크 모델(docs/lateral-nn.md). 있으면 매 틱 목표 궤적 이력을 쌓고, nn_feedforward가 켜져 있으면 조향 중
     // 피드포워드를 이 모델이 낸다. nullptr이면 선형 피드포워드만 쓴다.
     void set_lateral_nn(std::shared_ptr<const LateralNnModel> model);
@@ -133,29 +131,35 @@ public:
     bool lateral_nn_evaluated() const { return nn_evaluated_; }
     std::vector<float> lateral_nn_inputs() const { return nn_inputs_.last_inputs(); }
 
-    // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
+    // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다. now_ns는 plan 나이를 재는 시각
+    // (monotonic_now_ns 시간축, controlsd는 공유 상태를 다 읽은 직후)이고, 0이면 나이를 0으로 본다(캡처 시각이 없는 검사).
     LateralControlResult update(const LateralPath &path, const LateralTarget &target,
                                 const VehicleCanState &vehicle_state, double now_s, int frame, bool panda_ready = true,
-                                bool panda_controls_allowed = true);
+                                bool panda_controls_allowed = true, uint64_t now_ns = 0);
 
 private:
     // CLU 버튼 edge로 결합·해제 상태를 갱신한다.
     void update_button_state(int button, double now_s);
     // update의 단계들(순서대로 부른다). 설명은 정의에 있다.
     LateralPath debounce_path(const LateralPath &path, double now_s);
-    float plan_age_s(const LateralTarget &target) const;
+    // 조향각 유지 한계: 목표 곡률을 [lo, hi]로 묶는다. 묶지 않으면 active가 거짓이고 lo·hi는 곡률 상한이다.
+    struct CurvatureBounds {
+        bool active = false;
+        float lo = -kMaxCurvature;
+        float hi = kMaxCurvature;
+    };
     void disengage(double now_s);
     void resolve_engagement(BlockKind kind, bool soft_condition, bool logical_engaged, bool engage_requested,
                             double now_s, LateralControlResult *result);
     // 클립 전 목표 곡률. plan_curvature에는 묶기 전의 plan 곡률(상류 modelV2.action.desiredCurvature,
     // 포화 경고가 쓴다)을 적는다.
     float requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
-                              float plan_age_s, bool steering, bool steering_pressed, bool yaw_rate_valid,
-                              const LiveLateralParams &live, float *plan_curvature);
-    // 운전자가 핸들을 잡지 않고 조향 중이면 목표 곡률을 avoid_lkas_fault_hold_angle_deg(80도)가 내는 [lo, hi] 안으로
-    // 묶는다. 묶지 않을 때는 false.
-    bool hold_angle_bounds(float speed_mps, bool steering, bool steering_pressed, const LiveLateralParams &live,
-                           float *lo, float *hi);
+                              float plan_age_s, bool steering, bool yaw_rate_valid, const LiveLateralParams &live,
+                              const CurvatureBounds &hold, float *plan_curvature);
+    // 운전자가 핸들을 잡지 않고 조향 중이면 목표 곡률을 avoid_lkas_fault_hold_angle_deg(80도)가 내는 곡률 안으로
+    // 묶는다(update가 틱마다 한 번 구해 목표 곡률과 학습한 토크 모델 입력에 같이 쓴다).
+    CurvatureBounds hold_angle_bounds(float speed_mps, bool steering, bool steering_pressed,
+                                      const LiveLateralParams &live);
     // 조향 중인 틱의 토크. torque_in은 update가 채운 토크 제어기 입력(조향 여부·핸들 조작·안전 한계는 여기서 정한다).
     void steer(const VehicleCanState &vehicle_state, const TorqueController::Inputs &torque_in, double now_s,
                bool steering_pressed, bool curvature_limited, float plan_curvature, float nn_feedforward,
@@ -164,16 +168,17 @@ private:
     // 학습 속도 범위이며 학습에서 뺀 순간(차선 변경·회전·깜빡이)이 아니면 1)로 옮긴다. 무게가 있고 조향 중일 때만
     // 값을, 아니면 NaN을 낸다.
     float lateral_nn_feedforward(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
-                                 float plan_age_s, bool steering, bool steering_pressed, const LiveLateralParams &live);
+                                 float plan_age_s, bool steering, const LiveLateralParams &live,
+                                 const CurvatureBounds &hold);
     bool update_saturation(const LateralControlResult &result, float plan_curvature, float speed_mps, double now_s,
                            bool steering_pressed, bool curvature_limited);
     void copy_torque_state(LateralControlResult *result) const;
 
-    // active를 막는 현재 gate reason을 계산한다.
+    // active를 막는 현재 gate reason을 계산한다. 앞선 사유가 없으면 soft_reason이다.
     BlockReason active_block_reason(const LateralPath &path, const LateralTarget &target,
                                     const VehicleCanState &vehicle_state, bool seeds_ready, bool vehicle_fresh,
                                     bool panda_ready, bool panda_controls_allowed, float speed_kph, float plan_age_s,
-                                    bool steer_fault_alert) const;
+                                    BlockReason soft_reason) const;
     // SoftDisable 사유(상류 SOFT_DISABLE 이벤트). active_block_reason의 맨 끝이고, 해제 예고 타이머는 이것만 따로
     // 본다(앞선 다른 사유가 끼어도 센다).
     BlockReason soft_disable_reason(bool steer_fault_alert) const;
@@ -209,7 +214,6 @@ private:
     LiveLateralParams live_params() const;
 
     LateralControllerConfig config_{};
-    std::function<uint64_t()> clock_;
     TorqueController torque_controller_;
     std::shared_ptr<const LateralNnModel> lateral_nn_;
     LateralNnInputs nn_inputs_;

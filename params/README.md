@@ -165,8 +165,9 @@ The other rules of the button decision are code constants too
 `steer_driver_factor` (1) were taken out of the runtime keys, because the
 panda's hyundai safety enforces the same numbers (`safety_hyundai.h`). Raising
 them makes the panda reject frames, and lowering them only makes the steering
-weaker than stock. To change them, change the panda firmware with them and edit
-`src/controls/control_params.h`. The steering-angle gate
+weaker than stock. They are code constants, as in upstream opendbc's
+`CarControllerParams` (`kHyundaiSteer*` in `src/car/hyundai_can.h`); to change
+them, change the panda firmware with them. The steering-angle gate
 (`max_steering_angle_deg`) was a dead path that never ran while fault avoidance
 is on, so the parameter and the code were removed together. Fault avoidance
 itself (`avoid_lkas_fault_enabled`) must stay on: the measurements of
@@ -238,7 +239,7 @@ ringing after a disturbance:
 | `tire_stiffness_factor` | 0.83 | factor | 0.2 to 2.0 | Car-specific correction applied to the reference tyre lateral stiffness. It is the paramsd learned value (2026-09-27); RK's K7 default factor is 1.0. |
 | `steer_actuator_delay` | 0.42 | s | 0.01 to 1.0 | Steering actuator delay. **It is used in two places.** `lag_adjusted_desired_curvature` reads the MPC path this far ahead to lead the curve entry, and the torque controller's request buffer compares the target from this long **ago** with the current measurement. So raising it adds lead but makes the feedback staler. When the curvature tightens quickly and the car is already past the stale target, the error's sign flips and the torque drops out in the middle of the curve — at 0.46, 36% of 69 tightening curves had the requested torque collapse below 30% within 0.4 s, against 14% at 0.34 (paired comparison, McNemar p=0.0015). The upstream Hyundai default is 0.1 (0.2 for some). |
 | `angle_offset_deg` | -1.57 | ° | -10 to 10 | Straight-ahead offset of the steering-angle sensor. It is subtracted from the sensor angle before the actual curvature is estimated. Set to the paramsd learned mean (drives of 2026-09-21 to 23, −1.5 to −1.6°). The earlier −0.7° was 0.9° off and got the curvature wrong by about 4e-4, making left curves look under-turned and right curves over-turned. |
-| `torque_lat_accel_offset` | -0.06 | m/s² | -1.0 to 1.0 | Subtracts from the feed-forward the constant lateral-acceleration bias that a mount roll error and the like cause (openpilot latAccelOffset). Enter the offset torqued learned (with a recording, the one `diagnostics/replay_lateral_learners` finds) as it is; `tools/control/fit_lateral_params.py fit` only approximates torqued. Positive = the direction to raise when the car pulls right (+y = right convention, the opposite wording to the openpilot docs). |
+| `torque_lat_accel_offset` | -0.06 | m/s² | -1.0 to 1.0 | Subtracts from the feed-forward the constant lateral-acceleration bias that a mount roll error and the like cause (openpilot latAccelOffset). Enter the offset torqued learned (with a recording, the one `diagnostics/replay_lateral_learners` finds) as it is. Positive = the direction to raise when the car pulls right (+y = right convention, the opposite wording to the openpilot docs). |
 | `live_bank_compensation` | true | bool | | Corrects the feed-forward in real time for the road bank estimated from the ESP12 measurements (2 s filter). The bank absorbs the bias the sensors see (crown, zero), so `torque_lat_accel_offset` is only a trim for the torque-path or mechanical bias the sensors do not see. This replaced the static roll key, which was removed. |
 | `use_live_vehicle_params` | true | bool | | Like openpilot paramsd, uses the steering ratio, tyre stiffness, steering-angle zero (total) and road roll learned while driving. On, the actual curvature uses the learned values instead of `steer_ratio` and `angle_offset_deg`, and the roll goes into the actual curvature, the feed-forward (−roll·g) and the curvature's lateral-acceleration limit, replacing `live_bank_compensation`. When the learned values become invalid (zero or roll beyond its limit and so on, after calibration has completed) it disengages with `paramsd_invalid`. Off, it only computes and records. The learning state is kept in `live_parameters.json` (checked every minute, written when it changed) and carries on at the next start. In the web console, choose Auto-learn or Manual on the Vehicle tab. |
 | `use_live_torque_params` | true | bool | | Like openpilot torqued, learns the torque-to-lateral-acceleration factor (latAccelFactor), the offset and the friction, and uses them in the torque controller. The factor stays within ±30% of `torque_lat_accel_factor` (default 2.75), the friction within ±50% of `torque_friction`. On, `torque_lat_accel_offset` is replaced by the learned offset. Until the buckets are full (`cal_perc` < 100) the starting values are used: the saved ones, or else `torque_lat_accel_factor` and `torque_friction` with an offset of 0. The points and the filters are kept in `live_torque_parameters.bin` (every 12 s when new points arrived). In the web console, choose Auto-learn or Manual on the Vehicle tab. |
@@ -344,7 +345,8 @@ earlier, lower this constant.
 ### State and CAN
 
 These are code constants, as upstream (openpilot, opendbc, the community forks)
-has them, and are not read from the file (`ControlTiming` in
+has them, and are not read from the file (`kModelTimeoutS`,
+`kVehicleStateTimeoutS` and `kInactiveReleaseS` in
 `src/controls/control_params.h`; the MDPS speed is
 `SteeringParams::mdps_speed_spoof_kph`):
 

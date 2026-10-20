@@ -164,7 +164,7 @@ export function paramCard(group, key) {
   return card;
 }
 
-// ------------------------------------------------------------ 컨트롤: {element, show(value), setDisabled(bool)}
+// ------------------------------------------------------------ 컨트롤: {element, show(value)}
 function switchControl(meta, save) {
   const text = el("span");
   const button = el("button.switch-control",
@@ -176,9 +176,6 @@ function switchControl(meta, save) {
     show(value) {
       button.setAttribute("aria-checked", String(value));
       text.textContent = value ? t("common.on") : t("common.off");
-    },
-    setDisabled(disabled) {
-      button.disabled = disabled;
     },
   };
 }
@@ -224,9 +221,6 @@ function stepperControl(meta, save) {
       shown = value;
       input.value = String(value);
     },
-    setDisabled(disabled) {
-      for (const control of [minus, input, plus]) control.disabled = disabled;
-    },
   };
 }
 
@@ -248,9 +242,6 @@ function sliderControl(meta, save) {
       shown = value;
       input.value = String(value);
       output.textContent = withUnit(value, meta.unit);
-    },
-    setDisabled(disabled) {
-      input.disabled = disabled;
     },
   };
 }

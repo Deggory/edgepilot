@@ -41,7 +41,7 @@ IMAGE_ERRORS = ("missing", "too_small", "too_large", "unaligned", "unsigned", "n
 def panda_image_info(path: str) -> Dict[str, Any]:
     """설치된 앱 이미지(firmware/panda의 panda.bin.signed)를 panda_firmware.cc와 같은 규칙으로 본다. error는
     IMAGE_ERRORS의 코드이고 max_bytes는 앱 영역의 크기다."""
-    info: Dict[str, Any] = {"path": path, "present": False, "valid": False, "version": "", "size": 0, "error": "",
+    info: Dict[str, Any] = {"present": False, "valid": False, "version": "", "size": 0, "error": "",
                             "max_bytes": PANDA_APP_MAX_BYTES}
     try:
         data = Path(path).read_bytes()
@@ -113,7 +113,6 @@ class PandaUpdate:
         return {
             **fresh,
             "mode": link.get("mode", "none"),
-            "serial": link.get("serial", ""),
             "hw_type": link.get("hw_type", 0),
             "hw_name": link.get("hw_name", ""),
             "hw_supported": link.get("hw_type", 0) in PANDA_FLASHABLE_HW,

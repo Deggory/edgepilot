@@ -622,7 +622,6 @@ constexpr uint8_t kSpeedPacked[] = {
 };
 constexpr char kSpeedFirst = 32;
 constexpr int kSpeedAscent = 76;
-constexpr int kSpeedDescent = 20;
 
 // Value: 30 px, 획 1, ' '..'S', 3335바이트
 constexpr HudGlyph kValueGlyphs[] = {
@@ -822,7 +821,6 @@ constexpr uint8_t kValuePacked[] = {
 };
 constexpr char kValueFirst = 32;
 constexpr int kValueAscent = 31;
-constexpr int kValueDescent = 8;
 
 // Title: 22 px, 획 1, ' '..'~', 10745바이트
 constexpr HudGlyph kTitleGlyphs[] = {
@@ -1374,7 +1372,6 @@ constexpr uint8_t kTitlePacked[] = {
 };
 constexpr char kTitleFirst = 32;
 constexpr int kTitleAscent = 23;
-constexpr int kTitleDescent = 7;
 
 // Body: 18 px, 획 0, ' '..'°', 5694바이트
 constexpr HudGlyph kBodyGlyphs[] = {
@@ -1766,7 +1763,6 @@ constexpr uint8_t kBodyPacked[] = {
 };
 constexpr char kBodyFirst = 32;
 constexpr int kBodyAscent = 18;
-constexpr int kBodyDescent = 5;
 
 // Caption: 14 px, 획 0, ' '..'°', 3548바이트
 constexpr HudGlyph kCaptionGlyphs[] = {
@@ -2068,4 +2064,3 @@ constexpr uint8_t kCaptionPacked[] = {
 };
 constexpr char kCaptionFirst = 32;
 constexpr int kCaptionAscent = 14;
-constexpr int kCaptionDescent = 4;
