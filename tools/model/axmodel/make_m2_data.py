@@ -10,8 +10,7 @@
 
   make_m2_data.py calib <spec.json> <out_dir>
       Pulsar2 캘리브레이션 세트(<out_dir>/<tensor>.tar 안의 NNNN.npy, batch 축이 있는 float32).
-      spec: {"core": core_fp32.onnx, "routes_dir": <route>/events가 있는 디렉터리,
-             "video_dir": <route>/<seg>/road.h264 + frames.bin이 있는 디렉터리,
+      spec: {"core": core_fp32.onnx, "routes_dir": 녹화 route들이 있는 디렉터리(<route>/events, <route>/segments),
              "groups": [[route, [seg, ...]], ...]   이어진 세그먼트, 스트림 하나로 디코드한다,
              "exclude": {route: [t, ...]}             t-12..t+5 s를 뺀다(평가 순간),
              "dense": {route: [[a, b], ...]},         여기서는 촘촘히 뽑는다(빛 변화),
@@ -58,6 +57,12 @@ def recorded(route_dir: Path):
                 rpy.append(np.array([cal["roll"], cal["pitch"], cal["yaw"]], np.float32))
                 mount.append(rec.camera_mount())
     return np.array(cs_t), np.array(cs_des), np.array(m_t), np.array(rpy), np.array(mount)
+
+
+def route_segments(spec: dict, route: str, segs: list[str]) -> tuple[Path, list[Path]]:
+    """route 디렉터리와 그 안의 세그먼트 디렉터리들(<route>/segments/<seg>)."""
+    route_dir = Path(spec["routes_dir"]).expanduser() / route
+    return route_dir, [route_dir / "segments" / s for s in segs]
 
 
 def run_stream(sess, route_dir: Path, seg_dirs: list[Path]):
@@ -126,9 +131,8 @@ def cmd_calib(spec: dict, out_dir: Path):
     rng = np.random.default_rng(0)
     stride, dense_stride, count = spec.get("stride", 80), spec.get("dense_stride", 5), 0
     for route, segs in spec["groups"]:
-        seg_dirs = [Path(spec["video_dir"]).expanduser() / route / s for s in segs]
         n, kept, start = 0, 0, None
-        for t, feed, _ in run_stream(sess, Path(spec["routes_dir"]).expanduser() / route, seg_dirs):
+        for t, feed, _ in run_stream(sess, *route_segments(spec, route, segs)):
             start = t if start is None else start
             n += 1
             dense = any(a <= t <= b for a, b in spec.get("dense", {}).get(route, []))
@@ -155,10 +159,9 @@ def cmd_calib(spec: dict, out_dir: Path):
 
 def cmd_eval(spec: dict, route: str, segs: str, t_from: float, t_to: float, out_dir: Path):
     sess = session(spec["core"])
-    seg_dirs = [Path(spec["video_dir"]).expanduser() / route / s for s in segs.split(",")]
     keep = {k: [] for k in TENSORS}
     ts, refs = [], []
-    for t, feed, out in run_stream(sess, Path(spec["routes_dir"]).expanduser() / route, seg_dirs):
+    for t, feed, out in run_stream(sess, *route_segments(spec, route, segs.split(","))):
         if t > t_to:
             break
         if t < t_from:

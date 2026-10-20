@@ -135,8 +135,7 @@ The spec names the inputs and the sampling:
 | Key | What it is |
 | --- | --- |
 | `core` | the fp32 core, `core_fp32.onnx` |
-| `routes_dir` | where the routes' `events/` are read from |
-| `video_dir` | where the segments' `road.h264` and `frames.bin` are read from (copies of board recordings) |
+| `routes_dir` | where the recorded routes are, each with its `events/` and `segments/` |
 | `groups` | runs of consecutive segments, each decoded as one stream |
 | `exclude` | per route, moments whose t−12 to t+5 s are left out (the evaluation moments) |
 | `dense` | per route, time ranges sampled densely (changes of light) |

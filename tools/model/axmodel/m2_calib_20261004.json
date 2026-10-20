@@ -1,7 +1,6 @@
 {
  "core": "~/Documents/ax630/model/opmain/core_fp32.onnx",
  "routes_dir": "~/Documents/ax630/experiments",
- "video_dir": "~/Documents/ax630/eval/m2_video",
  "stride": 80,
  "dense_stride": 5,
  "groups": [
