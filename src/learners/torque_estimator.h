@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -60,13 +59,15 @@ public:
     // lag_s는 상류 lateralDelay 자리. cache가 비어 있지 않으면 상류처럼 먼저 복원한다.
     // Corrupt면 호출자가 캐시를 지운다(상류 params.remove). 키 불일치는 두기만 한다.
     // localizer_source: 점의 요레이트·롤 출처(캐시에 남기고 복원 때 대조한다).
-    TorqueEstimator(const TorqueTuning &offline, double lag_s, uint64_t seed, const std::string &cache = std::string(),
+    TorqueEstimator(const TorqueTuning &offline, double lag_s, const std::string &cache = std::string(),
                     bool localizer_source = false);
 
-    // 제어 틱마다 부른다. 4 Hz 출력 틱이면 true이고 params()가 갱신된다.
+    // 제어 틱마다 부른다. 4 Hz 출력 틱이면 true이고 params()가 갱신된다. 입력이 낡은 동안(차가 꺼짐)은 쉰다:
+    // 상류 torqued는 시동이 켜졌을 때만 돈다.
     bool update(const TorqueEstimatorInput &in);
+    // 생성 직후에는 복원한 점의 추정(필터는 그대로, inputs_ok 거짓)이고, 쉬는 동안은 지난 값에 inputs_ok만 거짓이다.
     const TorqueParams &params() const { return last_; }
-    // 20 Hz 240번(12초)마다, 첫 틱 포함. 상류처럼 get_msg를 한 번 더 돌린 결과라
+    // 입력이 신선한 20 Hz 틱 240번(12초)마다, 첫 틱 포함. 상류처럼 get_msg를 한 번 더 돌린 결과라
     // 그 틱에는 필터가 두 번 갱신된다.
     bool persist_due() const { return persist_due_; }
     const std::string &cache() const { return cache_; }
@@ -78,8 +79,6 @@ public:
     void set_lag(double lag_s) { lag_s_ = lag_s; }
     double lag() const { return lag_s_; }
 
-    // 적합에 점을 전부 쓴다(상류는 2000점 무작위 추출). 참조 구현 대조용.
-    void set_fit_all_points(bool all) { fit_all_points_ = all; }
     int bucket_size(int i) const { return buckets_[i].count; }
     int total_points() const;
     // 상류 get_points()[:, [0, 2]]: 버킷 순서, 버킷 안은 오래된 것부터.
@@ -116,7 +115,7 @@ private:
     bool is_calculable() const;
     bool is_valid() const;
     int valid_percent() const;
-    void estimate_params(double *slope, double *offset, double *friction);
+    void estimate_params(double *slope, double *offset, double *friction) const;
     void update_params(double factor, double offset, double friction);
     void handle_device_motion(const TorqueEstimatorInput &in);
     double interp_raw(double t, double RawSample::*field) const;
@@ -127,8 +126,6 @@ private:
     TorqueTuning offline_;
     bool localizer_source_ = false;
     double lag_s_ = 0.0;
-    uint64_t rng_ = 0;
-    bool fit_all_points_ = false;
     double min_factor_ = 0.0, max_factor_ = 0.0, min_friction_ = 0.0, max_friction_ = 0.0;
     double resets_ = 0.0;
     double decay_ = 0.0;
@@ -136,7 +133,6 @@ private:
     int raw_head_ = 0;  // 가장 오래된 표본
     int raw_count_ = 0;
     std::array<Bucket, kBuckets> buckets_{};
-    std::vector<const std::array<double, 2> *> fit_points_;  // 적합할 점(버킷의 점을 가리킨다)
     Filter factor_f_, offset_f_, friction_f_;
     long frame_ = -1;
     bool has_motion_t_ = false;

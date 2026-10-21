@@ -53,7 +53,7 @@ class LateralLearners {
 public:
     // vehicle_json·torque_cache는 저장 파일 내용이다(없으면 빈 문자열).
     LateralLearners(const SteeringParams &params, const std::string &vehicle_json, const std::string &torque_cache,
-                    uint64_t seed, const VehicleParamsOptions &options = {});
+                    const VehicleParamsOptions &options = {});
 
     // speed_mps는 controlsd가 거른 vEgo(상류 paramsd·torqued도 carState.vEgo를 쓴다). 휠 속도가 낡으면
     // NaN이고 그 틱의 입력은 신선하지 않다. vehicle_fresh·esp12_fresh는 컨트롤러의 같은 틱 판정이다

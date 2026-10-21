@@ -179,7 +179,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    ControlsTick tick(params, force_engaged, vehicle_json, torque_cache, 1);
+    ControlsTick tick(params, force_engaged, vehicle_json, torque_cache);
     if (!torque_cache.empty() && tick.learners().torque_restore_status() != TorqueRestore::Restored)
         std::fprintf(stderr, "warning: torqued cache not restored (corrupt, other tuning or other source)\n");
     if (lane_filter > 0.0) tick.planner().set_lane_filter_weight(lane_filter);

@@ -142,8 +142,6 @@ recorded driver torque, debounced as the controller does it.
   learning.
 - `--upstream-schedule`: observes the steering angle and speed only at 20 Hz,
   as upstream does (the default is every tick).
-- `--fit-all`: uses every point for the torqued fit (the default is 2000 random
-  points, as upstream).
 - `--torque-cache c.bin`: restores it when it exists and overwrites it at each
   save tick, to chain several drives like the runtime cache.
 - `--outputs`/`--torque-outputs` write the published paramsd and torqued

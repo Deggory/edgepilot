@@ -20,7 +20,6 @@ namespace {
 
 // torqued.py
 constexpr int kMinPointsTotal = 4000;
-constexpr int kFitPointsTotal = 2000;
 constexpr double kMinVel = 15.0;
 constexpr double kFrictionFactor = 1.5;
 constexpr double kFactorSanity = 0.3;
@@ -36,13 +35,6 @@ constexpr double kSteerBucketBounds[TorqueEstimator::kBuckets][2] = {
 constexpr int kMinBucketPoints[TorqueEstimator::kBuckets] = {100, 300, 500, 500, 500, 500, 300, 100};
 // 캐시 머리. 매직이 다르면 깨진 캐시, 버전이 다르면 키가 다른 캐시로 보고 처음부터 배운다(restore)
 constexpr char kTorqueCacheMagic[8] = {'E', 'D', 'G', 'E', 'T', 'Q', 'C', '1'};
-
-uint64_t splitmix64(uint64_t *state) {
-    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
 
 // 대칭 3×3의 최소 고유값 고유벡터(순환 야코비). [x,1,y]의 최소 특이벡터와 같다.
 std::array<double, 3> smallest_eigenvector(std::array<std::array<double, 3>, 3> a) {
@@ -95,10 +87,9 @@ bool take(const std::string &in, size_t *pos, T *v) {
 
 }  // namespace
 
-TorqueEstimator::TorqueEstimator(const TorqueTuning &offline, double lag_s, uint64_t seed, const std::string &cache,
+TorqueEstimator::TorqueEstimator(const TorqueTuning &offline, double lag_s, const std::string &cache,
                                  bool localizer_source)
-    : offline_(offline), localizer_source_(localizer_source), lag_s_(lag_s), rng_(seed) {
-    fit_points_.reserve(kBuckets * kPointsPerBucket);
+    : offline_(offline), localizer_source_(localizer_source), lag_s_(lag_s) {
     reset();
     decay_ = kMinFilterDecay;
     min_factor_ = (1.0 - kFactorSanity) * offline_.lat_accel_factor;
@@ -111,6 +102,8 @@ TorqueEstimator::TorqueEstimator(const TorqueTuning &offline, double lag_s, uint
     factor_f_ = {factor, alpha};
     offset_f_ = {offset, alpha};
     friction_f_ = {friction, alpha};
+    // 첫 신선한 틱 전에도(책상, 시동 전) 복원한 점의 추정을 보인다. 필터는 신선한 틱에서만 움직인다
+    last_ = get_msg(false);
 }
 
 void TorqueEstimator::reset() {
@@ -171,42 +164,31 @@ int TorqueEstimator::valid_percent() const {
     return static_cast<int>((total + individual) / 2.0);
 }
 
-void TorqueEstimator::estimate_params(double *slope, double *offset, double *friction) {
-    // 예약해 둔 버퍼를 재사용한다. 점은 복사하지 않고 가리킨다(최대 12,000개를 4 Hz로 섞는다)
-    fit_points_.resize(static_cast<size_t>(total_points()));
-    size_t k = 0;
-    for (const Bucket &b : buckets_) b.for_each([&](const std::array<double, 2> &p) { fit_points_[k++] = &p; });
-    const int total = static_cast<int>(fit_points_.size());
-    int n = total;
-    if (!fit_all_points_ && total > kFitPointsTotal) {  // rng.choice(replace=False): 부분 셔플
-        n = kFitPointsTotal;
-        for (int i = 0; i < n; ++i) {
-            const int j = i + static_cast<int>(splitmix64(&rng_) % static_cast<uint64_t>(total - i));
-            std::swap(fit_points_[i], fit_points_[j]);
-        }
-    }
-    // 총최소제곱: [x, 1, y]의 최소 특이벡터 n에서 y = −(n0·x + n1)/n2
-    std::array<std::array<double, 3>, 3> ata{};
-    for (int i = 0; i < n; ++i) {
-        const double r[3] = {(*fit_points_[i])[0], 1.0, (*fit_points_[i])[1]};
-        for (int a = 0; a < 3; ++a)
-            for (int b = 0; b < 3; ++b) ata[a][b] += r[a] * r[b];
-    }
-    const std::array<double, 3> v = smallest_eigenvector(ata);
+void TorqueEstimator::estimate_params(double *slope, double *offset, double *friction) const {
+    // 상류는 무작위 2000점(rng.choice)만 쓰지만 여기서는 모든 점을 합 6개로 한 번에 푼다. 보드에서 무작위로 점을
+    // 읽는 쪽이 모든 점을 차례로 읽는 쪽보다 6배 느렸고(0.95 대 0.15 ms, 캐시 미스), 2000점 추정은 적합마다
+    // 배율이 0.75 % 흔들렸다(평균은 모든 점의 추정과 같다, 2026-10-21).
+    double n = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0, syy = 0.0;
+    for (const Bucket &b : buckets_)
+        b.for_each([&](const std::array<double, 2> &p) {
+            n += 1.0;
+            sx += p[0];
+            sy += p[1];
+            sxx += p[0] * p[0];
+            sxy += p[0] * p[1];
+            syy += p[1] * p[1];
+        });
+    // 총최소제곱: [x, 1, y]의 최소 특이벡터 v에서 y = −(v0·x + v1)/v2
+    const std::array<double, 3> v = smallest_eigenvector({{{sxx, sx, sxy}, {sx, n, sy}, {sxy, sy, syy}}});
     *slope = -v[0] / v[2];
     *offset = -v[1] / v[2];
-    // slope2rot은 |기울기|로 돌린다(상류 그대로). 흩어짐 = 직선에 수직인 성분
+    // slope2rot은 |기울기|로 돌린다(상류 그대로). 흩어짐 d = −sin·x + cos·y(직선에 수직인 성분)의 표준편차를 합에서
+    // 구한다. 평균 제곱 − 평균²은 반올림으로 0 밑이 될 수 있어 0에서 자른다
     const double sin = std::sqrt(*slope * *slope / (*slope * *slope + 1.0));
     const double cos = std::sqrt(1.0 / (*slope * *slope + 1.0));
-    double mean = 0.0;
-    for (int i = 0; i < n; ++i) mean += -(*fit_points_[i])[0] * sin + (*fit_points_[i])[1] * cos;
-    mean /= n;
-    double var = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const double d = -(*fit_points_[i])[0] * sin + (*fit_points_[i])[1] * cos - mean;
-        var += d * d;
-    }
-    *friction = std::sqrt(var / n) * kFrictionFactor;
+    const double mean = (-sin * sx + cos * sy) / n;
+    const double mean_square = (sin * sin * sxx - 2.0 * sin * cos * sxy + cos * cos * syy) / n;
+    *friction = std::sqrt(std::max(mean_square - mean * mean, 0.0)) * kFrictionFactor;
 }
 
 void TorqueEstimator::update_params(double factor, double offset, double friction) {
@@ -266,36 +248,41 @@ bool TorqueEstimator::update(const TorqueEstimatorInput &in) {
     if (!motion_due) return false;
     has_motion_t_ = true;
     last_motion_t_ = in.t_s;
-    ++frame_;
-    if (in.inputs_fresh) {
-        // 상류는 conflate된 carControl·carOutput·carState 최신값을 deviceMotion보다 먼저 넣는다
-        // lag가 줄면 시각이 뒤로 갈 수 있다. 보간(np.interp)은 증가하는 시각을 가정한다
-        double sample_t = in.t_s + lag_s_;
-        if (raw_count_ > 0) {
-            const double last_t = raw_[(raw_head_ + raw_count_ - 1) % kHistLen].t;
-            sample_t = std::max(sample_t, last_t + 1e-3);
-        }
-        RawSample &s = raw_[(raw_head_ + raw_count_) % kHistLen];
-        s = {sample_t, in.lat_active ? 1.0 : 0.0, in.steer_torque, in.speed_mps, in.steer_override ? 1.0 : 0.0};
-        if (raw_count_ < kHistLen)
-            ++raw_count_;
-        else
-            raw_head_ = (raw_head_ + 1) % kHistLen;
-        handle_device_motion(in);
+    // 상류 torqued는 시동이 켜졌을 때만 돈다(only_onroad). 입력이 낡은 동안(차가 꺼짐, 책상)은 표본·적합·필터·
+    // 저장을 쉬고 지난 값을 둔다. 쉬지 않으면 점이 그대로인데 4 Hz로 다시 적합해 필터가 운전 없이 움직였다
+    // (2026-10-21 책상에서 offset −0.174 → −0.161).
+    if (!in.inputs_fresh) {
+        last_.inputs_ok = false;
+        return false;
     }
+    ++frame_;
+    // 상류는 conflate된 carControl·carOutput·carState 최신값을 deviceMotion보다 먼저 넣는다
+    // lag가 줄면 시각이 뒤로 갈 수 있다. 보간(np.interp)은 증가하는 시각을 가정한다
+    double sample_t = in.t_s + lag_s_;
+    if (raw_count_ > 0) {
+        const double last_t = raw_[(raw_head_ + raw_count_ - 1) % kHistLen].t;
+        sample_t = std::max(sample_t, last_t + 1e-3);
+    }
+    RawSample &s = raw_[(raw_head_ + raw_count_) % kHistLen];
+    s = {sample_t, in.lat_active ? 1.0 : 0.0, in.steer_torque, in.speed_mps, in.steer_override ? 1.0 : 0.0};
+    if (raw_count_ < kHistLen)
+        ++raw_count_;
+    else
+        raw_head_ = (raw_head_ + 1) % kHistLen;
+    handle_device_motion(in);
     const bool publish = frame_ % 5 == 0;
-    if (publish) last_ = get_msg(in.inputs_fresh);
-    // 상류처럼 12초마다 저장하되, 그동안 새 점이 없으면 건너뛴다(처음 한 번은 저장한다). 점이 그대로면 필터값만
-    // 같은 점의 적합으로 수렴하는 중이라 다시 시작해도 같은 데서 이어진다. 상류 torqued는 주행 중에만 돌지만
-    // 여기서는 주차 중에도 돌아, 88 KB를 12초마다 SD에 다시 쓰고 있었다.
+    if (publish) last_ = get_msg(true);
+    // 상류처럼 12초마다 저장하되, 그동안 새 점이 없으면(시동을 켜고 서 있음) 건너뛴다(처음 한 번은 저장한다).
+    // 점이 그대로면 필터값만 같은 점의 적합으로 수렴하는 중이라 다시 시작해도 같은 데서 이어진다.
     if (frame_ % 240 == 0 && (new_points_ > 0 || cache_.empty())) {
-        cache_ = serialize(get_msg(in.inputs_fresh));
+        cache_ = serialize(get_msg(true));
         persist_due_ = true;
         new_points_ = 0;
     }
     return publish;
 }
 
+// inputs_ok가 거짓이면(생성 때) 추정만 싣고 필터는 옮기지 않는다.
 TorqueParams TorqueEstimator::get_msg(bool inputs_ok) {
     TorqueParams m;
     m.inputs_ok = inputs_ok;
@@ -313,8 +300,9 @@ TorqueParams TorqueEstimator::get_msg(bool inputs_ok) {
                 reset();
             } else {
                 m.valid = true;
-                update_params(clip(factor, min_factor_, max_factor_), offset,
-                              clip(friction, min_friction_, max_friction_));
+                if (inputs_ok)
+                    update_params(clip(factor, min_factor_, max_factor_), offset,
+                                  clip(friction, min_friction_, max_friction_));
             }
         }
     }

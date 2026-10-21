@@ -59,9 +59,9 @@ struct LearnerOutputs {
 class ControlsTick {
 public:
     // force_engaged는 EDGEPILOT_FORCE_ENGAGED(버튼 없이 결합), vehicle_learn_json·torque_learn_cache는
-    // 학습 저장 파일 내용(없으면 빈 문자열), seed는 학습기 난수 시드.
+    // 학습 저장 파일 내용(없으면 빈 문자열).
     ControlsTick(const ControlParams &params, bool force_engaged, const std::string &vehicle_learn_json,
-                 const std::string &torque_learn_cache, uint64_t seed);
+                 const std::string &torque_learn_cache);
 
     // 다시 읽은 파라미터를 컨트롤러·플래너·크루즈에 넘긴다.
     void apply_params(const ControlParams &params);

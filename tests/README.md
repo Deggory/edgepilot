@@ -14,7 +14,7 @@ flowchart TB
     gtest(["googletest v1.18.0<br>first configure, SHA256 pinned"]) --> configure
     configure --> build["build the host_tests target<br>38 gtest_* executables"]
     build --> ctest["ctest<br>from the repository root"]
-    ctest --> cpp["build-host/bin/gtest_*<br>356 cases"]
+    ctest --> cpp["build-host/bin/gtest_*<br>357 cases"]
     ctest --> py["Python checks<br>check_web_console.py, check_manager.py<br>check_recording_reader.py<br>check_docs.py"]
     py -.-> mjs["check_bev_lane_filter.mjs<br>jsc or node, if present"]
     classDef proc fill:#f6f8fa,stroke:#8b949e,color:#1f2328
@@ -30,7 +30,7 @@ flowchart TB
 ```
 
 The script configures `build-host`, builds the `host_tests` target and runs
-everything with `ctest`: 356 C++ cases and 4 Python checks. googletest v1.18.0
+everything with `ctest`: 357 C++ cases and 4 Python checks. googletest v1.18.0
 is downloaded on the first configure (its SHA256 is pinned).
 
 `./scripts/run_host_tests.sh --linux` does the same in `build-linux-test/`
@@ -86,7 +86,7 @@ the root as well.
 | `gtest_json_value` | 4 | The small JSON reader (`common/json_value.h`) the model file uses: every value kind, string escapes, refused documents with their byte position, and the nesting limit. |
 | `gtest_lane_line_filter` | 6 | The lane-line time filter: weight 1 gives the measurement as it is; no bias while following a curve (linear interpolation would pull it towards the inside); no lag when the car turns on a straight road, thanks to the ego-motion compensation; the noise falls with the weight; it starts again from the measurement when a line changes a lot or frames drop; the golden output shared with the BEV's JS copy (`check_bev_lane_filter.mjs`) |
 | `gtest_lateral_controller` | 37 | The lateral controller: the engage gate and holds; the torque limit and the MDPS fault avoidance (torque cap and steer request off above 85°, waiting at a stop and engaging above 85°, the 80° cap with hands off and its limit below the fault angle, the request kept off until under 15° after a turn the driver took over, or back below 80° after the wheel follows the planned curve for 1 s, and the upstream 85° cut with the avoidance off); MDPS temporary faults (steering pause and disengage warning, quiet if the driver took over); inactive at a stop; the curvature limit (minimum stable delay, saturation warning); the Panda gate and handover; the LKAS HUD; the use of learned values (bit-identical when off, `paramsd_invalid` as a soft disable, the road-bank estimate held through curves and faded when stale, roll-aware curvature limit, lagd delay); every `params/steering.json` key equal to the code default; a lost model or stale car state warning then disengaging, a Panda revoke while engaged, the soft-disable timer counting through other reasons; the CAN fixture replay |
-| `gtest_lateral_learners` | 20 | paramsd EKF (Jacobian, Joseph positive definiteness, convergence, gate, output limits, save, gyro bias), torqued (TLS against the closed form, buckets, gate, filter and decay, the 4 Hz/12 s schedule, a cache saved only after new points), the controlsd wiring; locationd samples observed at their own time and kept once, the ESP12 fallback per tick |
+| `gtest_lateral_learners` | 21 | paramsd EKF (Jacobian, Joseph positive definiteness, convergence, gate, output limits, save, gyro bias), torqued (TLS against the closed form, buckets, gate, filter and decay, the 4 Hz/12 s schedule, a cache saved only after new points, a pause while the inputs are stale), the controlsd wiring; locationd samples observed at their own time and kept once, the ESP12 fallback per tick |
 | `gtest_lateral_mpc` | 1 | Lateral MPC optimality: the dynamics and the cost are implemented separately, and the gradient is checked at the converged point of 8 scenarios ([Verification](../docs/verification.md#lateral-mpc-solver)) |
 | `gtest_lateral_nn` | 26 | The learned torque model (`docs/lateral-nn.md`): the repository model and every model in `models/lateral_nn/` load (the loader re-evaluates their test vectors), refused files (format, names, non-finite values, output clip, windows beyond the history, a wrong test vector, a non-boolean `friction_free`, a `curve_gain` outside 0..1), a collapsed net giving NaN instead of a clip bound, the run-time inputs from a plan and the history, the same inputs as the training code on every library model's `input_tests`, the inverse vehicle model, the torque controller's blend, the curve friction kept only for a friction-free model and the curve gain's ramps (lateral acceleration 0.2→0.6 m/s², 30→50 km/h), and in the lateral controller the switch, the model, the 1 s ramp kept through a model swap, the 80° hold limit on the model's inputs, the 3 m/s floor, a NaN plan, the linear feed-forward during lane changes, turns and blinkers (left out of training), and the roll inputs equal to the bank estimate over g. |
 | `gtest_lateral_nn_select` | 5 | Choosing the model file (`params/lateral_nn.json`): the name rule, the selection file and the environment override, the selector switching, keeping and reporting a model, and no model when nothing is selected. |

@@ -3,7 +3,6 @@
 // 기록된 운전자 토크를 컨트롤러와 같게 디바운스). 게시한 학습값을 CSV로 남길 수 있다.
 // 사용: replay_lateral_learners [옵션] <events.bin...>
 // --upstream-schedule: 조향각·속도를 상류처럼 20 Hz로만 관측(기본은 런타임과 같은 매 틱).
-// --fit-all: torqued 적합에 점 전부(기본은 상류처럼 2000점 무작위).
 // --outputs out.csv / --torque-outputs tout.csv: paramsd·torqued가 게시한 값.
 // --torque-cache c.bin: 있으면 복원하고 저장 틱마다 덮어쓴다(상류 LiveTorqueParameters).
 // --steering route/params/steering.json: 녹화 당시 파라미터(사전값·지연·토크 튜닝·입력 출처).
@@ -40,7 +39,7 @@
 int main(int argc, char **argv) {
     std::string outputs_path, torque_outputs_path, torque_cache_path;
     std::string steering_path, vehicle_json_path;
-    bool fit_all = false, usage_error = false;
+    bool usage_error = false;
     std::string source = "steering";
     size_t metric_from_file = 0;  // 곡률 대조를 이 번호 파일부터만 센다(앞 파일은 학습 수렴용)
     VehicleParamsOptions options;
@@ -57,8 +56,6 @@ int main(int argc, char **argv) {
             options.car_state_every_tick = false;
         else if (arg == "--outputs" && i + 1 < argc)
             outputs_path = argv[++i];
-        else if (arg == "--fit-all")
-            fit_all = true;
         else if (arg == "--torque-outputs" && i + 1 < argc)
             torque_outputs_path = argv[++i];
         else if (arg == "--torque-cache" && i + 1 < argc)
@@ -77,7 +74,7 @@ int main(int argc, char **argv) {
     if (source != "steering" && source != "locationd" && source != "esp") usage_error = true;
     if (events.empty() || usage_error) {
         std::fprintf(stderr,
-                     "usage: %s [--upstream-schedule] [--fit-all] [--outputs out.csv] [--torque-outputs tout.csv] "
+                     "usage: %s [--upstream-schedule] [--outputs out.csv] [--torque-outputs tout.csv] "
                      "[--torque-cache c.bin] "
                      "[--steering steering.json] [--vehicle-json live_parameters.json] "
                      "[--source steering|locationd|esp] [--metric-from N] <events.bin...>\n",
@@ -97,7 +94,7 @@ int main(int argc, char **argv) {
     const std::string vehicle_json = vehicle_json_path.empty() ? std::string() : read_text_file(vehicle_json_path);
     const bool use_locationd = source == "steering" ? sp.use_locationd_learner_inputs : source == "locationd";
     std::printf("yaw rate and roll source: %s\n", use_locationd ? "locationd (ESP12 when invalid or stale)" : "ESP12");
-    LateralLearners learners(sp, vehicle_json, cache, 1, options);
+    LateralLearners learners(sp, vehicle_json, cache, options);
     if (!vehicle_json.empty())
         std::printf("paramsd saved values: %s\n", learners.vehicle_restored() ? "restored" : "rejected");
     // 결합 직진 구간의 곡률 대조: 학습값 차량 모델(조향각) − 요레이트(바이어스 제거)
@@ -113,7 +110,6 @@ int main(int argc, char **argv) {
                     learners.torque_restore_status() == TorqueRestore::Restored      ? "restored"
                     : learners.torque_restore_status() == TorqueRestore::KeyMismatch ? "key mismatch"
                                                                                      : "corrupt");
-    learners.torque_estimator().set_fit_all_points(fit_all);
     SteeringPressedFilter steering_pressed;  // 컨트롤러와 같은 판정
     SpeedFilter speed_filter;
 

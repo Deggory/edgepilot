@@ -58,15 +58,14 @@ VehicleModelConstants LateralLearners::constants(const SteeringParams &params) {
 }
 
 LateralLearners::LateralLearners(const SteeringParams &params, const std::string &vehicle_json,
-                                 const std::string &torque_cache, uint64_t seed, const VehicleParamsOptions &options)
+                                 const std::string &torque_cache, const VehicleParamsOptions &options)
     : constants_(constants(params)),
       init_(restore_or_prior(vehicle_json, constants_)),
       vehicle_restored_(init_.restored),
       vehicle_restore_rejected_(!vehicle_json.empty() && !init_.restored),
       bias_(init_.yaw_bias_rad_s),
       vehicle_(constants_, init_.steer_ratio, init_.stiffness_factor, rad(init_.angle_offset_deg), options),
-      torque_(torque_tuning(params), params.steer_actuator_delay, seed, torque_cache,
-              params.use_locationd_learner_inputs) {}
+      torque_(torque_tuning(params), params.steer_actuator_delay, torque_cache, params.use_locationd_learner_inputs) {}
 
 void LateralLearners::set_localizer(bool use, const LocalizerSample &sample) {
     use_localizer_ = use;

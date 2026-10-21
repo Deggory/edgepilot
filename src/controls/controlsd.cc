@@ -175,8 +175,7 @@ int main() {
         const std::string torque_learn_path = param_path("live_torque_parameters.bin");
         const std::string vehicle_learn_json = read_text_file(vehicle_learn_path);
         const std::string torque_learn_cache = read_text_file(torque_learn_path);
-        ControlsTick tick(params, force_engaged, vehicle_learn_json, torque_learn_cache,
-                          static_cast<uint64_t>(monotonic_now_ns()));
+        ControlsTick tick(params, force_engaged, vehicle_learn_json, torque_learn_cache);
         const LateralLearners &learners = tick.learners();
         if (learners.vehicle_restore_rejected()) learner_store.remove(vehicle_learn_path);
         if (learners.torque_restore_status() == TorqueRestore::Corrupt) learner_store.remove(torque_learn_path);

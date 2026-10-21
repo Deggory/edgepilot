@@ -296,11 +296,11 @@ LearnerState ControlsTick::make_learner_state() const {
 }
 
 ControlsTick::ControlsTick(const ControlParams &params, bool force_engaged, const std::string &vehicle_learn_json,
-                           const std::string &torque_learn_cache, uint64_t seed)
+                           const std::string &torque_learn_cache)
     : cruise_(params.cruise),
       planner_(params.steering),
       controller_(LateralControllerConfig{force_engaged, params.steering}),
-      learners_(params.steering, vehicle_learn_json, torque_learn_cache, seed),
+      learners_(params.steering, vehicle_learn_json, torque_learn_cache),
       adaptive_cruise_controller_(params.cruise),
       saved_vehicle_json_(vehicle_learn_json),
       saved_torque_cache_(torque_learn_cache) {}

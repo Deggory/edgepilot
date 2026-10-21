@@ -108,8 +108,9 @@ PandaState panda_state(uint64_t now_ns, bool controls_allowed) {
 // controlsd main의 순서대로 틱을 돈다(Laneless: 차선 없이 plan으로 경로를 만든다).
 class Drive {
 public:
-    explicit Drive(const ControlParams &params = laneless_params())
-        : tick_(params, false, std::string(), std::string(), 1) {}
+    explicit Drive(const ControlParams &params = laneless_params(), const std::string &vehicle_learn_json = {},
+                   const std::string &torque_learn_cache = {})
+        : tick_(params, false, vehicle_learn_json, torque_learn_cache) {}
 
     static ControlParams laneless_params() {
         ControlParams params;
@@ -128,7 +129,7 @@ public:
             tick_.on_panda(panda_state(now_ns_, panda_allows));
             tick_.on_localization(LocalizationRead{}, now_s);
             state = tick_.step(now_s, now_ns_);
-            tick_.update_learners(now_s);
+            torque_writes_ += tick_.update_learners(now_s).torque_cache ? 1 : 0;
         }
         return state;
     }
@@ -142,11 +143,14 @@ public:
     }
 
     const ControlsTick &tick() const { return tick_; }
+    // update_learners가 내준 torqued 저장 수
+    int torque_writes() const { return torque_writes_; }
 
 private:
     uint64_t now_ns_ = 1'000'000'000ULL;
     unsigned ticks_ = 0;
     ControlsTick tick_;
+    int torque_writes_ = 0;
 };
 
 bool sends(const ControlsTick &tick, uint32_t address, uint8_t bus) {
@@ -156,24 +160,30 @@ bool sends(const ControlsTick &tick, uint32_t address, uint8_t bus) {
                        [&](const CanFrame &frame) { return frame.address == address && frame.bus == bus; });
 }
 
-// 학습 파일은 내용이 바뀔 때만 쓴다: CAN이 없어 배울 것이 없으면 처음 한 번 뒤로는 다시 쓰지 않는다.
+// 학습 파일은 내용이 바뀔 때만 쓴다: 배울 것이 없으면 처음 한 번 뒤로는 다시 쓰지 않는다. CAN이 없으면(차가
+// 꺼짐) torqued는 쉬어 처음 한 번도 쓰지 않는다.
 TEST(ControlsTick, LearnerFilesAreWrittenOnlyWhenTheyChange) {
     const ControlParams params;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick off(params, false, std::string(), std::string());
     int vehicle_writes = 0, torque_writes = 0;
-    for (int i = 0; i < 13000; ++i) {  // 100 Hz로 130 s: paramsd 저장 주기 2번, torqued 10번
-        const LearnerOutputs out = tick.update_learners(1.0 + i * 0.01);
+    for (int i = 0; i < 13000; ++i) {  // 100 Hz로 130 s: paramsd 저장 주기 2번
+        const LearnerOutputs out = off.update_learners(1.0 + i * 0.01);
         vehicle_writes += out.vehicle_json ? 1 : 0;
         torque_writes += out.torque_cache ? 1 : 0;
     }
     EXPECT_EQ(vehicle_writes, 1);
-    EXPECT_EQ(torque_writes, 1);
-
-    // 시작 때 읽은 내용과 같으면 첫 저장도 하지 않는다
-    ControlsTick restarted(params, false, tick.learners().vehicle_persist_json(), tick.learners().torque_cache(), 1);
-    torque_writes = 0;
-    for (int i = 0; i < 3000; ++i) torque_writes += restarted.update_learners(1.0 + i * 0.01).torque_cache ? 1 : 0;
     EXPECT_EQ(torque_writes, 0);
+
+    // 시동을 켜고 서 있으면 새 점이 없어 torqued는 처음 한 번만 쓴다(저장 주기 10번)
+    K7Inputs parked;
+    parked.speed_kph = 0.0f;
+    Drive drive(params);
+    drive.run(130.0, parked);
+    EXPECT_EQ(drive.torque_writes(), 1);
+    // 시작 때 읽은 내용과 같으면 첫 저장도 하지 않는다
+    Drive restarted(params, std::string(), drive.tick().learners().torque_cache());
+    restarted.run(30.0, parked);
+    EXPECT_EQ(restarted.torque_writes(), 0);
 }
 
 TEST(ControlsTick, EngagesOnSetAndDisengagesWhenADoorOpens) {
@@ -218,7 +228,7 @@ TEST(ControlsTick, ControlStateCarriesTheLagdInputs) {
 
 // 끝낼 때는 마지막 저장 뒤 바뀐 학습값만 내놓고, 그대로면 아무것도 내놓지 않는다
 TEST(ControlsTick, FinalLearnerOutputsOnlyWhatChanged) {
-    ControlsTick tick(Drive::laneless_params(), false, std::string(), std::string(), 1);
+    ControlsTick tick(Drive::laneless_params(), false, std::string(), std::string());
     const LearnerOutputs first = tick.final_learner_outputs();
     ASSERT_TRUE(first.vehicle_json.has_value()) << "시작 때 읽은 파일이 없으니 처음 것은 새 내용이다";
     const LearnerOutputs again = tick.final_learner_outputs();
@@ -256,7 +266,7 @@ TEST(ControlsTick, BrakePedalCancelsTheCruiseEstimate) {
 // 아니라 꺼낸 직후의 시각을 넘긴다(틱 안에 들어온 묶음을 버리던 문제)
 TEST(ControlsTick, CanBatchFreshnessUsesThePopTime) {
     ControlParams params;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string());
     const uint64_t stamp = 5'000'000'000ULL;
     const CanBatch batch = k7_batch(K7Inputs{}, stamp);
     EXPECT_FALSE(tick.on_can_batch(batch, stamp - 1'000'000ULL, 5.0)) << "꺼내기 전 시각에는 미래 묶음이다";
@@ -267,7 +277,7 @@ TEST(ControlsTick, CanBatchFreshnessUsesThePopTime) {
 TEST(ControlsTick, TornLocalizationReadKeepsTheLastLagEstimate) {
     ControlParams params;
     params.steering.use_live_delay = true;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string());
     LocalizationRead good;
     good.open = good.read = true;
     good.read_ns = 10'000'000'000ULL;
@@ -294,7 +304,7 @@ TEST(ControlsTick, TornLocalizationReadKeepsTheLastLagEstimate) {
 // 판정(observe_vision_lead)을 받는다.
 TEST(ControlsTick, VisionLeadNeedsTheFixedProbability) {
     ControlParams params;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string());
     const uint64_t now_ns = 2'000'000'000ULL;
     ModelState model = straight_model(now_ns);
     model.lead.valid = 1;
@@ -314,7 +324,7 @@ TEST(ControlsTick, VisionLeadNeedsTheFixedProbability) {
 // 알림은 모델 앞차를 그대로 받는다(늦으면 안 된다). 추적이 없으면 크루즈도 모델 앞차다.
 TEST(ControlsTick, CruiseTakesTheLeadTrackAndTheAlertTheModelLead) {
     ControlParams params;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string());
     const uint64_t now_ns = 2'000'000'000ULL;
     ModelState model = straight_model(now_ns);
     model.lead.valid = 1;
@@ -366,7 +376,7 @@ ModelState lane_model(uint64_t now_ns) {
 // 웹 콘솔에서 바꿔 다시 읽은 파라미터는 다음 모델 프레임부터 플래너에 들어간다(apply_params → 플래너).
 TEST(ControlsTick, ReloadedParamsReachThePlanner) {
     ControlParams params;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string());
     uint64_t now_ns = 1'000'000'000ULL;
     for (int frame = 0; frame < 40; ++frame, now_ns += 50'000'000ULL) {
         tick.on_model(lane_model(now_ns));
@@ -410,7 +420,7 @@ TEST(ControlsTick, ParamWatcherPicksUpAnAtomicRewriteWithinASecond) {
 // 프레임의 플랜이 나왔다).
 TEST(ControlsTick, UsesTheNewPlanInTheSameTick) {
     const ControlParams params;
-    ControlsTick tick(params, false, std::string(), std::string(), 1);
+    ControlsTick tick(params, false, std::string(), std::string());
     uint64_t now_ns = 1'000'000'000ULL;
     for (int frame = 0; frame < 20; ++frame, now_ns += 50'000'000ULL) {
         tick.on_model(lane_model(now_ns));

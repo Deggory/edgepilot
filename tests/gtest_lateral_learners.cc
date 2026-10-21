@@ -433,7 +433,7 @@ bool same_filters(const TorqueParams &a, const TorqueParams &b, double tol) {
 TEST(LateralLearners, TorqueExactLine) {
     TorqueTruth tr;
     tr.half_width = 0.0;
-    TorqueEstimator est(prior(), kTorqueLag, 1);
+    TorqueEstimator est(prior(), kTorqueLag);
     drive_torque(&est, tr, 0, 40000);
     const TorqueParams &p = est.params();
     // 한 직선 위의 점은 그 직선과 마찰 0을 준다
@@ -446,8 +446,7 @@ TEST(LateralLearners, TorqueExactLine) {
 TEST(LateralLearners, TorqueLearnsParallelogram) {
     TorqueTruth tr;
     const TorqueTuning tuning = prior();
-    TorqueEstimator est(tuning, kTorqueLag, 7);
-    est.set_fit_all_points(true);
+    TorqueEstimator est(tuning, kTorqueLag);
     TorqueParams prev{};
     long frame = -1, first_valid_frame = -1;
     bool checked_first_step = false, checked_double = false;
@@ -514,12 +513,6 @@ TEST(LateralLearners, TorqueLearnsParallelogram) {
     // 필터된 배율이 추정값 쪽으로 대부분 움직인다
     ASSERT_GT(p.lat_accel_factor, tuning.lat_accel_factor + 0.5 * (tr.factor - tuning.lat_accel_factor));
     ASSERT_LT(p.lat_accel_factor, tr.factor);
-
-    // 무작위 2000점 추출도 같은 답 근처
-    TorqueEstimator sampled(tuning, kTorqueLag, 7);
-    drive_torque(&sampled, tr, 0, 150000);
-    ASSERT_NEAR(sampled.params().lat_accel_factor_raw, p.lat_accel_factor_raw, 0.01);
-    ASSERT_NEAR(sampled.params().friction_raw, p.friction_raw, 0.005);
 }
 
 TEST(LateralLearners, TorqueClipsToPriorBand) {
@@ -527,8 +520,7 @@ TEST(LateralLearners, TorqueClipsToPriorBand) {
     tr.factor = 1.9;       // 사전 1.4의 +30%(1.82) 밖
     tr.half_width = 0.12;  // 마찰 0.18, 사전 0.1의 +50%(0.15) 밖
     const TorqueTuning tuning = prior();
-    TorqueEstimator est(tuning, kTorqueLag, 3);
-    est.set_fit_all_points(true);
+    TorqueEstimator est(tuning, kTorqueLag);
     TorqueParams prev{};
     for (long i = 0; i < 100000; ++i) {
         if (!est.update(torque_input(tr, i * 0.01))) continue;
@@ -558,7 +550,7 @@ TEST(LateralLearners, TorqueGates) {
     TorqueTruth tr;
     const auto none = [](long, TorqueEstimatorInput *) {};
     {
-        TorqueEstimator est(prior(), kTorqueLag, 1);
+        TorqueEstimator est(prior(), kTorqueLag);
         drive_torque(&est, tr, 0, 495);
         ASSERT_EQ(est.total_points(), 0) << "이력 100개 전에는 점을 넣지 않는다";
         drive_torque(&est, tr, 495, 1);
@@ -581,7 +573,7 @@ TEST(LateralLearners, TorqueGates) {
         {"stale inputs", [](long, TorqueEstimatorInput *in) { in->inputs_fresh = false; }},
     };
     for (const Gate &g : gates) {
-        TorqueEstimator est(prior(), kTorqueLag, 1);
+        TorqueEstimator est(prior(), kTorqueLag);
         ASSERT_GT(count_points_added(&est, tr, 0, 2000, none), 200) << "기준 주행은 점을 넣는다";
         drive_torque(&est, tr, 2000, 40, g.edit);  // 속도·토크는 지연만큼 지난 이력에서 읽는다
         EXPECT_EQ(count_points_added(&est, tr, 2040, 1000, g.edit), 0) << g.what;
@@ -589,7 +581,7 @@ TEST(LateralLearners, TorqueGates) {
     // 0.5초 개입·해제는 2초 창 + 지연이 지날 때까지 막는다. 낡은 입력은 이력을 지우지 않는다.
     for (int which = 0; which < 3; ++which) {
         SCOPED_TRACE(which);
-        TorqueEstimator est(prior(), kTorqueLag, 1);
+        TorqueEstimator est(prior(), kTorqueLag);
         drive_torque(&est, tr, 0, 2000);
         const auto edit = [which](long, TorqueEstimatorInput *in) {
             if (which == 0)
@@ -608,7 +600,7 @@ TEST(LateralLearners, TorqueGates) {
     }
     // 상류 성질: 활성은 보간 후 0이 아니면 참이라 한 표본짜리 해제는 걸러지지 않고, 두 표본이면 걸린다
     for (int samples = 1; samples <= 2; ++samples) {
-        TorqueEstimator est(prior(), kTorqueLag, 1);
+        TorqueEstimator est(prior(), kTorqueLag);
         drive_torque(&est, tr, 0, 2500);
         drive_torque(&est, tr, 2500, 10, [samples](long i, TorqueEstimatorInput *in) {
             if (i < 2500 + 5 * samples) in->lat_active = false;
@@ -621,25 +613,57 @@ TEST(LateralLearners, TorqueGates) {
     }
 }
 
-// 새 점이 없으면(주차 중이라 입력이 없으면) 처음 한 번 뒤로는 저장하지 않는다. 점이 그대로인 동안 필터값만
-// 수렴해 바뀌는 캐시를 12초마다 다시 쓰지 않게 한다.
+// 새 점이 없으면(시동을 켜고 서 있으면) 처음 한 번 뒤로는 저장하지 않는다. 점이 그대로인 동안 필터값만
+// 수렴해 바뀌는 캐시를 12초마다 다시 쓰지 않게 한다. 입력이 낡으면(차가 꺼짐) 처음 한 번도 쉰다.
 TEST(LateralLearners, TorqueCacheSavedOnlyAfterNewPoints) {
-    TorqueEstimator est(prior(), kTorqueLag, 5);
-    int saves = 0;
-    for (long i = 0; i < 60000; ++i) {  // 100 Hz로 600 s, 입력 없음
-        TorqueEstimatorInput in;
-        in.t_s = i * 0.01;
-        est.update(in);
-        saves += est.persist_due() ? 1 : 0;
+    for (const bool fresh : {true, false}) {
+        SCOPED_TRACE(fresh);
+        TorqueEstimator est(prior(), kTorqueLag);
+        int saves = 0;
+        for (long i = 0; i < 60000; ++i) {  // 100 Hz로 600 s, 속도 0이라 점이 없다
+            TorqueEstimatorInput in;
+            in.t_s = i * 0.01;
+            in.inputs_fresh = fresh;
+            est.update(in);
+            saves += est.persist_due() ? 1 : 0;
+        }
+        EXPECT_EQ(saves, fresh ? 1 : 0);
     }
-    EXPECT_EQ(saves, 1);
+}
+
+// 상류 torqued는 시동이 켜졌을 때만 돈다. 입력이 낡은 동안은 발행·적합·필터·저장을 쉬고 지난 값을 둔다(점이
+// 그대로인데 필터가 다시 적합한 값으로 움직이지 않는다). 돌아오면 그 자리에서 이어진다.
+TEST(LateralLearners, TorquePausesWhileInputsAreStale) {
+    TorqueTruth tr;
+    TorqueEstimator est(prior(), kTorqueLag);
+    long i = 0;
+    for (; i < 100000 || !est.params().valid; ++i) est.update(torque_input(tr, i * 0.01));
+    while (!est.update(torque_input(tr, i * 0.01))) ++i;  // 발행 틱에서 멈춘다
+    const TorqueParams before = est.params();
+    const int points = est.total_points();
+    for (long k = 1; k <= 60000; ++k) {  // 600 s, 차가 꺼짐
+        TorqueEstimatorInput in = torque_input(tr, (i + k) * 0.01);
+        in.inputs_fresh = false;
+        ASSERT_FALSE(est.update(in)) << "쉬는 동안은 발행하지 않는다";
+        ASSERT_FALSE(est.persist_due()) << "쉬는 동안은 저장하지 않는다";
+    }
+    i += 60001;
+    const TorqueParams &paused = est.params();
+    ASSERT_FALSE(paused.inputs_ok);
+    ASSERT_TRUE(paused.valid);
+    ASSERT_EQ(paused.lat_accel_factor_raw, before.lat_accel_factor_raw);
+    ASSERT_TRUE(same_filters(paused, before, 0.0)) << "필터와 decay가 그대로다";
+    ASSERT_EQ(est.total_points(), points);
+    // 다시 켜면 지난 값에서 이어 발행하고 필터가 다시 움직인다
+    while (!est.update(torque_input(tr, i * 0.01))) ++i;
+    ASSERT_TRUE(est.params().inputs_ok);
+    ASSERT_GT(est.params().decay, before.decay);
 }
 
 TEST(LateralLearners, TorqueScheduleAndCache) {
     TorqueTruth tr;
     const TorqueTuning tuning = prior();
-    TorqueEstimator est(tuning, kTorqueLag, 5);
-    est.set_fit_all_points(true);
+    TorqueEstimator est(tuning, kTorqueLag);
     long frame = -1;
     std::string calibrating_cache, valid_cache;
     std::vector<std::array<double, 2>> valid_points;
@@ -666,8 +690,7 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
     // 유효 캐시: 저장 get_msg는 발행값에서 필터를 한 번 더 돌린 값이다
     TorqueParams cached;
     expect_filter_step(at_valid_persist, at_valid_persist.decay, at_valid_persist, tuning, &cached);
-    TorqueEstimator restored(tuning, kTorqueLag, 5, valid_cache);
-    restored.set_fit_all_points(true);
+    TorqueEstimator restored(tuning, kTorqueLag, valid_cache);
     ASSERT_EQ(restored.restore_status(), TorqueRestore::Restored) << "유효한 캐시를 복원한다";
     const std::vector<std::array<double, 2>> pts = restored.points();
     ASSERT_EQ(pts.size(), valid_points.size()) << "캐시한 점이 모두 돌아온다";
@@ -676,28 +699,36 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
         ASSERT_EQ(pts[k][0], static_cast<float>(valid_points[k][0]));
         ASSERT_EQ(pts[k][1], static_cast<float>(valid_points[k][1]));
     }
-    TorqueEstimatorInput stale = torque_input(tr, 0.0);
-    stale.inputs_fresh = false;
-    ASSERT_TRUE(restored.update(stale)) << "복원한 추정기는 첫 프레임에 발행한다";
-    const TorqueParams &r = restored.params();
-    // 복원한 버킷은 유효하고 입력 범위 판정은 입력을 따른다
-    ASSERT_FALSE(r.inputs_ok);
-    ASSERT_TRUE(r.valid);
-    ASSERT_EQ(r.max_resets, 1.0);
     TorqueParams start;
     start.lat_accel_factor = static_cast<float>(cached.lat_accel_factor);
     start.lat_accel_offset = static_cast<float>(cached.lat_accel_offset);
     start.friction = static_cast<float>(cached.friction);
+    start.decay = static_cast<float>(cached.decay);
+    // 첫 신선한 틱 전에도 복원한 점의 추정을 보이고 필터는 캐시값 그대로다
+    const TorqueParams &shown = restored.params();
+    ASSERT_FALSE(shown.inputs_ok);
+    ASSERT_TRUE(shown.valid);
+    ASSERT_EQ(shown.total_bucket_points, static_cast<int>(valid_points.size()));
+    ASSERT_TRUE(same_filters(shown, start, 0.0));
+    TorqueEstimatorInput stale = torque_input(tr, 0.0);
+    stale.inputs_fresh = false;
+    ASSERT_FALSE(restored.update(stale)) << "입력이 낡으면 쉰다";
+    ASSERT_TRUE(restored.update(torque_input(tr, 0.05))) << "복원한 추정기는 첫 신선한 프레임에 발행한다";
+    const TorqueParams &r = restored.params();
+    // 복원한 버킷은 유효하다
+    ASSERT_TRUE(r.inputs_ok);
+    ASSERT_TRUE(r.valid);
+    ASSERT_EQ(r.max_resets, 1.0);
     TorqueParams want;
-    expect_filter_step(start, static_cast<float>(cached.decay), r, tuning, &want);
+    expect_filter_step(start, start.decay, r, tuning, &want);
     ASSERT_TRUE(same_filters(r, want, 1e-12)) << "복원한 필터와 decay는 캐시된 메시지에서 이어진다";
 
     // 무효 캐시: 점과 decay만, 필터는 사전값
-    TorqueEstimator partial(tuning, kTorqueLag, 5, calibrating_cache);
+    TorqueEstimator partial(tuning, kTorqueLag, calibrating_cache);
     // 보정 중인 캐시도 점은 복원한다
     ASSERT_EQ(partial.restore_status(), TorqueRestore::Restored);
     ASSERT_GT(partial.total_points(), 0);
-    partial.update(stale);
+    partial.update(torque_input(tr, 0.0));
     // 보정 중인 캐시는 필터를 사전값으로 둔다
     ASSERT_FALSE(partial.params().valid);
     ASSERT_EQ(partial.params().lat_accel_factor, tuning.lat_accel_factor);
@@ -705,11 +736,11 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
     ASSERT_EQ(partial.params().decay, 50.0);
 
     // 튜닝이 바뀌면 무시(지우지 않음), 깨졌으면 지움
-    TorqueEstimator other(prior(1.5), kTorqueLag, 5, valid_cache);
+    TorqueEstimator other(prior(1.5), kTorqueLag, valid_cache);
     // 다른 튜닝의 캐시는 무시한다
     ASSERT_EQ(other.restore_status(), TorqueRestore::KeyMismatch);
     ASSERT_EQ(other.total_points(), 0);
-    other.update(stale);
+    other.update(torque_input(tr, 0.0));
     // 무시한 캐시는 사전값을 남긴다
     ASSERT_EQ(other.params().lat_accel_factor, 1.5);
     ASSERT_EQ(other.params().decay, 50.0);
@@ -717,22 +748,22 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
     std::string bad_magic = valid_cache;
     bad_magic[0] = 'X';
     // 깨진 캐시는 지우도록 알린다
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, truncated).restore_status(), TorqueRestore::Corrupt);
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, bad_magic).restore_status(), TorqueRestore::Corrupt);
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, "").restore_status(), TorqueRestore::None);
+    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, truncated).restore_status(), TorqueRestore::Corrupt);
+    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, bad_magic).restore_status(), TorqueRestore::Corrupt);
+    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, "").restore_status(), TorqueRestore::None);
     ASSERT_EQ(valid_cache.compare(0, 8, "EDGETQC1"), 0);
 
     // 다른 요레이트·롤 출처의 캐시: 점과 절편은 버리고(롤 출처 차이만큼 어긋난다) 배율·마찰만 이어 쓴다.
-    TorqueEstimator switched(tuning, kTorqueLag, 5, valid_cache, true);
+    TorqueEstimator switched(tuning, kTorqueLag, valid_cache, true);
     ASSERT_EQ(switched.restore_status(), TorqueRestore::SourceChanged);
     ASSERT_EQ(switched.total_points(), 0);
-    switched.update(stale);
+    switched.update(torque_input(tr, 0.0));
     ASSERT_FALSE(switched.params().valid);
     ASSERT_NEAR(switched.params().lat_accel_factor, cached.lat_accel_factor, 1e-6);
     ASSERT_NEAR(switched.params().friction, cached.friction, 1e-6);
     ASSERT_EQ(switched.params().lat_accel_offset, 0.0);
     ASSERT_EQ(switched.params().decay, 50.0);
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, 5, switched.cache(), true).restore_status(), TorqueRestore::Restored)
+    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, switched.cache(), true).restore_status(), TorqueRestore::Restored)
         << "새 출처로 저장한 캐시는 그 출처로 복원한다";
 }
 
@@ -794,7 +825,7 @@ struct LocalizerDrive {
     double delay_s = 0.07;
     double roll = 0.02, roll_std = 0.003;
     bool pose_ok = true, roll_ok = true;
-    explicit LocalizerDrive(const SteeringParams &sp) : l(sp, "", "", 1), vehicle(driving_vehicle(0.0)) {}
+    explicit LocalizerDrive(const SteeringParams &sp) : l(sp, "", ""), vehicle(driving_vehicle(0.0)) {}
     double yaw_slope = 0.1;
     double yaw_right(double t) const { return yaw_slope * t; }
     void tick(double now, bool use = true, bool send = true, const std::function<void(VehicleCanState *)> &edit = {}) {
@@ -866,7 +897,7 @@ TEST(LateralLearners, LocalizerSamplesObservedAtTheirTime) {
 // (controlsd의 두 시계를 읽는 시각 차이) locationd의 원래 시각(stamp_ns)으로 가린다.
 TEST(LateralLearners, SameLocalizerSampleIsKeptOnce) {
     const SteeringParams sp;
-    LateralLearners l(sp, "", "", 1);
+    LateralLearners l(sp, "", "");
     LocalizerSample s;
     s.stamp_ns = 1'000'000'000ULL;
     s.t_s = 1.0;
@@ -934,7 +965,7 @@ TEST(LateralLearners, LocalizerRollThroughParamsd) {
 // torqued lag는 조향 지연을 따른다(상류 lateralDelay). 줄어도 이력 시각이 거꾸로 가지 않는다.
 TEST(LateralLearners, TorqueLagFollowsLateralDelay) {
     const SteeringParams sp;
-    LateralLearners l(sp, "", "", 1);
+    LateralLearners l(sp, "", "");
     EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), sp.steer_actuator_delay);
     l.set_lateral_delay(0.5);
     EXPECT_DOUBLE_EQ(l.torque_estimator().lag(), 0.5);
@@ -960,7 +991,7 @@ TEST(LateralLearners, LearnersGlue) {
     vehicle.lat_accel_valid = true;
     vehicle.lat_accel_mps2 = -0.4f;  // 반전 저장: 좌측 비력 +0.4
     {
-        LateralLearners l(sp, "", "", 1);
+        LateralLearners l(sp, "", "");
         // 새 학습기는 아직 내줄 값이 없다
         ASSERT_FALSE(l.vehicle_restored());
         ASSERT_FALSE(l.vehicle_restore_rejected());
@@ -1004,12 +1035,12 @@ TEST(LateralLearners, LearnersGlue) {
 
         // 저장 → 복원
         const std::string json = l.vehicle_persist_json();
-        LateralLearners restored(sp, json, l.torque_cache(), 2);
+        LateralLearners restored(sp, json, l.torque_cache());
         // 두 학습기가 각자 저장값을 복원한다
         ASSERT_TRUE(restored.vehicle_restored());
         ASSERT_EQ(restored.torque_restore_status(), TorqueRestore::Restored);
     }
-    LateralLearners bad(sp, "{ not json", std::string("junk"), 3);
+    LateralLearners bad(sp, "{ not json", std::string("junk"));
     // 거부된 저장값은 controlsd가 지우도록 알린다
     ASSERT_TRUE(bad.vehicle_restore_rejected());
     ASSERT_FALSE(bad.vehicle_restored());
