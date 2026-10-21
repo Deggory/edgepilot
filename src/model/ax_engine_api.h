@@ -1,5 +1,4 @@
-#ifndef AX_ENGINE_API_H
-#define AX_ENGINE_API_H
+#pragma once
 
 // AX620E(AX630C) NPU 런타임 libax_engine 선언과 NPU 세션이 쓰는 libax_sys 함수. 엔진
 // 헤더는 MSP SDK에 없어서, 같은 라이브러리를 여는 pyaxengine(_axe_capi.py)의 cffi 정의를
@@ -129,5 +128,3 @@ AX_S32 AX_ENGINE_RunSyncV2(uint64_t *handle, uint64_t *context, AX_ENGINE_IO_T *
 const AX_CHAR *AX_ENGINE_GetModelToolsVersion(uint64_t *nHandle);
 
 }  // extern "C"
-
-#endif

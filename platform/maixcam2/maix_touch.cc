@@ -30,7 +30,7 @@ std::string find_device() {
 }
 
 uint64_t event_us(const input_event &event) {
-    return static_cast<uint64_t>(event.time.tv_sec) * 1000000ULL + static_cast<uint64_t>(event.time.tv_usec);
+    return static_cast<uint64_t>(event.time.tv_sec) * 1'000'000ULL + static_cast<uint64_t>(event.time.tv_usec);
 }
 
 }  // namespace

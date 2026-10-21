@@ -1,5 +1,4 @@
-#ifndef MODEL_TEMPORAL_H
-#define MODEL_TEMPORAL_H
+#pragma once
 
 // openpilot master supercombo의 시간축 입력. 공개 ONNX는 이 큐들을 그래프 안에
 // 갖고 있지만 NPU 코어에서는 떼어냈으므로(tools/model/axmodel/extract_core.py) 런타임이
@@ -149,5 +148,3 @@ private:
     std::vector<uint8_t> frames_;
     int head_ = 0;
 };
-
-#endif

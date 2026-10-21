@@ -1,5 +1,4 @@
-#ifndef AX_ENGINE_SESSION_H
-#define AX_ENGINE_SESSION_H
+#pragma once
 
 // axmodel 하나를 AX620E NPU에서 돌리는 최소 세션. 입력 전부와 출력 전부를 각각 캐시 가능한 CMM
 // 블록 하나에 페이지 경계로 나눠 잡아 두고(따로 할당할 때와 같은 시작·여유), 호출자는 input(i)/output(i)에
@@ -70,5 +69,3 @@ private:
     std::vector<uint8_t> io_storage_;  // AX_ENGINE_IO_T와 버퍼 배열
     std::string tools_version_;
 };
-
-#endif

@@ -14,7 +14,7 @@ constexpr int kRate = 48000;
 
 TEST(AlertTones, ShortCleanAndDistinct) {
     std::vector<std::vector<int16_t>> tones;
-    for (int i = 0; i < static_cast<int>(AlertSoundId::count); ++i) {
+    for (int i = 0; i < static_cast<int>(AlertSoundId::Count); ++i) {
         const AlertSoundId id = static_cast<AlertSoundId>(i);
         const std::vector<int16_t> pcm = render_alert_tone(id, kRate);
         ASSERT_FALSE(pcm.empty()) << alert_sound_name(id);

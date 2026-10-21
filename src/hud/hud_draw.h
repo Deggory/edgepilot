@@ -1,5 +1,4 @@
-#ifndef HUD_DRAW_H
-#define HUD_DRAW_H
+#pragma once
 
 // HUD 렌더러 내부 공용: 디자인 토큰(색·간격·카드 크기), 글자 줄 배치와 색 섞기, 상태 → 색, 앞차
 // 정보, 그리고 렌더러가 나눈 영역의 그리기 함수(hud_scene.cc의 도로 장면, hud_cards.cc의
@@ -148,5 +147,3 @@ void draw_system(HudCanvas &canvas, const HudState &hud);
 void draw_debug_card(HudCanvas &canvas, int y, const HudState &hud);
 
 }  // namespace hud_draw
-
-#endif

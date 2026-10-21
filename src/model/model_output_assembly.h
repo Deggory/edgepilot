@@ -1,5 +1,4 @@
-#ifndef MODEL_OUTPUT_ASSEMBLY_H
-#define MODEL_OUTPUT_ASSEMBLY_H
+#pragma once
 
 // 출력 헤드를 나눈 axmodel(tools/model/axmodel/split_outputs.py)의 출력들을 openpilot의
 // 2576 레이아웃(model_output.h)으로 다시 모은다.
@@ -80,5 +79,3 @@ inline void place(const Part &part, const float *src, float *raw) {
 }
 
 }  // namespace model_output_assembly
-
-#endif

@@ -18,9 +18,9 @@
 // 않는다. 매니저 기본값과의 대조는 check_web_console.py가 한다.
 constexpr uint32_t kExpectedPandaSafetyModel = kPandaSafetyHyundaiCommunity;
 constexpr uint32_t kExpectedPandaSafetyParam = 0;
-constexpr uint64_t kPandaStateTimeoutNs = 1100000000ULL;
-constexpr uint64_t kPandaHealthHoldNs = 100000000ULL;
-constexpr uint64_t kPathInvalidHoldNs = 150000000ULL;
+constexpr uint64_t kPandaStateTimeoutNs = 1'100'000'000ULL;
+constexpr uint64_t kPandaHealthHoldNs = 100'000'000ULL;
+constexpr uint64_t kPathInvalidHoldNs = 150'000'000ULL;
 
 struct PandaGateOutput {
     bool state_fresh = false;

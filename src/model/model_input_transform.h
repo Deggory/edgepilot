@@ -1,5 +1,6 @@
-#ifndef MODEL_INPUT_TRANSFORM_H
-#define MODEL_INPUT_TRANSFORM_H
+#pragma once
+
+// 모델 입력 워프 행렬(모델 픽셀 → 소스 픽셀). 보정 rpy와 카메라 장착으로 medmodel·sbigmodel 3x3을 만든다.
 
 #include "common/app_config.h"
 #include "common/model_output.h"
@@ -33,5 +34,3 @@ private:
     float camera_height_m_ = kModelHeight;
     ModelFrame model_frame_ = ModelFrame::MedModel;
 };
-
-#endif

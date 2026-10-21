@@ -9,6 +9,8 @@
 #include "common/ipc_messages.h"
 #include "learners/lateral_learners.h"
 
+constexpr double kLocalizerMaxAgeS = 0.5;  // 이보다 낡은 locationd 상태는 학습기에 쓰지 않는다
+
 inline bool localizer_sample_from(const LocalizationState &loc, bool enabled, double age_s, double sample_t_s,
                                   LocalizerSample *out) {
     out->stamp_ns = loc.timestamp_ns;
@@ -19,5 +21,5 @@ inline bool localizer_sample_from(const LocalizationState &loc, bool enabled, do
     out->roll_std_rad = loc.orientation_std[0];
     out->pose_ok = (loc.flags & kLocalizationPosenetOk) != 0;
     out->roll_ok = (loc.flags & kLocalizationSensorsOk) != 0;
-    return enabled && age_s >= 0.0 && age_s < 0.5 && (loc.flags & kLocalizationFilterValid) != 0;
+    return enabled && age_s >= 0.0 && age_s < kLocalizerMaxAgeS && (loc.flags & kLocalizationFilterValid) != 0;
 }

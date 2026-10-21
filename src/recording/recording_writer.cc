@@ -26,8 +26,8 @@
 
 namespace {
 
-constexpr uint64_t kSegmentDurationNs = 60ULL * 1000000000ULL;
-constexpr uint64_t kStorageCheckIntervalNs = 5ULL * 1000000000ULL;
+constexpr uint64_t kSegmentDurationNs = 60ULL * 1'000'000'000ULL;
+constexpr uint64_t kStorageCheckIntervalNs = 5ULL * 1'000'000'000ULL;
 constexpr uint64_t kMinimumFreeBytes = 5ULL * 1024 * 1024 * 1024;
 constexpr unsigned kMinimumFreePercent = 10;
 // 공간 부족으로 멈춘 뒤 다시 시작하려면 예비분보다 이만큼 더 비어 있어야 한다. 멈춘 route의 파일이 tmpfs에서
@@ -623,7 +623,7 @@ void RecordingWriter::write_manifest(bool complete) const {
              << "  \"height\": " << height_ << ",\n"
              << "  \"fps\": " << fps_ << ",\n"
              << "  \"bitrate\": " << bitrate_ << ",\n"
-             << "  \"segment_seconds\": " << kSegmentDurationNs / 1000000000ULL << ",\n"
+             << "  \"segment_seconds\": " << kSegmentDurationNs / 1'000'000'000ULL << ",\n"
              << "  \"video_frames\": " << total_video_frames_.load() << ",\n"
              << "  \"event_records\": " << event_records_ << "\n"
              << "}\n";

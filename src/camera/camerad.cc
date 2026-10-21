@@ -1,3 +1,8 @@
+// MaixCAM2 카메라를 프레임 링에 싣는다. 링 슬롯은 CMM 블록이고(헤더에 물리 주소),
+// 카메라 프레임은 IVPS 하드웨어 복사로 슬롯에 들어가므로 CPU가 픽셀을 만지지 않는다.
+// modeld(GDC)와 overlayd(IVPS)도 슬롯을 직접 읽는다. 센서 자체가 20 fps 자동 노출로
+// 돌아 모델이 기대하는 50 ms 간격 그대로 모든 프레임을 링에 쓴다.
+
 #include "common/app_config.h"
 #include "common/build_version.h"
 #include "common/ipc_channels.h"
@@ -12,11 +17,6 @@
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
-
-// MaixCAM2 카메라를 프레임 링에 싣는다. 링 슬롯은 CMM 블록이고(헤더에 물리 주소),
-// 카메라 프레임은 IVPS 하드웨어 복사로 슬롯에 들어가므로 CPU가 픽셀을 만지지 않는다.
-// modeld(GDC)와 overlayd(IVPS)도 슬롯을 직접 읽는다. 센서 자체가 20 fps 자동 노출로
-// 돌아 모델이 기대하는 50 ms 간격 그대로 모든 프레임을 링에 쓴다.
 
 namespace {
 
@@ -90,7 +90,7 @@ int main() {
             ++window_frames;
 
             const uint64_t now = monotonic_now_ns();
-            if (now - window_start >= 1000000000ULL) {
+            if (now - window_start >= 1'000'000'000ULL) {
                 std::fprintf(stderr, "camerad: fps=%.2f frames=%llu errors=%u          \r",
                              window_frames * 1e9 / (now - window_start), static_cast<unsigned long long>(frame_id),
                              errors);
@@ -98,7 +98,7 @@ int main() {
                 window_start = now;
                 window_frames = 0;
             }
-            if (now - age_window_start >= 10000000000ULL && !ages_us.empty()) {
+            if (now - age_window_start >= 10'000'000'000ULL && !ages_us.empty()) {
                 std::sort(ages_us.begin(), ages_us.end());
                 std::sort(pop_ages_us.begin(), pop_ages_us.end());
                 auto pct = [](const std::vector<uint64_t> &v, double q) {  // 둘은 같이 쌓여 길이가 같다

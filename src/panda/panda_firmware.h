@@ -1,5 +1,4 @@
-#ifndef PANDA_FIRMWARE_H
-#define PANDA_FIRMWARE_H
+#pragma once
 
 // firmware/panda가 만든 앱 이미지(panda.bin.signed)를 검사하고, 플래싱해도 되는 차 상태인지
 // 가리고, pandad가 웹 콘솔에 알리는 상태를 JSON으로 만든다. USB를 쓰지 않아 호스트에서도
@@ -61,5 +60,3 @@ struct PandaLinkStatus {
 
 // pandad가 /dev/shm/edgepilot_panda_status.json에 쓰는 한 줄 JSON
 std::string panda_status_json(const PandaLinkStatus &link, const PandaFlashStatus &flash, uint64_t now_ns);
-
-#endif

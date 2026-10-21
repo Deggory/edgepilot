@@ -1,5 +1,6 @@
-#ifndef UTILS_MATH_H
-#define UTILS_MATH_H
+#pragma once
+
+// 수학 도우미: 원주율과 각도 변환, 클램프, openpilot interp, 3x3 행렬 곱.
 
 #include <algorithm>
 #include <cmath>
@@ -47,5 +48,3 @@ inline void matmul3(const float *a, const float *b, float *out) {
 constexpr float deg_to_rad(float deg) { return deg * 0.017453292519943295f; }
 
 constexpr float rad_to_deg(float rad) { return rad * 57.29577951308232f; }
-
-#endif

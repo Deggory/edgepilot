@@ -1,12 +1,12 @@
-#ifndef REPLAY_SOURCE_H
-#define REPLAY_SOURCE_H
+#pragma once
+
+// SCNV12R1 재생 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용.
 
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <string>
 
-// SCNV12R1 재생 파일의 NV12 프레임 소스. modeld의 헤드리스 재생용.
 class ReplayNv12Source {
 public:
     explicit ReplayNv12Source(const std::string &path);
@@ -28,5 +28,3 @@ private:
     size_t frame_bytes_ = 0;
     unsigned frames_read_ = 0;
 };
-
-#endif

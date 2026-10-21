@@ -1,5 +1,4 @@
-#ifndef LOCALIZATION_PIPELINE_H
-#define LOCALIZATION_PIPELINE_H
+#pragma once
 
 // locationd 프로세스의 본체: IMU 묶음·모델 상태·제어 상태를 받아 자세 칼만 필터와 lagd를
 // 돌리고 LocalizationState를 만든다. 하드웨어·공유 메모리와 무관해 녹화 재생(diagnostics/
@@ -62,5 +61,3 @@ private:
     unsigned lag_points_since_estimate_ = 0;
     double next_lag_t_ = 0.0;
 };
-
-#endif

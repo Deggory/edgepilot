@@ -33,8 +33,8 @@
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
-constexpr uint64_t kStatsWindowNs = 1000000000ULL;   // 진행 표시 한 줄
-constexpr uint64_t kDecoderStallNs = 1000000000ULL;  // 이만큼 출력이 없으면 디코더가 프레임을 삼킨 것으로 본다
+constexpr uint64_t kStatsWindowNs = 1'000'000'000ULL;   // 진행 표시 한 줄
+constexpr uint64_t kDecoderStallNs = 1'000'000'000ULL;  // 이만큼 출력이 없으면 디코더가 프레임을 삼킨 것으로 본다
 
 }  // namespace
 
@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
                      route_dir.c_str(), (t0 - route_start) / 1e9, route.frames.size() - first, events.chunks(),
                      route.width, route.height);
 
-        const uint64_t base = monotonic_now_ns() + 200000000ULL;  // 소비자가 붙을 여유
+        const uint64_t base = monotonic_now_ns() + 200'000'000ULL;  // 소비자가 붙을 여유
         auto due = [&](uint64_t recorded_ns) { return base + (recorded_ns - t0); };
         std::vector<uint8_t> packet;
         CanBatch rx, tx;  // 한 배치가 21.5 KB라 1 kHz 루프 밖에 둔다

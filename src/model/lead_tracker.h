@@ -1,5 +1,4 @@
-#ifndef LEAD_TRACKER_H
-#define LEAD_TRACKER_H
+#pragma once
 
 // 앞차(CIPV) 추적. 모델 앞차 거리와 광류 확대율(model/lead_flow)을 칼만 필터 하나로 섞어 거리와 상대
 // 속도를 낸다(ModelState.lead_track). 모델 거리는 프레임마다 0.6~1.6 m 흔들리고(앞뒤 2초 추세 둘레 3~7%),
@@ -46,5 +45,3 @@ private:
     uint64_t last_flow_frame_ = UINT64_MAX;  // 마지막으로 넣은 확대율의 창 끝 프레임
     LeadTrackState state_{};
 };
-
-#endif

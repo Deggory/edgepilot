@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_DISPLAY_H
-#define MAIXCAM2_DISPLAY_H
+#pragma once
 
 // MaixCAM2 LCD를 VO 하드웨어 두 레이어로 쓴다. 레이어 0은 카메라 YUV의 가운데 4:3을
 // IVPS로 잘라 화면 크기로 줄여 올리고(비율 유지, 세로 패널로의 90° 회전과 보드 disp_flip/
@@ -51,5 +50,3 @@ private:
     std::unique_ptr<Impl> impl_;
     bool letterbox_ = false;
 };
-
-#endif

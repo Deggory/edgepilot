@@ -20,7 +20,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cpp_headers import cpp_offsets, cpp_size  # noqa: E402
+from cpp_headers import cpp_constant, cpp_offsets, cpp_size  # noqa: E402
 from scripts.web_console.bev_stream import BEV_FRAME, BEV_FRAME_MAGIC, BEV_IDLE_S, bev_frames, bev_layout
 from scripts.web_console.calibration_control import (
     CALIBRATION_RESET_PATH,
@@ -1167,7 +1167,7 @@ class PandaUpdateTest(unittest.TestCase):
         self.assertIn('kDefaultFirmwarePath[] = "firmware/panda.bin.signed";', pandad)
         # 플래싱 조건(panda_flash_allowed)과 지원 보드(panda_hw_type_flashable)도 같아야 한다
         firmware = cpp(ROOT / "src" / "panda" / "panda_firmware.cc")
-        max_age_ns = int(re.search(r"kControlMaxAgeNs = (\d+)ULL;", firmware).group(1))
+        max_age_ns = int(re.search(r"kControlMaxAgeNs = ([\d']+)ULL;", firmware).group(1).replace("'", ""))
         self.assertEqual(max_age_ns, round(CONTROL_MAX_AGE_S * 1e9))
         self.assertEqual(float(re.search(r"kParkedMaxSpeedKph = ([\d.]+)f;", firmware).group(1)), PARKED_MAX_SPEED_KPH)
         flashable = re.search(r"return (hw_type == kPandaHw\w+(?: \|\| hw_type == kPandaHw\w+)*);", firmware).group(1)
@@ -1266,12 +1266,9 @@ class ProcessStatusTest(unittest.TestCase):
     def test_layout_matches_cpp(self):
         """웹 콘솔이 읽는 ManagerState(manager.py가 쓰고 overlayd도 읽는다) 배치가 ipc_messages.h와 같아야 한다. manager.py
         쪽은 check_manager.py가 본다."""
-        def constant(name):
-            return int(re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F]+|\d+);", cpp()).group(1), 0)
-
         self.assertEqual((IPC_MAGIC, IPC_VERSION, IPC_HEADER.size),
-                         (constant("kIpcMagic"), constant("kIpcVersion"), cpp_size("IpcHeader")))
-        self.assertEqual((PROCESS_STATE.size, MAX_PROCESSES), (cpp_size("ProcessState"), constant("kMaxProcesses")))
+                         (cpp_constant("kIpcMagic"), cpp_constant("kIpcVersion"), cpp_size("IpcHeader")))
+        self.assertEqual((PROCESS_STATE.size, MAX_PROCESSES), (cpp_size("ProcessState"), cpp_constant("kMaxProcesses")))
         self.assertLessEqual(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES, cpp_size("ManagerState"))
         self.assertIn(f'kManagerStateTopic[] = "{MANAGER_STATE_TOPIC}";', cpp())
 

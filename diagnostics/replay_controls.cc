@@ -265,7 +265,7 @@ int main(int argc, char **argv) {
         }
         localization.read_ns = tick_ns;
         tick.on_localization(localization, now_s);
-        ControlState state = tick.step(now_s, tick_ns);
+        ControlState state = tick.update(now_s, tick_ns);
         const LateralControlResult &result = tick.result();
         const bool send = result.should_send && !result.frames.empty();
         digest.add(&state, sizeof(state));

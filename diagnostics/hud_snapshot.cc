@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
                   engage_block_label("seatbelt_unlatched"));
 
     HudState depart = drive;
-    depart.departure_alert_type = DepartureAlertType::green_light;
+    depart.departure_alert_type = DepartureAlertType::GreenLight;
     depart.cluster_speed_kph = 0.0f;
     depart.brake_hold = true;
 
@@ -250,7 +250,7 @@ int main(int argc, char **argv) {
     HudState lane_change = drive;  // 왼쪽 깜빡이: 핸들을 밀기를 기다림
     lane_change.left_blinker = true;
     lane_change.turn_signal_step = 8;
-    lane_change.lane_change = HudLaneChange::pending;
+    lane_change.lane_change = HudLaneChange::Pending;
     lane_change.lane_change_direction = -1;
 
     HudState paused = drive;  // 85도 위에서 운전자가 넘겨받은 회전
@@ -316,12 +316,12 @@ int main(int argc, char **argv) {
     radar_lead.radar_lead_relative_speed_mps = -1.5f;
 
     HudState lead_departed = depart;
-    lead_departed.departure_alert_type = DepartureAlertType::lead_departed;
+    lead_departed.departure_alert_type = DepartureAlertType::LeadDeparted;
 
     HudState changing = drive;  // 오른쪽으로 차선 변경 중
     changing.right_blinker = true;
     changing.turn_signal_step = 6;
-    changing.lane_change = HudLaneChange::changing;
+    changing.lane_change = HudLaneChange::Changing;
     changing.lane_change_direction = 1;
 
     HudState tpms_bar = drive;  // bar 단위, 낮은·높은 타이어, 차량 TPMS 경고

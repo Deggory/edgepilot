@@ -1,3 +1,9 @@
+// 주행 녹화기. modeld가 실제로 쓴 프레임(recordFrame)을 하드웨어 H.264 인코더(VENC)로
+// 압축하고, CAN과 모델·제어·판다·학습기 상태를 함께 RecordingWriter 형식(세그먼트별
+// .h264 + 인덱스 + 이벤트 로그)으로 남긴다. 링 슬롯은 IVPS로 인코더 전용 버퍼에 복사한 뒤
+// 슬롯이 그동안 덮어써지지 않았을 때만 인코더에 넣는다(maix_venc.h). 녹화 on/off는
+// params/recording.json을 따르고, 녹화 중인지는 recordState로 HUD에 알린다.
+
 #include "common/build_version.h"
 #include "common/ipc_channels.h"
 #include "common/utils_file.h"
@@ -19,23 +25,17 @@
 #include <string>
 #include <thread>
 
-// 주행 녹화기. modeld가 실제로 쓴 프레임(recordFrame)을 하드웨어 H.264 인코더(VENC)로
-// 압축하고, CAN과 모델·제어·판다·학습기 상태를 함께 RecordingWriter 형식(세그먼트별
-// .h264 + 인덱스 + 이벤트 로그)으로 남긴다. 링 슬롯은 IVPS로 인코더 전용 버퍼에 복사한 뒤
-// 슬롯이 그동안 덮어써지지 않았을 때만 인코더에 넣는다(maix_venc.h). 녹화 on/off는
-// params/recording.json을 따르고, 녹화 중인지는 recordState로 HUD에 알린다.
-
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
 constexpr unsigned kRecordingFps = 20;
 // recording.json 의 bitrate_bps 가 없을 때의 기본값.
 constexpr unsigned kRecordingBitrate = 8000000;
-constexpr uint64_t kConfigPollIntervalNs = 250000000ULL;
-constexpr uint64_t kMaximumFrameAgeNs = 100000000ULL;
-constexpr uint64_t kStatePublishIntervalNs = 500000000ULL;
-constexpr uint64_t kEncoderDrainTimeoutNs = 500000000ULL;  // 녹화를 닫을 때 남은 패킷을 기다리는 한도
-constexpr uint64_t kLogIntervalNs = 1000000000ULL;
+constexpr uint64_t kConfigPollIntervalNs = 250'000'000ULL;
+constexpr uint64_t kMaximumFrameAgeNs = 100'000'000ULL;
+constexpr uint64_t kStatePublishIntervalNs = 500'000'000ULL;
+constexpr uint64_t kEncoderDrainTimeoutNs = 500'000'000ULL;  // 녹화를 닫을 때 남은 패킷을 기다리는 한도
+constexpr uint64_t kLogIntervalNs = 1'000'000'000ULL;
 constexpr unsigned kIdleSleepUs = 100000;  // 기록이 꺼진 동안의 대기(CAN 로그 큐 64칸 = 640 ms보다 짧게)
 
 // params/recording.json(웹 콘솔이 쓴다). 녹화 on/off와 비트레이트.

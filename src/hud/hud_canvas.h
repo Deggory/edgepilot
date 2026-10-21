@@ -1,5 +1,4 @@
-#ifndef HUD_CANVAS_H
-#define HUD_CANVAS_H
+#pragma once
 
 // HUD를 그리는 바탕. 스트레이트 알파 BGRA 버퍼 위에 커버리지로 over 합성한다. 다각형은 행마다
 // 4개 부표본 행이 지나는 구간만 쌓아 칠하므로(안티앨리어싱) 일이 덮인 넓이에 비례하고, 합성은
@@ -27,7 +26,7 @@ constexpr uint32_t hud_fade(uint32_t color, float scale) {
     return static_cast<uint32_t>(alpha + 0.5f) << 24 | (color & 0x00ffffffu);
 }
 
-enum class HudAlign { left, center, right };
+enum class HudAlign { Left, Center, Right };
 
 // fill_polygon이 받는 점(변)의 최대 수. 가장 큰 다각형은 궤적 띠(33쌍 = 66점, hud_scene.cc)다.
 constexpr int kHudMaxPolygonPoints = 72;
@@ -57,7 +56,7 @@ public:
                       float far_alpha = 1.0f);
     // 글자 상자의 왼쪽 위(정렬 기준점 x, 줄 위 y)에 쓴다. 카드 없이 영상 위에 쓰는 글은
     // shadow로 1 px 아래 오른쪽에 그림자를 깐다. 쓴 폭을 돌려준다.
-    int text(int x, int y, std::string_view text, const HudFont &font, uint32_t color, HudAlign align = HudAlign::left,
+    int text(int x, int y, std::string_view text, const HudFont &font, uint32_t color, HudAlign align = HudAlign::Left,
              bool shadow = false);
 
 private:
@@ -78,5 +77,3 @@ private:
     std::vector<uint32_t> &damage_;    // 행마다 그린 칸 비트
     int tile_shift_ = 4;               // 칸 폭 = 1 << tile_shift_
 };
-
-#endif

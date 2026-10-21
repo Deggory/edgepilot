@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_CAMERA_H
-#define MAIXCAM2_CAMERA_H
+#pragma once
 
 // MaixCAM2 카메라(VI)를 C++에서 직접 연다. libmaixcam_lib의 ax_middleware 클래스를
 // 쓰며 AX 헤더는 이 파일 밖으로 새지 않는다. AI-ISP(NPU 한 코어)는 늘 켠다.
@@ -30,5 +29,3 @@ private:
     int width_;
     int height_;
 };
-
-#endif

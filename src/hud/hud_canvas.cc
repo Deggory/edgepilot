@@ -327,9 +327,9 @@ void HudCanvas::fill_polygon(const HudPoint *screen_points, int count, uint32_t 
 int HudCanvas::text(int x, int y, std::string_view text, const HudFont &font, uint32_t color, HudAlign align,
                     bool shadow) {
     const int width = font.width(text);
-    if (align == HudAlign::center)
+    if (align == HudAlign::Center)
         x -= width / 2;
-    else if (align == HudAlign::right)
+    else if (align == HudAlign::Right)
         x -= width;
     if (shadow) glyphs(x + 1, y + 1, text, font, hud_fade(kTextShadow, static_cast<float>(color >> 24) / 255.0f));
     glyphs(x, y, text, font, color);

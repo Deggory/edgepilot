@@ -49,6 +49,8 @@ struct TorqueParams {
 // 차이(g·Δroll, 0.1~0.25 m/s²)만큼 어긋나 섞으면 절편이 몇 시간 끌려가므로 점과 절편은 버리고
 // 출처와 무관한 배율·마찰만 이어 쓴다.
 enum class TorqueRestore { None, Restored, KeyMismatch, Corrupt, SourceChanged };
+// 로그에 쓰는 이름(fresh, restored, key_mismatch, corrupt, source_changed)
+const char *torque_restore_name(TorqueRestore status);
 
 class TorqueEstimator {
 public:

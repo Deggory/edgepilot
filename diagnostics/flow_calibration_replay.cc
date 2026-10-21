@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
             job.t_s = it->second.first;
             job.lead = it->second.second;
         }
-        tracker.process(job);
+        tracker.update(job);
         const LeadFlowState lead = tracker.lead_state();
         if (lead.valid)
             std::printf("lead %ld %+.5f %u %u %.2f\n", frame, lead.expansion_rate, lead.inliers, lead.points,

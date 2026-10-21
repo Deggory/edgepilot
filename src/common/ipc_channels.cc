@@ -19,7 +19,7 @@
 namespace {
 
 // futex 대기 한 번의 상한. 끝없이 기다리는 호출도 이만큼마다 깨어 다시 본다.
-constexpr uint64_t kMaxFutexWaitNs = 100000000ULL;
+constexpr uint64_t kMaxFutexWaitNs = 100'000'000ULL;
 
 // 기다리는 쪽을 깨운다. 기다리는 이가 없어도 FUTEX_WAKE를 부른다(syscall 하나, 약 1 µs).
 void wake_all(std::atomic<uint32_t> *word) {
@@ -38,7 +38,7 @@ void wait_wake(std::atomic<uint32_t> *word, uint64_t timeout_ns, StillWaiting st
     const uint32_t before = word->load();
     if (!still_waiting()) return;
     const uint64_t ns = std::min(timeout_ns, kMaxFutexWaitNs);
-    timespec relative{static_cast<time_t>(ns / 1000000000ULL), static_cast<long>(ns % 1000000000ULL)};
+    timespec relative{static_cast<time_t>(ns / 1'000'000'000ULL), static_cast<long>(ns % 1'000'000'000ULL)};
     // 공유 메모리라 FUTEX_PRIVATE_FLAG는 쓰지 않는다. 깨움·시간 초과·신호 어느 것이든 돌아가 호출자가 다시 본다.
     syscall(SYS_futex, reinterpret_cast<uint32_t *>(word), FUTEX_WAIT, before, &relative, nullptr, 0);
 #else
@@ -279,7 +279,7 @@ bool LatestChannel::read(void *payload, size_t payload_capacity, uint64_t *seq) 
 
 bool LatestChannel::read_new(uint64_t *last_seq, void *payload, size_t payload_capacity, int timeout_ms) const {
     if (!header_) return false;
-    const uint64_t timeout_ns = timeout_ms < 0 ? UINT64_MAX : static_cast<uint64_t>(timeout_ms) * 1000000ULL;
+    const uint64_t timeout_ns = timeout_ms < 0 ? UINT64_MAX : static_cast<uint64_t>(timeout_ms) * 1'000'000ULL;
     uint64_t start = 0;  // 기다려야 할 때만 시계를 읽는다(CLOCK_BOOTTIME은 이 보드에서 진짜 syscall이다)
     while (true) {
         // seq가 그대로면 페이로드를 복사하지 않는다(폴링하는 쪽이 대부분 이 경우다)

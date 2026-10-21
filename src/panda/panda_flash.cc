@@ -14,7 +14,7 @@
 
 namespace {
 
-const char *mode_name(PandaUsbMode mode) {
+const char *usb_mode_name(PandaUsbMode mode) {
     switch (mode) {
         case PandaUsbMode::App:
             return "application";
@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
     }
     std::printf("image: %s (%s, %zu bytes)\n", path.c_str(), image.version.c_str(), image.bytes.size());
     const PandaUsbMode mode = panda_usb_mode();
-    std::printf("panda: %s\n", mode_name(mode));
+    std::printf("panda: %s\n", usb_mode_name(mode));
     if (mode == PandaUsbMode::None) return 1;
     if (!yes) {
         std::printf(

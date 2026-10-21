@@ -187,11 +187,11 @@ TEST(HudRenderer, EveryAlertTextFitsTheCard) {
     for (int direction : {-1, 1}) {
         hud = HudState{};
         hud.services_healthy = hud.controller_active = true;
-        hud.lane_change = HudLaneChange::pending;
+        hud.lane_change = HudLaneChange::Pending;
         hud.lane_change_direction = direction;
         add(hud);
     }
-    for (DepartureAlertType type : {DepartureAlertType::lead_departed, DepartureAlertType::green_light}) {
+    for (DepartureAlertType type : {DepartureAlertType::LeadDeparted, DepartureAlertType::GreenLight}) {
         hud = HudState{};
         hud.services_healthy = true;
         hud.departure_alert_type = type;
@@ -284,10 +284,10 @@ TEST(HudRenderer, PortraitBufferMatchesTransposedLandscape) {
 
     // 글자와 사각형은 화소까지 같다
     Surface text_l(200, 60), text_p(60, 200);
-    text_l.canvas().text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
+    text_l.canvas().text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::Left, true);
     text_l.canvas().fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
     HudCanvas tp(text_p.pixels.data(), 200, 60, 60 * 4, text_p.coverage, text_p.damage, true);
-    tp.text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::left, true);
+    tp.text(10, 8, "PITCH -2.30", kHudBodyFont, hud_argb(255, 255, 255, 255), HudAlign::Left, true);
     tp.fill_rect(5, 40, 120, 9, hud_argb(150, 12, 14, 18));
     for (int y = 0; y < 60; ++y)
         for (int x = 0; x < 200; ++x) ASSERT_EQ(text_p.at(y, x), text_l.at(x, y)) << x << "," << y;

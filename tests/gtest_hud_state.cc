@@ -22,58 +22,58 @@ TEST(HudState, AlertCardPriority) {
     hud.steer_paused = true;
     hud.steer_saturated = true;
     hud.services_healthy = false;
-    hud.lane_change = HudLaneChange::pending;
+    hud.lane_change = HudLaneChange::Pending;
     hud.lane_change_direction = -1;
-    hud.departure_alert_type = DepartureAlertType::lead_departed;
+    hud.departure_alert_type = DepartureAlertType::LeadDeparted;
 
     // 위에서부터 하나씩 끄면 다음 카드가 나온다
     HudAlertCard alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "UNABLE TO ENGAGE");
     EXPECT_EQ(alert.detail, "DOOR OPEN");
-    EXPECT_EQ(alert.level, HudAlertLevel::caution);
+    EXPECT_EQ(alert.level, HudAlertLevel::Caution);
     hud.engage_reject_label[0] = '\0';
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "TAKE CONTROL");
     EXPECT_EQ(alert.detail, "CALIB INVALID") << "해제 예고는 사유 라벨";
-    EXPECT_EQ(alert.level, HudAlertLevel::critical);
+    EXPECT_EQ(alert.level, HudAlertLevel::Critical);
     hud.soft_disabling = false;
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "STEERING FAULT");
     EXPECT_EQ(alert.detail, "MODEL OK   CAR --   PANDA --") << "결함 카드는 연결 상태";
-    EXPECT_EQ(alert.level, HudAlertLevel::critical);
+    EXPECT_EQ(alert.level, HudAlertLevel::Critical);
     hud.steering_fault = false;
     EXPECT_EQ(hud_select_alert(hud, false).title, "PANDA FAULT");
     hud.panda_faults = 0;
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "STEERING PAUSED");
     EXPECT_EQ(alert.detail, "Wheel past 85\xb0, resumes below it");
-    EXPECT_EQ(alert.level, HudAlertLevel::caution);
+    EXPECT_EQ(alert.level, HudAlertLevel::Caution);
     hud.steer_paused = false;
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "TAKE CONTROL");
     EXPECT_EQ(alert.detail, "Turn exceeds steering limit") << "조향 한계는 주황";
-    EXPECT_EQ(alert.level, HudAlertLevel::caution);
+    EXPECT_EQ(alert.level, HudAlertLevel::Caution);
     hud.steer_saturated = false;
     EXPECT_EQ(hud_select_alert(hud, true).title, "WAITING FOR SERVICES");
     hud.services_healthy = true;
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "LANE CHANGE");
     EXPECT_EQ(alert.arrow, -1);
-    EXPECT_EQ(alert.level, HudAlertLevel::notice);
-    hud.lane_change = HudLaneChange::none;
+    EXPECT_EQ(alert.level, HudAlertLevel::Notice);
+    hud.lane_change = HudLaneChange::None;
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "LEAD VEHICLE MOVING");
-    EXPECT_EQ(alert.level, HudAlertLevel::proceed);
-    hud.departure_alert_type = DepartureAlertType::green_light;
+    EXPECT_EQ(alert.level, HudAlertLevel::Proceed);
+    hud.departure_alert_type = DepartureAlertType::GreenLight;
     EXPECT_EQ(hud_select_alert(hud, true).title, "GREEN LIGHT");
-    hud.departure_alert_type = DepartureAlertType::none;
+    hud.departure_alert_type = DepartureAlertType::None;
     EXPECT_TRUE(hud_select_alert(hud, true).empty());
 
     // 조건이 붙은 카드
     HudState idle;
     idle.services_healthy = true;
     idle.steer_paused = true;
-    idle.lane_change = HudLaneChange::pending;
+    idle.lane_change = HudLaneChange::Pending;
     EXPECT_TRUE(hud_select_alert(idle, true).empty()) << "조향 쉼과 차선 변경 대기는 활성일 때만";
     idle.soft_disabling = true;
     std::snprintf(idle.active_block, sizeof(idle.active_block), "calibration_invalid");
@@ -90,7 +90,7 @@ TEST(HudState, ControlStateMapping) {
     c.engaged = 1;
     c.cluster_speed_kph = 63.5f;
     c.hud_flags = kHudFlagLaneless;
-    c.departure_alert_type = static_cast<uint32_t>(DepartureAlertType::green_light);
+    c.departure_alert_type = static_cast<uint32_t>(DepartureAlertType::GreenLight);
     c.apply_torque = -120;
     std::snprintf(c.active_block, sizeof(c.active_block), "%s", "not_engaged");
 
@@ -102,7 +102,7 @@ TEST(HudState, ControlStateMapping) {
     ASSERT_TRUE(hud.laneless_mode);
     ASSERT_EQ(hud.cluster_speed_kph, 63.5f);
     ASSERT_EQ(hud.apply_torque, -120);
-    ASSERT_EQ(hud.departure_alert_type, DepartureAlertType::green_light);
+    ASSERT_EQ(hud.departure_alert_type, DepartureAlertType::GreenLight);
     ASSERT_STREQ(hud.active_block, "not_engaged");
     hud_apply_control_state(c, false, &hud);
     // 낡은 스냅샷은 HUD를 비우고 control_stale로 표시한다
@@ -110,7 +110,7 @@ TEST(HudState, ControlStateMapping) {
     ASSERT_FALSE(hud.laneless_mode);
     ASSERT_EQ(hud.cluster_speed_kph, 0.0f);
     ASSERT_EQ(hud.apply_torque, 0);
-    ASSERT_EQ(hud.departure_alert_type, DepartureAlertType::none);
+    ASSERT_EQ(hud.departure_alert_type, DepartureAlertType::None);
     ASSERT_STREQ(hud.active_block, "control_stale");
     // 결합 차단 라벨: 표에 없는 이름(다른 빌드의 controlsd)은 그대로
     ASSERT_STREQ(engage_block_label("panda_not_ready"), "PANDA NOT READY");
@@ -132,19 +132,19 @@ TEST(HudState, ManeuverFlagsMapping) {
     HudState hud;
     hud_apply_control_state(c, true, &hud);
     // 차선 변경 대기(오른쪽)와 운전자 토크 눈금
-    ASSERT_EQ(hud.lane_change, HudLaneChange::pending);
+    ASSERT_EQ(hud.lane_change, HudLaneChange::Pending);
     ASSERT_EQ(hud.lane_change_direction, 1);
     ASSERT_FALSE(hud.steer_paused);
     ASSERT_NEAR(hud.driver_torque_fraction, -96.0f / kHyundaiSteerMax, 1e-6f);
     c.hud_flags = kHudFlagLaneChanging | kHudFlagSteerPaused | kHudFlagSteerPausedByDriver;
     hud_apply_control_state(c, true, &hud);
-    ASSERT_EQ(hud.lane_change, HudLaneChange::changing);
+    ASSERT_EQ(hud.lane_change, HudLaneChange::Changing);
     ASSERT_EQ(hud.lane_change_direction, -1);
     ASSERT_TRUE(hud.steer_paused);
     ASSERT_TRUE(hud.steer_paused_by_driver);
     hud_apply_control_state(c, false, &hud);
     // 낡은 스냅샷은 조작 표시를 끈다
-    ASSERT_EQ(hud.lane_change, HudLaneChange::none);
+    ASSERT_EQ(hud.lane_change, HudLaneChange::None);
     ASSERT_FALSE(hud.steer_paused);
     ASSERT_EQ(hud.driver_torque_fraction, 0.0f);
 }

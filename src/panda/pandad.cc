@@ -34,13 +34,13 @@ namespace {
 volatile sig_atomic_t g_stop = 0;
 // 수신 루프 주기. 상류 pandad처럼 10 ms마다 Panda에 쌓인 CAN을 한 번에 읽어 한 묶음으로 올린다.
 constexpr auto kRxCycle = std::chrono::milliseconds(10);
-constexpr uint64_t kMaxSendCanAgeNs = 100000000ULL;
+constexpr uint64_t kMaxSendCanAgeNs = 100'000'000ULL;
 // 송신 스레드가 sendcan을 기다리는 최대 시간(멈춤 확인 간격). 상류 can_send_thread의 100 ms와 같다.
-constexpr uint64_t kTxWaitNs = 100000000ULL;
-constexpr uint64_t kFirmwareIntervalNs = 1000000000ULL;
-constexpr uint64_t kHeartbeatIntervalNs = 500000000ULL;  // 상류 pandad 하트비트 0.5초
-constexpr uint64_t kHealthIntervalNs = 500000000ULL;     // 상태 조회(USB 제어 전송)
-constexpr uint64_t kStatsWindowNs = 1000000000ULL;       // 통계 로그 한 줄
+constexpr uint64_t kTxWaitNs = 100'000'000ULL;
+constexpr uint64_t kFirmwareIntervalNs = 1'000'000'000ULL;
+constexpr uint64_t kHeartbeatIntervalNs = 500'000'000ULL;  // 상류 pandad 하트비트 0.5초
+constexpr uint64_t kHealthIntervalNs = 500'000'000ULL;     // 상태 조회(USB 제어 전송)
+constexpr uint64_t kStatsWindowNs = 1'000'000'000ULL;      // 통계 로그 한 줄
 // 웹 콘솔(web_console)과 주고받는 파일. 요청 파일에는 쓸 이미지의 버전 문자열이 들어 있다.
 constexpr char kFirmwareStatusPath[] = "/dev/shm/edgepilot_panda_status.json";
 constexpr char kFlashRequestPath[] = "/dev/shm/edgepilot_panda_flash";

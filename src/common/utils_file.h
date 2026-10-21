@@ -1,5 +1,7 @@
 #pragma once
 
+// 파일 도우미: 바뀌었는지 보는 stat 지문(FileStamp), 텍스트 읽기, 원자적 쓰기(임시 파일 + rename).
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>

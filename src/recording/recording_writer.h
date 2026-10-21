@@ -1,5 +1,8 @@
 #pragma once
 
+// 녹화 쓰기(RecordingWriter): 세그먼트별 H.264·프레임 색인·이벤트 로그를 tmpfs에 쓰고, 닫힌 파일을 SD로 옮긴다
+// (StagingMover). recordd가 쓴다.
+
 #include "common/ipc_messages.h"
 #include "recording/recording_format.h"
 

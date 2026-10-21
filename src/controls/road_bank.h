@@ -1,13 +1,14 @@
 #pragma once
 
-#include "common/utils_math.h"
-
-#include <cmath>
-
 // 도로 편경사(뱅크)를 ESP12 횡가속과 요레이트로 추정한다: bank = lat + yaw_rate·v(실측 검증식, 2026-08-27 직선
 // -0.117 재현). 직선(|yaw·v| < 0.4)에서만 갱신하고 커브에서는 유지한다: 커브에서는 차체 롤의 중력 누설이 섞인다
 // (2026-08-30 drive10: 커브 방향 반상관 ±0.2~0.5 + 탈출 꼬리). 시정수 2초. 30초 넘게 갱신이 없으면 낡은 값을 0으로
 // 감쇠하고 다시 초기화를 허용한다. 컨트롤러는 100 Hz(dt 0.01 s)로, 데이터셋 도구는 ControlState 간격으로 부른다.
+
+#include "common/utils_math.h"
+
+#include <cmath>
+
 class RoadBankEstimator {
 public:
     static constexpr float kRcS = 2.0f;

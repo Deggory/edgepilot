@@ -1,5 +1,4 @@
-#ifndef FLOW_WORKER_H
-#define FLOW_WORKER_H
+#pragma once
 
 // 광류 작업 스레드(modeld 전용). FlowWorker가 FlowTracker(model/flow_tracker)를 IVE 엔진으로 모델 루프 밖
 // 스레드에서 돌린다. 모델 루프는 프레임 정보만 넘기고 기다리지 않는다. docs/flow-calibration.md.
@@ -50,5 +49,3 @@ private:
     bool blocks_changed_ = false;
     std::thread thread_;
 };
-
-#endif

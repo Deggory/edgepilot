@@ -1,5 +1,4 @@
-#ifndef DEVICE_SETTINGS_H
-#define DEVICE_SETTINGS_H
+#pragma once
 
 // 웹 기기 설정(params/display.json) 중 런타임이 읽는 값. modeld(카메라 장착, 보정 출처)와 overlayd(백라이트,
 // 알림음)가 각자 메인 루프에서 poll()을 부른다. 1초에 한 번만 stat하고 파일이 바뀌었을 때만 다시 읽는다.
@@ -90,5 +89,3 @@ private:
     bool read_once_ = false;
     uint64_t next_check_ns_ = 0;
 };
-
-#endif

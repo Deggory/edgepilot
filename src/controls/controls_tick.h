@@ -5,11 +5,11 @@
 //
 // 한 틱의 순서(main이 지킨다):
 //   apply_params(바뀌었으면) → on_can_batch(...) → on_model(새 모델이면) → on_panda → on_localization →
-//   step → [main: ControlState 발행, CAN 송신] → update_learners → [main: 학습 저장, LearnerState 발행]
+//   update → [main: ControlState 발행, CAN 송신] → update_learners → [main: 학습 저장, LearnerState 발행]
 // - 플래너는 on_model에서 이번 틱 CAN이 반영된 차량 상태와 직전 틱의 실제 곡률·active를 받아 그 자리에서
-//   계산하고, 같은 틱의 step이 그 결과를 쓴다(평균 약 0.1 ms, MPC는 반복 없는 고정 연산; 2026-10-13 보드).
+//   계산하고, 같은 틱의 update가 그 결과를 쓴다(평균 약 0.1 ms, MPC는 반복 없는 고정 연산; 2026-10-13 보드).
 //   예전에는 작업 스레드가 계산해 새 플랜이 한 틱(10 ms) 늦게 쓰였고, 재생 도구·검사와도 그만큼 달랐다.
-// - step의 now_ns는 공유 상태를 다 읽은 직후의 시각이다(그 사이 발행된 모델도 신선하게 본다). 컨트롤러는 plan 나이도
+// - update의 now_ns는 공유 상태를 다 읽은 직후의 시각이다(그 사이 발행된 모델도 신선하게 본다). 컨트롤러는 plan 나이도
 //   이 시각으로 잰다.
 // - 학습기 갱신은 송신 뒤라 적합·직렬화 틱이 CAN 송신을 늦추지 않고, 결과는 다음 틱의 컨트롤러가
 //   쓴다.
@@ -78,8 +78,8 @@ public:
 
     // 컨트롤러·알림·크루즈를 돌려 이번 틱의 ControlState(timestamp_ns 제외)를 만든다. 보낼 프레임은
     // result().frames, 보낼지는 result().should_send다.
-    ControlState step(double now_s, uint64_t now_ns);
-    // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영. 같은 틱의 step 다음에 부른다(컨트롤러의 신선도 판정을
+    ControlState update(double now_s, uint64_t now_ns);
+    // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영. 같은 틱의 update 다음에 부른다(컨트롤러의 신선도 판정을
     // 쓴다). 저장 주기가 됐고 내용이 마지막 저장과 다르면 저장할 내용을, 새 LearnerState가 나왔으면 그것도 담아
     // 돌려준다. 실패한 쓰기는 BackgroundWriter가 다시 쓴다.
     LearnerOutputs update_learners(double now_s);
@@ -100,7 +100,7 @@ public:
     LateralPlanner &planner() { return planner_; }
 
 private:
-    // step의 단계들. 입력은 멤버(이번 틱 상태)에서 읽고, 인자는 step의 지역값이다.
+    // update의 단계들. 입력은 멤버(이번 틱 상태)에서 읽고, 인자는 update의 지역값이다.
     void update_events(const PathHoldOutput &held, uint64_t now_ns);
     // overlayd/recordd가 읽는 100 Hz 스냅샷(timestamp_ns 제외)
     ControlState make_control_state(const DepartureAlertOutput &departure_alert, bool radar_lead_fresh,

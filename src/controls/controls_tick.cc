@@ -13,8 +13,10 @@
 
 namespace {
 
-constexpr uint64_t kAlertModelTimeoutNs = 500000000ULL;
-constexpr uint64_t kMaxCanRxAgeNs = 100000000ULL;
+constexpr uint64_t kAlertModelTimeoutNs = 500'000'000ULL;
+constexpr uint64_t kMaxCanRxAgeNs = 100'000'000ULL;
+constexpr uint64_t kLocalizationFreshNs = 2'000'000'000ULL;  // lagd 지연 추정을 쓰는 locationd 상태의 나이 한도
+constexpr double kRadarLeadTimeoutS = 0.5;                   // SCC11 레이더 앞차
 
 // 배치는 신선함(valid 포함)을 본 뒤에 들어오고, 프레임 수는 큐에서 꺼낼 때 이미 묶였다.
 void apply_can_batch(const CanBatch &batch, double now_s, VehicleCanState *vehicle) {
@@ -231,7 +233,7 @@ void ControlsTick::update_events(const PathHoldOutput &held, uint64_t now_ns) {
                      held.raw.point_count, static_cast<double>(held.raw.reach_m), held.path.point_count,
                      held.hold_applied ? 1U : 0U,
                      model.model_timestamp_ns != 0 && now_ns >= model.model_timestamp_ns
-                         ? static_cast<unsigned long long>((now_ns - model.model_timestamp_ns) / 1000000ULL)
+                         ? static_cast<unsigned long long>((now_ns - model.model_timestamp_ns) / 1'000'000ULL)
                          : 0ULL,
                      panda.ready ? 1U : 0U, panda.controls_allowed ? 1U : 0U, panda_state.connected,
                      panda_state.comms_healthy, panda_state.tx_enabled, panda_state.controls_allowed,
@@ -321,7 +323,7 @@ bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t now_ns, double n
 void ControlsTick::on_model(const ModelState &model) {
     model_ = model;
     model_updated_ = true;
-    // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다. 결과는 이번 틱 step이 쓴다.
+    // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다. 결과는 이번 틱 update가 쓴다.
     LateralPlannerInput planner_in;
     planner_in.v_ego = std::max(0.0f, last_result_.control_speed_kph / 3.6f);
     planner_in.measured_curvature = last_result_.actual_curvature;
@@ -345,7 +347,7 @@ void ControlsTick::on_localization(const LocalizationRead &localization, double 
     if (!localization_seen_) return;
     const LocalizationState &state = localization_;
     const uint64_t age_ns = localization.read_ns - state.timestamp_ns;
-    const bool fresh = age_ns < 2'000'000'000ULL;
+    const bool fresh = age_ns < kLocalizationFreshNs;
     controller_.set_live_delay(state.lateral_delay_s,
                                fresh && state.lag_status == static_cast<uint32_t>(LateralLagStatus::Estimated));
     // 상류 paramsd·torqued 입력(localizer_sample_from). 표본 시각은 학습기 시계(now_s)로
@@ -360,14 +362,14 @@ void ControlsTick::on_localization(const LocalizationRead &localization, double 
     }
 }
 
-ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
+ControlState ControlsTick::update(double now_s, uint64_t now_ns) {
     panda_ = panda_gate_.update(panda_state_, now_ns, controller_.config().force_engaged);
     const PathHoldOutput held = path_gate_.update(model_, now_ns, kModelTimeoutNs);
     const int frame = control_frame_++;
     last_result_ = controller_.update(held.path, lateral_target_, vehicle_, now_s, frame, panda_, now_ns);
     update_events(held, now_ns);
 
-    const bool radar_lead_fresh = signal_time_fresh(vehicle_.scc11_time_s, now_s, 0.5);
+    const bool radar_lead_fresh = signal_time_fresh(vehicle_.scc11_time_s, now_s, kRadarLeadTimeoutS);
     // 크루즈·이탈 경보·발행 속도(modeld 보정, locationd도 읽는다)도 컨트롤러가 거른 vEgo를 쓴다. 휠 속도가
     // kVehicleStateTimeoutS(0.5 s)보다 낡으면 NaN이다.
     const float ego_speed_kph = last_result_.control_speed_kph;

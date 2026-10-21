@@ -1,5 +1,4 @@
-#ifndef HUD_TILES_H
-#define HUD_TILES_H
+#pragma once
 
 // 그린 자리(damage): 버퍼 행마다 가로 칸의 비트. 캔버스가 지울 칸과 화면(maix_display)이 옮길 칸을 같은
 // 방식으로 훑는다. 칸은 31개까지라 맨 위 비트는 늘 비어 있다.
@@ -17,5 +16,3 @@ inline void for_each_tile_run(uint32_t tiles, Run run) {
         tiles &= ~((1u << end) - (1u << first));
     }
 }
-
-#endif

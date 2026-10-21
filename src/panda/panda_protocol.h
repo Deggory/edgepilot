@@ -1,5 +1,4 @@
-#ifndef PANDA_PROTOCOL_H
-#define PANDA_PROTOCOL_H
+#pragma once
 
 // firmware/panda가 USB로 말하는 것: 장치 ID, 요청 코드, 패킷 버전, health 패킷, 앱 플래시 배치.
 // pandad·플래셔가 쓰고, gtest_panda_firmware가 펌웨어 헤더(board/health.h 등)와 대조한다.
@@ -79,5 +78,3 @@ struct __attribute__((packed)) PandaHealthPacket {
     uint32_t blocked_msg_cnt_pkt;
     float interrupt_load;
 };
-
-#endif

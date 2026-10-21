@@ -1,5 +1,4 @@
-#ifndef RECORDED_CAN_H
-#define RECORDED_CAN_H
+#pragma once
 
 // 녹화된 CanRx/CanTx 페이로드: RecordedCanBatchHeader 뒤에 RecordedCanFrame이 count개.
 // recordd가 쓰고 replayd와 진단 도구가 읽는다. 읽을 때는 페이로드에 다 들어 있는 프레임만 본다
@@ -61,5 +60,3 @@ inline bool decode_recorded_can(const void *payload, size_t size, uint64_t times
     std::memcpy(out->frames, static_cast<const uint8_t *>(payload) + sizeof(header), out->count * sizeof(IpcCanFrame));
     return true;
 }
-
-#endif

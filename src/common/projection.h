@@ -1,5 +1,4 @@
-#ifndef PROJECTION_H
-#define PROJECTION_H
+#pragma once
 
 // 모델 도로 좌표를 화면 좌표로 옮긴다(openpilot식 view_from_calib). 화면 영상 레이어와 같은 4:3 미리보기 자르기를
 // 쓴다(app_config.h). HUD 장면과 차선 안 위치가 쓴다.
@@ -32,5 +31,3 @@ void projection_set_camera_intrinsics(float fx, float fy, float cx, float cy);
 
 // RPY(rad) -> 3x3 회전행렬(row-major), Rz*Ry*Rx.
 void rotation_from_rpy(float roll, float pitch, float yaw, float *rot);
-
-#endif

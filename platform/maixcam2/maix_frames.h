@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_FRAMES_H
-#define MAIXCAM2_FRAMES_H
+#pragma once
 
 // IVPS·VENC·VDEC에 넘기는 NV12 프레임, 늘이기 크기 바꾸기 설정, 캐시 없는 블록 풀. 여러 래퍼가 같은 설정을
 // 쓴다. AX 헤더를 끌어오므로 platform/maixcam2의 .cc에서만 쓴다.
@@ -43,5 +42,3 @@ inline AX_POOL make_noncache_pool(AX_U64 block_size, AX_U32 count) {
     std::strcpy(reinterpret_cast<char *>(cfg.PartitionName), "anonymous");
     return AX_POOL_CreatePool(&cfg);
 }
-
-#endif

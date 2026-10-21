@@ -111,7 +111,7 @@ void FlowWorker::run() {
             std::fprintf(stderr, "\nflowcal: reset, collecting from scratch\n");
             continue;
         }
-        tracker_.process(f);
+        tracker_.update(f);
         const FlowCalibrationState st = tracker_.calibrator().state();
         const LeadFlowState lead = tracker_.lead_state();
         const bool block_done = st.blocks != logged_blocks;

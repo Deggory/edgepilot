@@ -364,7 +364,7 @@ struct TrackerRig {
         f.gate.v_ego = v_ego;
         f.gate.vehicle_fresh = true;
         f.still_valid = [valid] { return valid; };
-        tracker->process(f);
+        tracker->update(f);
     }
 };
 

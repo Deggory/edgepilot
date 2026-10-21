@@ -38,7 +38,7 @@ const Tone kTones[] = {
     // 사용 불가 경고: 트라이톤을 두 번
     {"unavailable", {{0, kB5, 90, 1.0}, {160, kF5, 120, 1.0}, {360, kB5, 90, 1.0}, {520, kF5, 150, 1.0}}, 0.65},
 };
-static_assert(std::size(kTones) == static_cast<size_t>(AlertSoundId::count), "one tone per AlertSoundId");
+static_assert(std::size(kTones) == static_cast<size_t>(AlertSoundId::Count), "one tone per AlertSoundId");
 
 constexpr double kAttackMs = 4.0;     // 반코사인으로 올려 딸깍 소리 없이 시작
 constexpr double kTailMs = 10.0;      // 끝을 0으로 접는다

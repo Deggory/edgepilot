@@ -1,5 +1,4 @@
-#ifndef PANDA_FLASHER_H
-#define PANDA_FLASHER_H
+#pragma once
 
 // 판다 앱 펌웨어를 USB로 쓴다(STM32F413, bootstub 경유, 보드 전용). 앱이 돌고 있으면 bootstub으로
 // 보낸 뒤 섹터 1~3을 지우고 이미지를 쓰고, bootstub이 받은 끝 주소를 확인하고 재부팅시켜, 앱이 이미지의
@@ -30,5 +29,3 @@ struct PandaFlashResult {
 };
 
 PandaFlashResult flash_panda(const PandaImage &image, const PandaFlashProgress &progress);
-
-#endif

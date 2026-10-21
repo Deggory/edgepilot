@@ -1,5 +1,6 @@
-#ifndef HUD_RENDERER_H
-#define HUD_RENDERER_H
+#pragma once
+
+// HUD 한 장을 그린다(HudRenderer): 모델 출력의 도로 장면, 속도·크루즈·상태 카드, 알림. overlayd와 hud_snapshot이 쓴다.
 
 #include "common/model_output.h"
 #include "common/projection.h"
@@ -44,5 +45,3 @@ bool hud_status_touch(int x, int y, int width);
 // 터치 좌표가 왼쪽 열(설정 속도 카드, 모드·조작 칩, 진단 카드)인지. 아래 모서리 TPMS 카드 위까지,
 // 넉넉하게 본다. overlayd가 진단 카드를 켜고 끄는 데 쓴다.
 bool hud_left_column_touch(int x, int y, int height);
-
-#endif

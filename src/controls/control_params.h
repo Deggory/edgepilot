@@ -1,5 +1,10 @@
 #pragma once
 
+// controlsd가 읽는 조향 런타임 파라미터. params/steering.json이 출처다. 다만 상류(opendbc
+// CarControllerParams, 모듈 상수)에서도 코드에 박힌 차량·통신 상수는 여기 필드로만 두고 파일에서 읽지
+// 않는다(필드마다 적었다). 테스트와 재생 도구는 이 필드를 바꿔 쓴다. 조향 토크 한계는 상류처럼 상수다
+// (car/hyundai_can.h의 kHyundaiSteer*).
+
 #include "common/utils_file.h"
 #include "controls/adaptive_cruise.h"
 
@@ -7,11 +12,6 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-
-// controlsd가 읽는 조향 런타임 파라미터. params/steering.json이 출처다. 다만 상류(opendbc
-// CarControllerParams, 모듈 상수)에서도 코드에 박힌 차량·통신 상수는 여기 필드로만 두고 파일에서 읽지
-// 않는다(필드마다 적었다). 테스트와 재생 도구는 이 필드를 바꿔 쓴다. 조향 토크 한계는 상류처럼 상수다
-// (car/hyundai_can.h의 kHyundaiSteer*).
 
 // 기본값은 params/steering.json(K7 YG HEV 실차 검증값)과 일치시킨다. 로드 실패는
 // controlsd가 throw하므로 이 값은 파일 폴백이 아니라, JSON에 키가 빠졌을 때와

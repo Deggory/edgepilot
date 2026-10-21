@@ -1,5 +1,4 @@
-#ifndef LOCATION_ESTIMATOR_H
-#define LOCATION_ESTIMATOR_H
+#pragma once
 
 // openpilot locationd(selfdrive/locationd/locationd.py + models/pose_kf.py)의 C++ 이식.
 //
@@ -181,5 +180,3 @@ struct CalibratedPose {
     std::array<double, 3> acceleration{};
 };
 CalibratedPose calibrate_pose(const LivePoseEstimate &pose, const double calib_rpy[3]);
-
-#endif

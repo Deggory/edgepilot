@@ -1,3 +1,18 @@
+// 보드 IMU(ST LSM6DSOW)를 읽어 공유 메모리(/edgepilot_imu)에 발행한다. locationd의 입력이고
+// 녹화된다. IMU가 없거나 죽으면 locationd가 발행을 멈추고 controlsd 학습기는 ESP12 값으로
+// 돌아가므로 주행은 계속된다.
+//
+// MaixCAM2의 IMU는 i2c-1의 0x6B다(WHO_AM_I 0x6C). libmaixcam_lib에는 IMU 클래스가 없고
+// MaixPy 모듈은 불러올 때 UART4 핀을 바꾸는 부수효과가 있어, i2c-dev로 직접 읽는다.
+// 가속도·자이로 모두 104 Hz, ±4 g / ±250 dps, 블록 업데이트(BDU)로 한 샘플의 바이트가
+// 섞이지 않게 한다. 값은 칩 좌표 그대로 내고 바이어스도 빼지 않는다.
+//
+// i2c-1에는 터치·RTC·배터리 게이지가 같이 있다. 버스를 붙잡지 않도록 전송은 짧은 결합
+// 전송(레지스터 주소 쓰기 + 읽기) 하나씩이고, 열기에 실패하면 10초마다 다시 시도한다
+// (manager가 1초마다 재시작하는 루프를 만들지 않는다).
+//
+// 환경: EDGEPILOT_IMU_DEV(기본 /dev/i2c-1), EDGEPILOT_IMU_ADDR(기본 0x6B).
+
 #include "common/build_version.h"
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
@@ -20,21 +35,6 @@
 #include <cstring>
 #include <string>
 #include <thread>
-
-// 보드 IMU(ST LSM6DSOW)를 읽어 공유 메모리(/edgepilot_imu)에 발행한다. locationd의 입력이고
-// 녹화된다. IMU가 없거나 죽으면 locationd가 발행을 멈추고 controlsd 학습기는 ESP12 값으로
-// 돌아가므로 주행은 계속된다.
-//
-// MaixCAM2의 IMU는 i2c-1의 0x6B다(WHO_AM_I 0x6C). libmaixcam_lib에는 IMU 클래스가 없고
-// MaixPy 모듈은 불러올 때 UART4 핀을 바꾸는 부수효과가 있어, i2c-dev로 직접 읽는다.
-// 가속도·자이로 모두 104 Hz, ±4 g / ±250 dps, 블록 업데이트(BDU)로 한 샘플의 바이트가
-// 섞이지 않게 한다. 값은 칩 좌표 그대로 내고 바이어스도 빼지 않는다.
-//
-// i2c-1에는 터치·RTC·배터리 게이지가 같이 있다. 버스를 붙잡지 않도록 전송은 짧은 결합
-// 전송(레지스터 주소 쓰기 + 읽기) 하나씩이고, 열기에 실패하면 10초마다 다시 시도한다
-// (manager가 1초마다 재시작하는 루프를 만들지 않는다).
-//
-// 환경: EDGEPILOT_IMU_DEV(기본 /dev/i2c-1), EDGEPILOT_IMU_ADDR(기본 0x6B).
 
 namespace {
 
@@ -250,7 +250,7 @@ int main() {
         const uint64_t since_sample = now - (last_sample_ns ? last_sample_ns : opened_ns);
         if (got == 0 && since_sample > kNoSampleReopenNs) {
             std::fprintf(stderr, "imud: no sample for %llu ms, reopening\n",
-                         static_cast<unsigned long long>(since_sample / 1000000ULL));
+                         static_cast<unsigned long long>(since_sample / 1'000'000ULL));
             imu.close();
             opened = false;
             continue;

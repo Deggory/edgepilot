@@ -109,7 +109,7 @@ void draw_lead_marker(HudCanvas &canvas, const LeadInfo &lead, const ProjectionS
     chevron(3.0f, kShadow);
     chevron(0.0f, hud_fade(fill, 0.75f + 0.25f * lead.probability));
     canvas.text(static_cast<int>(cx), static_cast<int>(cy + size * 0.6f) + 8, lead_text(lead), kHudCaptionFont, kText,
-                HudAlign::center, true);
+                HudAlign::Center, true);
 }
 
 }  // namespace
@@ -189,7 +189,7 @@ void draw_lane_position(HudCanvas &canvas, const ParsedModelOutput &output, cons
     const long cm = std::lround(std::fabs(lane_center_offset_m) * 100.0f);
     canvas.text(static_cast<int>(car_x), static_cast<int>(center.y) + 16,
                 cm == 0 ? std::string("0 cm") : format_text("%ld cm %s", cm, lane_center_offset_m > 0.0f ? "L" : "R"),
-                kHudCaptionFont, kText, HudAlign::center, true);
+                kHudCaptionFont, kText, HudAlign::Center, true);
 }
 
 }  // namespace hud_draw

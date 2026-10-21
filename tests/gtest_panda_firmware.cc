@@ -22,7 +22,7 @@
 
 namespace {
 
-constexpr uint64_t kNow = 100000000000ULL;
+constexpr uint64_t kNow = 100'000'000'000ULL;
 
 // sign.py의 꼴: [본문 길이][코드 ... 버전 문자열 ...][VERS][2] 뒤에 서명 128바이트
 std::vector<uint8_t> make_image(const std::string &version, size_t body = 1024) {
@@ -39,7 +39,7 @@ std::vector<uint8_t> make_image(const std::string &version, size_t body = 1024) 
 
 ControlState parked() {
     ControlState control;
-    control.timestamp_ns = kNow - 50000000ULL;
+    control.timestamp_ns = kNow - 50'000'000ULL;
     control.vehicle_fresh = 1;
     control.gear = kGearPark;
     return control;
@@ -113,7 +113,7 @@ TEST(PandaFirmware, FlashesOnlyAParkedCar) {
     control.timestamp_ns = 0;
     EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "control_stale");
-    control.timestamp_ns = kNow - 1500000000ULL;
+    control.timestamp_ns = kNow - 1'500'000'000ULL;
     EXPECT_FALSE(panda_flash_allowed(control, kNow, false, &reason));
     EXPECT_EQ(reason, "control_stale");
 
@@ -161,7 +161,7 @@ TEST(PandaFirmware, RewritesABootstubPandaWhateverTheCarState) {
     control.engaged = 1;  // 그래도 결합 중이라고 하면 막는다
     EXPECT_FALSE(panda_flash_allowed(control, kNow, true, &reason));
     EXPECT_EQ(reason, "engaged");
-    control.timestamp_ns = kNow - 1500000000ULL;  // 낡은 제어 상태의 결합은 믿지 않는다
+    control.timestamp_ns = kNow - 1'500'000'000ULL;  // 낡은 제어 상태의 결합은 믿지 않는다
     EXPECT_TRUE(panda_flash_allowed(control, kNow, true, &reason));
 }
 

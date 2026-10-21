@@ -1,3 +1,9 @@
+// MaixCAM2 HUD. LCD의 VO 하드웨어 레이어 둘을 쓴다: 카메라 프레임 링의 최신 프레임은
+// 비디오 레이어 0(IVPS로 가운데 4:3을 640x480에), HUD는 렌더러가 640x480 화면 좌표로
+// 세로 패널 방향 그림판에 그려 그래픽 레이어 fb0로 옮기고, 합성은 하드웨어가 한다. 알림은
+// 화면 카드와 로그에 더해 보드 스피커로 알림음을 낸다(alert_sound.h). 터치스크린은 오른쪽
+// 위 상태 알약(네트워크 카드)과 왼쪽 열(진단 카드)을 켜고 끄는 데 쓴다.
+
 #include "common/app_config.h"
 #include "common/build_version.h"
 #include "common/device_settings.h"
@@ -22,12 +28,6 @@
 #include <limits>
 #include <stdexcept>
 
-// MaixCAM2 HUD. LCD의 VO 하드웨어 레이어 둘을 쓴다: 카메라 프레임 링의 최신 프레임은
-// 비디오 레이어 0(IVPS로 가운데 4:3을 640x480에), HUD는 렌더러가 640x480 화면 좌표로
-// 세로 패널 방향 그림판에 그려 그래픽 레이어 fb0로 옮기고, 합성은 하드웨어가 한다. 알림은
-// 화면 카드와 로그에 더해 보드 스피커로 알림음을 낸다(alert_sound.h). 터치스크린은 오른쪽
-// 위 상태 알약(네트워크 카드)과 왼쪽 열(진단 카드)을 켜고 끄는 데 쓴다.
-
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
@@ -38,13 +38,13 @@ void on_test_sound_signal(int) { ++g_test_sound_requests; }
 
 constexpr int kOutW = MaixDisplay::kWidth;
 constexpr int kOutH = MaixDisplay::kHeight;
-constexpr uint64_t kStateFreshNs = 2000000000ULL;
+constexpr uint64_t kStateFreshNs = 2'000'000'000ULL;
 // 오버레이(HUD 그림, CPU)는 새 모델 출력이 오면 곧바로(20 Hz) 다시 그린다. 모델이 멈춰도 속도·알림이
 // 따라가도록 지난번에 그린 지 100 ms가 지나면 그린다. 영상은 하드웨어 레이어라 카메라 프레임마다 올린다.
-constexpr uint64_t kMaxDrawIntervalNs = 100000000ULL;
+constexpr uint64_t kMaxDrawIntervalNs = 100'000'000ULL;
 // 루프는 새 모델 출력을 이만큼까지 기다리고 돈다(카메라 프레임, 터치, 다른 상태).
 constexpr int kPollMs = 5;
-constexpr uint64_t kStatsWindowNs = 1000000000ULL;  // fps·CPU를 재는 창(상태 줄 한 줄)
+constexpr uint64_t kStatsWindowNs = 1'000'000'000ULL;  // fps·CPU를 재는 창(상태 줄 한 줄)
 
 struct StageStats {
     uint64_t total_ns = 0;
@@ -185,7 +185,7 @@ private:
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
             std::fprintf(stderr, "\noverlayd: alert volume %.0f%%\n", sound_.volume_percent());
-            if (device_settings_read_) sound_.play(AlertSoundId::engage);  // 바꾼 크기를 들려준다
+            if (device_settings_read_) sound_.play(AlertSoundId::Engage);  // 바꾼 크기를 들려준다
         }
         device_settings_read_ = true;
     }
@@ -249,8 +249,8 @@ private:
 
     void play_test_sound() {
         static constexpr AlertSoundId kOrder[] = {
-            AlertSoundId::engage,         AlertSoundId::disengage,   AlertSoundId::unable,
-            AlertSoundId::signal_changed, AlertSoundId::unavailable,
+            AlertSoundId::Engage,        AlertSoundId::Disengage,   AlertSoundId::Unable,
+            AlertSoundId::SignalChanged, AlertSoundId::Unavailable,
         };
         const int requests = g_test_sound_requests;
         if (requests == test_sounds_played_) return;
@@ -262,18 +262,18 @@ private:
 
     // 정책이 고른 알림음을 내고 로그에 남긴다. 거부는 차단 사유, 해제 예고는 그 플래그와 사유를 함께.
     void play_alert(const HudSoundDecision &decision) {
-        if (decision.sound == HudSound::none) return;
+        if (decision.sound == HudSound::None) return;
         sound_.play(hud_sound_id(decision.sound));
         switch (decision.sound) {
-            case HudSound::unable:
+            case HudSound::Unable:
                 std::fprintf(stderr, "overlayd: alert=unable event=%u block=%s\n", decision.event_id,
                              control_state_.latest().engage_reject_block);
                 break;
-            case HudSound::take_control:
+            case HudSound::TakeControl:
                 std::fprintf(stderr, "overlayd: alert=take_control soft_disable=%d steer_saturated=%d block=%s\n",
                              hud_.soft_disabling ? 1 : 0, hud_.steer_saturated ? 1 : 0, hud_.active_block);
                 break;
-            case HudSound::unavailable:
+            case HudSound::Unavailable:
                 std::fprintf(stderr, "overlayd: alert=unavailable\n");
                 break;
             default:

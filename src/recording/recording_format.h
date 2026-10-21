@@ -1,5 +1,7 @@
 #pragma once
 
+// 녹화 형식(recordd가 쓰고 재생 도구와 Python 리더가 읽는다): 이벤트 로그와 프레임 색인의 머리·레코드, 레코드 타입.
+
 #include <cstdint>
 #include <cstring>
 

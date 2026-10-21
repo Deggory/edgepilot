@@ -53,19 +53,19 @@ bool elapsed(double now_s, double since_s, double duration_s) {
 
 const char *departure_alert_name(DepartureAlertType type) {
     switch (type) {
-        case DepartureAlertType::lead_departed:
+        case DepartureAlertType::LeadDeparted:
             return "lead_departed";
-        case DepartureAlertType::green_light:
+        case DepartureAlertType::GreenLight:
             return "green_light";
-        case DepartureAlertType::none:
+        case DepartureAlertType::None:
         default:
             return "none";
     }
 }
 
 DepartureAlertOutput DepartureAlertDetector::update(const DepartureAlertInput &input) {
-    if (active_type_ != DepartureAlertType::none && input.now_s >= active_until_s_) {
-        active_type_ = DepartureAlertType::none;
+    if (active_type_ != DepartureAlertType::None && input.now_s >= active_until_s_) {
+        active_type_ = DepartureAlertType::None;
     }
 
     // 정차 주기: 기어·가속 페달·0.5 m/s 넘는 출발은 정차를 끝내고, 서행(0.1~0.5 m/s)은 정차 시각과
@@ -100,9 +100,9 @@ DepartureAlertOutput DepartureAlertDetector::update(const DepartureAlertInput &i
 
         // 둘이 같은 프레임에 성립하면 더 구체적인 사유(앞차 출발)를 쓴다.
         if (lead_departed) {
-            trigger(DepartureAlertType::lead_departed, input.now_s);
+            trigger(DepartureAlertType::LeadDeparted, input.now_s);
         } else if (green_light_changed) {
-            trigger(DepartureAlertType::green_light, input.now_s);
+            trigger(DepartureAlertType::GreenLight, input.now_s);
         }
     }
 

@@ -1,5 +1,4 @@
-#ifndef LATERAL_NN_H
-#define LATERAL_NN_H
+#pragma once
 
 // 학습한 조향 토크 모델(피드포워드). 학습은 별도 저장소 nnlc가 한다(docs/lateral-nn.md).
 // - 모델 파일: 형식 "edgepilot-lateral-nn" 버전 1(JSON). 입력 이름·창 정의·정규화·망 가중치·시험 벡터를 담는다.
@@ -133,5 +132,3 @@ float LateralNnInputs::evaluate(const LateralNnModel &model, float speed_mps, fl
     if (n != static_cast<int>(model.input_count())) return NAN;
     return model.evaluate(inputs_.data());
 }
-
-#endif  // LATERAL_NN_H

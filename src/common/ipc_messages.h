@@ -1,5 +1,4 @@
-#ifndef IPC_MESSAGES_H
-#define IPC_MESSAGES_H
+#pragma once
 
 // 프로세스 사이를 /dev/shm으로 건너가는 메시지 전부: 채널 매직·버전과 이름, 크기 상한, 채널
 // 헤더, 상태 스냅샷. 채널 구현은 ipc_channels.h에, ModelState를 채우고 되돌리는 변환은
@@ -663,5 +662,3 @@ EDGEPILOT_CONTROL_STATE_AT(ego_speed_kph, 232);
 static_assert(sizeof(ControlState) == 240, "ControlState layout is shared by controlsd, overlayd and the recording");
 // recordd가 RecordType::PandaState로 그대로 저장한다.
 static_assert(sizeof(PandaState) == 96, "PandaState is recorded as-is: bump kRecordingVersion");
-
-#endif

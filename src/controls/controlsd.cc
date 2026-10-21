@@ -183,11 +183,7 @@ int main() {
                      learners.vehicle_restored()  ? "restored"
                      : vehicle_learn_json.empty() ? "fresh"
                                                   : "rejected",
-                     learners.torque_restore_status() == TorqueRestore::Restored        ? "restored"
-                     : learners.torque_restore_status() == TorqueRestore::KeyMismatch   ? "key_mismatch"
-                     : learners.torque_restore_status() == TorqueRestore::Corrupt       ? "corrupt"
-                     : learners.torque_restore_status() == TorqueRestore::SourceChanged ? "source_changed"
-                                                                                        : "fresh",
+                     torque_restore_name(learners.torque_restore_status()),
                      params.steering.use_live_vehicle_params ? 1U : 0U,
                      params.steering.use_live_torque_params ? 1U : 0U);
         // 학습한 토크 모델(docs/lateral-nn.md): 고른 모델을 읽고, 웹 콘솔에서 바꾸면 갈아 끼운다. 없거나 못 읽으면 선형
@@ -265,7 +261,7 @@ int main() {
             const uint64_t read_ns = monotonic_now_ns();
             localization.read_ns = read_ns;
             tick.on_localization(localization, now_s);
-            ControlState control_state = tick.step(now_s, read_ns);
+            ControlState control_state = tick.update(now_s, read_ns);
             control_state.timestamp_ns = monotonic_now_ns();
             if (!control_state_pub.publish(&control_state, sizeof(control_state))) {
                 ++stats.publish_errors;

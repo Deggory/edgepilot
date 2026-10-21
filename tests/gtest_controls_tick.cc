@@ -128,7 +128,7 @@ public:
             if (ticks_++ % 5 == 0) tick_.on_model(straight_model(now_ns_));
             tick_.on_panda(panda_state(now_ns_, panda_allows));
             tick_.on_localization(LocalizationRead{}, now_s);
-            state = tick_.step(now_s, now_ns_);
+            state = tick_.update(now_s, now_ns_);
             torque_writes_ += tick_.update_learners(now_s).torque_cache ? 1 : 0;
         }
         return state;
@@ -312,11 +312,11 @@ TEST(ControlsTick, VisionLeadNeedsTheFixedProbability) {
     model.lead.velocity = 15.0f;
     model.lead.probability = kLeadProbabilityThreshold - 0.05f;
     tick.on_model(model);
-    tick.step(2.0, now_ns);
+    tick.update(2.0, now_ns);
     ASSERT_FALSE(tick.alert_input().lead_valid);
     model.lead.probability = kLeadProbabilityThreshold + 0.05f;
     tick.on_model(model);
-    tick.step(2.0, now_ns);
+    tick.update(2.0, now_ns);
     ASSERT_TRUE(tick.alert_input().lead_valid);
 }
 
@@ -335,7 +335,7 @@ TEST(ControlsTick, CruiseTakesTheLeadTrackAndTheAlertTheModelLead) {
     model.lead_track.distance_m = 32.0f;
     model.lead_track.relative_speed_mps = -2.0f;
     tick.on_model(model);
-    tick.step(2.0, now_ns);
+    tick.update(2.0, now_ns);
     ASSERT_TRUE(tick.cruise_input().vision_lead_valid);
     EXPECT_FLOAT_EQ(tick.cruise_input().vision_lead_distance_m, 32.0f - kRadarToCameraDistanceM);
     EXPECT_FLOAT_EQ(tick.cruise_input().vision_lead_relative_speed_mps, -2.0f);
@@ -344,13 +344,13 @@ TEST(ControlsTick, CruiseTakesTheLeadTrackAndTheAlertTheModelLead) {
 
     model.lead_track.valid = 0;  // 추적이 없으면 크루즈도 모델 앞차
     tick.on_model(model);
-    tick.step(2.0, now_ns);
+    tick.update(2.0, now_ns);
     EXPECT_FLOAT_EQ(tick.cruise_input().vision_lead_distance_m, 30.0f - kRadarToCameraDistanceM);
 
     model.lead_track.valid = 1;  // 모델 앞차가 확률 문턱 밑이면 추적이 있어도 쓰지 않는다
     model.lead.probability = kLeadProbabilityThreshold - 0.05f;
     tick.on_model(model);
-    tick.step(2.0, now_ns);
+    tick.update(2.0, now_ns);
     EXPECT_FALSE(tick.cruise_input().vision_lead_valid);
 }
 
@@ -380,13 +380,13 @@ TEST(ControlsTick, ReloadedParamsReachThePlanner) {
     uint64_t now_ns = 1'000'000'000ULL;
     for (int frame = 0; frame < 40; ++frame, now_ns += 50'000'000ULL) {
         tick.on_model(lane_model(now_ns));
-        tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
+        tick.update(static_cast<double>(now_ns) * 1e-9, now_ns);
     }
     ASSERT_FALSE(tick.target().laneless_mode) << "차선이 자리 잡으면 Lane 모드로 계획한다";
     params.steering.laneless_mode = true;
     tick.apply_params(params);
     tick.on_model(lane_model(now_ns));
-    tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
+    tick.update(static_cast<double>(now_ns) * 1e-9, now_ns);
     EXPECT_TRUE(tick.target().laneless_mode) << "다시 읽은 뒤 첫 프레임부터 Laneless로 계획한다";
 }
 
@@ -424,7 +424,7 @@ TEST(ControlsTick, UsesTheNewPlanInTheSameTick) {
     uint64_t now_ns = 1'000'000'000ULL;
     for (int frame = 0; frame < 20; ++frame, now_ns += 50'000'000ULL) {
         tick.on_model(lane_model(now_ns));
-        tick.step(static_cast<double>(now_ns) * 1e-9, now_ns);
+        tick.update(static_cast<double>(now_ns) * 1e-9, now_ns);
         ASSERT_TRUE(tick.target().valid) << frame;
         ASSERT_EQ(tick.target().capture_timestamp_ns, now_ns) << "프레임 " << frame << "의 플랜을 같은 틱에 써야 한다";
     }

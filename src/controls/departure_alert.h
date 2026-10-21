@@ -6,9 +6,9 @@
 #include <cstdint>
 
 enum class DepartureAlertType : uint32_t {
-    none = 0,
-    lead_departed = 1,
-    green_light = 2,
+    None = 0,
+    LeadDeparted = 1,
+    GreenLight = 2,
 };
 
 const char *departure_alert_name(DepartureAlertType type);
@@ -33,7 +33,7 @@ struct DepartureAlertInput {
 };
 
 struct DepartureAlertOutput {
-    DepartureAlertType type = DepartureAlertType::none;
+    DepartureAlertType type = DepartureAlertType::None;
     uint32_t event_id = 0;
     bool lead_armed = false;
     bool green_light_armed = false;
@@ -87,7 +87,7 @@ private:
     LeadDepartureTracker lead_;
     GreenLightTracker green_light_;
 
-    DepartureAlertType active_type_ = DepartureAlertType::none;
+    DepartureAlertType active_type_ = DepartureAlertType::None;
     double active_until_s_ = -1.0;
     uint32_t event_id_ = 0;
 };

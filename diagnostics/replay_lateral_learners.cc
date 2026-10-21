@@ -107,10 +107,7 @@ int main(int argc, char **argv) {
     LocalizationState loc{};
     bool have_loc = false;
     if (!cache.empty())
-        std::printf("torqued cache %zu B: %s\n", cache.size(),
-                    learners.torque_restore_status() == TorqueRestore::Restored      ? "restored"
-                    : learners.torque_restore_status() == TorqueRestore::KeyMismatch ? "key mismatch"
-                                                                                     : "corrupt");
+        std::printf("torqued cache %zu B: %s\n", cache.size(), torque_restore_name(learners.torque_restore_status()));
     SteeringPressedFilter steering_pressed;  // 컨트롤러와 같은 판정
     SpeedFilter speed_filter;
 

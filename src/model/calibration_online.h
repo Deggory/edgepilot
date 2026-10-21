@@ -1,5 +1,6 @@
-#ifndef CALIBRATION_ONLINE_H
-#define CALIBRATION_ONLINE_H
+#pragma once
+
+// 모델 포즈로 카메라 장착 각도를 배우는 온라인 보정기(상류 calibrationd의 이식).
 
 #include "common/ipc_messages.h"  // CalibrationStatus
 #include "common/model_output.h"  // PoseObservation(모델 pose 출력)
@@ -60,5 +61,3 @@ private:
     float old_rpy_weight_ = 0.0f;
     Snapshot snapshot_;
 };
-
-#endif

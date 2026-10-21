@@ -52,7 +52,7 @@ AlertSound::AlertSound() : pcm_(env_string("EDGEPILOT_ALERT_PCM", "plughw:0,1"))
     signal(SIGPIPE, SIG_IGN);
     set_volume_percent(env_float("EDGEPILOT_ALERT_VOLUME", 70.0f));
     // 100% 크기로 한 번 만들어 두고 재생할 때 volume_을 곱한다.
-    for (int id = 0; id < static_cast<int>(AlertSoundId::count); ++id)
+    for (int id = 0; id < static_cast<int>(AlertSoundId::Count); ++id)
         clips_.push_back(stereo(render_alert_tone(static_cast<AlertSoundId>(id), kRate)));
     enabled_ = true;
     thread_ = std::thread(&AlertSound::loop, this);

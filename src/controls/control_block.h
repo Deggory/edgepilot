@@ -1,12 +1,13 @@
 #pragma once
 
+// 결합·조향 차단 사유. 컨트롤러가 정하고, ControlState에는 와이어 이름(문자열)으로
+// 실려 녹화·Python 리더·HUD가 읽는다. 행 하나가 열거값·와이어 이름·HUD 라벨·분류라서
+// 사유를 더할 때 다른 곳을 고칠 필요가 없다.
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
-// 결합·조향 차단 사유. 컨트롤러가 정하고, ControlState에는 와이어 이름(문자열)으로
-// 실려 녹화·Python 리더·HUD가 읽는다. 행 하나가 열거값·와이어 이름·HUD 라벨·분류라서
-// 사유를 더할 때 다른 곳을 고칠 필요가 없다.
 enum class BlockKind : uint8_t {
     None,    // 차단 없음: active
     Reject,  // 정적 gate: 결합 요청은 실패로 처리, 표시만 한다

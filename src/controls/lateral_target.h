@@ -1,5 +1,4 @@
-#ifndef LATERAL_TARGET_H
-#define LATERAL_TARGET_H
+#pragma once
 
 // LateralController의 틱 입력 둘: LateralPlanner(횡방향 MPC)가 만드는 횡방향 계획(LateralTarget, 생산자는 controlsd의
 // MPC 하나뿐이다)과 모델 plan의 조향 가용성(LateralPath).
@@ -62,5 +61,3 @@ struct LateralTarget {
     float lane_right_std = 0.0f;
     float lane_d_prob = 0.0f;
 };
-
-#endif

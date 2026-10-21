@@ -18,26 +18,26 @@ HudAlertCard hud_select_alert(const HudState &hud, bool model_ok) {
     std::snprintf(links, sizeof(links), "MODEL %s   CAR %s   PANDA %s", model_ok ? "OK" : "--",
                   hud.vehicle_fresh ? "OK" : "--", hud.panda_connected ? "OK" : "--");
     if (hud.engage_reject_label[0] != '\0')
-        return {"UNABLE TO ENGAGE", hud.engage_reject_label, HudAlertLevel::caution};
-    if (hud.soft_disabling) return {"TAKE CONTROL", engage_block_label(hud.active_block), HudAlertLevel::critical};
-    if (hud.steering_fault) return {"STEERING FAULT", links, HudAlertLevel::critical};
-    if (hud.panda_faults != 0) return {"PANDA FAULT", links, HudAlertLevel::critical};
+        return {"UNABLE TO ENGAGE", hud.engage_reject_label, HudAlertLevel::Caution};
+    if (hud.soft_disabling) return {"TAKE CONTROL", engage_block_label(hud.active_block), HudAlertLevel::Critical};
+    if (hud.steering_fault) return {"STEERING FAULT", links, HudAlertLevel::Critical};
+    if (hud.panda_faults != 0) return {"PANDA FAULT", links, HudAlertLevel::Critical};
     if (hud.controller_active && hud.steer_paused)
         return {
             "STEERING PAUSED",
             hud.steer_paused_by_driver ? "Resumes on the plan or below 15\xb0" : "Wheel past 85\xb0, resumes below it",
-            HudAlertLevel::caution};
-    if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", HudAlertLevel::caution};
-    if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, HudAlertLevel::caution};
-    if (hud.controller_active && hud.lane_change == HudLaneChange::pending) {
+            HudAlertLevel::Caution};
+    if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", HudAlertLevel::Caution};
+    if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, HudAlertLevel::Caution};
+    if (hud.controller_active && hud.lane_change == HudLaneChange::Pending) {
         const bool left = hud.lane_change_direction < 0;
         return {"LANE CHANGE", left ? "Steer left to start once safe" : "Steer right to start once safe",
-                HudAlertLevel::notice, left ? -1 : 1};
+                HudAlertLevel::Notice, left ? -1 : 1};
     }
-    if (hud.departure_alert_type == DepartureAlertType::lead_departed)
-        return {"LEAD VEHICLE MOVING", "Check the road and proceed", HudAlertLevel::proceed};
-    if (hud.departure_alert_type == DepartureAlertType::green_light)
-        return {"GREEN LIGHT", "Check the road and proceed", HudAlertLevel::proceed};
+    if (hud.departure_alert_type == DepartureAlertType::LeadDeparted)
+        return {"LEAD VEHICLE MOVING", "Check the road and proceed", HudAlertLevel::Proceed};
+    if (hud.departure_alert_type == DepartureAlertType::GreenLight)
+        return {"GREEN LIGHT", "Check the road and proceed", HudAlertLevel::Proceed};
     return {};
 }
 
@@ -68,9 +68,9 @@ void hud_apply_control_state(const ControlState &control, bool fresh, HudState *
     hud->brake_hold = (flags & kHudFlagBrakeHold) != 0;
     hud->soft_disabling = (flags & kHudFlagSoftDisabling) != 0;
     hud->steer_saturated = (flags & kHudFlagSteerSaturated) != 0;
-    hud->lane_change = flags & kHudFlagLaneChanging        ? HudLaneChange::changing
-                       : flags & kHudFlagLaneChangePending ? HudLaneChange::pending
-                                                           : HudLaneChange::none;
+    hud->lane_change = flags & kHudFlagLaneChanging        ? HudLaneChange::Changing
+                       : flags & kHudFlagLaneChangePending ? HudLaneChange::Pending
+                                                           : HudLaneChange::None;
     hud->lane_change_direction = flags & kHudFlagLaneChangeRight ? 1 : -1;
     hud->steer_paused = (flags & kHudFlagSteerPaused) != 0;
     hud->steer_paused_by_driver = (flags & kHudFlagSteerPausedByDriver) != 0;

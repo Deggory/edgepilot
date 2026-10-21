@@ -1,3 +1,7 @@
+// modeld: 카메라 프레임 링의 최신 프레임마다 supercombo를 NPU에서 돌려 ModelState를 낸다(20 Hz). 입력 워프는 GDC,
+// 보정은 CalibrationService(포즈 또는 광류), 광류 보정과 앞차 확대율은 광류 워커 스레드(IVE)가 맡는다. 녹화할
+// 프레임은 recordFrame으로 알린다. EDGEPILOT_REPLAY_NV12를 주면 그 SCNV12R1 파일로 헤드리스 재생한다.
+
 #include "common/app_config.h"
 #include "common/build_version.h"
 #include "common/device_settings.h"
@@ -89,7 +93,7 @@ struct RateWindow {
     bool close_if_due(uint64_t *window_us) {
         const uint64_t now_ns = monotonic_now_ns();
         const uint64_t elapsed_us = (now_ns - last_ns) / 1000ULL;
-        if (elapsed_us < 1000000ULL) return false;
+        if (elapsed_us < 1'000'000ULL) return false;
         *window_us = elapsed_us;
         last_ns = now_ns;
         return true;

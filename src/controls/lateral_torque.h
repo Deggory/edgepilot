@@ -1,5 +1,4 @@
-#ifndef LATERAL_TORQUE_H
-#define LATERAL_TORQUE_H
+#pragma once
 
 // openpilot latcontrol_torque(v0.11)의 C++ 이식.
 
@@ -154,5 +153,3 @@ private:
     // 저크 선행 마찰용 1.2Hz 저역통과 상태
     float jerk_filtered_ = 0.0f;
 };
-
-#endif  // LATERAL_TORQUE_H

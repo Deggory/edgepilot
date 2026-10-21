@@ -1,5 +1,4 @@
-#ifndef HUD_STATE_H
-#define HUD_STATE_H
+#pragma once
 
 // 공유 상태 스냅샷(ModelState·ControlState 등) → HUD 표시 상태. 그리기와 무관하고, overlayd와 hud_snapshot이 같은
 // 매핑을 쓴다.
@@ -20,7 +19,7 @@ const char *engage_block_label(const char *block);
 constexpr int kTurnSignalSteps = 25;
 
 // 차선 변경 표시(ControlState hud_flags에서): 깜빡이를 켜고 운전자가 핸들을 밀기를 기다리는 중, 변경 중.
-enum class HudLaneChange { none, pending, changing };
+enum class HudLaneChange { None, Pending, Changing };
 
 struct HudState {
     bool panda_connected = false;
@@ -38,7 +37,7 @@ struct HudState {
     bool brake_hold = false;
     bool soft_disabling = false;   // 3초 뒤 해제 예고(active_block이 사유)
     bool steer_saturated = false;  // 커브가 조향 한계를 넘음
-    HudLaneChange lane_change = HudLaneChange::none;
+    HudLaneChange lane_change = HudLaneChange::None;
     int lane_change_direction = 0;        // -1 왼쪽, 1 오른쪽
     bool steer_paused = false;            // 85도 위에서 조향 요청을 끄고 쉰다
     bool steer_paused_by_driver = false;  // 넘겨받은 회전: 15도 아래에서 손을 떼거나 계획 커브를 1초 따르면 다시 조향
@@ -54,7 +53,7 @@ struct HudState {
     bool radar_lead_valid = false;
     float radar_lead_distance_m = 0.0f;
     float radar_lead_relative_speed_mps = 0.0f;
-    DepartureAlertType departure_alert_type = DepartureAlertType::none;
+    DepartureAlertType departure_alert_type = DepartureAlertType::None;
     bool green_light_alert_armed = false;
     char engage_reject_label[48] = {};  // 비어 있지 않으면 결합 거부 알림(사유 라벨)
     bool tpms_valid = false;
@@ -137,12 +136,12 @@ void hud_apply_learner_state(const LearnerState &learner, bool fresh, HudState *
 void hud_apply_localization_state(const LocalizationState &localization, bool fresh, HudState *hud);
 
 // 아래 가운데 알림 카드의 무게. 렌더러가 색으로 옮긴다(흰색, 초록, 주황, 빨강).
-enum class HudAlertLevel { notice, proceed, caution, critical };
+enum class HudAlertLevel { Notice, Proceed, Caution, Critical };
 
 struct HudAlertCard {
     std::string title;
     std::string detail;
-    HudAlertLevel level = HudAlertLevel::notice;
+    HudAlertLevel level = HudAlertLevel::Notice;
     int arrow = 0;  // 제목 옆 방향 화살표: -1 왼쪽, 1 오른쪽
 
     bool empty() const { return title.empty(); }
@@ -158,5 +157,3 @@ HudAlertCard hud_select_alert(const HudState &hud, bool model_ok);
 float lane_center_offset_m(const ParsedModelOutput &output);
 // model_ok: 유효하고 신선한 모델 출력이 있는지. services_healthy의 조건 중 하나.
 void hud_apply_manager_state(const ManagerState &manager, bool fresh, bool model_ok, HudState *hud);
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_IVE_FLOW_H
-#define MAIXCAM2_IVE_FLOW_H
+#pragma once
 
 // 광류 작업(model/flow_tracker: 광류 보정과 앞차 확대율)의 하드웨어 부분(FlowEngine). 프레임마다 축소 단(1/2,
 // 1/4)을 VPP 한 번으로 만들고(modeld가 GDC 때문에 쥐고만 있던 VPP 작업 큐), 측정 창 시작 프레임에서 IVE로
@@ -53,5 +52,3 @@ private:
     std::unique_ptr<Impl> impl_;
     int width_ = 0;
 };
-
-#endif

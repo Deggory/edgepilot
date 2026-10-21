@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    for (int i = 0; i < static_cast<int>(AlertSoundId::count); ++i) {
+    for (int i = 0; i < static_cast<int>(AlertSoundId::Count); ++i) {
         const AlertSoundId id = static_cast<AlertSoundId>(i);
         const std::vector<int16_t> pcm = render_alert_tone(id, kRate);
         const std::string path = prefix + "_" + alert_sound_name(id) + ".wav";

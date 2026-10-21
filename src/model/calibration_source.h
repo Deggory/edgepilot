@@ -1,5 +1,4 @@
-#ifndef CALIBRATION_SOURCE_H
-#define CALIBRATION_SOURCE_H
+#pragma once
 
 // 워프 보정의 출처를 고른다: 모델 포즈 보정기(model/calibration_online)와 광류 보정기
 // (model/flow_calibration). 웹 기기 설정이 광류이고 광류 추정이 쓸 만하면 pitch·yaw를 광류에서, roll은
@@ -54,5 +53,3 @@ private:
     uint32_t flags_ = 0;
     float rpy_[3] = {0.0f, 0.0f, 0.0f};
 };
-
-#endif

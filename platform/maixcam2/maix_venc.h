@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_VENC_H
-#define MAIXCAM2_VENC_H
+#pragma once
 
 // AX620E 하드웨어 비디오 인코더(VENC, H.264). 보드 디코더(VDEC)도 H.264를 풀어서, 녹화한 주행을 그대로
 // 리허설(replayd)에 쓸 수 있다.
@@ -44,5 +43,3 @@ private:
     uint64_t submitted_ = 0;
     uint64_t encoded_ = 0;
 };
-
-#endif

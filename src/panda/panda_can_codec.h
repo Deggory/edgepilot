@@ -1,5 +1,4 @@
-#ifndef PANDA_CAN_CODEC_H
-#define PANDA_CAN_CODEC_H
+#pragma once
 
 // Panda USB의 CAN 패킷 형식(firmware/panda)을 싸고 푼다. 받는 쪽은 64바이트 USB 패킷 사이에 걸친 CAN 패킷을
 // 이어 붙인다.
@@ -35,5 +34,3 @@ struct PandaRxStream {
 // 남은 앞부분과 카운터를 stream에 두고 다음 읽기에서 잇는다. 실패하면 stream을 처음으로 되돌린다. size는 0보다 크다.
 bool panda_can_unpack_stream(const uint8_t *data, int size, bool complete, PandaRxStream *stream,
                              std::vector<PandaCanFrame> *frames, std::string *error = nullptr);
-
-#endif

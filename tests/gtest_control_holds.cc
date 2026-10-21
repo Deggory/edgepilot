@@ -13,7 +13,7 @@ namespace {
 ModelState usable_model_state() {
     ModelState state;
     state.valid = 1;
-    state.model_timestamp_ns = 1000000000ULL;
+    state.model_timestamp_ns = 1'000'000'000ULL;
     state.lane_probabilities[1] = 0.8f;
     state.lane_probabilities[2] = 0.7f;
     for (int i = 0; i < kTrajectorySize; ++i) {
@@ -31,7 +31,7 @@ void collapse_plan(ModelState *state) {
 
 TEST(ControlHolds, ModelPathAdapter) {
     const ModelState state = usable_model_state();
-    const LateralPath path = path_from_model_state(state, 1100000000ULL, 250000000ULL);
+    const LateralPath path = path_from_model_state(state, 1'100'000'000ULL, 250'000'000ULL);
     // 모델 경로 변환의 유효 판정
     ASSERT_TRUE(path.usable_for_steering);
     // 모델 경로 변환은 앞쪽 plan 점을 모두 센다
@@ -41,7 +41,7 @@ TEST(ControlHolds, ModelPathAdapter) {
     // 정차에서 plan이 몇 미터로 주저앉으면 점 수는 충분해도 조향에 못 쓴다.
     ModelState short_state = state;
     collapse_plan(&short_state);
-    const LateralPath short_path = path_from_model_state(short_state, 1100000000ULL, 250000000ULL);
+    const LateralPath short_path = path_from_model_state(short_state, 1'100'000'000ULL, 250'000'000ULL);
     // plan 도달 거리가 짧으면 조향 게이트에서 막힌다
     ASSERT_FALSE(short_path.usable_for_steering);
     ASSERT_FALSE(short_path.model_lost) << "모델 끊김이 아니라 짧은 경로";
@@ -50,7 +50,7 @@ TEST(ControlHolds, ModelPathAdapter) {
 // 문서화된 안전 홀드 1: Panda 헬스 스냅샷 공백은 100 ms까지만, 신선한
 // controls_allowed=0은 절대 유지하지 않는다.
 TEST(ControlHolds, PandaHealthHold) {
-    const uint64_t t0 = 1000000000ULL;
+    const uint64_t t0 = 1'000'000'000ULL;
     PandaState ready;
     ready.timestamp_ns = t0;
     ready.connected = ready.comms_healthy = ready.tx_enabled = 1;
@@ -68,20 +68,20 @@ TEST(ControlHolds, PandaHealthHold) {
     ASSERT_TRUE(out.ready);
     ASSERT_TRUE(out.controls_allowed);
     ASSERT_FALSE(out.hold_applied);
-    out = gate.update(unhealthy, t0 + 50000000ULL, false);
+    out = gate.update(unhealthy, t0 + 50'000'000ULL, false);
     // 50 ms 상태 공백은 마지막 판정을 유지한다
     ASSERT_FALSE(out.ready_raw);
     ASSERT_TRUE(out.hold_applied);
     ASSERT_TRUE(out.ready);
     ASSERT_TRUE(out.controls_allowed);
-    out = gate.update(unhealthy, t0 + 100000000ULL, false);
+    out = gate.update(unhealthy, t0 + 100'000'000ULL, false);
     ASSERT_TRUE(out.hold_applied) << "홀드는 정확히 100 ms까지 덮는다";
     out = gate.update(unhealthy, t0 + 100000001ULL, false);
     // 홀드는 100 ms 뒤 끝난다
     ASSERT_FALSE(out.hold_applied);
     ASSERT_FALSE(out.ready);
     ASSERT_FALSE(out.controls_allowed);
-    out = gate.update(ready, t0 + 1200000000ULL, false);
+    out = gate.update(ready, t0 + 1'200'000'000ULL, false);
     // 1.2 s 지난 스냅샷은 필드가 준비돼 보여도 낡은 것이다
     ASSERT_FALSE(out.state_fresh);
     ASSERT_FALSE(out.ready_raw);
@@ -91,8 +91,8 @@ TEST(ControlHolds, PandaHealthHold) {
     explicit_off.update(ready, t0, false);
     PandaState off = ready;
     off.controls_allowed = 0;
-    off.timestamp_ns = t0 + 10000000ULL;
-    out = explicit_off.update(off, t0 + 10000000ULL, false);
+    off.timestamp_ns = t0 + 10'000'000ULL;
+    out = explicit_off.update(off, t0 + 10'000'000ULL, false);
     // 신선하고 전송이 준비된 controls_allowed=0은 홀드하지 않는다
     ASSERT_TRUE(out.ready_raw);
     ASSERT_FALSE(out.hold_applied);
@@ -100,7 +100,7 @@ TEST(ControlHolds, PandaHealthHold) {
     ASSERT_FALSE(out.controls_allowed);
     PandaState gap = off;
     gap.comms_healthy = 0;
-    out = explicit_off.update(gap, t0 + 60000000ULL, false);
+    out = explicit_off.update(gap, t0 + 60'000'000ULL, false);
     // 명시적 off 뒤 상태 공백은 controls를 끈 채로 둔다
     ASSERT_TRUE(out.hold_applied);
     ASSERT_TRUE(out.ready);
@@ -121,24 +121,24 @@ TEST(ControlHolds, PandaHealthHold) {
 // 문서화된 안전 홀드 2: 잘못된 plan 프레임은 150 ms까지 마지막 유효 경로로
 // 덮고, 모델 freshness 타임아웃은 그대로 하드 게이트다.
 TEST(ControlHolds, PathInvalidHold) {
-    const uint64_t timeout_ns = 250000000ULL;
+    const uint64_t timeout_ns = 250'000'000ULL;
     const ModelState good = usable_model_state();
 
     PathHoldGate gate;
-    PathHoldOutput out = gate.update(good, 1100000000ULL, timeout_ns);
+    PathHoldOutput out = gate.update(good, 1'100'000'000ULL, timeout_ns);
     // 쓸 수 있는 plan은 홀드를 그대로 지난다
     ASSERT_TRUE(out.path.usable_for_steering);
     ASSERT_FALSE(out.hold_applied);
     ModelState collapsed = good;
-    collapsed.model_timestamp_ns = 1050000000ULL;
+    collapsed.model_timestamp_ns = 1'050'000'000ULL;
     collapse_plan(&collapsed);
-    out = gate.update(collapsed, 1100000000ULL, timeout_ns);
+    out = gate.update(collapsed, 1'100'000'000ULL, timeout_ns);
     // 무너진 프레임 하나는 마지막 쓸 수 있는 경로로 덮는다
     ASSERT_FALSE(out.raw.usable_for_steering);
     ASSERT_TRUE(out.hold_applied);
     ASSERT_TRUE(out.path.usable_for_steering);
-    collapsed.model_timestamp_ns = 1120000000ULL;
-    out = gate.update(collapsed, 1150000000ULL, timeout_ns);
+    collapsed.model_timestamp_ns = 1'120'000'000ULL;
+    out = gate.update(collapsed, 1'150'000'000ULL, timeout_ns);
     ASSERT_TRUE(out.hold_applied) << "홀드는 정확히 150 ms까지 덮는다";
     out = gate.update(collapsed, 1150000001ULL, timeout_ns);
     // 홀드는 마지막 쓸 수 있는 프레임 150 ms 뒤 끝난다
@@ -147,16 +147,16 @@ TEST(ControlHolds, PathInvalidHold) {
     ASSERT_FALSE(out.path.model_lost);
 
     PathHoldGate stale_gate;
-    stale_gate.update(good, 1100000000ULL, timeout_ns);
+    stale_gate.update(good, 1'100'000'000ULL, timeout_ns);
     ModelState stale = collapsed;
-    stale.model_timestamp_ns = 1000000000ULL;
-    out = stale_gate.update(stale, 1400000000ULL, timeout_ns);
+    stale.model_timestamp_ns = 1'000'000'000ULL;
+    out = stale_gate.update(stale, 1'400'000'000ULL, timeout_ns);
     // 낡은 모델은 바로 막고 홀드하지 않는다
     ASSERT_FALSE(out.hold_applied);
     ASSERT_TRUE(out.path.model_lost);
 
     PathHoldGate startup_gate;
-    out = startup_gate.update(ModelState{}, 1130000000ULL, timeout_ns);
+    out = startup_gate.update(ModelState{}, 1'130'000'000ULL, timeout_ns);
     // 시작할 때의 빈 모델 상태(시각 0)는 모델 끊김이다
     ASSERT_FALSE(out.hold_applied);
     ASSERT_TRUE(out.path.model_lost);

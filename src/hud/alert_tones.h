@@ -1,5 +1,4 @@
-#ifndef ALERT_TONES_H
-#define ALERT_TONES_H
+#pragma once
 
 // HUD 알림음의 소리 자체. 짧은 종소리 같은 음(부드러운 시작, 지수 감쇠, 더 빨리 사라지는
 // 2·3배음)을 겹쳐 만든다: 기쁜 알림은 위로, 해제는 아래로, 거부와 경고는 낮고 밝게.
@@ -8,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-enum class AlertSoundId { unable, engage, disengage, signal_changed, unavailable, count };
+enum class AlertSoundId { Unable, Engage, Disengage, SignalChanged, Unavailable, Count };
 
 const char *alert_sound_name(AlertSoundId id);
 
@@ -17,5 +16,3 @@ const char *alert_sound_name(AlertSoundId id);
 // 웹 기기 설정의 알림음 크기로 맞춘다.
 constexpr double kAlertTonePeak = 0.5;
 std::vector<int16_t> render_alert_tone(AlertSoundId id, int rate);
-
-#endif

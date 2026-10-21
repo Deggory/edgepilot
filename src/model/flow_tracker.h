@@ -1,5 +1,4 @@
-#ifndef FLOW_TRACKER_H
-#define FLOW_TRACKER_H
+#pragma once
 
 // 광류 작업의 한 프레임(호스트에서도 빌드한다). FlowTracker가 프레임마다 엔진(model/flow_engine)으로 축소 단을 한
 // 번 만들고, 광류 보정의 측정 창(model/flow_calibration)과 앞차 확대율의 창(model/lead_flow)의 점을 한 번의
@@ -40,7 +39,7 @@ public:
     FlowTracker(const FlowIntrinsics &k, int width, int height, std::unique_ptr<FlowEngine> engine);
     ~FlowTracker();
 
-    void process(const FlowFrame &f);
+    void update(const FlowFrame &f);
     const FlowCalibrator &calibrator() const { return calibrator_; }
     LeadFlowState lead_state() const { return lead_.state(); }
     // 저장해 둔 블록으로 시작한다(FlowCalibrator::restore). 진행 중인 창은 그대로다.
@@ -85,5 +84,3 @@ private:
     std::vector<uint8_t> back_ok_;
     std::vector<float> fit_a_, fit_b_;
 };
-
-#endif

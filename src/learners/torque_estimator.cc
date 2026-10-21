@@ -17,6 +17,22 @@ double clip(double v, double lo, double hi) { return std::min(std::max(v, lo), h
 
 // ---------------------------------------------------------------- TorqueEstimator
 
+const char *torque_restore_name(TorqueRestore status) {
+    switch (status) {
+        case TorqueRestore::None:
+            return "fresh";
+        case TorqueRestore::Restored:
+            return "restored";
+        case TorqueRestore::KeyMismatch:
+            return "key_mismatch";
+        case TorqueRestore::Corrupt:
+            return "corrupt";
+        case TorqueRestore::SourceChanged:
+            return "source_changed";
+    }
+    return "unknown";
+}
+
 namespace {
 
 // torqued.py

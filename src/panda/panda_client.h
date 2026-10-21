@@ -1,5 +1,6 @@
-#ifndef PANDA_CLIENT_H
-#define PANDA_CLIENT_H
+#pragma once
+
+// Panda USB 연결(PandaClient): 접속, safety 설정, 하트비트, 상태 조회, CAN 송수신. pandad가 쓴다.
 
 #include "panda/panda_can_codec.h"
 #include "panda/panda_protocol.h"
@@ -108,5 +109,3 @@ private:
     uint32_t consecutive_malformed_rx_ = 0;
     PandaRxStream rx_stream_;  // 시간 초과로 잘린 수신을 다음 읽기로 잇는다
 };
-
-#endif

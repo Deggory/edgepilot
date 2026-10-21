@@ -1,5 +1,4 @@
-#ifndef APP_CONFIG_H
-#define APP_CONFIG_H
+#pragma once
 
 // 런타임 옵션(환경 변수)을 시작할 때 한 번 읽는다(AppConfig). MaixCAM2 카메라 내부 파라미터, 캡처 크기, overlayd와
 // projection이 같이 쓰는 4:3 미리보기 자르기도 여기 있다.
@@ -82,5 +81,3 @@ struct AppConfig {
 
     bool replay_enabled() const { return !replay_nv12_path.empty(); }
 };
-
-#endif

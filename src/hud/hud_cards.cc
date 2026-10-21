@@ -33,7 +33,7 @@ void corner_card(HudCanvas &canvas, int x, int y, int h, const char *title, cons
     canvas.fill_round_rect(x, y, kCornerCardW, h, kRadius, kCard);
     const int line = cap_line(kHudCaptionFont, y + kCardPad);
     canvas.text(x + kCardPad, line, title, kHudCaptionFont, kTextSecondary);
-    canvas.text(x + kCornerCardW - kCardPad, line, status, kHudCaptionFont, status_color, HudAlign::right);
+    canvas.text(x + kCornerCardW - kCardPad, line, status, kHudCaptionFont, status_color, HudAlign::Right);
 }
 
 // 카드 아래쪽에 쌓는 줄: 왼쪽에 작은 이름, 오른쪽 정렬한 값.
@@ -55,7 +55,7 @@ void card_rows(HudCanvas &canvas, int x, int bottom, const CardRow (&rows)[N]) {
         const int baseline = bottom - kCardPad - static_cast<int>(N - 1 - i) * kRowH;
         canvas.text(x + kCardPad, base_line(kHudCaptionFont, baseline), rows[i].name, kHudCaptionFont, kTextSecondary);
         canvas.text(x + kCornerCardW - kCardPad, base_line(kHudBodyFont, baseline), rows[i].value, kHudBodyFont,
-                    rows[i].color, HudAlign::right);
+                    rows[i].color, HudAlign::Right);
     }
 }
 
@@ -96,7 +96,7 @@ int draw_network_card(HudCanvas &canvas, int y, const HudState &hud) {
     int baseline = y + header_baseline;
     canvas.text(x + kCardPad, base_line(kHudCaptionFont, baseline), title, kHudCaptionFont, kTextSecondary);
     canvas.text(x + w - kCardPad, base_line(kHudCaptionFont, baseline), status, kHudCaptionFont,
-                weak ? kAmber : kTextSecondary, HudAlign::right);
+                weak ? kAmber : kTextSecondary, HudAlign::Right);
     for (const Line &line : lines) {
         if (line.text[0] == '\0') continue;
         baseline += line.advance;
@@ -128,7 +128,7 @@ void draw_tpms(HudCanvas &canvas, const HudState &hud) {
         canvas.fill_round_rect(tire_x, tire_y, kTireW, kTireH, 2, color ? color : kTrack);
         canvas.text(right ? tire_x + kTireW + 6 : tire_x - 6, centered_line_top(kHudBodyFont, tire_y, kTireH),
                     color ? format_text(bar ? "%.1f" : "%.0f", pressure) : "--", kHudBodyFont,
-                    color ? color : kTextSecondary, right ? HudAlign::left : HudAlign::right);
+                    color ? color : kTextSecondary, right ? HudAlign::Left : HudAlign::Right);
     }
 }
 

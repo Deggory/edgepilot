@@ -1,5 +1,4 @@
-#ifndef HUD_FONT_H
-#define HUD_FONT_H
+#pragma once
 
 // HUD 글꼴. tools/ui/make_hud_font.py가 구운 글리프(hud_font_data.inc, Aileron Regular CC0)를
 // 컴파일 시점에 8비트 커버리지로 펼쳐 둔다. 실행 중 글꼴 래스터화는 없다.
@@ -36,5 +35,3 @@ extern const HudFont kHudValueFont;    // 30 px 숫자와 기어 글자(설정 �
 extern const HudFont kHudTitleFont;    // 22 px 세미볼드(알림 제목)
 extern const HudFont kHudBodyFont;     // 18 px(칩, 값)
 extern const HudFont kHudCaptionFont;  // 14 px(보조 글, 진단)
-
-#endif

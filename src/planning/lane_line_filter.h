@@ -1,5 +1,4 @@
-#ifndef LANE_LINE_FILTER_H
-#define LANE_LINE_FILTER_H
+#pragma once
 
 // 차선선 시간 필터. 모델 차선은 프레임마다 흔들리고(2026-10-10 밤 주행: 27 m에서 1.3 cm, 75 m에서 5.5 cm),
 // 그 흔들림이 조향 지령 잔떨림의 대부분이다. 직전 프레임에 거른 선을 그 사이 자차가 움직인 만큼(속도와
@@ -33,5 +32,3 @@ private:
     double t_s_ = 0.0;
     std::array<double, kTrajectorySize> x_{}, y_{};  // 직전 프레임 차체 좌표의 거른 선
 };
-
-#endif

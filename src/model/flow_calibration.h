@@ -1,5 +1,4 @@
-#ifndef FLOW_CALIBRATION_H
-#define FLOW_CALIBRATION_H
+#pragma once
 
 // 광류 보정기. 카메라가 실제로 움직이는 방향(소실점, FOE)을 영상에서 직접 잰다. 창 시작 프레임에서 고른
 // 점들을 1프레임씩 kFlowWindowSteps번 따라가고(0.4초), 시작·끝 점 쌍으로 이동 방향과 작은 회전을 함께
@@ -124,5 +123,3 @@ private:
     std::deque<float> med_yaw_, med_pitch_;       // 끝난 블록의 중앙값(오래된 것부터, 최근 kFlowMaxBlocks개)
     FlowCalibrationState state_{};
 };
-
-#endif

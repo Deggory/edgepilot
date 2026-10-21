@@ -1,3 +1,15 @@
+// 카메라 내부 파라미터 측정용 스틸 캡처.
+//
+// 런타임과 같은 MaixCamera 경로(센서 2560x1440 전체 화각을 크롭 없이 줄임, 보드
+// cam_flip/mirror, AI-ISP 설정)로 1920x1080을 받아, LCD에는 전체 화면을 원본 비율로
+// (위아래 검은 띠) 보여 주고, Func 키·화면 터치·터미널 Enter를 누르면 그 프레임을 무손실
+// PNG로 저장한다. 저장은 별도 스레드가 하므로 미리보기는 멈추지 않고, 파일이 디스크에
+// 쓰이면 확인음이 난다. 카메라를 독점하므로 edgepilot 런타임을 먼저 멈춘다.
+//
+// 환경: CAMCAL_DIR(기본 /root/camcal/snapshots), CAMCAL_WIDTH/HEIGHT(1920/1080),
+// CAMCAL_FORMAT(png|jpg), CAMCAL_MAX_SHUTTER_US(기본 10000: 손떨림 번짐을 줄인다),
+// CAMCAL_INPUTS(기본 /dev/input/event0,/dev/input/event1).
+
 #include "common/build_version.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
@@ -30,18 +42,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-// 카메라 내부 파라미터 측정용 스틸 캡처.
-//
-// 런타임과 같은 MaixCamera 경로(센서 2560x1440 전체 화각을 크롭 없이 줄임, 보드
-// cam_flip/mirror, AI-ISP 설정)로 1920x1080을 받아, LCD에는 전체 화면을 원본 비율로
-// (위아래 검은 띠) 보여 주고, Func 키·화면 터치·터미널 Enter를 누르면 그 프레임을 무손실
-// PNG로 저장한다. 저장은 별도 스레드가 하므로 미리보기는 멈추지 않고, 파일이 디스크에
-// 쓰이면 확인음이 난다. 카메라를 독점하므로 edgepilot 런타임을 먼저 멈춘다.
-//
-// 환경: CAMCAL_DIR(기본 /root/camcal/snapshots), CAMCAL_WIDTH/HEIGHT(1920/1080),
-// CAMCAL_FORMAT(png|jpg), CAMCAL_MAX_SHUTTER_US(기본 10000: 손떨림 번짐을 줄인다),
-// CAMCAL_INPUTS(기본 /dev/input/event0,/dev/input/event1).
 
 namespace {
 
@@ -158,12 +158,12 @@ private:
         if (ok) {
             ++saved;
             last_sharp = sharp;
-            sound_.play(AlertSoundId::signal_changed);
+            sound_.play(AlertSoundId::SignalChanged);
             std::fprintf(stderr, "\ncamcal: %d saved %s sharp=%.0f write=%.0fms\n", saved.load(), path.c_str(), sharp,
                          ms);
         } else {
             ++failed;
-            sound_.play(AlertSoundId::unable);
+            sound_.play(AlertSoundId::Unable);
             std::fprintf(stderr, "\ncamcal: save failed %s\n", path.c_str());
         }
     }
@@ -306,7 +306,7 @@ int main() {
             const uint64_t now = monotonic_now_ns();
             if (presses > 0) {
                 if (saver.busy()) {
-                    sound.play(AlertSoundId::unable);
+                    sound.play(AlertSoundId::Unable);
                     std::fprintf(stderr, "\ncamcal: still saving the previous shot, ignored\n");
                 } else {
                     // CMM 슬롯은 캐시하지 않는 메모리라 한 번에 복사해 두고 저장 스레드에 넘긴다.
@@ -314,7 +314,7 @@ int main() {
                     shot.nv12.assign(slot.virt, slot.virt + frame_bytes);
                     shot.index = index++;
                     saver.submit(std::move(shot));
-                    flash_until = now + 150000000ULL;
+                    flash_until = now + 150'000'000ULL;
                     flashing = true;
                     redraw = true;
                 }
@@ -330,7 +330,7 @@ int main() {
                 redraw = false;
             }
 
-            if (now - window_start >= 1000000000ULL) {
+            if (now - window_start >= 1'000'000'000ULL) {
                 std::fprintf(stderr, "camcal: fps=%.1f saved=%d failed=%d errors=%llu          \r",
                              window_frames * 1e9 / (now - window_start), saver.saved.load(), saver.failed.load(),
                              static_cast<unsigned long long>(errors));

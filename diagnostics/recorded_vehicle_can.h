@@ -1,5 +1,4 @@
-#ifndef RECORDED_VEHICLE_CAN_H
-#define RECORDED_VEHICLE_CAN_H
+#pragma once
 
 // 녹화한 CanRx 페이로드를 vehicle_can 상태에 반영한다(진단 도구 공용). controlsd와 같은 규칙
 // (is_vehicle_rx_frame)으로 CAN-FD 길이, Panda가 되돌려 준 송신 프레임(flags != 0)과 가상 버스(src > 7)를
@@ -23,5 +22,3 @@ inline void apply_recorded_can(const void *payload, size_t size, double now_s, V
                                  static_cast<uint8_t>(frame.src), now_s);
     });
 }
-
-#endif

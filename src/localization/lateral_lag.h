@@ -1,5 +1,4 @@
-#ifndef LATERAL_LAG_H
-#define LATERAL_LAG_H
+#pragma once
 
 // openpilot lagd(selfdrive/locationd/lagd.py)의 C++ 이식: 조향 지연을 주행 중에 추정한다.
 //
@@ -114,5 +113,3 @@ private:
 // steering.json 글에서 steer_actuator_delay를 읽어 lagd 초기값(config->initial_lag)으로 둔다. controlsd 로더
 // (control_params.cc)와 같은 0.01~1.0으로 자르고, 키가 없으면 그대로 둔다. locationd와 재생 도구가 같은 규칙을 쓴다.
 void apply_steering_initial_lag(const std::string &steering_json, LateralLagConfig *config);
-
-#endif

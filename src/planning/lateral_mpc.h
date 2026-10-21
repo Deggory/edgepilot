@@ -1,5 +1,4 @@
-#ifndef LATERAL_MPC_H
-#define LATERAL_MPC_H
+#pragma once
 
 // openpilot 0.8.16 lateral_mpc_lib와 같은 OCP를 푸는 축소 SQP 솔버.
 // 상태 (y, psi, curvature), 입력 curvature_rate, 노드 17개(T_IDXS 격자).
@@ -63,5 +62,3 @@ private:
     double cost_ = 0.0;
     int status_ = 0;
 };
-
-#endif

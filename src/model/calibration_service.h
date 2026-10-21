@@ -1,5 +1,11 @@
-#ifndef CALIBRATION_SERVICE_H
-#define CALIBRATION_SERVICE_H
+#pragma once
+
+// 모델 입력 워프의 카메라 보정. 모델 포즈 보정기(OnlineCalibrator, upstream calibrationd)를 돌리고, 웹 기기
+// 설정이 광류면 광류 추정(FlowSource, 보드에서는 광류 워커)의 pitch·yaw로 바꿔 쓴다(CalibrationSourceSelector).
+// projection·input_rpy·snapshot은 언제나 워프에 쓰는 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다
+// (upstream 루프는 모델이 자기 값으로 워프된 영상을 봤다고 가정한다). 포즈 보정은 calibration.json, 광류 블록은
+// flow_calibration.json에 저장하고(SD가 바빠도 모델 루프가 서지 않게 BackgroundWriter로), 웹 콘솔의 초기화는 둘 다
+// 지운다(광류 측정원에도 알린다). 설정을 읽는 것은 프로세스(modeld)이고, 여기서는 인자로 받는다.
 
 #include "common/app_config.h"
 #include "common/background_writer.h"
@@ -12,12 +18,6 @@
 #include <chrono>
 #include <string>
 
-// 모델 입력 워프의 카메라 보정. 모델 포즈 보정기(OnlineCalibrator, upstream calibrationd)를 돌리고, 웹 기기
-// 설정이 광류면 광류 추정(FlowSource, 보드에서는 광류 워커)의 pitch·yaw로 바꿔 쓴다(CalibrationSourceSelector).
-// projection·input_rpy·snapshot은 언제나 워프에 쓰는 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다
-// (upstream 루프는 모델이 자기 값으로 워프된 영상을 봤다고 가정한다). 포즈 보정은 calibration.json, 광류 블록은
-// flow_calibration.json에 저장하고(SD가 바빠도 모델 루프가 서지 않게 BackgroundWriter로), 웹 콘솔의 초기화는 둘 다
-// 지운다(광류 측정원에도 알린다). 설정을 읽는 것은 프로세스(modeld)이고, 여기서는 인자로 받는다.
 class CalibrationService {
 public:
     // requested: 시작할 때의 보정 출처 설정(display.json calibration_use_flow). 첫 프레임 워프부터 맞춘다.
@@ -98,5 +98,3 @@ private:
     // 넘긴다(경로마다 최신 것만, 없앨 때 남은 일을 마친다).
     BackgroundWriter writer_{"calibration: write"};
 };
-
-#endif

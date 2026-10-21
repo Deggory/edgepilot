@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_VDEC_H
-#define MAIXCAM2_VDEC_H
+#pragma once
 
 // AX620E 하드웨어 비디오 디코더(VDEC). 한 번에 한 프레임(Annex B)을 넣고, 디코딩된
 // NV12 프레임을 IVPS로 호출자의 CMM 블록(예: 프레임 링 슬롯)에 복사해 준다. H.264만 받는다. 리허설
@@ -30,5 +29,3 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
-
-#endif

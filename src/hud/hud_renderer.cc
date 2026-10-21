@@ -64,13 +64,13 @@ bool speed_valid(float kph) { return kph > 0.0f; }
 
 uint32_t alert_color(HudAlertLevel level) {
     switch (level) {
-        case HudAlertLevel::proceed:
+        case HudAlertLevel::Proceed:
             return kGreen;
-        case HudAlertLevel::caution:
+        case HudAlertLevel::Caution:
             return kAmber;
-        case HudAlertLevel::critical:
+        case HudAlertLevel::Critical:
             return kRed;
-        case HudAlertLevel::notice:
+        case HudAlertLevel::Notice:
             break;
     }
     return kText;
@@ -79,7 +79,7 @@ uint32_t alert_color(HudAlertLevel level) {
 // ---- 공통 부품 ----
 
 // 칩 앞 표시: 색 점 또는 방향 화살표.
-enum class ChipMark { dot, left, right };
+enum class ChipMark { Dot, Left, Right };
 
 // 방향 화살표: 가운데 (cx, cy), 폭 w, 높이 h인 삼각형. direction은 -1(왼쪽) 또는 1.
 void draw_arrow(HudCanvas &canvas, float cx, float cy, float w, float h, int direction, uint32_t color) {
@@ -99,18 +99,18 @@ void draw_traffic_light(HudCanvas &canvas, int right, int y, int h) {
 }
 
 // 둥근 칩: 앞 표시와 글. x는 align 기준점. 그린 폭을 돌려준다.
-int chip(HudCanvas &canvas, int x, int y, const std::string &text, uint32_t color, HudAlign align = HudAlign::left,
-         ChipMark mark = ChipMark::dot) {
+int chip(HudCanvas &canvas, int x, int y, const std::string &text, uint32_t color, HudAlign align = HudAlign::Left,
+         ChipMark mark = ChipMark::Dot) {
     constexpr int kArrowW = 10;
-    const int mark_w = mark == ChipMark::dot ? kDot : kArrowW;
+    const int mark_w = mark == ChipMark::Dot ? kDot : kArrowW;
     const int w = 2 * kChipPadX + mark_w + 6 + kHudBodyFont.width(text);
-    const int left = align == HudAlign::right ? x - w : align == HudAlign::center ? x - w / 2 : x;
+    const int left = align == HudAlign::Right ? x - w : align == HudAlign::Center ? x - w / 2 : x;
     canvas.fill_round_rect(left, y, w, kChipH, kChipH / 2.0f, kCard);
     const int mark_x = left + kChipPadX;
-    if (mark == ChipMark::dot)
+    if (mark == ChipMark::Dot)
         canvas.fill_round_rect(mark_x, y + (kChipH - kDot) / 2, kDot, kDot, kDot / 2.0f, color);
     else
-        draw_arrow(canvas, mark_x + kArrowW / 2.0f, y + kChipH / 2.0f, kArrowW, 13.0f, mark == ChipMark::left ? -1 : 1,
+        draw_arrow(canvas, mark_x + kArrowW / 2.0f, y + kChipH / 2.0f, kArrowW, 13.0f, mark == ChipMark::Left ? -1 : 1,
                    color);
     canvas.text(mark_x + mark_w + 6, centered_line_top(kHudBodyFont, y, kChipH), text, kHudBodyFont, kText);
     return w;
@@ -135,8 +135,8 @@ int draw_speed(HudCanvas &canvas, const HudState &hud) {
     const std::string speed = format_text("%.0f", hud.cluster_speed_kph);
     const int center = canvas.width() / 2;
     const int top = kMargin - kHudSpeedFont.glyph('0')->top;
-    const int width = canvas.text(center, top, speed, kHudSpeedFont, kText, HudAlign::center, true);
-    canvas.text(center, speed_unit_line(), "km/h", kHudCaptionFont, kTextSecondary, HudAlign::center, true);
+    const int width = canvas.text(center, top, speed, kHudSpeedFont, kText, HudAlign::Center, true);
+    canvas.text(center, speed_unit_line(), "km/h", kHudCaptionFont, kTextSecondary, HudAlign::Center, true);
     return width;
 }
 
@@ -150,7 +150,7 @@ void draw_brake_hold(HudCanvas &canvas, const HudState &hud) {
     const int y = speed_unit_line() + kHudCaptionFont.ascent + kGap;
     canvas.fill_round_rect((canvas.width() - w) / 2, y, w, kH, kH / 2.0f, kCardStrong);
     canvas.text(canvas.width() / 2, centered_line_top(kHudTitleFont, y, kH), text, kHudTitleFont, kGreen,
-                HudAlign::center);
+                HudAlign::Center);
 }
 
 // 현재 속도 양옆의 깜빡이 화살표(노랑, 비상등이면 양쪽). 세 개가 차례로 켜진다. 숫자에서 18 px
@@ -190,15 +190,15 @@ void top_card(HudCanvas &canvas, int x, int w, const char *title, const std::str
     const int y = kMargin, header_bottom = y + kCardPad + cap_glyph(kHudCaptionFont).h;
     canvas.fill_round_rect(x, y, w, kTopCardH, kRadius, kCard);
     canvas.text(x + w / 2, cap_line(kHudCaptionFont, y + kCardPad), title, kHudCaptionFont, kTextSecondary,
-                HudAlign::center);
+                HudAlign::Center);
     if (sub.empty()) {
         canvas.text(x + w / 2, centered_line_top(kHudValueFont, header_bottom, y + kTopCardH - 4 - header_bottom),
-                    value, kHudValueFont, color, HudAlign::center);
+                    value, kHudValueFont, color, HudAlign::Center);
         return;
     }
-    canvas.text(x + w / 2, cap_line(kHudValueFont, header_bottom + 7), value, kHudValueFont, color, HudAlign::center);
+    canvas.text(x + w / 2, cap_line(kHudValueFont, header_bottom + 7), value, kHudValueFont, color, HudAlign::Center);
     canvas.text(x + w / 2, base_line(kHudBodyFont, y + kTopCardH - kCardPad), sub, kHudBodyFont, sub_color,
-                HudAlign::center);
+                HudAlign::Center);
 }
 
 // 왼쪽 위: 설정 속도 카드와 기어 카드, 그 아래 조향 모드 칩. 비전 크루즈가 설정보다 낮게 잡고
@@ -274,7 +274,7 @@ void draw_status(HudCanvas &canvas, const HudState &hud, const LeadInfo &lead) {
     int y = draw_status_pill(canvas, hud);
     if (hud.network_card) y = draw_network_card(canvas, y, hud);
     auto warn = [&](const std::string &text, uint32_t color) {
-        chip(canvas, right, y, text, color, HudAlign::right);
+        chip(canvas, right, y, text, color, HudAlign::Right);
         y += kChipH + kGap;
     };
     if (!hud.panda_connected || !hud.panda_healthy) warn("PANDA", kAmber);
@@ -318,19 +318,19 @@ void draw_alert(HudCanvas &canvas, const HudAlertCard &alert) {
     canvas.fill_round_rect(x, y, w, kAlertH, kRadius + 4, kCardStrong);
     canvas.fill_round_rect(x + 12, y + kInset, 4, kAlertH - 2 * kInset, 2.0f, alert_color(alert.level));
     const int title_w =
-        canvas.text(center, cap_line(kHudTitleFont, y + kInset), alert.title, kHudTitleFont, kText, HudAlign::center);
+        canvas.text(center, cap_line(kHudTitleFont, y + kInset), alert.title, kHudTitleFont, kText, HudAlign::Center);
     if (alert.arrow)
         draw_arrow(canvas, center + alert.arrow * (title_w / 2.0f + kAlertArrowGap),
                    y + kInset + cap_glyph(kHudTitleFont).h / 2.0f, kAlertArrowW, 16.0f, alert.arrow, kText);
     canvas.text(center, base_line(kHudBodyFont, y + kAlertH - kInset), alert.detail, kHudBodyFont, kTextSecondary,
-                HudAlign::center);
+                HudAlign::Center);
 }
 
 // 왼쪽 열: 조향 중에 하고 있는 조작(차선 변경). 다음 칩이 올 y를 돌려준다.
 int draw_maneuver(HudCanvas &canvas, int y, const HudState &hud) {
-    if (!steering_now(hud) || hud.lane_change != HudLaneChange::changing) return y;
-    chip(canvas, kMargin, y, "CHANGING LANES", state_color(hud), HudAlign::left,
-         hud.lane_change_direction < 0 ? ChipMark::left : ChipMark::right);
+    if (!steering_now(hud) || hud.lane_change != HudLaneChange::Changing) return y;
+    chip(canvas, kMargin, y, "CHANGING LANES", state_color(hud), HudAlign::Left,
+         hud.lane_change_direction < 0 ? ChipMark::Left : ChipMark::Right);
     return y + kChipH + kGap;
 }
 

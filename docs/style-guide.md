@@ -63,6 +63,13 @@ clang-format --dry-run --Werror $(git ls-files '*.cc' '*.h' | grep -v '^firmware
 
 - Comments are `//` only, as Google style uses them, including the comment at
   the top of a file that says what it is for. Do not write `/* */`.
+- A header starts with `#pragma once`, then that comment, then the includes.
+  A `.cc` file starts with the comment.
+- An `enum class` names its members in PascalCase (`LaneChangeState::Starting`).
+  The text a log or the screen shows comes from a `<enum>_name()` function
+  next to the enum.
+- A function called once per tick or per frame is `update()`. Functions that
+  take one input as it arrives are `on_<input>()`.
 - `// clang-format off` and `// clang-format on` are only for layouts that
   carry meaning: the row-major 3x3 matrices, the audio stub macro table in
   `maix_shim.cc`, and golden tables that a Python check reads back.

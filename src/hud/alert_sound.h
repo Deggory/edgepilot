@@ -1,5 +1,4 @@
-#ifndef ALERT_SOUND_H
-#define ALERT_SOUND_H
+#pragma once
 
 // HUD 알림음(alert_tones.h)을 MaixCAM2 보드 스피커로 낸다.
 //
@@ -52,5 +51,3 @@ private:
     int pipe_fd_ = -1;
     std::thread thread_;
 };
-
-#endif

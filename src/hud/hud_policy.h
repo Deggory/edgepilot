@@ -1,5 +1,4 @@
-#ifndef HUD_POLICY_H
-#define HUD_POLICY_H
+#pragma once
 
 // overlayd가 그리기 밖에서 정하는 것: 프레임마다 울릴 알림음, 터치로 여닫는 카드, 깜빡이 애니메이션
 // 단계, 길 위 차선 안 위치 눈금의 평활. 화면·스피커·터치 장치 없이 돌아 호스트에서 시험한다.
@@ -12,10 +11,10 @@
 
 // 한 프레임에 울린 알림. 앞의 넷은 controlsd 제어 이벤트(열거 순서가 같은 프레임 안의 우선순위다),
 // take_control은 해제 예고나 조향 한계가 켜진 순간, unavailable은 가용 → 불가용 천이다.
-enum class HudSound { none, unable, engage, disengage, signal_changed, take_control, unavailable };
+enum class HudSound { None, Unable, Engage, Disengage, SignalChanged, TakeControl, Unavailable };
 
 struct HudSoundDecision {
-    HudSound sound = HudSound::none;
+    HudSound sound = HudSound::None;
     uint32_t event_id = 0;  // 제어 이벤트 알림의 id
 };
 
@@ -39,7 +38,7 @@ private:
     uint32_t last_departure_ = 0;
 };
 
-// 낼 소리. 해제 예고·조향 한계는 거부와 같은 소리다. none이면 AlertSoundId::count.
+// 낼 소리. 해제 예고·조향 한계는 거부와 같은 소리다. none이면 AlertSoundId::Count.
 AlertSoundId hud_sound_id(HudSound sound);
 
 // 한 프레임에 알림음 하나를 고른다. 제어 이벤트가 먼저이고, 해제 예고·조향 한계가 켜지는 순간은
@@ -93,5 +92,3 @@ private:
 // 길 위 차선 안 위치 눈금(draw_lane_position)의 오프셋을 모델 프레임마다 다듬는다(20 Hz에서 0.5초 시간 상수,
 // 눈금과 cm 숫자의 떨림). raw가 NaN이면(차선을 놓침) 비우고, 다시 잡으면 그 값에서 시작한다.
 float smooth_lane_center_offset(float smoothed, float raw);
-
-#endif

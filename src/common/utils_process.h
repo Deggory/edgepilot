@@ -1,5 +1,4 @@
-#ifndef UTILS_PROCESS_H
-#define UTILS_PROCESS_H
+#pragma once
 
 // 프로세스가 OS에서 받는 것: 환경변수, params 디렉터리 경로, 종료 시그널.
 // 불리언 환경변수 규약은 env_flag 하나다.
@@ -64,5 +63,3 @@ inline void install_stop_signal_handlers(volatile sig_atomic_t *stop_flag) {
     signal(SIGINT, utils_process_detail::stop_signal_handler);
     signal(SIGTERM, utils_process_detail::stop_signal_handler);
 }
-
-#endif

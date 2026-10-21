@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr uint64_t kControlMaxAgeNs = 1000000000ULL;
+constexpr uint64_t kControlMaxAgeNs = 1'000'000'000ULL;
 constexpr float kParkedMaxSpeedKph = 1.0f;
 
 uint32_t read_le32(const uint8_t *p) {

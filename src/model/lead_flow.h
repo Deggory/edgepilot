@@ -1,5 +1,4 @@
-#ifndef LEAD_FLOW_H
-#define LEAD_FLOW_H
+#pragma once
 
 // 앞차 확대율. 모델 앞차를 원본 영상에 투영한 상자 안의 점을 1프레임씩 따라가고(IVE, model/flow_worker가
 // 광류 보정과 한 번에 부르고 앞차 점만 거꾸로 한 번 더 부른다), kLeadWindowSteps 프레임 전 위치와 지금 위치에
@@ -136,5 +135,3 @@ private:
     std::vector<float> corners_;  // top_up이 상자에서 고른 점(복사본 좌표)
     LeadFlowState state_{};
 };
-
-#endif

@@ -1,5 +1,4 @@
-#ifndef IPC_CHANNELS_H
-#define IPC_CHANNELS_H
+#pragma once
 
 // /dev/shm 채널 구현: 최신값 채널, CAN 큐, NV12 프레임 링. 레이아웃은
 // ipc_messages.h에 있다.
@@ -135,5 +134,3 @@ private:
     ShmRegion region_;
     FrameRingHeader *header_ = nullptr;
 };
-
-#endif

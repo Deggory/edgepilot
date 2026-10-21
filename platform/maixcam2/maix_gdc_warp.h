@@ -1,5 +1,4 @@
-#ifndef MAIXCAM2_GDC_WARP_H
-#define MAIXCAM2_GDC_WARP_H
+#pragma once
 
 // 모델 입력 워프를 AX620E IVPS GDC(AX_IVPS_Dewarp, 투시 변환)로 한다. CMM 블록의 소스 NV12(프레임 링 슬롯, 재생은
 // source())에서 medmodel/sbigmodel 두 시점으로 512x256 NV12를 만들고 모델의 YUV6 배치(Y 4평면 + U + V, 128x256)로
@@ -36,5 +35,3 @@ private:
     unsigned long long dst_phys_ = 0;
     uint8_t *dst_virt_ = nullptr;
 };
-
-#endif

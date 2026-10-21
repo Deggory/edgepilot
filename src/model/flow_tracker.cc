@@ -95,7 +95,7 @@ void FlowTracker::advance_window(uint64_t frame_id, int tracked) {
     in_window_ = false;
 }
 
-void FlowTracker::process(const FlowFrame &f) {
+void FlowTracker::update(const FlowFrame &f) {
     auto lose = [this] {
         if (in_window_) ++stats_.windows_lost;
         in_window_ = false;

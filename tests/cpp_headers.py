@@ -27,7 +27,7 @@ def cpp_offsets(struct: str, text: str = IPC) -> dict[str, int]:
 
 
 def cpp_constant(name: str, text: str = IPC) -> int:
-    """constexpr <타입> name = 값;의 값(10진수나 0x)."""
-    match = re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F]+|\d+);", text)
+    """constexpr <타입> name = 값;의 값(10진수나 0x, 자릿수 구분 ' 포함, 접미사 U·ULL 무시)."""
+    match = re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F']+|[\d']+)(?:ULL|UL|U|LL|L)?;", text)
     assert match, name
-    return int(match.group(1), 0)
+    return int(match.group(1).replace("'", ""), 0)

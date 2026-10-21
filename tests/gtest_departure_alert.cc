@@ -27,7 +27,7 @@ TEST(DepartureAlert, LeadDeparture) {
         input.lead_relative_speed_mps = 0.2f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "멈춘 앞차의 거리 떨림으로는 알림이 뜨지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "멈춘 앞차의 거리 떨림으로는 알림이 뜨지 않는다";
     ASSERT_TRUE(output.lead_armed) << "안정된 앞차가 검출기를 무장한다";
 
     for (int i = 21; i <= 25; ++i) {
@@ -38,7 +38,7 @@ TEST(DepartureAlert, LeadDeparture) {
         input.lead_relative_speed_mps = 1.0f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::lead_departed) << "앞차가 출발하면 알림이 뜬다";
+    ASSERT_EQ(output.type, DepartureAlertType::LeadDeparted) << "앞차가 출발하면 알림이 뜬다";
     ASSERT_EQ(output.event_id, 1u) << "첫 출발 알림의 이벤트 id";
 
     for (int i = 26; i <= 50; ++i) {
@@ -81,7 +81,7 @@ TEST(DepartureAlert, GreenLight) {
         input.plan_distance_m = 9.0f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "plan이 열림 기준보다 짧으면 알림이 뜨지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "plan이 열림 기준보다 짧으면 알림이 뜨지 않는다";
 
     for (int i = 39; i <= 46; ++i) {
         DepartureAlertInput input = stopped_input(i * 0.05);
@@ -90,7 +90,7 @@ TEST(DepartureAlert, GreenLight) {
         input.plan_distance_m = 11.0f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::green_light) << "무장한 뒤 모델 경로가 열리면 알림이 뜬다";
+    ASSERT_EQ(output.type, DepartureAlertType::GreenLight) << "무장한 뒤 모델 경로가 열리면 알림이 뜬다";
     ASSERT_EQ(output.event_id, 1u) << "첫 신호 알림의 이벤트 id";
 }
 
@@ -114,7 +114,7 @@ TEST(DepartureAlert, GreenSoonAfterStop) {
         input.plan_distance_m = 50.0f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::green_light);
+    ASSERT_EQ(output.type, DepartureAlertType::GreenLight);
 }
 
 // 무장은 정차 시간이 아니라 짧은 plan이 이어진 시간으로 잰다. 모델 입력 없이 서 있던 시간은 세지
@@ -135,7 +135,7 @@ TEST(DepartureAlert, ArmingCountsShortPlanTime) {
     ASSERT_FALSE(output.green_light_armed) << "첫 짧은 plan만으로는 무장하지 않는다";
     for (int i = 1; i < 20; ++i) output = model(3.0 + i * 0.05, 4.0f);
     output = model(4.0, 12.0f);  // 무장 전 한 프레임 열림: 다시 잰다
-    ASSERT_EQ(output.type, DepartureAlertType::none);
+    ASSERT_EQ(output.type, DepartureAlertType::None);
     for (int i = 1; i < 30; ++i) output = model(4.0 + i * 0.05, 4.0f);
     ASSERT_FALSE(output.green_light_armed) << "열린 뒤 짧은 plan이 1.5초 안 됐다";
     output = model(5.6, 4.0f);
@@ -159,15 +159,15 @@ TEST(DepartureAlert, GasPressTriggersGreenLight) {
     };
     output = model(0.0, 0.9f);
     output = model(0.05, 0.9f);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "무장 전에는 가속 확률로 알리지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "무장 전에는 가속 확률로 알리지 않는다";
     for (int i = 2; i <= 30; ++i) output = model(i * 0.05, 0.1f);
     ASSERT_TRUE(output.green_light_armed);
     output = model(1.55, 0.45f);
     output = model(1.6, 0.1f);
     output = model(1.65, 0.45f);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "끊긴 한 프레임씩은 거른다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "끊긴 한 프레임씩은 거른다";
     output = model(1.7, 0.45f);
-    ASSERT_EQ(output.type, DepartureAlertType::green_light) << "두 프레임 연속이면 알린다";
+    ASSERT_EQ(output.type, DepartureAlertType::GreenLight) << "두 프레임 연속이면 알린다";
     ASSERT_EQ(output.event_id, 1u);
 }
 
@@ -200,7 +200,7 @@ TEST(DepartureAlert, QueueKeepsLeadAlert) {
         input.plan_distance_m = 3.0f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::lead_departed) << "plan이 닫힌 채여도 앞차 출발 알림은 뜬다";
+    ASSERT_EQ(output.type, DepartureAlertType::LeadDeparted) << "plan이 닫힌 채여도 앞차 출발 알림은 뜬다";
 }
 
 // 무장 뒤 앞차가 끼어들어도 무장은 유지된다. 그 앞차가 출발하며 plan도
@@ -241,7 +241,7 @@ TEST(DepartureAlert, LeadDepartureWinsWhenPlanOpens) {
         input.plan_distance_m = 30.0f;
         output = detector.update(input);
     }
-    ASSERT_EQ(output.type, DepartureAlertType::lead_departed) << "같은 프레임에 plan도 열리면 앞차 출발이 이긴다";
+    ASSERT_EQ(output.type, DepartureAlertType::LeadDeparted) << "같은 프레임에 plan도 열리면 앞차 출발이 이긴다";
 }
 
 // 무장된 정차에서 3 m 앞 vision 앞차가 서 있으면(거리는 흔들려도 상대속도 0) plan이 0.5초 열렸다
@@ -264,15 +264,15 @@ TEST(DepartureAlert, CloseStationaryLeadNeedsSustainedOpenPlan) {
     int i = 0;
     for (; i <= 40; ++i) output = tick(i * 0.05, 2.0f, 3.0f + (i % 10) * 0.08f, 0.0f);
     ASSERT_TRUE(output.green_light_armed);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "서 있는 앞차 뒤에서는 가속 확률로 알리지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "서 있는 앞차 뒤에서는 가속 확률로 알리지 않는다";
     for (int k = 0; k < 10; ++k, ++i) output = tick(i * 0.05, 30.0f, 3.5f, 0.05f);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "0.5초 열림으로는 알리지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "0.5초 열림으로는 알리지 않는다";
     for (int k = 0; k < 20; ++k, ++i) output = tick(i * 0.05, 2.0f, 3.2f, 0.0f);
-    ASSERT_EQ(output.type, DepartureAlertType::none);
+    ASSERT_EQ(output.type, DepartureAlertType::None);
     for (int k = 0; k < 29; ++k, ++i) output = tick(i * 0.05, 30.0f, 3.2f, 0.0f);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "1.5초가 되기 전에는 기다린다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "1.5초가 되기 전에는 기다린다";
     for (int k = 0; k < 2; ++k, ++i) output = tick(i * 0.05, 30.0f, 3.2f, 0.0f);
-    ASSERT_EQ(output.type, DepartureAlertType::green_light) << "1.5초 넘게 열리면 알린다";
+    ASSERT_EQ(output.type, DepartureAlertType::GreenLight) << "1.5초 넘게 열리면 알린다";
 }
 
 // 서 있는 앞차 뒤에서 plan이 열린 채 앞차가 실제로 멀어지면(거리 +0.5 m, 상대속도 0.5 m/s 초과)
@@ -294,9 +294,9 @@ TEST(DepartureAlert, CloseLeadMovingReleasesGreenLight) {
     int i = 0;
     for (; i <= 40; ++i) output = tick(i * 0.05, 2.0f, 3.0f, 0.0f);
     for (int k = 0; k < 8; ++k, ++i) output = tick(i * 0.05, 40.0f, 3.1f, 0.1f);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "앞차가 서 있으면 0.3초 열림으로는 알리지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "앞차가 서 있으면 0.3초 열림으로는 알리지 않는다";
     output = tick(i++ * 0.05, 40.0f, 3.7f, 0.8f);
-    ASSERT_EQ(output.type, DepartureAlertType::green_light) << "앞차가 움직이면 바로 알린다";
+    ASSERT_EQ(output.type, DepartureAlertType::GreenLight) << "앞차가 움직이면 바로 알린다";
 }
 
 // 방향지시등을 켜고 기다리는 동안은 가속 확률로 알리지 않는다(2026-10-05 좌회전 대기 37초 이른
@@ -317,9 +317,9 @@ TEST(DepartureAlert, TurnSignalIgnoresGasPress) {
     for (; i <= 40; ++i) output = tick(i * 0.05, 2.0f, 0.1f);
     ASSERT_TRUE(output.green_light_armed);
     for (int k = 0; k < 10; ++k, ++i) output = tick(i * 0.05, 2.0f, 0.4f);
-    ASSERT_EQ(output.type, DepartureAlertType::none) << "깜빡이 대기 중 가속 확률은 쓰지 않는다";
+    ASSERT_EQ(output.type, DepartureAlertType::None) << "깜빡이 대기 중 가속 확률은 쓰지 않는다";
     for (int k = 0; k < 8; ++k, ++i) output = tick(i * 0.05, 30.0f, 0.4f);
-    ASSERT_EQ(output.type, DepartureAlertType::green_light) << "plan이 열리면 알린다";
+    ASSERT_EQ(output.type, DepartureAlertType::GreenLight) << "plan이 열리면 알린다";
 }
 
 // vision 앞차가 한 프레임 끊겨도 앞차 출발 무장은 이어진다(예전에는 처음부터 다시 쟀다).
@@ -346,7 +346,7 @@ TEST(DepartureAlert, GreenLightAtControlRateWithModelFrames) {
         input.model_updated = tick % 5 == 0;
         input.model_valid = true;
         input.plan_distance_m = tick < 250 ? 2.0f : 30.0f;
-        if (detector.update(input).type == DepartureAlertType::green_light) alert_tick = tick;
+        if (detector.update(input).type == DepartureAlertType::GreenLight) alert_tick = tick;
     }
     ASSERT_GE(alert_tick, 280) << "열린 plan을 0.3초 본 뒤에";
     ASSERT_LE(alert_tick, 285);
@@ -368,7 +368,7 @@ TEST(DepartureAlert, CloseLeadVetoDecidesBetweenModelFrames) {
         input.model_valid = true;
         input.plan_distance_m = tick < 250 ? 2.0f : 30.0f;
         if (model_frame && tick >= 250 && open_seen_tick < 0) open_seen_tick = tick;
-        if (detector.update(input).type == DepartureAlertType::green_light) alert_tick = tick;
+        if (detector.update(input).type == DepartureAlertType::GreenLight) alert_tick = tick;
     }
     ASSERT_GE(open_seen_tick, 250);
     ASSERT_GE(alert_tick, open_seen_tick + 149);
