@@ -35,7 +35,8 @@ public:
     void set_desire(int desire);
 
 private:
-    bool infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_output);
+    // warp_start_ns·warp_end_ns는 프로파일 시각(EDGEPILOT_PROFILE이 아니면 0)이다
+    bool infer(uint64_t warp_start_ns, uint64_t warp_end_ns, std::vector<float> &raw_output);
     // EDGEPILOT_PROFILE일 때만 시계를 읽는다(CLOCK_BOOTTIME은 이 보드에서 진짜 syscall이다).
     uint64_t profile_stamp() const;
 
@@ -51,7 +52,8 @@ private:
     ModelImageHistory road_history_;
     ModelImageHistory wide_history_;
     SupercomboTemporalState temporal_;
-    double profile_ms_[4] = {};
+    static constexpr unsigned kProfileFrames = 30;  // 이만큼마다 단계별 평균을 남긴다
+    double profile_ms_[4] = {};                     // warp, inputs, npu, outputs
     unsigned profile_frames_ = 0;
 };
 

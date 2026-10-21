@@ -1,6 +1,7 @@
 #include "hud/hud_renderer.h"
 
 #include "car/can_frame.h"
+#include "common/utils_math.h"  // kPiF
 #include "hud/hud_draw.h"
 
 #include <algorithm>
@@ -21,7 +22,7 @@
 namespace hud_draw {
 namespace {
 
-constexpr int kTurnLitSteps = 15;
+constexpr int kTurnLitSteps = 15;  // 깜빡이 한 주기(hud_state.h kTurnSignalSteps 단계) 중 켜져 있는 단계
 constexpr int kTurnChevronStartStep[] = {0, 4, 8};
 constexpr float kTurnChevronAlpha[] = {0.35f, 0.65f, 1.0f};
 
@@ -232,7 +233,7 @@ void draw_wifi_icon(HudCanvas &canvas, float cx, float apex, int dbm) {
     for (int band = 0; band < 3; ++band) {
         HudPoint points[2 * (kSegments + 1)];
         for (int i = 0; i <= kSegments; ++i) {
-            const float angle = (0.25f + 0.5f * static_cast<float>(i) / kSegments) * 3.14159265f;
+            const float angle = (0.25f + 0.5f * static_cast<float>(i) / kSegments) * kPiF;
             const float c = std::cos(angle), s = std::sin(angle);
             points[i] = {cx + kBands[band][1] * c, apex - kBands[band][1] * s};
             points[2 * kSegments + 1 - i] = {cx + kBands[band][0] * c, apex - kBands[band][0] * s};
@@ -327,7 +328,7 @@ void draw_alert(HudCanvas &canvas, const HudAlertCard &alert) {
 
 // 왼쪽 열: 조향 중에 하고 있는 조작(차선 변경). 다음 칩이 올 y를 돌려준다.
 int draw_maneuver(HudCanvas &canvas, int y, const HudState &hud) {
-    if (!steering_now(hud) || hud.lane_change != 2) return y;
+    if (!steering_now(hud) || hud.lane_change != HudLaneChange::changing) return y;
     chip(canvas, kMargin, y, "CHANGING LANES", state_color(hud), HudAlign::left,
          hud.lane_change_direction < 0 ? ChipMark::left : ChipMark::right);
     return y + kChipH + kGap;

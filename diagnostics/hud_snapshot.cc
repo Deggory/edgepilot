@@ -6,6 +6,7 @@
 // --portrait는 overlayd처럼 세로 패널 방향 480x640 버퍼에 transpose로 그리고, 파일도 그 버퍼 그대로
 // 쓴다. 리팩토링 전후 그림이 바이트 단위로 같은지 비교할 때 쓴다.
 // 사용: hud_snapshot [--model model.bin] [--control control.bin] [--iterations N] [--out PREFIX] [--portrait]
+#include "car/vehicle_can.h"  // kTpmsUnitBar
 #include "cli_args.h"
 #include "common/ipc_messages.h"
 #include "hud/hud_renderer.h"
@@ -196,7 +197,7 @@ int main(int argc, char **argv) {
     } else {
         drive.controller_enabled = drive.controller_engaged = drive.controller_active = true;
         drive.cruise_active = true;
-        drive.gear = 5;
+        drive.gear = kGearDrive;
         drive.cluster_speed_kph = 65.0f;
         drive.ego_speed_kph = 64.0f;
         drive.cruise_command_speed_kph = 70.0f;
@@ -243,13 +244,13 @@ int main(int argc, char **argv) {
     learned.torque_learned = learned.delay_learned = true;
     learned.lag_blocks = 5;
     learned.lateral_delay_s = 0.22f;
-    learned.gear = 7;
+    learned.gear = kGearReverse;
     learned.cluster_speed_kph = 4.0f;
 
     HudState lane_change = drive;  // 왼쪽 깜빡이: 핸들을 밀기를 기다림
     lane_change.left_blinker = true;
     lane_change.turn_signal_step = 8;
-    lane_change.lane_change = 1;
+    lane_change.lane_change = HudLaneChange::pending;
     lane_change.lane_change_direction = -1;
 
     HudState paused = drive;  // 85도 위에서 운전자가 넘겨받은 회전
@@ -320,12 +321,12 @@ int main(int argc, char **argv) {
     HudState changing = drive;  // 오른쪽으로 차선 변경 중
     changing.right_blinker = true;
     changing.turn_signal_step = 6;
-    changing.lane_change = 2;
+    changing.lane_change = HudLaneChange::changing;
     changing.lane_change_direction = 1;
 
     HudState tpms_bar = drive;  // bar 단위, 낮은·높은 타이어, 차량 TPMS 경고
     tpms_bar.tpms_valid = true;
-    tpms_bar.tpms_unit = 2;
+    tpms_bar.tpms_unit = kTpmsUnitBar;
     tpms_bar.tpms_pressure_fl = 2.4f;
     tpms_bar.tpms_pressure_fr = 1.7f;
     tpms_bar.tpms_pressure_rl = 2.5f;

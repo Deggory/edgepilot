@@ -1,3 +1,7 @@
+// pandad: Panda USB 브리지. 10 ms마다 Panda에 쌓인 CAN을 읽어 한 묶음으로 올리고(kCanTopic), controlsd가 만든
+// 송신 묶음(kSendCanTopic)은 송신 스레드가 마지막 관문(나이·길이 확인)을 거쳐 보낸다. 하트비트와 상태 조회(PandaState),
+// 웹 콘솔이 요청한 Panda 펌웨어 쓰기도 한다. 차량 제어 메시지는 만들지 않는다.
+
 #include "common/build_version.h"
 #include "common/ipc_channels.h"
 #include "common/utils_file.h"
@@ -34,6 +38,9 @@ constexpr uint64_t kMaxSendCanAgeNs = 100000000ULL;
 // 송신 스레드가 sendcan을 기다리는 최대 시간(멈춤 확인 간격). 상류 can_send_thread의 100 ms와 같다.
 constexpr uint64_t kTxWaitNs = 100000000ULL;
 constexpr uint64_t kFirmwareIntervalNs = 1000000000ULL;
+constexpr uint64_t kHeartbeatIntervalNs = 500000000ULL;  // 상류 pandad 하트비트 0.5초
+constexpr uint64_t kHealthIntervalNs = 500000000ULL;     // 상태 조회(USB 제어 전송)
+constexpr uint64_t kStatsWindowNs = 1000000000ULL;       // 통계 로그 한 줄
 // 웹 콘솔(web_console)과 주고받는 파일. 요청 파일에는 쓸 이미지의 버전 문자열이 들어 있다.
 constexpr char kFirmwareStatusPath[] = "/dev/shm/edgepilot_panda_status.json";
 constexpr char kFlashRequestPath[] = "/dev/shm/edgepilot_panda_flash";
@@ -59,7 +66,7 @@ void fill_rx_batch(CanBatch *batch, const PandaCanFrame *frames, size_t size) {
         dst->address = src.address;
         dst->src = src.bus;
         dst->data_len = src.data_len;
-        dst->flags = (src.returned ? 0x1U : 0U) | (src.rejected ? 0x2U : 0U);
+        dst->flags = (src.returned ? kCanFrameReturned : 0U) | (src.rejected ? kCanFrameRejected : 0U);
         std::memcpy(dst->data, src.data, std::min<size_t>(src.data_len, sizeof(dst->data)));
     });
 }
@@ -488,12 +495,12 @@ int main() {
             // 하트비트와 상태 조회(USB 제어 전송, 각각 최대 100 ms)를 한 주기에 몰지 않는다. 송신 스레드가 USB 잠금을
             // 두 번 연달아 기다리지 않게 한다.
             bool control_transfer = false;
-            if (now - last_heartbeat_ns >= 500000000ULL) {
+            if (now - last_heartbeat_ns >= kHeartbeatIntervalNs) {
                 panda.send_heartbeat(heartbeat_engaged && tx_enabled);
                 last_heartbeat_ns = now;
                 control_transfer = true;
             }
-            if (!control_transfer && now - last_health_ns >= 500000000ULL) {
+            if (!control_transfer && now - last_health_ns >= kHealthIntervalNs) {
                 have_health = publish_health(panda_state_pub, panda, tx_enabled, &last_health);
                 last_health_ns = now;
                 // 접속 뒤에도 safety 모드를 본다. 하트비트가 5초 끊기면 펌웨어는 NOOUTPUT으로 바꾸고 다음 하트비트에도
@@ -506,7 +513,7 @@ int main() {
                     panda.set_safety_model(safety_model, safety_param);
                 }
             }
-            if (now - last_log_ns >= 1000000000ULL) {
+            if (now - last_log_ns >= kStatsWindowNs) {
                 stats.log(panda, tx_stats, have_health ? &last_health : nullptr,
                           static_cast<unsigned long long>(sendcan_sub.depth()),
                           static_cast<unsigned long long>(can_pub.depth()));

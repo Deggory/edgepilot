@@ -103,7 +103,7 @@ bool SupercomboModel::run_replay_frame(std::vector<float> &raw_output) {
 
 bool SupercomboModel::run_frame_phys(unsigned long long src_phys, std::vector<float> &raw_output,
                                      const std::function<bool()> &source_still_valid) {
-    const uint64_t t0 = profile_stamp();
+    const uint64_t warp_start_ns = profile_stamp();
     float med[9], sbig[9];
     input_transform_.projection_matrix(med);
     big_input_transform_.projection_matrix(sbig);
@@ -112,16 +112,16 @@ bool SupercomboModel::run_frame_phys(unsigned long long src_phys, std::vector<fl
         return false;
     road_history_.commit();
     wide_history_.commit();
-    return infer(t0, profile_stamp(), raw_output);
+    return infer(warp_start_ns, profile_stamp(), raw_output);
 }
 
-bool SupercomboModel::infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_output) {
+bool SupercomboModel::infer(uint64_t warp_start_ns, uint64_t warp_end_ns, std::vector<float> &raw_output) {
     road_history_.model_input(session_.input<uint8_t>(index_[kRoad]));
     wide_history_.model_input(session_.input<uint8_t>(index_[kWide]));
     temporal_.push_desire_pulse();
     temporal_.desire_input(session_.input<float>(index_[kDesire]));
     temporal_.feature_input(session_.input<float>(index_[kFeatures]));
-    const uint64_t t2 = profile_stamp();
+    const uint64_t inputs_end_ns = profile_stamp();
 
     if (!session_.run()) {
         // 이미지·desire 큐는 이미 한 칸 나갔으므로 특징 큐도 빈 칸으로 한 칸 밀어
@@ -130,21 +130,22 @@ bool SupercomboModel::infer(uint64_t t0, uint64_t t1, std::vector<float> &raw_ou
         temporal_.push_feature_history(empty.data());
         return false;
     }
-    const uint64_t t3 = profile_stamp();
+    const uint64_t npu_end_ns = profile_stamp();
 
     raw_output.resize(kModelOutputFloats);  // 끝의 패딩 두 칸은 처음 늘릴 때의 0 그대로다
     for (int i = 0; i < model_output_assembly::kPartCount; ++i)
         model_output_assembly::place(model_output_assembly::kParts[i], session_.output<float>(output_parts_[i]),
                                      raw_output.data());
     temporal_.push_feature_history(raw_output.data());
-    const uint64_t t4 = profile_stamp();
+    const uint64_t outputs_end_ns = profile_stamp();
 
     if (profile_) {
-        const uint64_t stamps[] = {t0, t1, t2, t3, t4};
+        const uint64_t stamps[] = {warp_start_ns, warp_end_ns, inputs_end_ns, npu_end_ns, outputs_end_ns};
         for (int i = 0; i < 4; ++i) profile_ms_[i] += (stamps[i + 1] - stamps[i]) / 1e6;
-        if (++profile_frames_ == 30) {
-            std::fprintf(stderr, "\nprofile ms: warp %.2f inputs %.2f npu %.2f outputs %.2f\n", profile_ms_[0] / 30,
-                         profile_ms_[1] / 30, profile_ms_[2] / 30, profile_ms_[3] / 30);
+        if (++profile_frames_ == kProfileFrames) {
+            std::fprintf(stderr, "\nprofile ms: warp %.2f inputs %.2f npu %.2f outputs %.2f\n",
+                         profile_ms_[0] / kProfileFrames, profile_ms_[1] / kProfileFrames,
+                         profile_ms_[2] / kProfileFrames, profile_ms_[3] / kProfileFrames);
             profile_frames_ = 0;
             std::fill(std::begin(profile_ms_), std::end(profile_ms_), 0.0);
         }

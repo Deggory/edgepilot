@@ -1,5 +1,8 @@
 #pragma once
 
+// 출발 알림. D 단에서 서 있을 때 앞차가 떠나거나 신호가 녹색으로 바뀌면(모델의 가스 예측) 정차 한 번에 한 번
+// 알린다(docs/departure-alerts.md).
+
 #include <cstdint>
 
 enum class DepartureAlertType : uint32_t {

@@ -1,6 +1,9 @@
 #ifndef PROJECTION_H
 #define PROJECTION_H
 
+// 모델 도로 좌표를 화면 좌표로 옮긴다(openpilot식 view_from_calib). 화면 영상 레이어와 같은 4:3 미리보기 자르기를
+// 쓴다(app_config.h). HUD 장면과 차선 안 위치가 쓴다.
+
 struct ProjectionState {
     float roll = 0.0f;
     float pitch = 0.0f;

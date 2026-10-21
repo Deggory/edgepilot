@@ -106,8 +106,8 @@ int main(int argc, char **argv) {
     while (events.next(&record)) {
         const EventRecordHeader &rh = record.header;
         const std::vector<char> &buf = record.payload;
-        const double record_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
-        const auto type = static_cast<RecordType>(rh.type);
+        const double record_s = record_time_s(rh);
+        const RecordType type = record_type(rh);
         if (type == RecordType::CanRx) {
             apply_recorded_can(buf.data(), rh.payload_size, record_s, &vehicle);
         } else if (type == RecordType::ModelState) {

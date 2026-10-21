@@ -185,14 +185,13 @@ private:
 class CameraMount {
 public:
     static constexpr float kRateMps = 0.1f;
-    static constexpr float kFrameS = 0.05f;
 
     explicit CameraMount(const DeviceSettings &start)
         : offset_m_(start.camera_offset_m), height_m_(start.camera_height_m) {}
 
     // 매 프레임 실행 직전. 이번 프레임 워프에 쓴 값이 offset_m()·height_m()이다.
     void apply(SupercomboModel &model, const DeviceSettings &settings) {
-        const float step = kRateMps * kFrameS;
+        const float step = kRateMps * kDtMdlF;
         offset_m_ += std::clamp(settings.camera_offset_m - offset_m_, -step, step);
         height_m_ += std::clamp(settings.camera_height_m - height_m_, -step, step);
         model.set_camera_mount(offset_m_, height_m_);

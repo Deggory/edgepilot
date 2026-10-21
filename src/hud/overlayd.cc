@@ -44,6 +44,7 @@ constexpr uint64_t kStateFreshNs = 2000000000ULL;
 constexpr uint64_t kMaxDrawIntervalNs = 100000000ULL;
 // 루프는 새 모델 출력을 이만큼까지 기다리고 돈다(카메라 프레임, 터치, 다른 상태).
 constexpr int kPollMs = 5;
+constexpr uint64_t kStatsWindowNs = 1000000000ULL;  // fps·CPU를 재는 창(상태 줄 한 줄)
 
 struct StageStats {
     uint64_t total_ns = 0;
@@ -99,7 +100,7 @@ public:
                 draw_overlay();
             }
 
-            if (now - window_start >= 1000000000ULL) {
+            if (now - window_start >= kStatsWindowNs) {
                 const double seconds = (now - window_start) / 1e9;
                 hud_.preview_fps = static_cast<float>(preview_frames_ / seconds);
                 hud_.overlay_fps = static_cast<float>(overlay_frames_ / seconds);

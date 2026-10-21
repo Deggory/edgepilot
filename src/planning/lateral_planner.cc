@@ -1,5 +1,7 @@
 #include "planning/lateral_planner.h"
 
+#include "common/utils_time.h"  // kDtMdl
+
 #include "common/ipc_messages.h"
 #include "controls/control_params.h"
 #include "planning/desire_helper.h"
@@ -13,7 +15,6 @@
 
 namespace {
 
-constexpr double kDtModel = 0.05;
 // plan 끝점이 이보다 가까우면 plan이 붕괴한 것(정지: 실측 5.6 m, 주행: 60 m+).
 constexpr double kMinPlanReachM = 10.0;
 // 경로 인계 램프(1/s). 차선을 버릴 때 0.5초, 되찾을 때 0.25초.
@@ -54,7 +55,7 @@ double path_heading_at(const std::array<std::array<double, 3>, kTrajectorySize> 
 
 class FirstOrderFilter {
 public:
-    FirstOrderFilter(double value, double rc) : value_(value), alpha_(kDtModel / (rc + kDtModel)) {}
+    FirstOrderFilter(double value, double rc) : value_(value), alpha_(kDtMdl / (rc + kDtMdl)) {}
 
     double update(double value) {
         value_ = (1.0 - alpha_) * value_ + alpha_ * value;
@@ -150,7 +151,7 @@ public:
         // 차선 std는 std_mod 밴드(0.15~0.40)를 0.10초에 가로지른다(실측 2.43/s).
         // 그대로 쓰면 블렌드 가중치와 랜리스 전환이 같은 프레임에 통째로 뒤집힌다.
         // 둘의 입력을 늦춘다. 평균 가중치는 바뀌지 않는다.
-        const double prob_step = kProbRatePerS * kDtModel;
+        const double prob_step = kProbRatePerS * kDtMdl;
         left_prob_eff_ = std::clamp(left_prob, left_prob_eff_ - prob_step, left_prob_eff_ + prob_step);
         right_prob_eff_ = std::clamp(right_prob, right_prob_eff_ - prob_step, right_prob_eff_ + prob_step);
         left_switch_prob_ = std::clamp(left_switch, left_switch_prob_ - prob_step, left_switch_prob_ + prob_step);
@@ -357,7 +358,7 @@ struct LateralPlanner::Impl {
                 model_curvatures[i] = model_target.curvatures[i];
             }
             initial_curvature = (1.0 - model_weight) * initial_curvature +
-                                model_weight * interp(kDtModel, times.data(), model_curvatures.data(), times.size());
+                                model_weight * interp(kDtMdl, times.data(), model_curvatures.data(), times.size());
         }
 
         target.valid = true;
@@ -426,7 +427,7 @@ struct LateralPlanner::Impl {
         // 전환 임계값(유효확률 0.3)에서는 차선 블렌드 가중치가 아직 0.51이라 한 프레임에 바꾸면 튄다
         // (2026-09-13 실측, 전환 434회). 차선을 버리는 방향은 0.5초, 되찾는 방향은 0.25초에 섞는다.
         const double mix_target = use_model_path ? 1.0 : 0.0;
-        const double mix_step = (mix_target > plan_mix ? kPlanMixOutRatePerS : kPlanMixInRatePerS) * kDtModel;
+        const double mix_step = (mix_target > plan_mix ? kPlanMixOutRatePerS : kPlanMixInRatePerS) * kDtMdl;
         plan_mix = std::clamp(mix_target, plan_mix - mix_step, plan_mix + mix_step);
         return use_model_path;
     }
@@ -452,7 +453,7 @@ struct LateralPlanner::Impl {
         } else {
             std::array<double, kLatMpcNodes> curvatures{};
             for (int i = 0; i < kLatMpcNodes; ++i) curvatures[i] = mpc.nodes()[i].curvature;
-            initial_curvature = interp(kDtModel, path_t.data(), curvatures.data(), curvatures.size());
+            initial_curvature = interp(kDtMdl, path_t.data(), curvatures.data(), curvatures.size());
         }
         invalid_count = (mpc.cost() > 20000.0 || solver_failed) ? invalid_count + 1 : 0;
     }
@@ -514,8 +515,8 @@ struct LateralPlanner::Impl {
 
     // 이번 프레임의 desire와 차선 변경 단계(LateralTarget의 정수 필드로).
     void fill_desire(LateralTarget *target) const {
-        target->desire = static_cast<int>(desire_helper.desire());
-        target->lane_change_state = static_cast<int>(desire_helper.lane_change_state());
+        target->desire = desire_helper.desire();
+        target->lane_change_state = desire_helper.lane_change_state();
         target->lane_change_direction = desire_helper.direction();
     }
 

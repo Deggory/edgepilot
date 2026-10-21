@@ -1,8 +1,8 @@
 #ifndef HUD_STATE_H
 #define HUD_STATE_H
 
-// 공유 상태 스냅샷(ModelState·ControlState 등) → HUD 표시 상태. 그리기와 무관해 OpenCV 없이
-// 컴파일되며, overlayd와 hud_snapshot이 같은 매핑을 쓴다.
+// 공유 상태 스냅샷(ModelState·ControlState 등) → HUD 표시 상태. 그리기와 무관하고, overlayd와 hud_snapshot이 같은
+// 매핑을 쓴다.
 
 #include "common/ipc_messages.h"
 #include "common/projection.h"
@@ -19,6 +19,9 @@ const char *engage_block_label(const char *block);
 // overlayd가 시각 기준으로 계산하므로(TurnSignalClock) 재그리기 빈도에 영향받지 않는다.
 constexpr int kTurnSignalSteps = 25;
 
+// 차선 변경 표시(ControlState hud_flags에서): 깜빡이를 켜고 운전자가 핸들을 밀기를 기다리는 중, 변경 중.
+enum class HudLaneChange { none, pending, changing };
+
 struct HudState {
     bool panda_connected = false;
     bool panda_healthy = false;
@@ -33,9 +36,9 @@ struct HudState {
     int turn_signal_step = 0;
     bool cruise_active = false;
     bool brake_hold = false;
-    bool soft_disabling = false;          // 3초 뒤 해제 예고(active_block이 사유)
-    bool steer_saturated = false;         // 커브가 조향 한계를 넘음
-    int lane_change = 0;                  // 0 없음, 1 운전자가 핸들을 밀기를 기다림, 2 변경 중
+    bool soft_disabling = false;   // 3초 뒤 해제 예고(active_block이 사유)
+    bool steer_saturated = false;  // 커브가 조향 한계를 넘음
+    HudLaneChange lane_change = HudLaneChange::none;
     int lane_change_direction = 0;        // -1 왼쪽, 1 오른쪽
     bool steer_paused = false;            // 85도 위에서 조향 요청을 끄고 쉰다
     bool steer_paused_by_driver = false;  // 넘겨받은 회전: 15도 아래에서 손을 떼거나 계획 커브를 1초 따르면 다시 조향

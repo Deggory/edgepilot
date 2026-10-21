@@ -42,8 +42,8 @@ void write_exact_header(std::FILE *out) {
 void write_exact_row(std::FILE *out, uint64_t timestamp_ns, const LateralTarget &t, float des) {
     std::fprintf(out, "%llu,%d,%llu,%d,%d,%a,%a,%a,%d,%d,%d", static_cast<unsigned long long>(timestamp_ns),
                  t.valid ? 1 : 0, static_cast<unsigned long long>(t.capture_timestamp_ns), t.mpc_solution_valid ? 1 : 0,
-                 t.laneless_mode ? 1 : 0, t.target_y_m, t.psis[0], t.curvatures[0], t.desire, t.lane_change_state,
-                 t.lane_change_direction);
+                 t.laneless_mode ? 1 : 0, t.target_y_m, t.psis[0], t.curvatures[0], static_cast<int>(t.desire),
+                 static_cast<int>(t.lane_change_state), t.lane_change_direction);
     for (float v : t.psis) std::fprintf(out, ",%a", v);
     for (float v : t.curvatures) std::fprintf(out, ",%a", v);
     std::fprintf(out, ",%a,%a,%a,%a,%a,%a,%a,%a,%a\n", t.lane_left_y_m, t.lane_right_y_m, t.lane_width_m,
@@ -116,12 +116,13 @@ int main(int argc, char **argv) {
     TimeOrderedEvents::Record record;
     while (events.next(&record)) {
         const EventRecordHeader &rh = record.header;
+        const RecordType type = record_type(rh);
         const std::vector<char> &buf = record.payload;
         ControlState cs;
         LearnerState ls;
-        if (use_vehicle && rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
-            apply_recorded_can(buf.data(), rh.payload_size, static_cast<double>(rh.timestamp_ns) * 1e-9, &vehicle);
-        } else if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && read_record(buf, &cs)) {
+        if (use_vehicle && type == RecordType::CanRx) {
+            apply_recorded_can(buf.data(), rh.payload_size, record_time_s(rh), &vehicle);
+        } else if (type == RecordType::ControlState && read_record(buf, &cs)) {
             v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
             measured = cs.actual_curvature;
             des_rec = cs.desired_curvature;
@@ -131,10 +132,10 @@ int main(int argc, char **argv) {
                 steering_pressed = pressed_filter.update(cs.driver_torque, steering.steering_pressed_threshold);
             }
             have_cs = true;
-        } else if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) && read_record(buf, &ls)) {
+        } else if (type == RecordType::LearnerState && read_record(buf, &ls)) {
             plan_delay_s = ls.plan_delay_s;
             roll_rad = (ls.flags & kLearnerUseVehicle) != 0 ? ls.roll_rad : 0.0f;
-        } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
+        } else if (type == RecordType::ModelState) {
             if (!have_cs) continue;
             ModelState ms{};
             if (!read_record(buf, &ms)) continue;
@@ -160,7 +161,7 @@ int main(int argc, char **argv) {
             std::fprintf(out,
                          "%.3f,%.1f,%.6f,%.6f,%.6f,%.6f,%.3f,"
                          "%.3f,%.3f,%.2f,%.2f,%.2f,%d,%.2f,%d,%.4f,%.4f\n",
-                         rh.timestamp_ns * 1e-9, v_kph, measured, des_rec, des, t.curvatures[0], t.target_y_m,
+                         record_time_s(rh), v_kph, measured, des_rec, des, t.curvatures[0], t.target_y_m,
                          t.lane_left_y_m, t.lane_right_y_m, t.lane_left_prob, t.lane_right_prob, t.lane_d_prob,
                          t.laneless_mode ? 1 : 0, t.lane_width_m, t.mpc_solution_valid ? 1 : 0, t.psis[0],
                          t.psis[kLateralControlN - 1]);

@@ -3,6 +3,7 @@
 #include "ax_middleware.hpp"
 #include "ax_sys_api.h"
 #include "maix_app.hpp"
+#include "maixcam2/maix_frames.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -93,18 +94,8 @@ bool MaixCamera::read_to(unsigned long long dst_phys, int timeout_ms, uint64_t *
     frame->get_video_frame(&src);
     AX_U64 now_pts = 0;
     if (pop_age_us && AX_SYS_GetCurPTS(&now_pts) == 0 && now_pts >= src.u64PTS) *pop_age_us = now_pts - src.u64PTS;
-    AX_VIDEO_FRAME_T dst = {};
-    dst.u32Width = width_;
-    dst.u32Height = height_;
-    dst.enImgFormat = AX_FORMAT_YUV420_SEMIPLANAR;
-    dst.u32PicStride[0] = dst.u32PicStride[1] = width_;
-    dst.u64PhyAddr[0] = dst_phys;
-    dst.u64PhyAddr[1] = dst_phys + static_cast<AX_U64>(width_) * height_;
-    dst.u32FrameSize = static_cast<AX_U32>(static_cast<size_t>(width_) * height_ * 3 / 2);
-    AX_IVPS_CROP_RESIZE_ATTR_T attr = {};
-    attr.eSclType = AX_IVPS_SCL_TYPE_AUTO;
-    attr.eSclInput = AX_IVPS_SCL_INPUT_SHARE;
-    attr.tAspectRatio.eMode = AX_IVPS_ASPECT_RATIO_STRETCH;
+    AX_VIDEO_FRAME_T dst = nv12_frame(dst_phys, width_, height_);
+    AX_IVPS_CROP_RESIZE_ATTR_T attr = stretch_resize();
     const bool ok = AX_IVPS_CropResizeTdp(&src, &dst, &attr) == 0;
     if (age_us && AX_SYS_GetCurPTS(&now_pts) == 0 && now_pts >= src.u64PTS) *age_us = now_pts - src.u64PTS;
     delete frame;

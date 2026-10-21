@@ -482,7 +482,7 @@ TEST(LateralController, LaneChangesAndBlinkersUseTheLinearFeedforward) {
     LateralController controller(config);
     controller.set_lateral_nn(model);
     int i = 0;
-    const auto tick = [&](bool blinker, int desire) {
+    const auto tick = [&](bool blinker, Desire desire) {
         const double t = 1.0 + 0.01 * i;
         VehicleCanState vehicle = ready_vehicle(t);
         vehicle.left_blinker = blinker;
@@ -490,14 +490,14 @@ TEST(LateralController, LaneChangesAndBlinkersUseTheLinearFeedforward) {
         target.desire = desire;
         return controller.update(usable_path(), target, vehicle, t, i++);
     };
-    for (int k = 0; k < 150; ++k) ASSERT_TRUE(tick(false, 0).nn_feedforward_used || k < 2);
+    for (int k = 0; k < 150; ++k) ASSERT_TRUE(tick(false, Desire::None).nn_feedforward_used || k < 2);
     LateralControlResult r;
-    for (int k = 0; k < 150; ++k) r = tick(true, 0);
+    for (int k = 0; k < 150; ++k) r = tick(true, Desire::None);
     EXPECT_TRUE(r.lat_active);
     EXPECT_FALSE(r.nn_feedforward_used) << "깜빡이";
-    for (int k = 0; k < 150; ++k) r = tick(false, 0);
+    for (int k = 0; k < 150; ++k) r = tick(false, Desire::None);
     EXPECT_TRUE(r.nn_feedforward_used) << "끝나면 다시 모델";
-    for (int k = 0; k < 150; ++k) r = tick(false, 3);
+    for (int k = 0; k < 150; ++k) r = tick(false, Desire::LaneChangeLeft);
     EXPECT_FALSE(r.nn_feedforward_used) << "차선 변경 desire";
 }
 

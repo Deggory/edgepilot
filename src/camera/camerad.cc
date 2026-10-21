@@ -21,6 +21,7 @@
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
+constexpr int kSensorFps = 20;  // 모델 프레임(20 Hz)에 맞춘 센서 속도
 
 }  // namespace
 
@@ -39,7 +40,7 @@ int main() {
             throw std::runtime_error("open road ai frame ring failed");
 
         // 카메라가 AX SYS를 초기화한 뒤에 슬롯 CMM을 잡는다.
-        MaixCamera camera(static_cast<int>(config.nv12_width), static_cast<int>(config.nv12_height), 20);
+        MaixCamera camera(static_cast<int>(config.nv12_width), static_cast<int>(config.nv12_height), kSensorFps);
         std::vector<CmmBlock> slots(frame_ring.slot_count());
         for (unsigned i = 0; i < slots.size(); ++i) {
             if (!cmm_alloc(&slots[i], frame_ring.frame_bytes(), "frame_ring"))
@@ -55,8 +56,8 @@ int main() {
         std::vector<uint64_t> ages_us, pop_ages_us;
         constexpr uint64_t kMaxCaptureAgeUs = 200000;  // 이보다 오래됐다고 나오면 PTS를 믿지 않는다
         uint64_t age_window_start = window_start;
-        std::fprintf(stderr, "camerad: MaixCAM2 VI %ux%u NV12, 20 fps sensor, CMM ring\n", config.nv12_width,
-                     config.nv12_height);
+        std::fprintf(stderr, "camerad: MaixCAM2 VI %ux%u NV12, %d fps sensor, CMM ring\n", config.nv12_width,
+                     config.nv12_height, kSensorFps);
 
         while (!g_stop) {
             const unsigned slot = static_cast<unsigned>(frame_id % frame_ring.slot_count());

@@ -1,5 +1,6 @@
 #include "car/vehicle_can.h"
 
+#include "common/utils_math.h"
 #include "common/utils_time.h"
 
 #include <algorithm>
@@ -103,7 +104,7 @@ Mdps12Values decode_mdps12(const std::array<uint8_t, 8> &data) {
 Esp12Values decode_esp12(const std::array<uint8_t, 8> &data) {
     Esp12Values values;
     const float yaw_rate_deg_s = static_cast<float>(get_signal_le(data.data(), 40, 13)) * 0.01f - 40.95f;
-    values.yaw_rate_rad_s = yaw_rate_deg_s * 0.017453292519943295f;
+    values.yaw_rate_rad_s = deg_to_rad(yaw_rate_deg_s);
     values.yaw_rate_valid = get_signal_le(data.data(), 54, 1) == 0;
     // ESP12 LAT_ACCEL도 YAW_RATE처럼 제어 관례와 부호가 반대다. 2026-08-25
     // 실차 344샘플 회귀: 실측 = -1.022 x (curveYaw*v^2) + 0.158. 반전해 저장.
@@ -196,7 +197,7 @@ Cgw2Values decode_cgw2(const std::array<uint8_t, 8> &data) {
 Tpms11Values decode_tpms11(const std::array<uint8_t, 8> &data) {
     Tpms11Values values;
     values.unit = static_cast<int>(get_signal_le(data.data(), 11, 2));
-    const float factor = values.unit == 1 ? 0.72519f : (values.unit == 2 ? 0.1f : 1.0f);
+    const float factor = values.unit == kTpmsUnitKpa ? 0.72519f : (values.unit == kTpmsUnitBar ? 0.1f : 1.0f);
     auto pressure = [factor](uint8_t raw) { return raw == 0xff ? 0.0f : static_cast<float>(raw) * factor; };
     values.pressure_fl = pressure(data[2]);
     values.pressure_fr = pressure(data[3]);

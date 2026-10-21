@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from cpp_headers import cpp_constant, cpp_size  # noqa: E402
 from scripts import manager  # noqa: E402
 
 IPC_MESSAGES = ROOT / "src" / "common" / "ipc_messages.h"
@@ -23,20 +24,12 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def constant(name: str) -> int:
-    return int(re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F]+|\d+);", read(IPC_MESSAGES)).group(1), 0)
-
-
-def cpp_size(struct_name: str) -> int:
-    return int(re.search(rf"sizeof\({struct_name}\) == (\d+)", read(IPC_MESSAGES)).group(1))
-
-
 class ManagerTest(unittest.TestCase):
     def test_layout_matches_cpp(self):
         """매니저가 쓰는 ManagerState(overlayd와 웹 콘솔이 읽는다)가 ipc_messages.h와 같아야 한다."""
-        self.assertEqual(manager.IPC_MAGIC, constant("kIpcMagic"))
-        self.assertEqual(manager.IPC_VERSION, constant("kIpcVersion"))
-        self.assertEqual(manager.MAX_PROCESSES, constant("kMaxProcesses"))
+        self.assertEqual(manager.IPC_MAGIC, cpp_constant("kIpcMagic"))
+        self.assertEqual(manager.IPC_VERSION, cpp_constant("kIpcVersion"))
+        self.assertEqual(manager.MAX_PROCESSES, cpp_constant("kMaxProcesses"))
         self.assertEqual(manager.HEADER_SIZE, cpp_size("IpcHeader"))
         self.assertEqual(manager.PROCESS.size, cpp_size("ProcessState"))
         self.assertEqual(manager.MANAGER_STATE_SIZE, cpp_size("ManagerState"))

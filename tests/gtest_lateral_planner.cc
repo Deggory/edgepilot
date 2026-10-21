@@ -63,32 +63,32 @@ TEST(LateralPlanner, LaneChangeFollowsUpstreamDesireHelper) {
     ms.desire_state[0] = 1.0f;
     VehicleCanState vehicle{};
     LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true, false);
-    ASSERT_EQ(r.desire, 0);
+    ASSERT_EQ(r.desire, Desire::None);
     vehicle.left_blinker = true;
     r = planner.update(ms, vehicle, v, 0.0f, true, false);
-    EXPECT_EQ(r.desire, 0) << "깜빡이만으로는 시작하지 않는다";
-    EXPECT_EQ(r.lane_change_state, 1) << "HUD: 핸들을 밀기를 기다린다";
+    EXPECT_EQ(r.desire, Desire::None) << "깜빡이만으로는 시작하지 않는다";
+    EXPECT_EQ(r.lane_change_state, LaneChangeState::PreLaneChange) << "HUD: 핸들을 밀기를 기다린다";
     EXPECT_EQ(r.lane_change_direction, -1);
     vehicle.driver_torque = 300;  // 왼쪽으로 민다(컨트롤러가 거른 운전자 조향)
     r = planner.update(ms, vehicle, v, 0.0f, true, true);
-    EXPECT_EQ(r.desire, 3) << "깜빡이 방향으로 밀면 laneChangeLeft";
-    EXPECT_EQ(r.lane_change_state, 2) << "HUD: 변경 중";
+    EXPECT_EQ(r.desire, Desire::LaneChangeLeft) << "깜빡이 방향으로 밀면 laneChangeLeft";
+    EXPECT_EQ(r.lane_change_state, LaneChangeState::Starting) << "HUD: 변경 중";
     // 모델이 차선 변경 중이라고 하는 동안(prob 높음)은 핸들을 놓아도 3초 넘게 이어진다.
     vehicle.driver_torque = 0;
     ms.desire_state[0] = 0.1f;
     ms.desire_state[3] = 0.9f;
     for (int i = 0; i < 60; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
-    EXPECT_EQ(r.desire, 3) << "출력이 커져도 취소하지 않는다(예전 출력 0.8 취소 제거)";
+    EXPECT_EQ(r.desire, Desire::LaneChangeLeft) << "출력이 커져도 취소하지 않는다(예전 출력 0.8 취소 제거)";
     // 모델이 끝났다고 하면 마무리(차선선을 0.5초에 되살림) 동안은 openpilot 0.9.4 DESIRES처럼
     // laneChangeLeft를 유지하고, 끝나면 내린다.
     ms.desire_state[0] = 1.0f;
     ms.desire_state[3] = 0.0f;
     vehicle.left_blinker = false;
     r = planner.update(ms, vehicle, v, 0.0f, true, false);
-    EXPECT_EQ(r.desire, 3) << "마무리 단계";
+    EXPECT_EQ(r.desire, Desire::LaneChangeLeft) << "마무리 단계";
     for (int i = 0; i < 12; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
-    EXPECT_EQ(r.desire, 0) << "차선선을 되살리면 끝난다";
-    EXPECT_EQ(r.lane_change_state, 0);
+    EXPECT_EQ(r.desire, Desire::None) << "차선선을 되살리면 끝난다";
+    EXPECT_EQ(r.lane_change_state, LaneChangeState::Off);
 }
 
 // 차선 변경 속도 아래에서 켠 깜빡이는 desire를 주지 않는다(상류 desire_helper). 빠를 때 시작한 차선 변경은
@@ -109,8 +109,8 @@ TEST(LateralPlanner, SlowBlinkerGivesNoDesire) {
     vehicle.left_blinker = true;
     for (int i = 0; i < 60; ++i) {  // 3초
         const LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true, false);
-        ASSERT_EQ(r.desire, 0) << i;
-        ASSERT_EQ(r.lane_change_state, 0) << i;
+        ASSERT_EQ(r.desire, Desire::None) << i;
+        ASSERT_EQ(r.lane_change_state, LaneChangeState::Off) << i;
     }
 
     LateralPlanner changing(steering);
@@ -118,9 +118,10 @@ TEST(LateralPlanner, SlowBlinkerGivesNoDesire) {
     vehicle.left_blinker = true;
     changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true, false);
     vehicle.driver_torque = 300;  // 왼쪽 넛지(컨트롤러가 거른 운전자 조향)
-    EXPECT_EQ(changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true, true).desire, 3) << "차선 변경 시작";
+    EXPECT_EQ(changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true, true).desire, Desire::LaneChangeLeft)
+        << "차선 변경 시작";
     vehicle.driver_torque = 0;
-    EXPECT_EQ(changing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true, false).desire, 3)
+    EXPECT_EQ(changing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true, false).desire, Desire::LaneChangeLeft)
         << "시작한 변경은 감속해도 이어진다";
 }
 
@@ -183,11 +184,11 @@ TEST(LateralPlanner, BlinkerAloneKeepsTheModelPathFallback) {
     ASSERT_TRUE(r.laneless_mode) << "약한 차선이면 모델 경로";
     vehicle.left_blinker = true;
     for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
-    EXPECT_EQ(r.lane_change_state, 1);
+    EXPECT_EQ(r.lane_change_state, LaneChangeState::PreLaneChange);
     EXPECT_TRUE(r.laneless_mode) << "깜빡이만으로는 대체를 끄지 않는다";
     vehicle.driver_torque = 300;  // 왼쪽으로 밀어 변경을 시작한다
     r = planner.update(ms, vehicle, v, 0.0f, true, true);
-    EXPECT_EQ(r.lane_change_state, 2);
+    EXPECT_EQ(r.lane_change_state, LaneChangeState::Starting);
     EXPECT_FALSE(r.laneless_mode) << "변경 중에는 대체하지 않는다";
 }
 

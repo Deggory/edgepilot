@@ -11,6 +11,7 @@
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
 #include "common/utils_file.h"
+#include "common/utils_math.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
 #include "localization/localization_pipeline.h"
@@ -117,7 +118,7 @@ int main() {
                          "locationd: batches=%llu published=%llu flags=0x%x inputs=0x%x yaw=%.4f roll=%.2fdeg "
                          "pitch=%.2fdeg v=%.1f lag status=%u delay=%.3f est=%.3f+-%.3f blocks=%d points=%u\n",
                          batches, published, last.flags, last.input_flags, last.angular_velocity_calib[2],
-                         last.orientation_calib[0] * 57.29578f, last.orientation_calib[1] * 57.29578f,
+                         rad_to_deg(last.orientation_calib[0]), rad_to_deg(last.orientation_calib[1]),
                          last.velocity_device[0], last.lag_status, last.lateral_delay_s, last.lag_estimate_s,
                          last.lag_estimate_std_s, last.lag_valid_blocks, last.lag_points);
             // 지난 로그 이후 입력별 받음/거부(사유별)

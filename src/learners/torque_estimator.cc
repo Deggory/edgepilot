@@ -1,5 +1,7 @@
 #include "learners/torque_estimator.h"
 
+#include "common/utils_time.h"  // kDtMdl
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -8,7 +10,6 @@
 namespace {
 
 constexpr double kGravity = 9.81;
-constexpr double kDtMdl = 0.05;
 
 double clip(double v, double lo, double hi) { return std::min(std::max(v, lo), hi); }
 

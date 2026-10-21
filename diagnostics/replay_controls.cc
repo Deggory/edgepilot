@@ -46,7 +46,7 @@ using Record = TimeOrderedEvents::Record;
 
 // 틱에 넣는 레코드 종류
 bool replayed(const Record &r) {
-    const auto type = static_cast<RecordType>(r.header.type);
+    const auto type = record_type(r.header);
     return type == RecordType::CanRx || type == RecordType::ModelState || type == RecordType::PandaState ||
            type == RecordType::Localization || type == RecordType::ControlState;
 }
@@ -228,11 +228,10 @@ int main(int argc, char **argv) {
             tick_records.push_back(std::move(pending));
             advance();
         }
-        std::stable_partition(tick_records.begin(), tick_records.end(), [](const Record &r) {
-            return static_cast<RecordType>(r.header.type) == RecordType::CanRx;
-        });
+        std::stable_partition(tick_records.begin(), tick_records.end(),
+                              [](const Record &r) { return record_type(r.header) == RecordType::CanRx; });
         for (const Record &r : tick_records) {
-            switch (static_cast<RecordType>(r.header.type)) {
+            switch (record_type(r.header)) {
                 case RecordType::CanRx:
                     if (decode_recorded_can(r.payload.data(), r.payload.size(), tick_ns, &can_batch))
                         tick.on_can_batch(can_batch, tick_ns, now_s);

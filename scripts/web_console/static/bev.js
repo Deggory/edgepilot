@@ -20,7 +20,7 @@ import * as THREE from "three";
 import {OrbitControls} from "./three/OrbitControls.js";
 import {CSS2DRenderer, CSS2DObject} from "./three/CSS2DRenderer.js";
 import {carModel, fit, wheel} from "./bev_car.js";
-import {BevStream, GAS_PRESS_HORIZON, HISTORY_S, LANE_SURE, LEAD_HISTORY_S} from "./bev_data.js";
+import {BevStream, DEPARTURE_ALERT, GAS_PRESS_HORIZON, HISTORY_S, LANE_SURE, LEAD_HISTORY_S} from "./bev_data.js";
 import {EGO_SIZE, makeEgo} from "./bev_ego.js";
 import {arc, arrow, band, corridor, curb, egoLane, headingAt, normalAt} from "./bev_geometry.js";
 import {BLACK, Batch, CORRIDOR, FOOTPRINT, GROUND, Instances, OVERLAY, SHARED, ink, modelMaterial, shader} from "./bev_gl.js";
@@ -542,9 +542,10 @@ class BevView {
   drawDeparture(scene) {
     const card = this.card, departure = scene.departure, speed = scene.speedKph / 3.6;
     const standing = departure.drive && Number.isFinite(speed) && speed <= (card.hidden ? DEPART.stopped : DEPART.moving);
-    card.hidden = !(standing || departure.alert !== 0);
+    card.hidden = !(standing || departure.alert !== DEPARTURE_ALERT.none);
     if (card.hidden) return;
-    const [text, tone] = departure.alert === 2 ? ["GREEN", "go"] : departure.alert === 1 ? ["LEAD GO", "go"]
+    const [text, tone] = departure.alert === DEPARTURE_ALERT.greenLight ? ["GREEN", "go"]
+      : departure.alert === DEPARTURE_ALERT.leadDeparted ? ["LEAD GO", "go"]
       : departure.armed ? ["ARMED", "armed"] : ["WAIT", ""];
     if (this.badge.textContent !== text) {
       this.badge.textContent = text;

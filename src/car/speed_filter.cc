@@ -1,12 +1,13 @@
 #include "car/speed_filter.h"
 
+#include "common/utils_time.h"  // kDtCtrl
+
 #include <cmath>
 #include <limits>
 
 namespace {
 
 // opendbc CarStateBase: A = [[1, DT_CTRL], [0, 1]], C = [1, 0], Q = [[0, 0], [0, 100]], R = 0.3
-constexpr double kDtCtrl = 0.01;
 constexpr double kAccelProcessNoise = 100.0;
 constexpr double kSpeedMeasurementNoise = 0.3;
 constexpr double kRestartGapMps = 2.0;

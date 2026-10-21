@@ -22,7 +22,7 @@ TEST(HudState, AlertCardPriority) {
     hud.steer_paused = true;
     hud.steer_saturated = true;
     hud.services_healthy = false;
-    hud.lane_change = 1;
+    hud.lane_change = HudLaneChange::pending;
     hud.lane_change_direction = -1;
     hud.departure_alert_type = DepartureAlertType::lead_departed;
 
@@ -60,7 +60,7 @@ TEST(HudState, AlertCardPriority) {
     EXPECT_EQ(alert.title, "LANE CHANGE");
     EXPECT_EQ(alert.arrow, -1);
     EXPECT_EQ(alert.level, HudAlertLevel::notice);
-    hud.lane_change = 0;
+    hud.lane_change = HudLaneChange::none;
     alert = hud_select_alert(hud, true);
     EXPECT_EQ(alert.title, "LEAD VEHICLE MOVING");
     EXPECT_EQ(alert.level, HudAlertLevel::proceed);
@@ -73,7 +73,7 @@ TEST(HudState, AlertCardPriority) {
     HudState idle;
     idle.services_healthy = true;
     idle.steer_paused = true;
-    idle.lane_change = 1;
+    idle.lane_change = HudLaneChange::pending;
     EXPECT_TRUE(hud_select_alert(idle, true).empty()) << "조향 쉼과 차선 변경 대기는 활성일 때만";
     idle.soft_disabling = true;
     std::snprintf(idle.active_block, sizeof(idle.active_block), "calibration_invalid");
@@ -132,19 +132,19 @@ TEST(HudState, ManeuverFlagsMapping) {
     HudState hud;
     hud_apply_control_state(c, true, &hud);
     // 차선 변경 대기(오른쪽)와 운전자 토크 눈금
-    ASSERT_EQ(hud.lane_change, 1);
+    ASSERT_EQ(hud.lane_change, HudLaneChange::pending);
     ASSERT_EQ(hud.lane_change_direction, 1);
     ASSERT_FALSE(hud.steer_paused);
     ASSERT_NEAR(hud.driver_torque_fraction, -96.0f / kHyundaiSteerMax, 1e-6f);
     c.hud_flags = kHudFlagLaneChanging | kHudFlagSteerPaused | kHudFlagSteerPausedByDriver;
     hud_apply_control_state(c, true, &hud);
-    ASSERT_EQ(hud.lane_change, 2);
+    ASSERT_EQ(hud.lane_change, HudLaneChange::changing);
     ASSERT_EQ(hud.lane_change_direction, -1);
     ASSERT_TRUE(hud.steer_paused);
     ASSERT_TRUE(hud.steer_paused_by_driver);
     hud_apply_control_state(c, false, &hud);
     // 낡은 스냅샷은 조작 표시를 끈다
-    ASSERT_EQ(hud.lane_change, 0);
+    ASSERT_EQ(hud.lane_change, HudLaneChange::none);
     ASSERT_FALSE(hud.steer_paused);
     ASSERT_EQ(hud.driver_torque_fraction, 0.0f);
 }

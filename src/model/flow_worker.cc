@@ -1,5 +1,6 @@
 #include "model/flow_worker.h"
 
+#include "common/utils_math.h"  // kRadToDeg
 #include "maixcam2/maix_ive_flow.h"
 
 #include <sys/resource.h>
@@ -14,7 +15,6 @@ namespace {
 
 constexpr size_t kQueueDepth = 3;
 constexpr uint64_t kLeadLogFrames = 1200;
-constexpr double kRadToDeg = 57.29577951308232;
 
 }  // namespace
 
@@ -151,9 +151,10 @@ void FlowWorker::run() {
             "last yaw %+.3f pitch %+.3f rot %.3f deg tracks %u inliers %u parallax %.1f px | frames %llu "
             "done %llu lost %llu rejected %llu dropped %llu | %.1f ms wall %.2f ms cpu per frame, pyramid %s\n",
             st.blocks, st.windows, st.yaw * kRadToDeg, st.pitch * kRadToDeg, st.sd_yaw * kRadToDeg,
-            st.sd_pitch * kRadToDeg, st.estimate_blocks, st.status == 2 ? "estimate" : "collecting",
-            st.window_yaw * kRadToDeg, st.window_pitch * kRadToDeg, st.window_rotation * kRadToDeg, st.window_tracks,
-            st.window_inliers, st.window_parallax, static_cast<unsigned long long>(s.frames),
+            st.sd_pitch * kRadToDeg, st.estimate_blocks,
+            st.status == kFlowCalibrationEstimate ? "estimate" : "collecting", st.window_yaw * kRadToDeg,
+            st.window_pitch * kRadToDeg, st.window_rotation * kRadToDeg, st.window_tracks, st.window_inliers,
+            st.window_parallax, static_cast<unsigned long long>(s.frames),
             static_cast<unsigned long long>(s.windows_done), static_cast<unsigned long long>(s.windows_lost),
             static_cast<unsigned long long>(s.rejected), static_cast<unsigned long long>(dropped), s.wall_ms / frames,
             s.cpu_ms / frames, tracker_.pyramid_engine());

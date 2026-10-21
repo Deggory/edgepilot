@@ -1,7 +1,7 @@
 // recordd 녹화(이벤트 파일)에서 횡제어 분석/학습용 CSV를 뽑는다. CAN 디코드와 부호 규약은
 // 런타임과 같은 vehicle_can을 그대로 쓴다. 레코드는 기록 시각 순으로 읽는다(TimeOrderedEvents): 행마다 그 시각까지
 // 들어온 CAN과 모델만 본다(controlsd가 그 틱에 본 것).
-// 사용: extract_lateral_dataset <out.csv> <events...>
+// 사용: extract_lateral_dataset <out.csv> <events.bin...>
 #include "car/hyundai_can.h"
 #include "car/vehicle_can.h"
 #include "common/ipc_messages.h"
@@ -80,23 +80,24 @@ int main(int argc, char **argv) {
     TimeOrderedEvents::Record record;
     while (events.next(&record)) {
         const EventRecordHeader &rh = record.header;
+        const RecordType type = record_type(rh);
         const std::vector<char> &buf = record.payload;
-        const double now_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
+        const double now_s = record_time_s(rh);
         if (route_start_s < 0.0) route_start_s = now_s;
 
-        if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
+        if (type == RecordType::CanRx) {
             apply_recorded_can(buf.data(), rh.payload_size, now_s, &vehicle);
             continue;
         }
 
-        if (rh.type == static_cast<uint16_t>(RecordType::ModelState) && read_record(buf, &model)) {
+        if (type == RecordType::ModelState && read_record(buf, &model)) {
             have_model = model.valid != 0;
             model_time_s = now_s;
             continue;
         }
 
         ControlState cs{};
-        if (rh.type != static_cast<uint16_t>(RecordType::ControlState) || !read_record(buf, &cs)) continue;
+        if (type != RecordType::ControlState || !read_record(buf, &cs)) continue;
 
         const float v = vehicle_speed_kph(vehicle, now_s, kVehicleStateTimeoutS) / 3.6f;
         const bool yaw_fresh =

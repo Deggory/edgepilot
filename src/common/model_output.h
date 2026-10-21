@@ -1,6 +1,9 @@
 #ifndef MODEL_OUTPUT_H
 #define MODEL_OUTPUT_H
 
+// openpilot master supercombo 원시 출력의 배치(model_output_layout, 블록 오프셋마다 static_assert)와 해석(plan,
+// 차선선, 도로 경계, 앞차, pose, meta 가스 예측), 궤적 격자(T_IDXS, X_IDXS).
+
 #include <array>
 #include <vector>
 

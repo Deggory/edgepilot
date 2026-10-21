@@ -12,6 +12,7 @@
 //       frames.bin 순서이고, 추적기에는 modeld처럼 녹화된 카메라 frame_id와 촬영 시각을 준다(녹화에서 빠진
 //       프레임 자리에서는 광류가 이어지지 않는다).
 #include "common/app_config.h"
+#include "common/utils_math.h"  // kRadToDeg
 #include "maixcam2/maix_cmm.h"
 #include "maixcam2/maix_ive_flow.h"
 #include "maixcam2/maix_vdec.h"
@@ -27,12 +28,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-namespace {
-
-constexpr double kDeg = 57.29577951308232;
-
-}  // namespace
 
 int main(int argc, char **argv) {
     const auto usage = [&] {
@@ -111,8 +106,8 @@ int main(int argc, char **argv) {
         while (!have) {
             if (sent < count && sent < got + 24) {
                 const FrameIndexRecord &r = recs[sent];
-                if (!read_h264_frame(video, prefix_bytes, r.file_offset, r.packet_size, (r.flags & 1U) != 0, sent == 0,
-                                     &packet) ||
+                if (!read_h264_frame(video, prefix_bytes, r.file_offset, r.packet_size,
+                                     (r.flags & kFrameIndexKeyframe) != 0, sent == 0, &packet) ||
                     !decoder.send(packet.data(), packet.size(), r.capture_timestamp_ns, 200)) {
                     std::fprintf(stderr, "feeding frame %zu failed\n", sent);
                     return 1;
@@ -154,9 +149,9 @@ int main(int argc, char **argv) {
         if (st.windows != windows) {
             windows = st.windows;
             std::printf("window %llu %+.4f %+.4f %.4f %u %u %+.4f %+.4f %u\n",
-                        static_cast<unsigned long long>(st.window_frame_id), st.window_yaw * kDeg,
-                        st.window_pitch * kDeg, st.window_rotation * kDeg, st.window_tracks, st.window_inliers,
-                        st.yaw * kDeg, st.pitch * kDeg, st.blocks);
+                        static_cast<unsigned long long>(st.window_frame_id), st.window_yaw * kRadToDeg,
+                        st.window_pitch * kRadToDeg, st.window_rotation * kRadToDeg, st.window_tracks,
+                        st.window_inliers, st.yaw * kRadToDeg, st.pitch * kRadToDeg, st.blocks);
         }
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -170,8 +165,8 @@ int main(int argc, char **argv) {
         count, static_cast<unsigned long long>(s.frames), st.windows, static_cast<unsigned long long>(s.windows_done),
         static_cast<unsigned long long>(s.windows_lost), static_cast<unsigned long long>(s.rejected),
         static_cast<unsigned long long>(s.lead_frames), static_cast<unsigned long long>(s.lead_rates),
-        s.wall_ms / frames, s.cpu_ms / frames, tracker.pyramid_engine(), st.status, st.blocks, st.yaw * kDeg,
-        st.pitch * kDeg, seconds);
+        s.wall_ms / frames, s.cpu_ms / frames, tracker.pyramid_engine(), st.status, st.blocks, st.yaw * kRadToDeg,
+        st.pitch * kRadToDeg, seconds);
     for (CmmBlock &b : slots) cmm_free(&b);
     std::fclose(video);
     return 0;

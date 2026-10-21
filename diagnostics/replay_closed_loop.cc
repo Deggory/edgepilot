@@ -55,7 +55,10 @@
 
 namespace {
 
-constexpr double kDtCtrl = 0.01;
+// 재동기화한 구간의 처음 이만큼(0.5초)은 과도라 점수에서 뺀다.
+constexpr int kSegmentWarmupFrames = 50;
+// 차선 중앙 오차(CSV lane_y)는 두 자차 차선선이 이만큼 확실할 때만 쓴다.
+constexpr float kLaneSureProbability = 0.3f;
 // 녹화가 본 차선 범위 밖은 외삽이라 신뢰 구간을 벗어난다.
 constexpr float kMaxDeviationY = 2.0f;
 constexpr float kMaxDeviationPsi = 0.15f;
@@ -215,8 +218,8 @@ public:
     float step(float a_cmd, float v) {
         const float u = delay_.push(a_cmd) * gain_at(v);
         const float acc = wn_ * wn_ * (u - a_) - 2.0f * zeta_ * wn_ * a_dot_;
-        a_dot_ += acc * static_cast<float>(kDtCtrl);
-        a_ += a_dot_ * static_cast<float>(kDtCtrl);
+        a_dot_ += acc * kDtCtrlF;
+        a_ += a_dot_ * kDtCtrlF;
         return a_;
     }
 
@@ -394,8 +397,7 @@ int main(int argc, char **argv) {
     int segment = 0;
     int segment_frames = 0;
     bool resynced_prev = true;
-    // 재현 점수: 자유 주행 구간에서 시뮬 횡가속도가 실측을 얼마나 설명하는가.
-    // 구간 시작 0.5초는 재동기화 과도라 뺀다.
+    // 재현 점수: 자유 주행 구간에서 시뮬 횡가속도가 실측을 얼마나 설명하는가(구간 시작 kSegmentWarmupFrames는 뺀다).
     Score score;
     // 속도 대역별 점수. 단일 이득으로는 저속과 고속이 같이 안 맞는다.
     constexpr int kBands = 4;
@@ -502,7 +504,7 @@ int main(int argc, char **argv) {
                 ++segment;
                 segment_frames = 0;
             }
-            if (++segment_frames > 50) {
+            if (++segment_frames > kSegmentWarmupFrames) {
                 const double a_sim = static_cast<double>(k_sim) * v_clamped * v_clamped;
                 const double a_rec = static_cast<double>(ex.k_rec) * v_clamped * v_clamped;
                 score.add(a_sim, a_rec);
@@ -513,8 +515,8 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-            dpsi += static_cast<float>(kDtCtrl) * v_mps * path_deviation;
-            dy += static_cast<float>(kDtCtrl) * v_mps * dpsi;
+            dpsi += kDtCtrlF * v_mps * path_deviation;
+            dy += kDtCtrlF * v_mps * dpsi;
             const float dy_c = std::clamp(dy, -kMaxDeviationY, kMaxDeviationY);
             const float dpsi_c = std::clamp(dpsi, -kMaxDeviationPsi, kMaxDeviationPsi);
             if (dy_c != dy || dpsi_c != dpsi) clamped = 1;
@@ -528,8 +530,8 @@ int main(int argc, char **argv) {
         resynced_prev = resync;
 
         if (out) {
-            const bool lane_ok =
-                have_model && ms_sim.lane_probabilities[1] >= 0.3f && ms_sim.lane_probabilities[2] >= 0.3f;
+            const bool lane_ok = have_model && ms_sim.lane_probabilities[1] >= kLaneSureProbability &&
+                                 ms_sim.lane_probabilities[2] >= kLaneSureProbability;
             const float lane_y = lane_ok ? 0.5f * (ms_sim.lanes[1][0].y + ms_sim.lanes[2][0].y) : 0.0f;
             std::fprintf(out,
                          "%.3f,%d,%.2f,%d,%s,%.6f,%.6f,%.6f,%.4f,%.4f,%.3f,%.3f,"
@@ -549,8 +551,9 @@ int main(int argc, char **argv) {
     TimeOrderedEvents::Record record;
     while (events.next(&record)) {
         const EventRecordHeader &rh = record.header;
+        const RecordType type = record_type(rh);
         const std::vector<char> &buf = record.payload;
-        const double rec_t = static_cast<double>(rh.timestamp_ns) * 1e-9;
+        const double rec_t = record_time_s(rh);
 
         if (sim_t > 0.0) {
             while (sim_t + kDtCtrl <= rec_t) {
@@ -561,7 +564,7 @@ int main(int argc, char **argv) {
 
         // controlsd처럼 학습값을 컨트롤러에 넣는다(스위치는 steering 파라미터가 정한다)
         LearnerState ls;
-        if (rh.type == static_cast<uint16_t>(RecordType::LearnerState) && read_record(buf, &ls)) {
+        if (type == RecordType::LearnerState && read_record(buf, &ls)) {
             LiveLateralParams live;
             live.use_vehicle = (ls.flags & kLearnerUseVehicle) != 0;
             live.steer_ratio = ls.steer_ratio;
@@ -583,26 +586,25 @@ int main(int argc, char **argv) {
             live_now = live;
         }
         // controlsd와 같은 거름과 파서. 시뮬 차는 이 상태에서 ESP12만 가져간다.
-        if (rh.type == static_cast<uint16_t>(RecordType::CanRx))
-            apply_recorded_can(buf.data(), buf.size(), rec_t, &recorded_vehicle);
-        if (rh.type == static_cast<uint16_t>(RecordType::Localization) && read_record(buf, &localization))
-            have_localization = true;
+        if (type == RecordType::CanRx) apply_recorded_can(buf.data(), buf.size(), rec_t, &recorded_vehicle);
+        if (type == RecordType::Localization && read_record(buf, &localization)) have_localization = true;
         ControlState cs;
-        if (rh.type == static_cast<uint16_t>(RecordType::ControlState) && read_record(buf, &cs)) {
+        if (type == RecordType::ControlState && read_record(buf, &cs)) {
             ex.v_kph = cs.ego_speed_kph > 0.0f ? cs.ego_speed_kph : cs.cluster_speed_kph;
             ex.k_rec = cs.actual_curvature;
             ex.angle_rec = cs.steering_angle_deg;
             ex.driver_torque = cs.driver_torque;
             ex.apply_rec = cs.apply_torque;
             ex.active_rec = cs.active;
-        } else if (rh.type == static_cast<uint16_t>(RecordType::ModelState)) {
+        } else if (type == RecordType::ModelState) {
             ModelState ms{};
             if (!read_record(buf, &ms)) continue;
             if (sim_t < 0.0) {
                 sim_t = rec_t;
                 route_t0 = rec_t;
             }
-            controller.set_calibration_status(ms.calibration.status);  // controlsd(ControlsTick)처럼
+            controller.set_calibration_status(
+                static_cast<CalibrationStatus>(ms.calibration.status));  // controlsd(ControlsTick)처럼
             ms_sim = ms;
             // 카메라 오프셋 변경: 모델은 실제 점을 y - 오프셋으로 본다(set_camera_mount)
             transform_model(ms_sim, dy + opt.camera_shift, dpsi);

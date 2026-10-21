@@ -117,7 +117,7 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
         result.engaged && !result.active && (kind == BlockKind::Availability || kind == BlockKind::Interrupt);
     // LKAS가 켜져 있다(MDPS 속도 스푸프): 활성이거나 가용성 대기
     const bool lkas_active = result.active || steer_availability_hold;
-    // MDPS가 고장을 알리는 동안은 요청을 내리지 않는다(상류 latActive=false면 요청 비트도 0)
+    // MDPS가 고장을 알리는 동안은 요청 비트를 끈다(상류 latActive=false면 요청 비트도 0)
     const bool steer_request = lkas_active && !result.steer_fault;
     result.cut_steer_temp = update_cut_steer_state(steer_request, vehicle_state.steering_angle_deg);
     const bool plan_matches = large_angle_hold_ && driver_took_wheel_ &&
@@ -133,7 +133,7 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     const bool steering = result.active && !result.large_angle_hold && !result.steer_fault && !standstill;
     result.lat_active = steering;
     const bool yaw_rate_valid = result.esp12_fresh && vehicle_state.yaw_rate_valid;
-    road_bank_.update(0.01f, speed_mps, vehicle_state.lat_accel_mps2, vehicle_state.lat_accel_valid,
+    road_bank_.update(kDtCtrlF, speed_mps, vehicle_state.lat_accel_mps2, vehicle_state.lat_accel_valid,
                       vehicle_state.yaw_rate_rad_s, yaw_rate_valid);
 
     const CurvatureBounds hold = hold_angle_bounds(speed_mps, steering, steering_pressed, live);
@@ -373,7 +373,8 @@ float LateralController::lateral_nn_feedforward(const LateralTarget &target, con
     nn_inputs_.push(la_at(0.0f), angle_at(0.0f));
     // 켜고 끌 때, 그리고 조향을 시작할 때 피드포워드가 건너뛰지 않게 1초에 걸쳐 섞는다(설정은 주행 중에도 바뀐다).
     // 학습에서 뺀 순간(desire가 있거나 깜빡이가 켜진 차선 변경·회전, nnlc csvdata)에는 선형으로 돌아간다.
-    const bool trained_situation = target.desire == 0 && !vehicle_state.left_blinker && !vehicle_state.right_blinker;
+    const bool trained_situation =
+        target.desire == Desire::None && !vehicle_state.left_blinker && !vehicle_state.right_blinker;
     const bool wanted = steering && config_.steering_params.nn_feedforward && target.valid && speed > kNnMinSpeedMps &&
                         trained_situation;
     nn_weight_ = clamp_float(nn_weight_ + (wanted ? kNnBlendStep : -kNnBlendStep), 0.0f, 1.0f);
@@ -430,12 +431,11 @@ void LateralController::steer(const VehicleCanState &vehicle_state, const Torque
 // 않았으면 경고한다.
 bool LateralController::update_saturation(const LateralControlResult &result, float plan_curvature, float speed_mps,
                                           double now_s, bool steering_pressed, bool curvature_limited) {
-    constexpr float kDt = 0.01f;
     const bool saturated_now = std::fabs(result.normalized_output) > 1.0f - 1e-3f || curvature_limited;
     if (saturated_now && speed_mps > kSatCheckMinSpeedMps && !steer_limited_by_safety_ && !steering_pressed)
-        sat_time_ += kDt;
+        sat_time_ += kDtCtrlF;
     else
-        sat_time_ -= kDt;
+        sat_time_ -= kDtCtrlF;
     sat_time_ = clamp_float(sat_time_, 0.0f, kSteerLimitTimerS);
     lac_saturated_ = sat_time_ > kSteerLimitTimerS - 1e-3f;
     const bool lac_saturated = lac_saturated_;
@@ -612,9 +612,9 @@ BlockReason LateralController::active_block_reason(const LateralPath &path, cons
 // 끝났을 때만 본다(상류 sm.seen·cal_status 검사: 보정 사유가 먼저 돌아간다).
 BlockReason LateralController::soft_disable_reason(bool steer_fault_alert) const {
     if (steer_fault_alert) return BlockReason::SteerTempUnavailable;
-    if (calibration_status_ == 0) return BlockReason::CalibrationIncomplete;
-    if (calibration_status_ == 3) return BlockReason::CalibrationRecalibrating;
-    if (calibration_status_ != 1) return BlockReason::CalibrationInvalid;
+    if (calibration_status_ == CalibrationStatus::Uncalibrated) return BlockReason::CalibrationIncomplete;
+    if (calibration_status_ == CalibrationStatus::Recalibrating) return BlockReason::CalibrationRecalibrating;
+    if (calibration_status_ != CalibrationStatus::Calibrated) return BlockReason::CalibrationInvalid;
     if (live_params().use_vehicle && !live_vehicle_valid_) return BlockReason::ParamsdInvalid;
     return BlockReason::None;
 }

@@ -43,6 +43,8 @@ FRAME_INDEX_RECORD = np.dtype([
     ("packet_size", "<u4"),
     ("flags", "<u4"),
 ])
+FRAME_KEYFRAME = 1  # FRAME_INDEX_RECORD flags 비트(recording_format.h kFrameIndexKeyframe)
+DECODE_CHUNK_BYTES = 1 << 20  # 영상을 디코더에 이만큼씩 넣는다
 
 # ControlState: 자연 정렬이고 packing pragma가 없다. 멤버가 모두
 # 4/8바이트라 끝의 8바이트 패딩 말고는 패딩이 없다.
@@ -288,6 +290,7 @@ def decode_route_yuv(segments: list[SegmentInfo]):
         count = 0
         for match in re.finditer(b"\x00\x00\x01", payload):
             pos = match.end()
+            # NAL 타입이 슬라이스(1 비IDR, 5 IDR)이고, 슬라이스 머리의 첫 비트가 1(ue(v) first_mb_in_slice == 0)
             if pos + 1 < len(payload) and (payload[pos] & 0x1F) in (1, 5) \
                     and (payload[pos + 1] >> 7) & 1:
                 count += 1
@@ -324,8 +327,8 @@ def decode_route_yuv(segments: list[SegmentInfo]):
         # 꼬리가 일부만 쓰인 채 남을 수 있다
         last = segment.frames[-1]
         data = data[: int(last["file_offset"]) + int(last["packet_size"])]
-        for chunk_start in range(0, len(data), 1 << 20):
-            for packet in codec.parse(data[chunk_start : chunk_start + (1 << 20)]):
+        for chunk_start in range(0, len(data), DECODE_CHUNK_BYTES):
+            for packet in codec.parse(data[chunk_start : chunk_start + DECODE_CHUNK_BYTES]):
                 yield from decode(packet)
     for packet in codec.parse(b""):
         yield from decode(packet)
@@ -357,7 +360,7 @@ class RouteVideo:
         s, i = self.where[frame_id]
         segment, frames = self.segments[s], self.segments[s].frames
         key = i
-        while key > 0 and not frames[key]["flags"] & 1:
+        while key > 0 and not frames[key]["flags"] & FRAME_KEYFRAME:
             key -= 1
         data = self._bytes(s)
         stream = data[:int(frames[0]["file_offset"])] + \

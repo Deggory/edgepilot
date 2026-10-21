@@ -8,6 +8,24 @@
 
 constexpr int kLateralControlN = 17;
 
+// 차선 변경 단계(상류 LaneChangeState, planning/desire_helper가 정한다). 정수 값은 ControlState·HUD 플래그에 그대로
+// 쓰인다.
+enum class LaneChangeState : int {
+    Off = 0,
+    PreLaneChange = 1,  // 깜빡이를 켰고 운전자가 핸들을 밀기를 기다린다
+    Starting = 2,       // 변경 중: 차선선을 빼며 모델 desire를 준다
+    Finishing = 3,      // 끝나 가는 중: 차선선을 되돌린다
+};
+
+// 모델 desire 입력(0.9.4·master DESIRES).
+enum class Desire : int {
+    None = 0,
+    TurnLeft = 1,
+    TurnRight = 2,
+    LaneChangeLeft = 3,
+    LaneChangeRight = 4,
+};
+
 // 모델 plan을 조향 가용성 gate로만 환산한 것(control_holds.h path_from_model_state). 목표 곡률은 MPC(LateralTarget)가
 // 내므로 경로 기하는 없다. 쓸 수 없으면 모델이 낡았거나(model_lost) 경로가 짧다.
 struct LateralPath {
@@ -27,9 +45,9 @@ struct LateralTarget {
     bool mpc_solution_valid = false;
     bool laneless_mode = false;
     float target_y_m = 0.0f;
-    int desire = 0;
-    // 차선 변경 상태(0 없음, 1 운전자 토크 대기, 2 변경 중, 3 마무리)와 방향(-1 왼쪽, 1 오른쪽). HUD 표시용.
-    int lane_change_state = 0;
+    Desire desire = Desire::None;
+    // 차선 변경 단계와 방향(-1 왼쪽, 1 오른쪽). HUD 표시용.
+    LaneChangeState lane_change_state = LaneChangeState::Off;
     int lane_change_direction = 0;
     // 경로 노드의 방향각(rad)과 곡률(1/m). [0]이 지금이다.
     float psis[kLateralControlN] = {};

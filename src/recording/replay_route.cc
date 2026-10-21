@@ -60,8 +60,8 @@ ReplayRoute::ReplayRoute(const std::string &dir) {
         for (size_t i = 0; i < index.records.size(); ++i) {
             const FrameIndexRecord &r = index.records[i];
             if (i == 0) segment.header_bytes = r.file_offset;
-            frames.push_back(
-                {segments.size(), r.file_offset, r.packet_size, r.capture_timestamp_ns, (r.flags & 1U) != 0, i == 0});
+            frames.push_back({segments.size(), r.file_offset, r.packet_size, r.capture_timestamp_ns,
+                              (r.flags & kFrameIndexKeyframe) != 0, i == 0});
         }
         segments.push_back(segment);
     }

@@ -33,7 +33,8 @@ CALIBRATION_STATE = struct_layout(CALIBRATION_FIELDS)
 FLOW_CALIBRATION_STATE = struct_layout(FLOW_CALIBRATION_FIELDS)
 CALIBRATION_SOURCE_STATE = struct_layout(CALIBRATION_SOURCE_FIELDS)
 CALIBRATION_STATUS = ("uncalibrated", "calibrated", "invalid", "recalibrating")
-FLOW_STATUS = ("off", "collecting", "estimate")
+FLOW_STATUS = ("off", "collecting", "estimate")  # ipc_messages.h kFlowCalibration*
+CALIBRATION_SOURCES = ("pose", "flow")  # ipc_messages.h kCalibrationFrom*
 SOURCE_FLAGS = ("flow_usable", "switch_pending", "ramping")  # ipc_messages.h kCalibrationSource* 비트 순서
 SOURCE_GROUP, SOURCE_KEY = "display", "calibration_use_flow"  # 보정 출처 설정(modeld ModeldSettings가 읽는다)
 MODEL_MAX_AGE_S = 2.0  # 모델 상태는 20 Hz로 나온다
@@ -97,7 +98,7 @@ class CalibrationControl:
                            "rotation_deg": degrees(flow["window_rotation"]), "tracks": flow["window_tracks"],
                            "inliers": flow["window_inliers"], "parallax_px": round(flow["window_parallax"], 2)},
             },
-            "source": "flow" if source["source"] == 1 else "pose",
+            "source": status_name(CALIBRATION_SOURCES, source["source"]),
             **flag_names(source["flags"], SOURCE_FLAGS),
             "pose": {"status": status_name(CALIBRATION_STATUS, source["pose_status"]),
                      "valid_blocks": source["pose_valid_blocks"], "rpy_deg": [degrees(v) for v in source["pose_rpy"]]},

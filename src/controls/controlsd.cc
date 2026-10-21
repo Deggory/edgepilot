@@ -119,18 +119,18 @@ struct TickStats {
             ticks / window_s, work_sum_us / std::max(1U, ticks), work_max_us, wake_max_us, misses, can_frames,
             generated_frames, publish_errors, send_queue_full, stale_can_batches, tx_depth, rx_depth, param_generation,
             result.engaged ? 1 : 0, result.active ? 1 : 0, panda.ready ? 1 : 0, panda.controls_allowed ? 1 : 0,
-            target.valid ? 1 : 0, target.mpc_solution_valid ? 1 : 0, target.desire, result.desired_torque,
-            result.apply_torque, vehicle.driver_torque, vehicle.steering_angle_deg, result.desired_curvature,
-            result.actual_curvature, result.actual_curvature_vm, result.actual_curvature_yaw, vehicle.lat_accel_mps2,
-            road_bank_lat_accel, vehicle.long_accel_mps2, result.curvature_error, target.target_y_m,
-            0.5 * (target.lane_left_y_m + target.lane_right_y_m), target.lane_width_m, target.lane_left_y_m,
-            target.lane_right_y_m, target.lane_left_prob, target.lane_right_prob, target.lane_d_prob,
-            target.lane_left_std, target.lane_right_std, result.cluster_speed_kph, result.control_speed_kph,
-            adaptive_cruise.active ? 1U : 0U, adaptive_cruise.maximum_speed_kph, adaptive_cruise.commanded_speed_kph,
-            adaptive_cruise.target_speed_kph, adaptive_cruise.lead_valid ? 1U : 0U, cruise_input.vision_lead_distance_m,
-            cruise_input.vision_lead_relative_speed_mps, adaptive_cruise.command_button, vehicle.gas,
-            vehicle.driver_override, block_reason_name(result.active_block), work_names(slowest_work).c_str(),
-            switches);
+            target.valid ? 1 : 0, target.mpc_solution_valid ? 1 : 0, static_cast<int>(target.desire),
+            result.desired_torque, result.apply_torque, vehicle.driver_torque, vehicle.steering_angle_deg,
+            result.desired_curvature, result.actual_curvature, result.actual_curvature_vm, result.actual_curvature_yaw,
+            vehicle.lat_accel_mps2, road_bank_lat_accel, vehicle.long_accel_mps2, result.curvature_error,
+            target.target_y_m, 0.5 * (target.lane_left_y_m + target.lane_right_y_m), target.lane_width_m,
+            target.lane_left_y_m, target.lane_right_y_m, target.lane_left_prob, target.lane_right_prob,
+            target.lane_d_prob, target.lane_left_std, target.lane_right_std, result.cluster_speed_kph,
+            result.control_speed_kph, adaptive_cruise.active ? 1U : 0U, adaptive_cruise.maximum_speed_kph,
+            adaptive_cruise.commanded_speed_kph, adaptive_cruise.target_speed_kph, adaptive_cruise.lead_valid ? 1U : 0U,
+            cruise_input.vision_lead_distance_m, cruise_input.vision_lead_relative_speed_mps,
+            adaptive_cruise.command_button, vehicle.gas, vehicle.driver_override,
+            block_reason_name(result.active_block), work_names(slowest_work).c_str(), switches);
         *this = TickStats{};
     }
 };

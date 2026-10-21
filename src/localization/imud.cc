@@ -1,6 +1,7 @@
 #include "common/build_version.h"
 #include "common/ipc_channels.h"
 #include "common/ipc_messages.h"
+#include "common/utils_math.h"
 #include "common/utils_process.h"
 #include "common/utils_time.h"
 
@@ -54,10 +55,11 @@ constexpr uint8_t kCtrl1Xl104Hz4g = 0x48;  // ODR 104 Hz, FS ±4 g
 constexpr uint8_t kCtrl2G104Hz250 = 0x40;  // ODR 104 Hz, FS ±250 dps
 
 constexpr float kGravity = 9.80665f;
-constexpr float kAccelScale = 0.122e-3f * kGravity;                  // m/s^2 / LSB at ±4 g
-constexpr float kGyroScale = 8.75e-3f * 3.14159265358979f / 180.0f;  // ±250 dps에서 LSB당 rad/s
+constexpr float kAccelScale = 0.122e-3f * kGravity;     // m/s^2 / LSB at ±4 g
+constexpr float kGyroScale = 8.75e-3f * kPiF / 180.0f;  // ±250 dps에서 LSB당 rad/s
 constexpr uint64_t kPublishIntervalNs = 100'000'000ULL;
-constexpr uint64_t kSamplePeriodNs = 9'615'000ULL;  // 104 Hz
+constexpr uint64_t kStatsWindowNs = 10'000'000'000ULL;  // rate 로그 한 줄
+constexpr uint64_t kSamplePeriodNs = 9'615'000ULL;      // 104 Hz
 constexpr uint64_t kTemperatureIntervalNs = 1'000'000'000ULL;
 // 샘플을 읽고 kFirstPollNs 뒤에 깨어나고, 준비되지 않았으면 kPollRetryNs마다 본다. 읽은 시각에서 재므로 다음
 // 샘플(실제 간격 약 9.9 ms, 101 Hz)보다 늘 먼저 깨어나 건너뛰지 않는다. 받은 간격으로 깨어날 때를 잡으면 늦게
@@ -236,7 +238,7 @@ int main() {
             batch.count = 0;
             batch_start = now;
         }
-        if (now - window_start >= 10'000'000'000ULL) {
+        if (now - window_start >= kStatsWindowNs) {
             std::fprintf(stderr, "imud: rate=%.1f Hz samples=%llu dropped=%llu errors=%llu\n",
                          samples * 1e9 / (now - window_start), static_cast<unsigned long long>(samples),
                          static_cast<unsigned long long>(dropped), static_cast<unsigned long long>(errors));

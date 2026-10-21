@@ -6,6 +6,8 @@
 #include <initializer_list>
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr float kPiF = static_cast<float>(kPi);
+constexpr double kRadToDeg = 180.0 / kPi;
 
 inline float clamp_float(float value, float lo, float hi) {
     if (!std::isfinite(value)) return lo;
@@ -42,8 +44,8 @@ inline void matmul3(const float *a, const float *b, float *out) {
     }
 }
 
-inline float deg_to_rad(float deg) { return deg * 0.017453292519943295f; }
+constexpr float deg_to_rad(float deg) { return deg * 0.017453292519943295f; }
 
-inline float rad_to_deg(float rad) { return rad * 57.29577951308232f; }
+constexpr float rad_to_deg(float rad) { return rad * 57.29577951308232f; }
 
 #endif

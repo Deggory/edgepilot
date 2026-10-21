@@ -8,11 +8,11 @@
 
 #include "common/utils_json.h"
 #include "common/utils_math.h"
+#include "common/utils_time.h"  // kDtMdl
 
 namespace {
 
 constexpr double kGravity = 9.81;
-constexpr double kDtMdl = 0.05;
 double rad(double deg) { return deg * kPi / 180.0; }
 double deg(double r) { return r * 180.0 / kPi; }
 

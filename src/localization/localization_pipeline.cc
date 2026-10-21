@@ -40,7 +40,7 @@ void LocalizationPipeline::on_model(const ModelState &model) {
     calib_rpy_[0] = model.calibration.roll;
     calib_rpy_[1] = model.calibration.pitch;
     calib_rpy_[2] = model.calibration.yaw;
-    calib_valid_ = model.calibration.status == 1;
+    calib_valid_ = model.calibration.status == static_cast<uint32_t>(CalibrationStatus::Calibrated);
     estimator_.handle_calibration(calib_rpy_);
     if (!model.pose.valid || model.capture_timestamp_ns == 0) return;
     CameraOdometry c;

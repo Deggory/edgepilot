@@ -1,5 +1,7 @@
 #include "planning/desire_helper.h"
 
+#include "common/utils_time.h"  // kDtMdl
+
 #include "car/vehicle_can.h"
 
 #include <algorithm>
@@ -9,7 +11,6 @@
 
 namespace {
 
-constexpr double kDtModel = 0.05;  // 모델 프레임 주기(20 Hz)
 // 깜빡이를 켠 채 핸들을 이만큼 돌리면 회전이다. 차선 변경은 훨씬 덜 돌린다: 2026-10-14·15 주행에서 차선 변경은
 // 최대 29도였고, 차선 변경으로 시작해 버린 교차로 회전 4번은 48~128도까지 돌렸다.
 constexpr float kTurnAngleDeg = 45.0f;
@@ -38,7 +39,7 @@ double DesireHelper::record_speed(float v_ego) {
     speed_count_ = std::min(speed_count_ + 1, n);
     if (speed_count_ < n) return 0.0;
     const float second_ago = speeds_[(speed_head_ + 1) % n];
-    return (second_ago - v_ego) / ((n - 1) * kDtModel);
+    return (second_ago - v_ego) / ((n - 1) * kDtMdl);
 }
 
 // openpilot desire_helper(0.9.4 차선선 페이드 포함)와 같다. 꺼지는 조건은 조향 비활성과 10초 초과다. 예전에는
@@ -72,7 +73,7 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
         ++turn_frames_;
         if (std::fabs(vehicle.steering_angle_deg) < kTurnEndAngleDeg) {
             turn_direction_ = 0;
-        } else if (turn_frames_ * kDtModel > kTurnMaxS) {
+        } else if (turn_frames_ * kDtMdl > kTurnMaxS) {
             turn_direction_ = 0;
             turn_expired_ = true;
         }
@@ -133,13 +134,13 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
                 direction_ = 0;
             } else {
                 // 0.5초에 걸쳐 차선선을 뺀다(openpilot "fade out over .5s").
-                lane_change_lane_prob_ = std::max(0.0, lane_change_lane_prob_ - 2.0 * kDtModel);
+                lane_change_lane_prob_ = std::max(0.0, lane_change_lane_prob_ - 2.0 * kDtMdl);
                 if (model.lane_change_prob < 0.02 && lane_change_lane_prob_ < 0.01)
                     lane_change_state_ = LaneChangeState::Finishing;
             }
         } else if (lane_change_state_ == LaneChangeState::Finishing) {
             // 복구 0.5초 (openpilot 기본 1.0초). 변경 직후 새 차선 적응을 당긴다.
-            lane_change_lane_prob_ = std::min(1.0, lane_change_lane_prob_ + 2.0 * kDtModel);
+            lane_change_lane_prob_ = std::min(1.0, lane_change_lane_prob_ + 2.0 * kDtMdl);
             if (lane_change_lane_prob_ > 0.99) {
                 // 상류는 깜빡이가 켜져 있으면 다음 변경을 기다린다. 여기서는 깜빡이를 껐다 켜야 다시 한다:
                 // 램프나 회전 출구에서 켜 둔 깜빡이가 4.5초마다 차선 변경을 다시 시작했다(2026-10-05, 10-15).
@@ -163,7 +164,7 @@ void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_
 
     const bool changing =
         lane_change_state_ == LaneChangeState::Starting || lane_change_state_ == LaneChangeState::Finishing;
-    lane_change_timer_ = changing ? lane_change_timer_ + kDtModel : 0.0;
+    lane_change_timer_ = changing ? lane_change_timer_ + kDtMdl : 0.0;
     // 상류: 조향하지 않는 동안 켜 둔 깜빡이는 조향이 다시 켜지면 새로 켠 것으로 본다
     previous_one_blinker_ = road_edge_blocked ? false : one_blinker && lat_active;
     desire_ = changing && direction_ == -1  ? Desire::LaneChangeLeft

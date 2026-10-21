@@ -6,15 +6,15 @@
 
 #include "car/hyundai_can.h"
 #include "common/utils_math.h"
+#include "common/utils_time.h"  // kDtCtrlF
 
 namespace {
 
-constexpr float kDtCtrl = 0.01f;
 constexpr float kFrictionThreshold = 0.2f;
 // 저크 선행 마찰: 0.19s 앞의 요청 저크를 1.2Hz LP로 걸러 미리 반영한다.
 constexpr int kJerkLookaheadFrames = 19;
 constexpr float kJerkGain = 0.3f;
-constexpr float kJerkFilterAlpha = 1.0f / (1.0f + 1.0f / (2.0f * 3.14159265f * 1.2f * 0.01f));
+constexpr float kJerkFilterAlpha = 1.0f / (1.0f + 1.0f / (2.0f * kPiF * 1.2f * kDtCtrlF));
 // openpilot INTERP_SPEEDS. 저속 이득은 이 곡선이 담당하고 LOW_SPEED_Y 곡률항은
 // 쓰지 않는다(상류 PR #36364). 마지막 점만 파라미터(torque_kp)다.
 constexpr float kKpSpeedsMps[] = {1.0f, 1.5f, 2.0f, 3.0f, 5.0f, 7.5f, 10.0f, 15.0f, 30.0f};
@@ -102,13 +102,13 @@ int TorqueController::update(const Inputs &in, const SteeringParams &params, con
     request_head_ = (request_head_ + 1) % kRequestBufferLen;
     lat_accel_request_[request_head_] = std::isfinite(desired_lat_accel) ? desired_lat_accel : 0.0f;
     // 상류: delay_frames = int(clip(lat_delay / dt + 1, 1, buffer_len))
-    const int delay_frames = clamp_int(static_cast<int>(in.lat_delay_s / kDtCtrl) + 1, 1, kRequestBufferLen);
+    const int delay_frames = clamp_int(static_cast<int>(in.lat_delay_s / kDtCtrlF) + 1, 1, kRequestBufferLen);
     const auto at = [this](int back) { return (request_head_ - back + 2 * kRequestBufferLen) % kRequestBufferLen; };
     const float expected_lat_accel = lat_accel_request_[at(delay_frames - 1)];
 
     const int lookahead_back = clamp_int(delay_frames - 1 - kJerkLookaheadFrames, 1, kRequestBufferLen - 2);
     const float raw_jerk =
-        (lat_accel_request_[at(lookahead_back - 1)] - lat_accel_request_[at(lookahead_back + 1)]) / (2.0f * kDtCtrl);
+        (lat_accel_request_[at(lookahead_back - 1)] - lat_accel_request_[at(lookahead_back + 1)]) / (2.0f * kDtCtrlF);
     jerk_filtered_ += kJerkFilterAlpha * (raw_jerk - jerk_filtered_);
 
     // 오차는 횡가속도만으로 낸다. 저속 보강은 LOW_SPEED_Y 곡률항이 아니라
@@ -317,7 +317,7 @@ float TorqueController::pid_update(float error, float feedforward, bool freeze_i
     p_ = kp * error;
     f_ = feedforward;
     if (!freeze_integrator) {
-        const float i = i_ + ki * kDtCtrl * error;
+        const float i = i_ + ki * kDtCtrlF * error;
         // 이미 한계에 걸려 있으면 그 방향으로는 더 감지 않는다(상류 "Don't allow windup if already clipping")
         const float test_control = p_ + i + f_;
         const float i_upper = test_control > limit ? i_ : limit;

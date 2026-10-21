@@ -117,6 +117,9 @@ are Python `unittest` files.
 | `check_recording_reader.py` | numpy (skipped without it) | The layout and record type numbers of `tools/model/recording_reader.py`, and the tools' MaixCAM2 camera intrinsics, against the fixed values in the C++ headers; `model_warp.py`'s warp matrix against the golden values `gtest_model_input_transform` pins |
 | `check_docs.py` | stdlib only | The documents (`docs/*.md` and the folder READMEs): the title matches the file name, the back link under the title, `## Related` as the last section, sentence-case headings, relative links and `#` anchors that exist, prose wrapped at 80 columns, English only (except `docs/style-guide.md`, which holds the Korean glossary), Mermaid `classDef` lines from the shared palette, image files that exist. The root README gets only the link and image checks |
 
+The three checks that compare Python layouts with the C++ headers read the
+fixed values (`static_assert` sizes, `EDGEPILOT_<struct>_AT` offsets,
+`constexpr` constants) through `tests/cpp_headers.py`.
 `check_recording_reader.py` exits with 77 when numpy is missing, and `ctest`
 counts that as skipped. `check_docs.py` also takes documents as arguments
 (`tests/check_docs.py docs/hud.md`) and checks all of them when given none. It

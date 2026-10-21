@@ -6,12 +6,12 @@
 
 #include "common/json_value.h"
 #include "common/utils_file.h"
+#include "common/utils_time.h"  // kDtCtrlF
 
 namespace {
 
 constexpr const char *kFormat = "edgepilot-lateral-nn";
 constexpr int kVersion = 1;
-constexpr float kDt = 0.01f;
 // 파일의 시험 벡터와 이 계산의 차이 한계(학습 쪽 float32 계산과의 차이는 1e-7 안팎이다)
 constexpr float kTestVectorTolerance = 2e-4f;
 
@@ -259,6 +259,6 @@ void LateralNnInputs::push(float la_now, float angle_now) {
 float LateralNnInputs::history(const float *buffer, float delta_s) const {
     // delta_s < 0: |delta_s|초 전 틱의 값(load가 이력 안만 읽는 모델만 받는다). 막 시작해 모자라면 가장 오래된 값.
     if (count_ == 0) return NAN;
-    const int back = std::min(static_cast<int>(std::lround(-delta_s / kDt)), count_ - 1);
+    const int back = std::min(static_cast<int>(std::lround(-delta_s / kDtCtrlF)), count_ - 1);
     return buffer[(head_ - back + kHistory) % kHistory];
 }

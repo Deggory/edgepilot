@@ -24,27 +24,13 @@ except ModuleNotFoundError:
     sys.exit(77)
 
 import model_warp  # noqa: E402
+from cpp_headers import IPC, cpp_offsets, cpp_size, pinned  # noqa: E402
 import recording_reader as rr  # noqa: E402
 
-IPC = (ROOT / "src" / "common" / "ipc_messages.h").read_text(encoding="utf-8")
 FORMAT = (ROOT / "src" / "recording" / "recording_format.h").read_text(encoding="utf-8")
 EVENT_LOG_READER = (ROOT / "src" / "recording" / "event_log_reader.h").read_text(encoding="utf-8")
 APP_CONFIG = (ROOT / "src" / "common" / "app_config.h").read_text(encoding="utf-8")
 MODEL_OUTPUT = (ROOT / "src" / "common" / "model_output.h").read_text(encoding="utf-8")
-
-
-def pinned_offsets(macro: str) -> dict[str, int]:
-    return {name: int(at) for name, at in re.findall(macro + r"\((\w+), (\d+)\);", IPC)}
-
-
-def pinned(pattern: str, text: str = IPC) -> int:
-    match = re.search(pattern, text)
-    assert match, pattern
-    return int(match.group(1))
-
-
-def size_of(struct: str, text: str = IPC) -> int:
-    return pinned(r"sizeof\(" + struct + r"\) == (\d+)", text)
 
 
 def struct_fields(name: str, text: str) -> list[tuple[str, str, int]]:
@@ -70,41 +56,41 @@ def offset_in(dtype, name: str) -> int:
 
 class RecordingReaderLayout(unittest.TestCase):
     def test_control_state(self):
-        offsets = pinned_offsets("EDGEPILOT_CONTROL_STATE_AT")
+        offsets = cpp_offsets("CONTROL_STATE")
         self.assertGreater(len(offsets), 40)
         for name, offset in offsets.items():
             self.assertIn(name, rr.CONTROL_STATE.names, "the C++ field names")
             self.assertEqual(offset_in(rr.CONTROL_STATE, name), offset, name)
         # C++ 구조체는 uint64_t로 시작해 8바이트 경계까지 끝을 덧댄다. dtype에는 그 덧댐이 없다.
-        self.assertEqual(-(-rr.CONTROL_STATE.itemsize // 8) * 8, size_of("ControlState"))
+        self.assertEqual(-(-rr.CONTROL_STATE.itemsize // 8) * 8, cpp_size("ControlState"))
 
     def test_learner_state(self):
-        offsets = pinned_offsets("EDGEPILOT_LEARNER_STATE_AT")
+        offsets = cpp_offsets("LEARNER_STATE")
         self.assertGreater(len(offsets), 5)
         for name, offset in offsets.items():
             self.assertEqual(offset_in(rr.LEARNER_STATE, name), offset, name)
-        self.assertEqual(rr.LEARNER_STATE.itemsize, size_of("LearnerState"))
+        self.assertEqual(rr.LEARNER_STATE.itemsize, cpp_size("LearnerState"))
 
     def test_localization_and_imu(self):
         """크기만 대조하면 필드 순서가 바뀌어도 모른다: 형식·이름·배열 길이를 차례대로 대조한다."""
-        self.assertEqual(rr.LOCALIZATION_STATE.itemsize, size_of("LocalizationState"))
+        self.assertEqual(rr.LOCALIZATION_STATE.itemsize, cpp_size("LocalizationState"))
         self.assertEqual(dtype_fields(rr.LOCALIZATION_STATE), struct_fields("LocalizationState", IPC))
-        self.assertEqual(rr.IMU_SAMPLE.itemsize, size_of("ImuSample"))
+        self.assertEqual(rr.IMU_SAMPLE.itemsize, cpp_size("ImuSample"))
         self.assertEqual(dtype_fields(rr.IMU_SAMPLE), struct_fields("ImuSample", IPC))
         self.assertEqual(rr.IMU_BATCH_HEAD.size, pinned(r"sizeof\(ImuBatch\) == (\d+) \+"), "ImuBatch head")
 
     def test_model_state(self):
         self.assertEqual(rr.RECORDING_VERSION, pinned(r"kRecordingVersion = (\d+)", FORMAT))
         layout = rr.MODEL_STATE_LAYOUT
-        self.assertEqual(rr.MODEL_STATE.itemsize, size_of("ModelState"))
-        offsets = pinned_offsets("EDGEPILOT_MODEL_STATE_AT")
+        self.assertEqual(rr.MODEL_STATE.itemsize, cpp_size("ModelState"))
+        offsets = cpp_offsets("MODEL_STATE")
         self.assertGreater(len(offsets), 5)
         for name, offset in offsets.items():
             self.assertEqual(layout[name], offset, name)
         for name in ("calibration", "plan_yaw", "camera_offset_m", "gas_press_probs", "flow_calibration",
                      "calibration_source", "lead_flow", "lead_track"):
             self.assertEqual(layout[name], pinned(r"offsetof\(ModelState, " + name + r"\) == (\d+)"), name)
-        self.assertEqual(rr.CALIBRATION_STATE.itemsize, size_of("CalibrationState"))
+        self.assertEqual(rr.CALIBRATION_STATE.itemsize, cpp_size("CalibrationState"))
         self.assertEqual(dtype_fields(rr.POSE_STATE), struct_fields("PoseState", IPC))
         self.assertEqual(dtype_fields(rr.LEAD_STATE), struct_fields("LeadState", IPC))
         self.assertEqual(dtype_fields(rr.FLOW_CALIBRATION_STATE), struct_fields("FlowCalibrationState", IPC))
@@ -125,11 +111,11 @@ class RecordingReaderLayout(unittest.TestCase):
 
     def test_recording_format(self):
         self.assertEqual(rr.MAX_RECORD_PAYLOAD, 1 << pinned(r"kMaxPayloadBytes = 1U << (\d+);", EVENT_LOG_READER))
-        self.assertEqual(rr.EVENT_RECORD_HEADER.size, size_of("EventRecordHeader", FORMAT))
-        self.assertEqual(rr.RECORDED_CAN_FRAME.itemsize, size_of("RecordedCanFrame", FORMAT))
+        self.assertEqual(rr.EVENT_RECORD_HEADER.size, cpp_size("EventRecordHeader", FORMAT))
+        self.assertEqual(rr.RECORDED_CAN_FRAME.itemsize, cpp_size("RecordedCanFrame", FORMAT))
         self.assertEqual(dtype_fields(rr.RECORDED_CAN_FRAME), struct_fields("RecordedCanFrame", FORMAT))
         self.assertEqual(len(struct_fields("RecordedCanBatchHeader", FORMAT)) * 4, rr.RECORDED_CAN_BATCH_HEAD.size)
-        self.assertEqual(rr.FRAME_INDEX_RECORD.itemsize, size_of("FrameIndexRecord", FORMAT))
+        self.assertEqual(rr.FRAME_INDEX_RECORD.itemsize, cpp_size("FrameIndexRecord", FORMAT))
         body = re.search(r"enum class RecordType : uint16_t \{(.*?)\};", FORMAT, re.S).group(1)
         types = {name: int(value) for name, value in re.findall(r"(\w+) = (\d+),", body)}
         self.assertEqual(len(types), 8)

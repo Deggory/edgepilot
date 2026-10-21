@@ -29,7 +29,7 @@ HudAlertCard hud_select_alert(const HudState &hud, bool model_ok) {
             HudAlertLevel::caution};
     if (hud.steer_saturated) return {"TAKE CONTROL", "Turn exceeds steering limit", HudAlertLevel::caution};
     if (!hud.services_healthy) return {"WAITING FOR SERVICES", links, HudAlertLevel::caution};
-    if (hud.controller_active && hud.lane_change == 1) {
+    if (hud.controller_active && hud.lane_change == HudLaneChange::pending) {
         const bool left = hud.lane_change_direction < 0;
         return {"LANE CHANGE", left ? "Steer left to start once safe" : "Steer right to start once safe",
                 HudAlertLevel::notice, left ? -1 : 1};
@@ -68,7 +68,9 @@ void hud_apply_control_state(const ControlState &control, bool fresh, HudState *
     hud->brake_hold = (flags & kHudFlagBrakeHold) != 0;
     hud->soft_disabling = (flags & kHudFlagSoftDisabling) != 0;
     hud->steer_saturated = (flags & kHudFlagSteerSaturated) != 0;
-    hud->lane_change = flags & kHudFlagLaneChanging ? 2 : flags & kHudFlagLaneChangePending ? 1 : 0;
+    hud->lane_change = flags & kHudFlagLaneChanging        ? HudLaneChange::changing
+                       : flags & kHudFlagLaneChangePending ? HudLaneChange::pending
+                                                           : HudLaneChange::none;
     hud->lane_change_direction = flags & kHudFlagLaneChangeRight ? 1 : -1;
     hud->steer_paused = (flags & kHudFlagSteerPaused) != 0;
     hud->steer_paused_by_driver = (flags & kHudFlagSteerPausedByDriver) != 0;
@@ -110,7 +112,7 @@ void hud_apply_model_state(const ModelState &model, bool fresh, HudState *hud) {
     hud->calibration_roll_deg = rad_to_deg(calibration.roll);
     hud->calibration_pitch_deg = rad_to_deg(calibration.pitch);
     hud->calibration_yaw_deg = rad_to_deg(calibration.yaw);
-    hud->calibration_flow = model.calibration_source.source == 1;
+    hud->calibration_flow = model.calibration_source.source == kCalibrationFromFlow;
 }
 
 void hud_apply_record_state(const RecordState &record, bool fresh, HudState *hud) {

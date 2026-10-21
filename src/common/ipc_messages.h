@@ -125,6 +125,14 @@ struct PoseState {
     float rot_std[3] = {};
 };
 
+// CalibrationState.status와 CalibrationSourceState.pose_status의 값(상류 calibrationd 상태, model/calibration_online).
+enum class CalibrationStatus : uint32_t {
+    Uncalibrated = 0,
+    Calibrated = 1,
+    Invalid = 2,
+    Recalibrating = 3,  // 장착이 바뀐 것으로 보고 마지막 블록부터 다시 모으는 중
+};
+
 // 모델 입력 워프의 보정. 모든 필드가 워프에 쓴 보정과 그 출처(calibration_source.source)의 것이다.
 // - 포즈 출처: status·valid_blocks·spread는 포즈 보정기 그대로(5블록이면 Calibrated, spread는 블록 범위).
 // - 광류 출처: status는 Calibrated(쓸 만할 때만 쓴다), valid_blocks는 광류 추정에 든 블록 수(3블록부터 쓴다),
@@ -144,7 +152,7 @@ struct CalibrationState {
 // 각도는 calibration과 같은 규약(rad)이다.
 struct FlowCalibrationState {
     uint64_t window_frame_id = 0;  // 마지막으로 받아들인 측정 창의 끝 프레임(0이면 아직 없음)
-    uint32_t status = 0;           // 0 꺼짐, 1 모으는 중(블록 부족), 2 추정 있음
+    uint32_t status = 0;           // kFlowCalibration*
     uint32_t windows = 0;          // 받아들인 측정 창 수
     // 끝난 블록 수(창 kFlowBlockWindows개마다 하나). 이 실행에서 센 것에 복원한 블록 수를 더한 것이다: 저장 파일은
     // 최근 kFlowMaxBlocks개만 남기므로 다시 시작하면 그 수에서 다시 센다.
@@ -165,12 +173,15 @@ struct FlowCalibrationState {
     uint32_t rejected_windows = 0;  // 끝까지 갔지만 풀이가 맞지 않거나 이동량이 작아 버린 창
 };
 static_assert(sizeof(FlowCalibrationState) == 72, "FlowCalibrationState is recorded as-is");
+constexpr uint32_t kFlowCalibrationOff = 0;
+constexpr uint32_t kFlowCalibrationCollecting = 1;  // 블록이 모자란다
+constexpr uint32_t kFlowCalibrationEstimate = 2;    // 추정이 있다(kFlowMinBlocks 이상)
 
 // 워프에 쓴 보정의 출처와 모델 포즈 보정기 자신의 추정(녹화 v11부터). calibration은 언제나 워프에 쓴
 // 값이다. 포즈 보정기는 자기 값이 워프를 맡을 때만 돈다(upstream 루프는 모델이 자기 값으로 워프된 영상을
 // 봤다고 가정한다). 광류가 워프를 맡는 동안 pose_*는 멈춘 마지막 추정이다.
 struct CalibrationSourceState {
-    uint32_t source = 0;       // 0 모델 포즈, 1 광류
+    uint32_t source = 0;       // kCalibrationFrom*
     uint32_t requested = 0;    // 웹 기기 설정(display.json calibration_use_flow). 결합 중에는 바뀌어도 기다린다
     uint32_t flags = 0;        // kCalibrationSource* 비트
     uint32_t pose_status = 0;  // 포즈 보정기의 CalibrationStatus
@@ -180,6 +191,8 @@ struct CalibrationSourceState {
     float pose_yaw = 0.0f;
 };
 static_assert(sizeof(CalibrationSourceState) == 32, "CalibrationSourceState is recorded as-is");
+constexpr uint32_t kCalibrationFromPose = 0;                // 모델 포즈 보정기
+constexpr uint32_t kCalibrationFromFlow = 1;                // 광류 보정기
 constexpr uint32_t kCalibrationSourceFlowUsable = 1u << 0;  // 광류 추정을 워프에 쓸 수 있다
 constexpr uint32_t kCalibrationSourcePending = 1u << 1;     // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
 constexpr uint32_t kCalibrationSourceRamping = 1u << 2;     // 워프가 새 목표로 천천히 옮겨 가는 중
@@ -311,9 +324,12 @@ struct IpcCanFrame {
     uint32_t src = 0;
     uint32_t bus_time = 0;
     uint32_t data_len = 0;
-    uint32_t flags = 0;
+    uint32_t flags = 0;  // kCanFrame*(0이면 차에서 받은 프레임)
     uint8_t data[64] = {};
 };
+// IpcCanFrame.flags(녹화된 RecordedCanFrame.flags도 같다). USB 와이어 형식(panda_can_codec)과 비트 순서가 다르다.
+constexpr uint32_t kCanFrameReturned = 1u << 0;  // Panda가 돌려준 송신 에코
+constexpr uint32_t kCanFrameRejected = 1u << 1;  // Panda safety가 거부한 송신
 
 struct CanBatch {
     uint64_t timestamp_ns = 0;

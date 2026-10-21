@@ -33,6 +33,8 @@
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
+constexpr uint64_t kStatsWindowNs = 1000000000ULL;   // 진행 표시 한 줄
+constexpr uint64_t kDecoderStallNs = 1000000000ULL;  // 이만큼 출력이 없으면 디코더가 프레임을 삼킨 것으로 본다
 
 }  // namespace
 
@@ -118,7 +120,7 @@ int main(int argc, char *argv[]) {
                     last_output_ns = now;
                 } else {
                     ring.end_write(slot, UINT64_MAX);
-                    if (now - last_output_ns > 1000000000ULL) {  // 디코더가 삼킨 프레임
+                    if (now - last_output_ns > kDecoderStallNs) {
                         ++dropped_outputs;
                         last_output_ns = now;
                     }
@@ -162,7 +164,7 @@ int main(int argc, char *argv[]) {
             }
             const bool done = (next_frame >= route.frames.size() || route.frames[next_frame].capture_ns >= t_end) &&
                               sent <= frame_id + dropped_outputs && pending.empty();
-            if (now - window >= 1000000000ULL) {
+            if (now - window >= kStatsWindowNs) {
                 std::fprintf(stderr, "replayd: fps=%.2f t=%.1fs frames=%llu errors=%llu can=%llu tx=%llu          \r",
                              window_frames * 1e9 / (now - window), (now - base) / 1e9,
                              static_cast<unsigned long long>(frame_id), static_cast<unsigned long long>(decode_errors),

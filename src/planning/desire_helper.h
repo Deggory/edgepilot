@@ -5,26 +5,11 @@
 // 부른다. 상류에 더해, 깜빡이를 켠 회전(핸들을 크게 돌리거나 회전하려고 감속)은 차선 변경으로 시작하지 않고
 // 모델에 회전 desire를 주며, 깜빡이 한 번에 차선 변경은 한 번이고, 운전자가 반대로 밀면 취소한다.
 
+#include "controls/lateral_target.h"  // LaneChangeState, Desire
+
 #include <array>
 
 struct VehicleCanState;
-
-// 차선 변경 단계(상류 LaneChangeState). 정수 값은 LateralTarget·HUD 플래그에 그대로 쓰인다.
-enum class LaneChangeState : int {
-    Off = 0,
-    PreLaneChange = 1,  // 깜빡이를 켰고 운전자가 핸들을 밀기를 기다린다
-    Starting = 2,       // 변경 중: 차선선을 빼며 모델 desire를 준다
-    Finishing = 3,      // 끝나 가는 중: 차선선을 되돌린다
-};
-
-// 모델 desire 입력(0.9.4·master DESIRES).
-enum class Desire : int {
-    None = 0,
-    TurnLeft = 1,
-    TurnRight = 2,
-    LaneChangeLeft = 3,
-    LaneChangeRight = 4,
-};
 
 struct DesireHelperParams {
     int steering_pressed_threshold = 150;  // 컨트롤러와 같은 운전자 토크 임계값(변경 시작 넛지)

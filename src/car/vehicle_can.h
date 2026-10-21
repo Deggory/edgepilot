@@ -1,5 +1,8 @@
 #pragma once
 
+// K7 YG HEV에서 받은 CAN 프레임을 신호 값으로 풀고(decode_*) 차량 상태(VehicleCanState)에 모은다. 주소와 버스는
+// car/can_frame.h에 있다.
+
 #include "car/can_frame.h"
 
 #include <array>
@@ -79,8 +82,13 @@ struct Cgw2Values {
     bool rear_right_door_open = false;
 };
 
+// TPMS11 UNIT. kPa 값은 psi로 바꿔 낸다(그래서 화면 단위는 bar 아니면 psi다).
+constexpr int kTpmsUnitPsi = 0;
+constexpr int kTpmsUnitKpa = 1;
+constexpr int kTpmsUnitBar = 2;
+
 struct Tpms11Values {
-    int unit = 0;
+    int unit = kTpmsUnitPsi;
     float pressure_fl = 0.0f;
     float pressure_fr = 0.0f;
     float pressure_rl = 0.0f;
@@ -177,7 +185,7 @@ struct VehicleCanState {
     float radar_lead_relative_speed_mps = 0.0f;
 };
 
-// K7 SAS11 steering angle/rate를 해석한다.
+// K7 SAS11 조향각을 해석한다.
 Sas11Values decode_sas11(const std::array<uint8_t, 8> &data);
 
 // K7 MDPS12 steering feedback/fault 값을 해석한다.

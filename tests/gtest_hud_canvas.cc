@@ -187,7 +187,7 @@ TEST(HudRenderer, EveryAlertTextFitsTheCard) {
     for (int direction : {-1, 1}) {
         hud = HudState{};
         hud.services_healthy = hud.controller_active = true;
-        hud.lane_change = 1;
+        hud.lane_change = HudLaneChange::pending;
         hud.lane_change_direction = direction;
         add(hud);
     }

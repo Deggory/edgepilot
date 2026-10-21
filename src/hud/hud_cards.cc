@@ -1,5 +1,6 @@
 #include "hud/hud_draw.h"
 
+#include "car/vehicle_can.h"  // kTpmsUnitBar
 #include "localization/lateral_lag.h"
 #include "model/calibration_online.h"
 
@@ -108,7 +109,7 @@ int draw_network_card(HudCanvas &canvas, int y, const HudState &hud) {
 // TPMS 경고를 내면 머리글도 빨강. 값이 없으면 "--".
 void draw_tpms(HudCanvas &canvas, const HudState &hud) {
     const int x = kMargin, y = canvas.height() - kMargin - kCornerCardH;
-    const bool bar = hud.tpms_unit == 2;
+    const bool bar = hud.tpms_unit == kTpmsUnitBar;
     corner_card(canvas, x, y, kCornerCardH, "TPMS", bar ? "bar" : "psi", hud.tpms_warning ? kRed : kTextSecondary);
 
     // 정수 좌표라 둥근 사각형이 곧은 행 지름길을 탄다.

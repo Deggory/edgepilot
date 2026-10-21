@@ -17,18 +17,19 @@
 // docs/flow-calibration.md.
 
 #include "common/ipc_messages.h"  // FlowCalibrationState, kCalibrationSource*
+#include "common/utils_math.h"    // kPiF
 
 #include <cstdint>
 
 class CalibrationSourceSelector {
 public:
-    static constexpr float kRampRadPerS = 0.05f * 3.14159265358979323846f / 180.0f;
+    static constexpr float kRampRadPerS = 0.05f * kPiF / 180.0f;
     static constexpr float kRampTimeS = 5.0f;
     static constexpr float kMaxDtS = 0.2f;  // 이보다 긴 간격(멈췄다 다시 온 프레임)은 이만큼만 옮긴다
     // 블록 중앙값들의 표준편차가 이 안이어야 쓰기 시작한다(블록 하나의 잡음은 0.2° 안팎)
-    static constexpr float kMaxFlowSpreadRad = 0.5f * 3.14159265358979323846f / 180.0f;
+    static constexpr float kMaxFlowSpreadRad = 0.5f * kPiF / 180.0f;
     // 쓰는 중에는 이보다 커져야 그만 쓴다
-    static constexpr float kMaxFlowSpreadStayRad = 0.8f * 3.14159265358979323846f / 180.0f;
+    static constexpr float kMaxFlowSpreadStayRad = 0.8f * kPiF / 180.0f;
 
     // 워프에 쓸 만한 광류 추정인지: 3블록 이상, 블록끼리 맞고(표준편차가 max_spread 안), 포즈 보정기와 같은 각도
     // 한계 안.

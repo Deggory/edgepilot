@@ -41,6 +41,8 @@ from recording_reader import RECORD_CONTROL_STATE, RECORD_MODEL_STATE, X_IDXS, c
 
 FIT_POINTS = 20          # 0 .. 75 m. 그 너머는 차선이 흔들린다
 STRAIGHT_PLAN_Y_M = 0.5  # 48 m에서 |plan y|가 이보다 작으면 직진으로 친다
+STRAIGHT_PLAN_INDEX = 16  # X_IDXS[16] = 48 m
+MIN_FIT_SAMPLES = 200
 MIN_SPEED_KPH = 60.0
 MIN_LANE_PROB = 0.6
 MAX_DRIVER_TORQUE = 50   # 운전자가 핸들을 살짝 건드린 프레임은 뺀다
@@ -98,7 +100,7 @@ def analyse(route: Path) -> None:
                   0, len(data.control["ts"]) - 1)
     ctl = {k: v[idx] for k, v in data.control.items() if k != "ts"}
 
-    straight = np.abs(data.plan_y[:, 16]) < STRAIGHT_PLAN_Y_M
+    straight = np.abs(data.plan_y[:, STRAIGHT_PLAN_INDEX]) < STRAIGHT_PLAN_Y_M
     keep = (straight
             & (data.left_prob > MIN_LANE_PROB) & (data.right_prob > MIN_LANE_PROB)
             & (ctl["cluster_speed_kph"] > MIN_SPEED_KPH) & (ctl["active"] == 1)
@@ -112,7 +114,7 @@ def analyse(route: Path) -> None:
     print(f"  {int(keep.sum())} straight engaged samples "
           f"(model 48 m path within {STRAIGHT_PLAN_Y_M} m, >{MIN_SPEED_KPH:.0f} km/h, "
           f"both lanes >{MIN_LANE_PROB}, no driver torque)")
-    if keep.sum() < 200:
+    if keep.sum() < MIN_FIT_SAMPLES:
         print("  too few samples to fit")
         return
 

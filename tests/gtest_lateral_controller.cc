@@ -482,18 +482,18 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
         return controller.update(replay_path(), replay_target(), vehicle, t + 0.01, 1, true, true);
     };
 
-    controller.set_calibration_status(0);
+    controller.set_calibration_status(CalibrationStatus::Uncalibrated);
     const auto rejected = press_set(1.0);
     EXPECT_TRUE(rejected.engage_rejected) << "보정 미완료면 결합을 거부한다";
     EXPECT_FALSE(rejected.engaged);
     EXPECT_EQ(rejected.active_block, BlockReason::CalibrationIncomplete);
 
-    controller.set_calibration_status(1);
+    controller.set_calibration_status(CalibrationStatus::Calibrated);
     const auto engaged = press_set(2.0);
     ASSERT_TRUE(engaged.engaged && engaged.active);
 
     // 결합 중 재보정: 경고를 띄운 채 3초 조향하고 해제한다.
-    controller.set_calibration_status(3);
+    controller.set_calibration_status(CalibrationStatus::Recalibrating);
     LateralControlResult r;
     double t = 2.02;
     for (; t < 2.02 + 2.9; t += 0.01) {
@@ -511,16 +511,16 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
     EXPECT_FALSE(r.soft_disabling);
 
     // 3초 안에 보정이 돌아오면 해제하지 않고 타이머도 처음부터 다시 센다.
-    controller.set_calibration_status(1);
+    controller.set_calibration_status(CalibrationStatus::Calibrated);
     ASSERT_TRUE(press_set(10.0).engaged);
-    controller.set_calibration_status(2);
+    controller.set_calibration_status(CalibrationStatus::Invalid);
     for (t = 10.02; t < 11.5; t += 0.01) {
         vehicle = ready_vehicle(t);
         r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
     }
     EXPECT_TRUE(r.soft_disabling);
     EXPECT_EQ(r.active_block, BlockReason::CalibrationInvalid);
-    controller.set_calibration_status(1);
+    controller.set_calibration_status(CalibrationStatus::Calibrated);
     vehicle = ready_vehicle(t);
     r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
     EXPECT_TRUE(r.engaged && r.active && !r.soft_disabling);
@@ -1183,11 +1183,11 @@ TEST(LateralController, ParamsdInvalidBlocksOnlyWhenUsed) {
     ASSERT_TRUE(controller.update(replay_path(), replay_target(), vehicle, 1.0, 0).active)
         << "유효한 학습값은 제어를 활성으로 둔다";
     controller.set_live_params(odd_live_params(), false);
-    controller.set_calibration_status(0);
+    controller.set_calibration_status(CalibrationStatus::Uncalibrated);
     ASSERT_EQ(controller.update(replay_path(), replay_target(), vehicle, 1.01, 1).active_block,
               BlockReason::CalibrationIncomplete)
         << "보정 전에는 보정 사유가 먼저다(상류 cal_status 검사): 무효 학습값으로 막지 않는다";
-    controller.set_calibration_status(1);
+    controller.set_calibration_status(CalibrationStatus::Calibrated);
     const LateralControlResult invalid = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2);
     ASSERT_EQ(invalid.active_block, BlockReason::ParamsdInvalid) << "보정 뒤 무효 학습값은 막는다";
     // 상류 paramsdTemporaryError처럼 SOFT_DISABLE: 결합 중이면 경고하며 3초 더 조향한 뒤 해제한다
@@ -1503,7 +1503,7 @@ TEST(LateralController, PandaRevokeWhileEngagedDisengages) {
 TEST(LateralController, SoftDisableTimerKeepsCountingThroughOtherReasons) {
     EngagedDrive drive;
     ASSERT_TRUE(drive.engage().engaged);
-    drive.controller.set_calibration_status(2);
+    drive.controller.set_calibration_status(CalibrationStatus::Invalid);
     LateralPath short_path = replay_path();
     short_path.usable_for_steering = false;
     LateralControlResult r;

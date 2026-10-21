@@ -1,5 +1,6 @@
 #include "hud/hud_canvas.h"
 
+#include "common/utils_math.h"  // kPiF
 #include "hud/hud_tiles.h"
 
 #include <algorithm>
@@ -29,7 +30,7 @@ constexpr uint32_t kTextShadow = hud_argb(150, 0, 0, 0);
 const std::array<HudPoint, kCornerSegments + 1> kQuarterArc = [] {
     std::array<HudPoint, kCornerSegments + 1> arc{};
     for (int i = 0; i <= kCornerSegments; ++i) {
-        const float angle = static_cast<float>(i) / kCornerSegments * 1.5707964f;
+        const float angle = static_cast<float>(i) / kCornerSegments * (kPiF / 2);
         arc[i] = {std::cos(angle), std::sin(angle)};
     }
     return arc;

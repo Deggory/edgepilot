@@ -1,6 +1,9 @@
 #ifndef PANDA_CAN_CODEC_H
 #define PANDA_CAN_CODEC_H
 
+// Panda USB의 CAN 패킷 형식(firmware/panda)을 싸고 푼다. 받는 쪽은 64바이트 USB 패킷 사이에 걸친 CAN 패킷을
+// 이어 붙인다.
+
 #include <cstddef>
 #include <cstdint>
 #include <string>

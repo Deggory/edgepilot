@@ -1,5 +1,9 @@
 #pragma once
 
+// 횡방향 계획. 모델 출력의 차선 확률·폭(상류 lateral_planner)과 횡방향 MPC로 목표 곡률(LateralTarget)을 만든다.
+// Laneless 모드와 Lane 모드의 모델 경로 구간은 plan의 방향각을 쓰고, 차선 변경은 desire_helper가 정한다.
+// LateralTarget을 만드는 곳은 이것뿐이다.
+
 #include "controls/lateral_target.h"
 
 #include <memory>

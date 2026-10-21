@@ -12,6 +12,10 @@
 #include <utility>
 #include <vector>
 
+// 레코드 머리의 타입과 기록 시각(s). 도구마다 캐스트를 되풀이하지 않게 둔다.
+inline RecordType record_type(const EventRecordHeader &header) { return static_cast<RecordType>(header.type); }
+inline double record_time_s(const EventRecordHeader &header) { return static_cast<double>(header.timestamp_ns) * 1e-9; }
+
 class RouteEvents {
 public:
     // window_ns: 파일 순서와 기록 시각이 이만큼까지 어긋난 레코드를 바로잡는다(recordd는 상태 스냅샷을 쌓인 CAN 뒤에

@@ -135,8 +135,8 @@ ControlState ControlsTick::make_control_state(const DepartureAlertOutput &depart
                       (result.vehicle_fresh && vehicle.brake_hold ? kHudFlagBrakeHold : 0U) |
                       (result.soft_disabling ? kHudFlagSoftDisabling : 0U) |
                       (result.steer_saturated ? kHudFlagSteerSaturated : 0U) |
-                      (target.lane_change_state == 1 ? kHudFlagLaneChangePending : 0U) |
-                      (target.lane_change_state >= 2 ? kHudFlagLaneChanging : 0U) |
+                      (target.lane_change_state == LaneChangeState::PreLaneChange ? kHudFlagLaneChangePending : 0U) |
+                      (target.lane_change_state >= LaneChangeState::Starting ? kHudFlagLaneChanging : 0U) |
                       (target.lane_change_direction > 0 ? kHudFlagLaneChangeRight : 0U) |
                       (result.large_angle_hold ? kHudFlagSteerPaused : 0U) |
                       (result.large_angle_hold_by_driver ? kHudFlagSteerPausedByDriver : 0U) |
@@ -412,7 +412,7 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
                      last_result_.control_speed_kph / 3.6f, last_result_.lat_active, last_result_.apply_torque,
                      last_result_.steering_pressed);
     controller_.set_live_params(learners_.live(), learners_.vehicle_valid());
-    controller_.set_calibration_status(model_.calibration.status);
+    controller_.set_calibration_status(static_cast<CalibrationStatus>(model_.calibration.status));
     LearnerOutputs out;
     if (learners_.vehicle_persist_due()) {
         emit_if_changed(learners_.vehicle_persist_json(), &saved_vehicle_json_, &out.vehicle_json);

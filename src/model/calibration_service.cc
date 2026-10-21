@@ -20,7 +20,7 @@ namespace {
 
 constexpr int kPersistVersion = 1;
 constexpr auto kPersistInterval = std::chrono::seconds(60);
-constexpr float kPersistDeltaRad = 0.01f * 3.14159265358979323846f / 180.0f;
+constexpr float kPersistDeltaRad = 0.01f * kPiF / 180.0f;
 constexpr auto kResetPollInterval = std::chrono::seconds(1);
 
 struct StoredCalibration {
@@ -226,7 +226,7 @@ void CalibrationService::apply_selection(float dt_s) {
 CalibrationSourceState CalibrationService::source_state() const {
     CalibrationSourceState out;
     const bool online = auto_enabled_;
-    out.source = online && selector_.flow_applied() ? 1u : 0u;
+    out.source = online && selector_.flow_applied() ? kCalibrationFromFlow : kCalibrationFromPose;
     out.requested = use_flow_ ? 1u : 0u;
     out.flags = online ? selector_.flags() : 0u;
     out.pose_status = static_cast<uint32_t>(last_snapshot_.status);
@@ -315,7 +315,7 @@ void CalibrationService::reset_online() {
     writer_.remove(calibration_path_);
     writer_.remove(flow_path_);
     flow_state_ = FlowCalibrationState{};
-    flow_state_.status = 1;
+    flow_state_.status = kFlowCalibrationCollecting;
     stored_flow_ = FlowBlocks{};
     latest_flow_blocks_ = FlowBlocks{};
     flow_blocks_dirty_ = false;

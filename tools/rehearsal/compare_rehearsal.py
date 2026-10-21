@@ -102,7 +102,7 @@ def main():
         names, counts = np.unique(blocks, return_counts=True)
         top = sorted(zip(counts, names), reverse=True)[:5]
         print("MaixCAM2 inactive while original active, block reasons:",
-              ", ".join(f"{n}:{k}" for k, n in top))
+              ", ".join(f"{name}:{count}" for count, name in top))
 
 
 if __name__ == "__main__":

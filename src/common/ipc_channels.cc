@@ -239,7 +239,7 @@ bool LatestChannel::publish(const void *payload, size_t payload_size) {
     if ((seq & 1ULL) != 0) ++seq;
     header_->seq.store(seq + 1, std::memory_order_relaxed);
     // 홀수 seq가 아래 페이로드 쓰기보다 먼저 보이게 한다. release 저장만으로는 뒤의 쓰기가 앞당겨질 수 있다(ARM은
-    // 약한 순서). FrameRing::begin_write와 같다.
+    // 약한 순서). FrameRing::begin_write도 같은 이유로 울타리를 둔다(그쪽은 seq_cst).
     std::atomic_thread_fence(std::memory_order_release);
     std::memcpy(payload_, payload, payload_size);
     header_->payload_size.store(static_cast<uint32_t>(payload_size), std::memory_order_release);

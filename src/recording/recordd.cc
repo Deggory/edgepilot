@@ -34,6 +34,8 @@ constexpr unsigned kRecordingBitrate = 8000000;
 constexpr uint64_t kConfigPollIntervalNs = 250000000ULL;
 constexpr uint64_t kMaximumFrameAgeNs = 100000000ULL;
 constexpr uint64_t kStatePublishIntervalNs = 500000000ULL;
+constexpr uint64_t kEncoderDrainTimeoutNs = 500000000ULL;  // 녹화를 닫을 때 남은 패킷을 기다리는 한도
+constexpr uint64_t kLogIntervalNs = 1000000000ULL;
 constexpr unsigned kIdleSleepUs = 100000;  // 기록이 꺼진 동안의 대기(CAN 로그 큐 64칸 = 640 ms보다 짧게)
 
 // params/recording.json(웹 콘솔이 쓴다). 녹화 on/off와 비트레이트.
@@ -116,7 +118,7 @@ int main() {
             writer.write_encoded_frame(frame, packet.data, packet.size, packet.keyframe);
         };
         auto drain_encoder = [&]() {
-            const uint64_t deadline_ns = monotonic_now_ns() + 500000000ULL;
+            const uint64_t deadline_ns = monotonic_now_ns() + kEncoderDrainTimeoutNs;
             while (encoder.submitted() != encoder.encoded() && monotonic_now_ns() < deadline_ns)
                 encoder.drain(on_config, on_packet, 10);
         };
@@ -140,7 +142,7 @@ int main() {
         FileStamp config_stamp;
         uint64_t next_config_poll_ns = 0;
         uint64_t next_state_publish_ns = 0;
-        uint64_t next_log_ns = monotonic_now_ns() + 1000000000ULL;
+        uint64_t next_log_ns = monotonic_now_ns() + kLogIntervalNs;
         uint64_t selected_frames = 0;
         uint64_t dropped_frames = 0;
         uint64_t stale_frames = 0;
@@ -223,7 +225,7 @@ int main() {
             if (writer.requested_enabled()) states.record(writer, false);
 
             if (now_ns >= next_log_ns) {
-                next_log_ns = now_ns + 1000000000ULL;
+                next_log_ns = now_ns + kLogIntervalNs;
                 std::fprintf(
                     stderr,
                     "recordd: enabled=%u active=%u warmed=%u selected=%llu "

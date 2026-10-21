@@ -65,6 +65,9 @@ GAP_MIN_S = 0.5
 ONE_SIDED_MIN_S = 1.0
 MODEL_LOST_PROB = 0.3
 CAMERA_LOST_QUALITY = 1
+CAMERA_SURE_QUALITY = 2.5  # LKA14 품질이 이보다 높아야(3) 순정 카메라가 그 선을 본 것으로 친다
+MIN_COMPARED_SAMPLES = 200  # 이보다 적게 겹치면 지표를 내지 않는다
+MIN_STRAIGHT_SAMPLES = 100
 MERGE_S = 2.0          # 이보다 짧게 끊긴 구간은 한 장면으로 잇는다
 SCENE_SPACING_S = 10.0
 SERIES_HALF_S = 6.0
@@ -204,7 +207,7 @@ def align(data: RouteData) -> Aligned:
     guard = near(t, crossing | lane_change, GUARD_S)
     valid = (in_range & np.isfinite(model_pos).all(1) & np.isfinite(model_head).all(1) & (speed > MIN_SPEED_KPH)
              & ~guard)
-    compared = valid & (camera_quality > 2.5).all(1) & (data.lane_prob > MIN_LANE_PROB).all(1)
+    compared = valid & (camera_quality > CAMERA_SURE_QUALITY).all(1) & (data.lane_prob > MIN_LANE_PROB).all(1)
     straight = (compared & (speed > STRAIGHT_MIN_SPEED_KPH) & (np.abs(steer) < STRAIGHT_MAX_STEER_DEG)
                 & (np.abs(yaw_rate) < STRAIGHT_MAX_YAW_RATE_DPS))
     return Aligned(t, camera_pos, camera_head, camera_quality, model_pos, model_head, speed, steer, yaw_rate,
@@ -215,7 +218,7 @@ def metrics(data: RouteData, a: Aligned) -> dict:
     c, s = a.compared, a.straight
     out = {"minutes": float(a.t[-1] / 60.0), "compared_min": float(c.sum() / MODEL_HZ / 60),
            "straight_min": float(s.sum() / MODEL_HZ / 60)}
-    if c.sum() < 200:
+    if c.sum() < MIN_COMPARED_SAMPLES:
         return out
     flow = data.cal_source[c].mean()
     out["calibration"] = "flow" if flow > 0.5 else "pose"
@@ -234,7 +237,7 @@ def metrics(data: RouteData, a: Aligned) -> dict:
     centre = (a.camera_pos[c].sum(1) - a.model_pos[c].sum(1)) / 2
     out["centre_bias_cm"] = float(centre.mean() * 100)
     out["width_diff_cm"] = float(np.median(width) * 100)
-    if s.sum() > 100:
+    if s.sum() > MIN_STRAIGHT_SAMPLES:
         out["straight_head_diff_deg"] = float(np.degrees((a.camera_head[s].mean(1) - a.model_head[s].mean(1)).mean()))
     return out
 
@@ -261,7 +264,7 @@ def find_scenes(data: RouteData, a: Aligned, per_kind: dict[str, int], has_video
         off = diff - median
         masks = {
             "gap": (a.compared & (np.abs(off) > GAP_M), GAP_MIN_S),
-            "camera_only": (a.valid & (a.camera_quality[:, i] > 2.5) & (data.lane_prob[:, i] < MODEL_LOST_PROB),
+            "camera_only": (a.valid & (a.camera_quality[:, i] > CAMERA_SURE_QUALITY) & (data.lane_prob[:, i] < MODEL_LOST_PROB),
                             ONE_SIDED_MIN_S),
             "model_only": (a.valid & (a.camera_quality[:, i] < CAMERA_LOST_QUALITY + 0.5)
                            & (data.lane_prob[:, i] > MIN_LANE_PROB), ONE_SIDED_MIN_S),

@@ -20,6 +20,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from cpp_headers import cpp_offsets, cpp_size  # noqa: E402
 from scripts.web_console.bev_stream import BEV_FRAME, BEV_FRAME_MAGIC, BEV_IDLE_S, bev_frames, bev_layout
 from scripts.web_console.calibration_control import (
     CALIBRATION_RESET_PATH,
@@ -138,15 +139,6 @@ def page_modules() -> list:
 
 def cpp(path: Path = IPC_MESSAGES) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def cpp_offsets(macro: str) -> dict:
-    """EDGEPILOT_<macro>_AT(필드, 위치) 고정값들."""
-    return {name: int(at) for name, at in re.findall(rf"EDGEPILOT_{macro}_AT\((\w+), (\d+)\);", cpp())}
-
-
-def cpp_size(struct_name: str) -> int:
-    return int(re.search(rf"sizeof\({struct_name}\) == (\d+)", cpp()).group(1))
 
 
 def snake(name: str) -> str:

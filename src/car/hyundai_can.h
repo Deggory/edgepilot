@@ -1,5 +1,8 @@
 #pragma once
 
+// 현대 LKAS 명령 프레임을 만든다: LKAS11(조향 토크), CLU11(MDPS 속도 스푸프·크루즈 버튼), MDPS12. 받은 프레임을
+// 바탕(seed)으로 바꿀 칸만 고친다.
+
 #include <array>
 #include <cstdint>
 #include <vector>

@@ -1,5 +1,9 @@
 #pragma once
 
+// 횡제어 한 틱. LateralPlanner의 목표 곡률(LateralTarget)과 모델 경로의 조향 가용성(LateralPath), 차량 상태로 결합과
+// 차단을 정하고(control_block), 토크 제어(lateral_torque)를 거쳐 LKAS11·CLU11·MDPS12 프레임을 만든다
+// (car/hyundai_can). 학습기 값, 보정 상태, lagd 지연을 받는다.
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -7,6 +11,7 @@
 #include "car/hyundai_can.h"
 #include "car/speed_filter.h"
 #include "car/vehicle_can.h"
+#include "common/ipc_messages.h"  // CalibrationStatus
 #include "controls/control_block.h"
 #include "controls/control_params.h"
 #include "controls/drive_helpers.h"
@@ -110,10 +115,9 @@ public:
     // 보정 사유(set_calibration_status)가 먼저다.
     void set_live_params(const LiveLateralParams &live, bool vehicle_valid);
 
-    // modeld 온라인 보정 상태(CalibrationStatus: 0 미완료, 1 완료, 2 범위 밖,
-    // 3 재보정). 완료가 아니면 openpilot처럼 결합을 막고 결합 중이면 경고 후 해제한다.
+    // modeld 온라인 보정 상태. 완료가 아니면 openpilot처럼 결합을 막고 결합 중이면 경고 후 해제한다.
     // 기본값은 완료라 단위 테스트와 재생 도구는 영향이 없다.
-    void set_calibration_status(uint32_t status) { calibration_status_ = status; }
+    void set_calibration_status(CalibrationStatus status) { calibration_status_ = status; }
     // lagd 추정 지연. valid는 확정(5블록)이고 신선할 때. use_live_delay가 켜져 있으면 경로
     // 지연에 쓴다.
     void set_live_delay(float delay_s, bool valid);
@@ -223,7 +227,7 @@ private:
     bool live_vehicle_valid_ = true;
     float live_delay_s_ = 0.0f;
     bool live_delay_valid_ = false;
-    uint32_t calibration_status_ = 1;
+    CalibrationStatus calibration_status_ = CalibrationStatus::Calibrated;
     double soft_disable_start_s_ = -1.0;
     double interrupt_start_s_ = -1.0;  // 결합 중 입력이 끊긴 시각(BlockKind::Interrupt), 없으면 음수
     // 상류 CarStateBase.v_ego_kf

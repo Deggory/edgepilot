@@ -508,7 +508,7 @@ void RecordingWriter::write_encoded_frame_impl(const RoadAiFrame &frame, const u
     index.encode_index = total_video_frames_.load();
     index.file_offset = offset;
     index.packet_size = static_cast<uint32_t>(size);
-    index.flags = keyframe ? 1U : 0U;
+    index.flags = keyframe ? kFrameIndexKeyframe : 0U;
     if (std::fwrite(&index, sizeof(index), 1, index_file_) != 1) {
         std::fprintf(stderr, "recordd: frame index write failed: %s\n", std::strerror(errno));
         return;
@@ -623,7 +623,7 @@ void RecordingWriter::write_manifest(bool complete) const {
              << "  \"height\": " << height_ << ",\n"
              << "  \"fps\": " << fps_ << ",\n"
              << "  \"bitrate\": " << bitrate_ << ",\n"
-             << "  \"segment_seconds\": 60,\n"
+             << "  \"segment_seconds\": " << kSegmentDurationNs / 1000000000ULL << ",\n"
              << "  \"video_frames\": " << total_video_frames_.load() << ",\n"
              << "  \"event_records\": " << event_records_ << "\n"
              << "}\n";

@@ -1,16 +1,10 @@
 #ifndef CALIBRATION_ONLINE_H
 #define CALIBRATION_ONLINE_H
 
+#include "common/ipc_messages.h"  // CalibrationStatus
 #include "common/model_output.h"  // PoseObservation(모델 pose 출력)
 
 #include <cstdint>
-
-enum class CalibrationStatus {
-    Uncalibrated = 0,
-    Calibrated = 1,
-    Invalid = 2,
-    Recalibrating = 3,  // 장착이 바뀐 것으로 보고 마지막 블록부터 다시 모으는 중
-};
 
 class OnlineCalibrator {
 public:

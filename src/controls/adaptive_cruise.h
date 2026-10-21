@@ -1,5 +1,8 @@
 #pragma once
 
+// 비전 크루즈. 모델 앞차(앞차 추적이 있으면 그것)로 순정 고정형 크루즈의 설정 속도를 정하고 SET+/SET- 버튼 펄스
+// (CLU11)로 맞춘다. 이 차는 설정 속도를 알려 주지 않아 세션마다 운전자 버튼과 계기판 속도로 추정한다.
+
 #include <string>
 
 struct AdaptiveCruiseConfig {

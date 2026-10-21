@@ -12,10 +12,10 @@ constexpr float kReachedRad = 1e-6f;
 
 }  // namespace
 
-// status 2는 kFlowMinBlocks 이상의 블록 중앙값 평균이다(유한한 값만 블록이 된다).
+// 추정(kFlowCalibrationEstimate)은 kFlowMinBlocks 이상의 블록 중앙값 평균이다(유한한 값만 블록이 된다).
 bool CalibrationSourceSelector::flow_usable(const FlowCalibrationState &flow, float max_spread) {
     const float rpy[3] = {0.0f, flow.pitch, flow.yaw};
-    return flow.status == 2 && flow.sd_pitch <= max_spread && flow.sd_yaw <= max_spread &&
+    return flow.status == kFlowCalibrationEstimate && flow.sd_pitch <= max_spread && flow.sd_yaw <= max_spread &&
            OnlineCalibrator::rpy_within_limits(rpy);
 }
 

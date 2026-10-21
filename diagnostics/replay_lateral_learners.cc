@@ -18,6 +18,7 @@
 #include "cli_args.h"
 #include "common/ipc_messages.h"
 #include "common/utils_file.h"
+#include "common/utils_math.h"  // kPi
 #include "common/utils_time.h"
 #include "controls/control_params.h"
 #include "controls/lateral_torque.h"
@@ -136,27 +137,28 @@ int main(int argc, char **argv) {
     while (route_events.next(&record)) {
         const bool count_metric = record.file >= metric_from_file;
         const EventRecordHeader &rh = record.header;
+        const RecordType type = record_type(rh);
         const std::vector<char> &buf = record.payload;
-        const double record_s = static_cast<double>(rh.timestamp_ns) * 1e-9;
+        const double record_s = record_time_s(rh);
         const double now_s = std::max(record_s, latest_can_s);
-        if (rh.type == static_cast<uint16_t>(RecordType::CanRx)) {
+        if (type == RecordType::CanRx) {
             latest_can_s = std::max(latest_can_s, record_s);
             apply_recorded_can(buf.data(), rh.payload_size, now_s, &vehicle);
             continue;
         }
-        if (rh.type == static_cast<uint16_t>(RecordType::Localization)) {
+        if (type == RecordType::Localization) {
             if (read_record(buf, &loc)) have_loc = true;
             continue;
         }
         // 보드가 실제로 쓴 조향 지연(torqued lag도 이 값을 따른다). 예전 기록은 0이라 건너뛴다
-        if (rh.type == static_cast<uint16_t>(RecordType::LearnerState)) {
+        if (type == RecordType::LearnerState) {
             LearnerState ls;
             if (read_record(buf, &ls) && ls.plan_delay_s > 0.0f) learners.set_lateral_delay(ls.plan_delay_s);
             continue;
         }
         // 제어 틱(ControlState, 100 Hz)마다 한 번 넣는다. controlsd가 부를 자리와 같다.
         ControlState cs;
-        if (rh.type != static_cast<uint16_t>(RecordType::ControlState) || !read_record(buf, &cs)) continue;
+        if (type != RecordType::ControlState || !read_record(buf, &cs)) continue;
         const bool pressed = steering_pressed.update(cs.driver_torque, sp.steering_pressed_threshold);
         // controlsd처럼 매 틱 최신 locationd 상태로 판단한다(기록 시각 = 학습기 시계)
         if (have_loc) {
@@ -191,7 +193,7 @@ int main(int argc, char **argv) {
         if (first_t < 0.0) first_t = now_s;
         last_t = now_s;
         ++ticks;
-        if (in.inputs_fresh && in.speed_mps > 1.0 && std::fabs(in.steering_angle_deg) < 45.0 && in.gear != 7)
+        if (in.inputs_fresh && in.speed_mps > 1.0 && std::fabs(in.steering_angle_deg) < 45.0 && in.gear != kGearReverse)
             ++active_ticks;
         if (learners.vehicle_published()) {
             ++publishes;
@@ -199,8 +201,8 @@ int main(int argc, char **argv) {
             if (out_file)
                 std::fprintf(out_file, "%.4f,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n", now_s - first_t,
                              p.inputs_ok, p.valid, p.sensor_valid, p.steer_ratio, p.stiffness_factor,
-                             p.roll_rad * 180.0 / 3.14159265358979323846, p.angle_offset_average_deg,
-                             p.angle_offset_deg, p.steer_ratio_std, p.stiffness_factor_std, learners.yaw_bias_rad_s());
+                             p.roll_rad * 180.0 / kPi, p.angle_offset_average_deg, p.angle_offset_deg,
+                             p.steer_ratio_std, p.stiffness_factor_std, learners.yaw_bias_rad_s());
         }
         if (learners.torque_persist_due() && !torque_cache_path.empty()) {
             std::ofstream f(torque_cache_path, std::ios::binary | std::ios::trunc);
@@ -221,8 +223,8 @@ int main(int argc, char **argv) {
         "%.0fs, ticks %ld, active %.0fs, outputs %ld | SR %.3f (±%.3f) stiffness %.3f offset %+.3f deg "
         "(total %+.3f) roll %+.3f deg | valid %d | gyro bias %+.4f deg/s\n",
         last_t - first_t, ticks, active_ticks / 100.0, publishes, p.steer_ratio, p.steer_ratio_std, p.stiffness_factor,
-        p.angle_offset_average_deg, p.angle_offset_deg, p.roll_rad * 180.0 / 3.14159265358979323846, p.valid,
-        learners.yaw_bias_rad_s() * 180.0 / 3.14159265358979323846);
+        p.angle_offset_average_deg, p.angle_offset_deg, p.roll_rad * 180.0 / kPi, p.valid,
+        learners.yaw_bias_rad_s() * 180.0 / kPi);
     for (int k = 0; k < 2; ++k) {
         const CurvatureSums &c = curv[k];
         if (c.n == 0) continue;
@@ -230,7 +232,7 @@ int main(int argc, char **argv) {
             "engaged straight %ld ticks (%s yaw rate): angle curvature %+.3fe-4, yaw-rate curvature %+.3fe-4, "
             "difference %+.3fe-4 1/m | mean roll %+.3f deg\n",
             c.n, k ? "locationd" : "ESP12", c.angle / c.n * 1e4, c.yaw / c.n * 1e4, c.diff / c.n * 1e4,
-            c.roll / c.n * 180.0 / 3.14159265358979323846);
+            c.roll / c.n * 180.0 / kPi);
     }
     const TorqueParams &q = learners.torque_params();
     std::printf(

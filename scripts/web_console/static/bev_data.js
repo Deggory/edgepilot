@@ -34,6 +34,7 @@ const PLAN_NOW_INDEX = 2;               // 계획의 현재 속도: 첫 점의 �
 export const GAS_PRESS_HORIZON = 1;     // controls_tick.cc가 출발 알림에 넣는 gas_press_probs[1], 2 s 후
 const DRIVE_GEAR = 5;                   // can_frame.h kGearDrive: 출발 알림은 D에서만 본다
 export const HISTORY_S = 10;            // 출발 알림 카드가 입력을 얼마나 남겨 두는지
+export const DEPARTURE_ALERT = {none: 0, leadDeparted: 1, greenLight: 2};  // departure_alert.h DepartureAlertType
 // 앞차 카드: 최근 LEAD_HISTORY_S 동안 앞차의 거리와 자차 대비 상대 속도를 모델, 광류(속도만), modeld의
 // 앞차 추적(둘을 융합한 것)에서 가져와 모델 자체 거리의 추세와 견준다. 추세는 앞차 하나의 ±half s에 맞춘
 // 직선이다(끊김 없이, jump m보다 큰 튐 없이, 양 끝에서 edge s 안까지 닿는 points 프레임 이상).
@@ -194,7 +195,7 @@ const NO_CONTROL = {enabled: false, engaged: false, active: false, alarm: false,
 //   blinkers {left, right} (둘 다면 비상등), controlsd가 없으면 null. controlsd는 램프가 마지막으로 깜박인
 //   뒤 0.5 s 동안 각각을 켜 두므로, 램프가 깜박이는 동안 켜진 채로 있다
 //   brakeLights: 자차의 브레이크등(페달을 밟았거나 AUTO HOLD: vehicle_can brake_lights_on)
-//   departure {drive (D 단), armed, alert (0 없음, 1 앞차 출발, 2 녹색 신호), gas [0, 2, … 10 s],
+//   departure {drive (D 단), armed, alert (DEPARTURE_ALERT), gas [0, 2, … 10 s],
 //   plan10 (m, 10 s의 모델 x), history [[t s, gas 2 s, plan10]]}: departure_alert.cc가 판단에 쓰는 것
 //   modelAge, controlAge (s, 없으면 Infinity)
 function scene(model, control, now, history = []) {
