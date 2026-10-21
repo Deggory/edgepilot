@@ -1,4 +1,5 @@
 #include "model/calibration_online.h"
+#include "common/projection.h"  // rotation_from_rpy
 #include "common/utils_math.h"
 
 #include <algorithm>
@@ -7,7 +8,6 @@
 
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
 constexpr float kMinSpeedFilter = 15.0f * 0.44704f;
 constexpr float kMaxVelAngleStd = 0.25f * kPi / 180.0f;
 constexpr float kMaxYawRateFilter = 2.0f * kPi / 180.0f;
@@ -27,40 +27,6 @@ const float kMaxHeightStd = std::exp(-3.5f);
 
 bool finite3(const float v[3]) { return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]); }
 
-void rot_from_euler(const float rpy[3], float *rot) {
-    const float roll = rpy[0];
-    const float pitch = rpy[1];
-    const float yaw = rpy[2];
-    const float cr = std::cos(roll);
-    const float sr = std::sin(roll);
-    const float cp = std::cos(pitch);
-    const float sp = std::sin(pitch);
-    const float cy = std::cos(yaw);
-    const float sy = std::sin(yaw);
-
-    // clang-format off
-    const float rx[9] = {
-        1.0f, 0.0f, 0.0f,
-        0.0f, cr, -sr,
-        0.0f, sr, cr,
-    };
-    const float ry[9] = {
-        cp, 0.0f, sp,
-        0.0f, 1.0f, 0.0f,
-        -sp, 0.0f, cp,
-    };
-    const float rz[9] = {
-        cy, -sy, 0.0f,
-        sy, cy, 0.0f,
-        0.0f, 0.0f, 1.0f,
-    };
-    // clang-format on
-
-    float tmp[9];
-    matmul3(ry, rx, tmp);
-    matmul3(rz, tmp, rot);
-}
-
 void euler_from_rot(const float *rot, float rpy[3]) {
     rpy[0] = std::atan2(rot[2 * 3 + 1], rot[2 * 3 + 2]);
     rpy[1] = std::asin(std::max(-1.0f, std::min(1.0f, -rot[2 * 3 + 0])));
@@ -71,27 +37,13 @@ void compose_rpy(const float base[3], const float observed[3], float out[3]) {
     float base_rot[9];
     float observed_rot[9];
     float composed[9];
-    rot_from_euler(base, base_rot);
-    rot_from_euler(observed, observed_rot);
+    rotation_from_rpy(base[0], base[1], base[2], base_rot);
+    rotation_from_rpy(observed[0], observed[1], observed[2], observed_rot);
     matmul3(base_rot, observed_rot, composed);
     euler_from_rot(composed, out);
 }
 
 }  // namespace
-
-const char *calibration_status_name(CalibrationStatus status) {
-    switch (status) {
-        case CalibrationStatus::Uncalibrated:
-            return "uncalibrated";
-        case CalibrationStatus::Calibrated:
-            return "calibrated";
-        case CalibrationStatus::Invalid:
-            return "invalid";
-        case CalibrationStatus::Recalibrating:
-            return "recalibrating";
-    }
-    return "unknown";
-}
 
 OnlineCalibrator::OnlineCalibrator() { reset_to_rpy(snapshot_.rpy, 0); }
 

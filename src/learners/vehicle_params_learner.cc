@@ -7,10 +7,10 @@
 #include <cstdio>
 
 #include "common/utils_json.h"
+#include "common/utils_math.h"
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr double kGravity = 9.81;
 constexpr double kDtMdl = 0.05;
 double rad(double deg) { return deg * kPi / 180.0; }

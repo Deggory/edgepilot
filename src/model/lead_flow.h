@@ -18,7 +18,9 @@
 #include "common/model_output.h"     // kLeadProbabilityThreshold
 #include "model/flow_calibration.h"  // FlowIntrinsics
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 constexpr int kLeadMaxPoints = 64;    // 따라가는 점
@@ -85,11 +87,11 @@ public:
     LeadFlowTracker(const FlowIntrinsics &k, int width, int height);
 
     // 프레임 시작. y는 이 프레임의 Y 평면(CPU 매핑, 행 간격 stride)으로, 상자 둘레를 한 번 복사해 두고 점
-    // 고르기·템플릿·다듬기에 쓴다(호출자는 그동안 버퍼가 그대로였는지 확인한다). consecutive가 false면(프레임을
-    // 건너뛰었다) 점을 버린다. 앞차를 따라갈 수 없으면 점과 확대율을 버리고 false. 돌려준 뒤 points()가 이번에
-    // 따라갈 점이다.
-    bool begin(const LeadFlowInput &lead, uint64_t frame_id, double t_s, bool consecutive, const uint8_t *y,
-               int stride);
+    // 고르기·템플릿·다듬기에 쓴다(호출자는 그동안 버퍼가 그대로였는지 확인한다). invalidate가 있으면 복사할 행
+    // 범위(y에서의 바이트 오프셋, 길이)를 읽기 전에 넘긴다(캐시 매핑). consecutive가 false면(프레임을 건너뛰었다)
+    // 점을 버린다. 앞차를 따라갈 수 없으면 점과 확대율을 버리고 false. 돌려준 뒤 points()가 이번에 따라갈 점이다.
+    bool begin(const LeadFlowInput &lead, uint64_t frame_id, double t_s, bool consecutive, const uint8_t *y, int stride,
+               const std::function<void(size_t, size_t)> &invalidate = {});
     // 따라갈 점(원본 좌표, 직전 프레임 위치)을 xy에 쓰고 수를 돌려준다
     int points(float *xy);
     // points()를 LK로 이 프레임까지 따라간 결과(xy, ok)와, 그 위치를 직전 프레임으로 되돌려 따라간 결과
@@ -108,7 +110,7 @@ private:
     static constexpr int kTemplateSize = kTemplateSide * kTemplateSide;
 
     void drop_points();
-    void copy_roi(const uint8_t *y, int stride);
+    void copy_roi(const uint8_t *y, int stride, const std::function<void(size_t, size_t)> &invalidate);
     bool sample_patch(double x, double y, int half, float *out) const;
     bool refine(const float *tmpl, float *xy) const;
     int slot(int back) const { return (head_ - back + kSlots) % kSlots; }

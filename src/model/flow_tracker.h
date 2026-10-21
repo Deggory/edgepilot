@@ -24,6 +24,8 @@ struct FlowFrame {
     // 것도), 그동안 링 슬롯이 덮어써졌으면 그 걸음을 버린다.
     unsigned long long y_phys = 0;
     const uint8_t *y_virt = nullptr;  // 같은 평면의 CPU 매핑(앞차 점·템플릿). 없으면 앞차를 따라가지 않는다
+    // y_virt가 캐시 매핑이면 CPU가 [offset, offset + bytes)를 읽기 전에 부른다(보드: 캐시 무효화)
+    std::function<void(size_t offset, size_t bytes)> invalidate;
     int stride = 0;
     uint64_t frame_id = 0;
     double t_s = 0.0;    // 촬영 시각(s)

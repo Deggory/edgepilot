@@ -80,9 +80,11 @@ flowchart TB
 | Refinement | `LeadFlowTracker::refine` | every point keeps a 9x9 template per frame. A point alive for 10 frames is matched against its template from 10 frames ago: translation-only inverse-compositional LK, starting from the chained position, within 2 px |
 | Fit | `fit_similarity_scale` | similarity transform from the positions 10 frames ago to the refined ones; RANSAC at 0.7 px, then a least-squares refit. At least 8 pairs and 6 inliers |
 
-The ring slot is an uncached mapping. So the CPU copies the box's neighbourhood
-once per frame and picks the corners, cuts the templates and refines on that
-copy.
+The CPU copies the box's neighbourhood once per frame and picks the corners,
+cuts the templates and refines on that copy. It reads the ring slot through a
+cached mapping and invalidates the copied rows first: an uncached mapping made
+the copy three to five times slower (a 38 KB neighbourhood took 0.68 ms instead
+of 0.21 ms, a 312 KB one 5.2 ms instead of 0.94 ms; board, 2026-10-21).
 
 All points are dropped when a frame is skipped, and when in one frame the lead's
 distance jumps by more than 4 m and more than 15% of the distance (the larger of

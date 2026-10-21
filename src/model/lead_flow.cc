@@ -283,7 +283,7 @@ int LeadFlowTracker::alive_points() const {
 }
 
 // 점이 버려지기 전까지 머무는 곳(상자와 kKeepMargin)과 템플릿·다듬기가 읽는 둘레를 행 단위로 한 번 복사한다
-void LeadFlowTracker::copy_roi(const uint8_t *y, int stride) {
+void LeadFlowTracker::copy_roi(const uint8_t *y, int stride, const std::function<void(size_t, size_t)> &invalidate) {
     const int mx = static_cast<int>(std::ceil(kKeepMargin * box_.width())) + kRoiMarginPx;
     const int my = static_cast<int>(std::ceil(kKeepMargin * box_.height())) + kRoiMarginPx;
     roi_x0_ = std::max(0, box_.x0 - mx);
@@ -291,6 +291,7 @@ void LeadFlowTracker::copy_roi(const uint8_t *y, int stride) {
     roi_w_ = std::min(width_, box_.x1 + mx) - roi_x0_;
     roi_h_ = std::min(height_, box_.y1 + my) - roi_y0_;
     roi_.resize(static_cast<size_t>(roi_w_) * roi_h_);
+    if (invalidate) invalidate(static_cast<size_t>(roi_y0_) * stride, static_cast<size_t>(roi_h_) * stride);
     for (int r = 0; r < roi_h_; ++r)
         std::memcpy(&roi_[static_cast<size_t>(r) * roi_w_], y + static_cast<size_t>(roi_y0_ + r) * stride + roi_x0_,
                     static_cast<size_t>(roi_w_));
@@ -357,7 +358,7 @@ bool LeadFlowTracker::refine(const float *t, float *xy) const {
 }
 
 bool LeadFlowTracker::begin(const LeadFlowInput &lead, uint64_t frame_id, double t_s, bool consecutive,
-                            const uint8_t *y, int stride) {
+                            const uint8_t *y, int stride, const std::function<void(size_t, size_t)> &invalidate) {
     if (!consecutive) drop_points();  // 이전 위치가 이 프레임 바로 앞이 아니다
     LeadBox box;
     const bool usable = y && lead_flow_wanted(lead) &&
@@ -380,7 +381,7 @@ bool LeadFlowTracker::begin(const LeadFlowInput &lead, uint64_t frame_id, double
     box_ = box;
     head_ = (head_ + 1) % kSlots;
     times_[head_] = t_s;
-    copy_roi(y, stride);
+    copy_roi(y, stride, invalidate);
     return alive_points() > 0;
 }
 

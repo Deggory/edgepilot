@@ -5,6 +5,8 @@
 #include <cmath>
 #include <initializer_list>
 
+constexpr double kPi = 3.14159265358979323846;
+
 inline float clamp_float(float value, float lo, float hi) {
     if (!std::isfinite(value)) return lo;
     return std::min(std::max(value, lo), hi);

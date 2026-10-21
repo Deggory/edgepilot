@@ -402,9 +402,10 @@ VPP call. That fifth process is typically a tool run while the runtime is up.
 Camera frames never go through the small-message IPC. The frame ring's pixels
 live in camerad's CMM blocks and are read by physical address: the GDC in
 `modeld` and IVPS in `overlayd` and `recordd` read the slot directly, and the
-flow worker maps it uncached to read the lead's points. Only the ring header and
-per-frame metadata are in `/dev/shm`. This keeps the split runtime close to
-openpilot's process boundaries without paying the cost of Cap'n Proto/cereal.
+flow worker maps it cached, invalidating the rows it reads, to read the lead's
+points. Only the ring header and per-frame metadata are in `/dev/shm`. This
+keeps the split runtime close to openpilot's process boundaries without paying
+the cost of Cap'n Proto/cereal.
 
 ```mermaid
 flowchart TB

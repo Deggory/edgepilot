@@ -12,8 +12,6 @@ enum class CalibrationStatus {
     Recalibrating = 3,  // 장착이 바뀐 것으로 보고 마지막 블록부터 다시 모으는 중
 };
 
-const char *calibration_status_name(CalibrationStatus status);
-
 class OnlineCalibrator {
 public:
     struct Snapshot {

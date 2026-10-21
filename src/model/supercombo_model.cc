@@ -76,8 +76,9 @@ SupercomboModel::SupercomboModel(const char *model_file, const AppConfig &config
         output_parts_[p] = found;
     }
 
-    // traffic convention은 이 차에서 상수라 한 번만 쓴다.
-    std::memcpy(session_.input<float>(index_[kTraffic]), temporal_.traffic_convention().data(), sizeof(float) * 2);
+    // traffic convention은 이 차에서 상수(우측 통행 {1, 0})라 한 번만 쓴다.
+    const float right_hand_traffic[2] = {1.0f, 0.0f};
+    std::memcpy(session_.input<float>(index_[kTraffic]), right_hand_traffic, sizeof(right_hand_traffic));
     std::fprintf(stderr, "Supercombo openpilot-master axmodel (pulsar2 %s), warp on GDC (AX IVPS)\n",
                  session_.tools_version().c_str());
 }

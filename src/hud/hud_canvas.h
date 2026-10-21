@@ -65,7 +65,6 @@ private:
     uint32_t *row(int y) const;
     HudPoint to_buffer(HudPoint p) const;  // 화면 점 → 버퍼 점(연속 좌표)
     void mark(int y, int x0, int x1);      // y행 [x0, x1)을 그렸다
-    void fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color);
     void glyphs(int x, int y, std::string_view text, const HudFont &font, uint32_t color);
 
     uint8_t *base_;

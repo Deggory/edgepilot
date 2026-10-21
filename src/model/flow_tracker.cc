@@ -1,9 +1,10 @@
 #include "model/flow_tracker.h"
 
 #include <algorithm>
-#include <chrono>
 #include <ctime>
 #include <utility>
+
+#include "common/utils_time.h"
 
 namespace {
 
@@ -13,10 +14,6 @@ constexpr double kCornerQuality = 0.002;
 // 보정 점과 앞차 점을 한 번의 LK로 따라간다
 constexpr int kStepPoints = kFlowMaxPoints + kLeadMaxPoints;
 static_assert(kStepPoints <= FlowEngine::kMaxPoints, "one LK call tracks both point sets");
-
-double now_ms() {
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
 
 double thread_cpu_ms() {
     timespec ts{};
@@ -111,7 +108,7 @@ void FlowTracker::process(const FlowFrame &f) {
         have_last_ = false;
         return;
     }
-    const double wall0 = now_ms(), cpu0 = thread_cpu_ms();
+    const double wall0 = monotonic_now_ns() * 1e-6, cpu0 = thread_cpu_ms();
     const bool consecutive = have_last_ && f.frame_id == last_frame_ + 1;
     if (!engine_->push(f.y_phys, f.stride) || (f.still_valid && !f.still_valid())) {
         lose();
@@ -125,7 +122,8 @@ void FlowTracker::process(const FlowFrame &f) {
     last_valid_ = f.still_valid;
     ++stats_.frames;
     if (in_window_ && !consecutive) lose();  // 이동이 8 px 한계를 넘을 수 있다
-    const bool lead_points = lead_wanted && lead_.begin(f.lead, f.frame_id, f.t_s, consecutive, f.y_virt, f.stride);
+    const bool lead_points =
+        lead_wanted && lead_.begin(f.lead, f.frame_id, f.t_s, consecutive, f.y_virt, f.stride, f.invalidate);
 
     // 살아 있는 보정 점 다음에 앞차 점을 모아 한 번에 따라간다
     live_.clear();
@@ -165,7 +163,7 @@ void FlowTracker::process(const FlowFrame &f) {
         // begin이 상자 둘레를 복사한 뒤 슬롯이 덮어써졌으면 새 점과 템플릿을 믿을 수 없다
         if (f.still_valid && !f.still_valid()) lead_.reset();
     }
-    stats_.wall_ms += now_ms() - wall0;
+    stats_.wall_ms += monotonic_now_ns() * 1e-6 - wall0;
     stats_.cpu_ms += thread_cpu_ms() - cpu0;
 }
 

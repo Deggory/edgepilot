@@ -19,7 +19,11 @@ void cmm_free(CmmBlock *block) {
 }
 
 uint8_t *cmm_map(unsigned long long phys, size_t size) {
-    return static_cast<uint8_t *>(AX_SYS_Mmap(phys, static_cast<AX_U32>(size)));
+    return static_cast<uint8_t *>(AX_SYS_MmapCache(phys, static_cast<AX_U32>(size)));
+}
+
+void cmm_invalidate(unsigned long long phys, uint8_t *virt, size_t size) {
+    AX_SYS_MinvalidateCache(phys, virt, static_cast<AX_U32>(size));
 }
 
 void cmm_unmap(uint8_t *virt, size_t size) {

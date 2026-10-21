@@ -710,7 +710,8 @@ only in the board build, against `deps/ax630` from
   blocking; reports short taps in screen coordinates, rotated clockwise 90° as
   MaixCDK's `maix_touchscreen_maixcam2.hpp` does.
 - `maix_cmm.*`: physically contiguous CMM blocks shared across processes
-  (allocate in one, map by physical address in another, uncached).
+  (allocate in one, uncached; map by physical address in another, cached for
+  CPU reads, which invalidate the range first).
 - `maix_frames.h`: the NV12 frame description, stretch-resize setting and
   uncached block pool that the display, GDC, IVE, encoder and decoder wrappers
   share.

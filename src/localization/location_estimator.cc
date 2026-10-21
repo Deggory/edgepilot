@@ -3,10 +3,11 @@
 #include <algorithm>
 #include <numeric>
 
+#include "common/utils_math.h"
+
 namespace {
 
 constexpr double kEarthG = 9.81;
-constexpr double kPi = 3.14159265358979323846;
 
 // locationd.py
 constexpr double kAccelSanityCheck = 100.0;    // m/s²

@@ -152,8 +152,10 @@ public:
         if (live_) {
             file_.poll(monotonic_now_ns(), &settings_);
         } else {
-            settings_.camera_offset_m = env_setting("EDGEPILOT_CAMERA_OFFSET_M", &DeviceSettings::camera_offset_m);
-            settings_.camera_height_m = env_setting("EDGEPILOT_CAMERA_HEIGHT_M", &DeviceSettings::camera_height_m);
+            settings_.camera_offset_m = clamp_device_setting(
+                &DeviceSettings::camera_offset_m, env_float("EDGEPILOT_CAMERA_OFFSET_M", settings_.camera_offset_m));
+            settings_.camera_height_m = clamp_device_setting(
+                &DeviceSettings::camera_height_m, env_float("EDGEPILOT_CAMERA_HEIGHT_M", settings_.camera_height_m));
         }
         log();
     }
@@ -165,15 +167,6 @@ public:
     const DeviceSettings &get() const { return settings_; }
 
 private:
-    static float env_setting(const char *name, float DeviceSettings::*member) {
-        const DeviceSettings defaults;
-        const char *text = std::getenv(name);
-        if (!text || !*text) return defaults.*member;
-        char *end = nullptr;
-        const float value = std::strtof(text, &end);
-        if (*end != '\0' || !std::isfinite(value)) throw std::runtime_error(std::string(name) + " is not a number");
-        return clamp_device_setting(member, value);
-    }
     void log() const {
         std::fprintf(stderr, "\nmodeld: settings camera offset=%+.3f m height=%.2f m, calibration source %s (%s)\n",
                      settings_.camera_offset_m, settings_.camera_height_m,
@@ -337,8 +330,8 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 
-// 광류 작업이 앞차 점을 고를 때 읽는 링 슬롯의 CPU 매핑(캐시 없이). camerad가 다시 떠서 물리 주소가 바뀌면 다시
-// 매핑한다.
+// 광류 작업이 앞차 점을 고를 때 읽는 링 슬롯의 CPU 매핑(캐시, 읽을 행만 비운다). camerad가 다시 떠서 물리 주소가
+// 바뀌면 다시 매핑한다.
 struct RingSlotMaps {
     unsigned long long phys[kFrameSlots] = {};
     uint8_t *virt[kFrameSlots] = {};
@@ -437,6 +430,9 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             FlowFrame job;
             job.y_phys = slot_phys;
             job.y_virt = slot_maps.virt[meta.slot];
+            job.invalidate = [phys = slot_phys, virt = slot_maps.virt[meta.slot]](size_t offset, size_t bytes) {
+                cmm_invalidate(phys + offset, virt + offset, bytes);
+            };
             job.stride = static_cast<int>(meta.width);
             job.frame_id = meta.frame_id;
             job.t_s = static_cast<double>(meta.timestamp_ns) * 1e-9;

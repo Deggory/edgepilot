@@ -3,13 +3,7 @@
 #include <cmath>
 
 #include "car/hyundai_can.h"
-
-namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-double rad(double deg) { return deg * kPi / 180.0; }
-
-}  // namespace
+#include "common/utils_math.h"
 
 // ---------------------------------------------------------------- YawBiasEstimator
 
@@ -64,7 +58,7 @@ LateralLearners::LateralLearners(const SteeringParams &params, const std::string
       vehicle_restored_(init_.restored),
       vehicle_restore_rejected_(!vehicle_json.empty() && !init_.restored),
       bias_(init_.yaw_bias_rad_s),
-      vehicle_(constants_, init_.steer_ratio, init_.stiffness_factor, rad(init_.angle_offset_deg), options),
+      vehicle_(constants_, init_.steer_ratio, init_.stiffness_factor, init_.angle_offset_deg * kPi / 180.0, options),
       torque_(torque_tuning(params), params.steer_actuator_delay, torque_cache, params.use_locationd_learner_inputs) {}
 
 void LateralLearners::set_localizer(bool use, const LocalizerSample &sample) {

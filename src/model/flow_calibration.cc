@@ -4,9 +4,10 @@
 #include <cmath>
 #include <cstddef>
 
+#include "common/utils_math.h"
+
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr int kMinPoints = 50;
 constexpr int kMinInliers = 40;
 constexpr double kMaxRotation = 0.5 * kPi / 180.0;  // 창(0.4초) 동안. 곧은 길에서는 0.1° 안팎이다

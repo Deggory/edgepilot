@@ -150,15 +150,12 @@ void HudCanvas::clear(bool only_damaged) {
 }
 
 void HudCanvas::fill_rect(int x, int y, int w, int h, uint32_t color) {
-    const HudPoint a = to_buffer({static_cast<float>(x), static_cast<float>(y)});
-    const HudPoint b = to_buffer({static_cast<float>(x + w), static_cast<float>(y + h)});
-    fill_buffer_rect(static_cast<int>(std::min(a.x, b.x)), static_cast<int>(std::min(a.y, b.y)),
-                     static_cast<int>(std::max(a.x, b.x)), static_cast<int>(std::max(a.y, b.y)), color);
-}
-
-void HudCanvas::fill_buffer_rect(int x0, int y0, int x1, int y1, uint32_t color) {
-    x0 = std::max(0, x0), x1 = std::min(buffer_w_, x1);
-    y0 = std::max(0, y0), y1 = std::min(buffer_h_, y1);
+    const HudPoint p = to_buffer({static_cast<float>(x), static_cast<float>(y)});
+    const HudPoint q = to_buffer({static_cast<float>(x + w), static_cast<float>(y + h)});
+    const int x0 = std::max(0, static_cast<int>(std::min(p.x, q.x))),
+              x1 = std::min(buffer_w_, static_cast<int>(std::max(p.x, q.x)));
+    const int y0 = std::max(0, static_cast<int>(std::min(p.y, q.y))),
+              y1 = std::min(buffer_h_, static_cast<int>(std::max(p.y, q.y)));
     if (x0 >= x1) return;
     const uint32_t rgb = color & 0x00ffffffu, a = color >> 24;
     for (int yy = y0; yy < y1; ++yy) {

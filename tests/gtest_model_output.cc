@@ -138,7 +138,6 @@ TEST(ModelTemporal, Desire) {
     state.desire_input(pooled.data());
     ASSERT_EQ(pooled[last_pool + 3], 0.0f);
     ASSERT_EQ(pooled[last_pool - kDesireLen + 3], 1.0f);
-    ASSERT_EQ(state.traffic_convention(), (std::vector<float>{1.0f, 0.0f}));
 }
 
 // 특징: hidden_state 512개가 마지막 슬롯에 들어가고, 모델 입력은 0,4,...,92번

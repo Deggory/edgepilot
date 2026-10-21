@@ -37,7 +37,6 @@ public:
     SupercomboTemporalState()
         : desire_(kDesireLen, 0.0f),
           prev_desire_(kDesireLen, 0.0f),
-          traffic_convention_{1.0f, 0.0f},
           desire_history_(kDesireHistoryTicks * kDesireLen, 0.0f),
           feature_history_(kFeatureHistoryTicks * kModelFeatureLen, 0.0f) {}
 
@@ -102,7 +101,6 @@ public:
                         sizeof(float) * kModelFeatureLen);
         return ordered;
     }
-    const std::vector<float> &traffic_convention() const { return traffic_convention_; }
 
 private:
     // age 0 = 가장 오래된 칸, kFeatureHistoryTicks-1 = 최신. feature_head_는 다음에 쓸 칸(= 가장 오래된 칸).
@@ -113,7 +111,6 @@ private:
 
     std::vector<float> desire_;
     std::vector<float> prev_desire_;
-    std::vector<float> traffic_convention_;
     std::vector<float> desire_history_;
     std::vector<float> feature_history_;
     int feature_head_ = 0;
