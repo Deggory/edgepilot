@@ -28,12 +28,12 @@ def load(route: Path):
     for chunk in rr.iter_states(route, rr.RECORD_CONTROL_STATE, rr.RECORD_MODEL_STATE):
         control_ts, control = chunk[rr.RECORD_CONTROL_STATE]
         _, model = chunk[rr.RECORD_MODEL_STATE]
-        parts.append({"ts": control_ts, "control": control, "model_ts": model["capture_timestamp_ns"].copy()})
+        parts.append({"t": control_ts, "control": control, "model_t": model["capture_timestamp_ns"].copy()})
     v = rr.concat_chunks(parts)
     if not len(v["control"]):
         raise SystemExit(f"{route}: no control states")
-    t = (v["ts"].astype(np.int64) - int(v["ts"][0])) / 1e9
-    return t, v["control"], v["model_ts"]
+    t = (v["t"].astype(np.int64) - int(v["t"][0])) / 1e9
+    return t, v["control"], v["model_t"]
 
 
 def resample(t, values, grid):
@@ -60,10 +60,10 @@ def align(t_ref, v_ref, t_new, v_new):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("original", type=Path)
-    ap.add_argument("rehearsal", type=Path)
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("original", type=Path)
+    parser.add_argument("rehearsal", type=Path)
+    args = parser.parse_args()
 
     t_ref, c_ref, _ = load(args.original)
     t_new, c_new, model_ts = load(args.rehearsal)

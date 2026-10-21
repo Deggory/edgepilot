@@ -1,5 +1,5 @@
 """시험이 C++ 헤더의 고정값을 읽는 도우미. ipc_messages.h 등의 static_assert(sizeof), EDGEPILOT_<구조체>_AT
-오프셋과 constexpr 상수를 Python 쪽 배치와 대조할 때 쓴다(check_*.py가 같은 폴더에서 가져온다)."""
+오프셋, constexpr 상수·문자열·비트 플래그를 Python 쪽 배치와 대조할 때 쓴다(check_*.py가 같은 폴더에서 가져온다)."""
 
 import re
 from pathlib import Path
@@ -31,3 +31,15 @@ def cpp_constant(name: str, text: str = IPC) -> int:
     match = re.search(rf"constexpr \w+ {name} = (0x[0-9a-fA-F']+|[\d']+)(?:ULL|UL|U|LL|L)?;", text)
     assert match, name
     return int(match.group(1).replace("'", ""), 0)
+
+
+def cpp_string(name: str, text: str = IPC) -> str:
+    """constexpr char name[] = "값";의 값(토픽 이름 등)."""
+    match = re.search(rf'constexpr char {name}\[\] = "([^"]*)";', text)
+    assert match, name
+    return match.group(1)
+
+
+def cpp_flags(prefix: str, text: str = IPC) -> dict[str, int]:
+    """constexpr uint32_t <prefix><이름> = 1U << 비트;들의 {이름: 비트}, 선언 순서."""
+    return {name: int(bit) for name, bit in re.findall(rf"constexpr uint32_t {prefix}(\w+) = 1U << (\d+);", text)}

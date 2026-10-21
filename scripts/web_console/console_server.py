@@ -167,7 +167,7 @@ def create_app(stopping: Callable[[], bool]) -> FastAPI:
 
     @application.post("/api/panda/flash")
     def flash_panda(request: PandaFlashRequest) -> Dict[str, Any]:
-        return panda.request(request.version)
+        return panda.request_flash(request.version)
 
     @application.get("/api/recordings")
     def get_recordings() -> Dict[str, Any]:

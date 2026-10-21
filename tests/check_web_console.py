@@ -20,7 +20,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cpp_headers import cpp_constant, cpp_offsets, cpp_size  # noqa: E402
+from cpp_headers import cpp_constant, cpp_flags, cpp_offsets, cpp_size, cpp_string  # noqa: E402
 from scripts.web_console.bev_stream import BEV_FRAME, BEV_FRAME_MAGIC, BEV_IDLE_S, bev_frames, bev_layout
 from scripts.web_console.calibration_control import (
     CALIBRATION_RESET_PATH,
@@ -34,13 +34,11 @@ from scripts.web_console.learner_monitor import (
     LEARNER_FIELDS,
     LEARNER_FLAGS,
     LEARNER_STATE,
-    LEARNER_TOPIC,
     LEARNER_TREND_COLUMNS,
     LOCALIZATION_FIELDS,
     LOCALIZATION_FLAGS,
     LOCALIZATION_INPUT_FLAGS,
     LOCALIZATION_STATE,
-    LOCALIZATION_TOPIC,
     LearnerMonitor,
     LocalizationReader,
 )
@@ -52,7 +50,6 @@ from scripts.web_console.lateral_nn_models import (
     read_choice,
 )
 from scripts.web_console.panda_update import (
-    CONTROL_MAX_AGE_S,
     IMAGE_ERRORS,
     PANDA_APP_MAX_BYTES,
     PANDA_FLASHABLE_HW,
@@ -66,13 +63,12 @@ from scripts.web_console.panda_update import (
     panda_image_info,
 )
 from scripts.web_console.param_metadata import PARAM_GROUPS, PARAM_METADATA, RUNTIME_FACTS, VEHICLE_TAB
-from scripts.web_console.param_store import ParamStore, check_value, group_paths, read_document
+from scripts.web_console.param_store import ParamStore, group_paths, read_document
 from scripts.web_console.recordings import (
     MIN_FREE_BYTES,
     MIN_FREE_PERCENT,
     RECORD_ROOT,
     RECORD_STATE,
-    RECORD_STATE_TOPIC,
     ROUTE_NAME,
     STAGING_ROOT,
     STORAGE_BLOCKED,
@@ -81,7 +77,6 @@ from scripts.web_console.recordings import (
 from scripts.web_console.refusal import Refusal
 from scripts.web_console.process_status import (
     MANAGER_STATE_HEAD,
-    MANAGER_STATE_TOPIC,
     MAX_PROCESSES,
     PROCESS_STATE,
     VERSION_MARKER,
@@ -93,16 +88,21 @@ from scripts.web_console.shm_channel import IPC_HEADER, IPC_MAGIC, IPC_VERSION, 
 from scripts.web_console.state_layout import (
     CONTROL_FORMATS,
     CONTROL_STATE_AT,
+    CONTROL_STATE_MAX_AGE_S,
     CONTROL_STATE_SIZE,
     CONTROL_STATE_TOPIC,
     GEAR_PARK,
     HUD_FLAG_BITS,
+    LEARNER_STATE_TOPIC,
+    LOCALIZATION_STATE_TOPIC,
+    MANAGER_STATE_TOPIC,
     MODEL_CALIBRATION_AT,
     MODEL_CALIBRATION_SOURCE_AT,
     MODEL_FLOW_CALIBRATION_AT,
     MODEL_STATE_AT,
     MODEL_STATE_SIZE,
     MODEL_STATE_TOPIC,
+    RECORD_STATE_TOPIC,
 )
 from scripts.web_console.static_assets import STATIC_DIR, StaticAssets
 
@@ -673,10 +673,9 @@ class LearnerStateTest(unittest.TestCase):
         self.assertGreaterEqual(len(asserted), 8)
         for name, expected in asserted.items():
             self.assertEqual(offsets[name], expected, name)
-        bits = re.findall(r"constexpr uint32_t kLearner(\w+) = 1U << (\d+);", cpp())
-        self.assertEqual([snake(name) for name, _ in bits], list(LEARNER_FLAGS))
-        self.assertEqual([int(bit) for _, bit in bits], list(range(len(LEARNER_FLAGS))))
-        self.assertIn(f'kLearnerStateTopic[] = "{LEARNER_TOPIC}";', cpp())
+        bits = cpp_flags("kLearner")
+        self.assertEqual([snake(name) for name in bits], list(LEARNER_FLAGS))
+        self.assertEqual(list(bits.values()), list(range(len(LEARNER_FLAGS))))
 
     def monitor(self) -> LearnerMonitor:
         return LearnerMonitor(str(self.path))
@@ -797,12 +796,11 @@ class LocalizationStateTest(unittest.TestCase):
         declared = [(kind, name, int(count or 1)) for kind, name, count in
                     re.findall(r"(uint64_t|uint32_t|int32_t|float) (\w+)(?:\[(\d+)\])?", body)]
         self.assertEqual(fields, declared)
-        flags = re.findall(r"constexpr uint32_t kLocalization(\w+) = 1U << (\d+);", cpp())
-        state_flags = [int(bit) for name, bit in flags if not name.startswith(("Invalid", "CameraGuarded"))]
-        input_flags = [int(bit) for name, bit in flags if name.startswith(("Invalid", "CameraGuarded"))]
+        flags = cpp_flags("kLocalization")
+        state_flags = [bit for name, bit in flags.items() if not name.startswith(("Invalid", "CameraGuarded"))]
+        input_flags = [bit for name, bit in flags.items() if name.startswith(("Invalid", "CameraGuarded"))]
         self.assertEqual(state_flags, list(range(len(LOCALIZATION_FLAGS))))
         self.assertEqual(input_flags, list(range(len(LOCALIZATION_INPUT_FLAGS))))
-        self.assertIn(f'kLocalizationStateTopic[] = "{LOCALIZATION_TOPIC}";', cpp())
 
     def test_reader_decodes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -861,12 +859,9 @@ class CalibrationControlTest(unittest.TestCase):
         for field, at in (("flow_calibration", MODEL_FLOW_CALIBRATION_AT),
                           ("calibration_source", MODEL_CALIBRATION_SOURCE_AT)):
             self.assertEqual(int(re.search(rf"offsetof\(ModelState, {field}\) == (\d+)", cpp()).group(1)), at, field)
-        flow_size = int(re.search(r"sizeof\(FlowCalibrationState\) == (\d+)", cpp()).group(1))
-        self.assertEqual(FLOW_CALIBRATION_STATE.size, flow_size)
-        self.assertEqual(CALIBRATION_SOURCE_STATE.size,
-                         int(re.search(r"sizeof\(CalibrationSourceState\) == (\d+)", cpp()).group(1)))
-        for name, bit in (("FlowUsable", 0), ("Pending", 1), ("Ramping", 2)):
-            self.assertIn(f"kCalibrationSource{name} = 1u << {bit};", cpp())
+        self.assertEqual(FLOW_CALIBRATION_STATE.size, cpp_size("FlowCalibrationState"))
+        self.assertEqual(CALIBRATION_SOURCE_STATE.size, cpp_size("CalibrationSourceState"))
+        self.assertEqual(cpp_flags("kCalibrationSource"), {"FlowUsable": 0, "Pending": 1, "Ramping": 2})
         service = cpp(ROOT / "src" / "model" / "calibration_service.cc")
         self.assertRegex(service, rf'"EDGEPILOT_CALIBRATION_RESET_PATH",\s*"{re.escape(CALIBRATION_RESET_PATH)}"')
 
@@ -1062,7 +1057,6 @@ class RecordingsTest(unittest.TestCase):
         self.assertIn('"%Y-%m-%d--%H-%M-%S") << \'-\' << std::setw(3)', writer)
         self.assertTrue(ROUTE_NAME.fullmatch(self.OLD))
         header = cpp()
-        self.assertIn(f'kRecordStateTopic[] = "{RECORD_STATE_TOPIC}";', header)
         fields = re.search(r"struct RecordState \{(.*?)\};", header, re.S).group(1)
         self.assertEqual(re.findall(r"(uint\d+_t) (\w+)", fields),
                          [("uint64_t", "timestamp_ns"), ("uint32_t", "active"), ("uint32_t", "storage_blocked")])
@@ -1168,7 +1162,7 @@ class PandaUpdateTest(unittest.TestCase):
         # 플래싱 조건(panda_flash_allowed)과 지원 보드(panda_hw_type_flashable)도 같아야 한다
         firmware = cpp(ROOT / "src" / "panda" / "panda_firmware.cc")
         max_age_ns = int(re.search(r"kControlMaxAgeNs = ([\d']+)ULL;", firmware).group(1).replace("'", ""))
-        self.assertEqual(max_age_ns, round(CONTROL_MAX_AGE_S * 1e9))
+        self.assertEqual(max_age_ns, round(CONTROL_STATE_MAX_AGE_S * 1e9))
         self.assertEqual(float(re.search(r"kParkedMaxSpeedKph = ([\d.]+)f;", firmware).group(1)), PARKED_MAX_SPEED_KPH)
         flashable = re.search(r"return (hw_type == kPandaHw\w+(?: \|\| hw_type == kPandaHw\w+)*);", firmware).group(1)
         hw = {name: int(value) for name, value in re.findall(r"kPandaHw(\w+) = (\d+);", protocol)}
@@ -1203,7 +1197,7 @@ class PandaUpdateTest(unittest.TestCase):
         self.assertEqual(status["blocker"], "not_park")
         self.assertFalse(status["up_to_date"])
         with self.assertRaises(Refusal) as refused:
-            self.panda.request("EDGE-f9907afb-DEBUG")
+            self.panda.request_flash("EDGE-f9907afb-DEBUG")
         self.assertEqual(refused.exception.detail(), {"code": "panda.reason.not_park"})
         self.assertFalse(self.request.exists())
         for blocker, kwargs in (("moving", {"speed": 3.0}), ("engaged", {"engaged": 1}),
@@ -1214,29 +1208,29 @@ class PandaUpdateTest(unittest.TestCase):
 
         self.publish_control()
         with self.assertRaises(Refusal):
-            self.panda.request("EDGE-00000000-DEBUG")  # 페이지가 본 이미지가 아니다
-        status = self.panda.request("EDGE-f9907afb-DEBUG")
+            self.panda.request_flash("EDGE-00000000-DEBUG")  # 페이지가 본 이미지가 아니다
+        status = self.panda.request_flash("EDGE-f9907afb-DEBUG")
         self.assertTrue(status["request_pending"])
         self.assertEqual(self.request.read_text(), "EDGE-f9907afb-DEBUG\n")
         with self.assertRaises(Refusal):
-            self.panda.request("EDGE-f9907afb-DEBUG")  # 이미 요청했다
+            self.panda.request_flash("EDGE-f9907afb-DEBUG")  # 이미 요청했다
 
     def test_flash_needs_a_running_pandad_and_a_panda(self):
         self.image.write_bytes(panda_image())
         self.publish_control()
         with self.assertRaises(Refusal) as refused:
-            self.panda.request("EDGE-f9907afb-DEBUG")
+            self.panda.request_flash("EDGE-f9907afb-DEBUG")
         self.assertEqual(refused.exception.code, "error.pandad_missing")
         self.publish_pandad(stamp=boottime_ns() - 10_000_000_000)
         stale = self.panda.status()
         self.assertEqual((stale["available"], stale["stale"], stale["mode"]), (True, True, "none"))
         self.publish_pandad(mode="none", version="")
         with self.assertRaises(Refusal):
-            self.panda.request("EDGE-f9907afb-DEBUG")
+            self.panda.request_flash("EDGE-f9907afb-DEBUG")
         self.publish_pandad(hw_type=7)
         self.assertFalse(self.panda.status()["hw_supported"])
         with self.assertRaises(Refusal) as refused:
-            self.panda.request("EDGE-f9907afb-DEBUG")
+            self.panda.request_flash("EDGE-f9907afb-DEBUG")
         self.assertEqual(refused.exception.code, "panda.reason.hw_unsupported")
         # 앱이 서지 않은 bootstub 판다는 CAN을 넘기지 않아 차 상태가 낡지만, 차 상태 없이 다시 쓸 수 있다
         self.publish_control(vehicle_fresh=0, gear=5, speed=40.0)
@@ -1246,7 +1240,7 @@ class PandaUpdateTest(unittest.TestCase):
         self.assertEqual(self.panda.status()["blocker"], "engaged")
         self.publish_control(vehicle_fresh=0, stamp=boottime_ns() - 5_000_000_000)
         self.assertEqual(self.panda.status()["blocker"], "")
-        self.assertTrue(self.panda.request("EDGE-f9907afb-DEBUG")["request_pending"])
+        self.assertTrue(self.panda.request_flash("EDGE-f9907afb-DEBUG")["request_pending"])
 
     def test_status_reports_flash_progress(self):
         self.publish_pandad(version="EDGE-f9907afb-DEBUG",
@@ -1270,7 +1264,6 @@ class ProcessStatusTest(unittest.TestCase):
                          (cpp_constant("kIpcMagic"), cpp_constant("kIpcVersion"), cpp_size("IpcHeader")))
         self.assertEqual((PROCESS_STATE.size, MAX_PROCESSES), (cpp_size("ProcessState"), cpp_constant("kMaxProcesses")))
         self.assertLessEqual(MANAGER_STATE_HEAD.size + PROCESS_STATE.size * MAX_PROCESSES, cpp_size("ManagerState"))
-        self.assertIn(f'kManagerStateTopic[] = "{MANAGER_STATE_TOPIC}";', cpp())
 
     @staticmethod
     def publish_processes(path, entries, stamp=None):
@@ -1359,11 +1352,14 @@ class BevTest(unittest.TestCase):
         control = cpp_offsets("CONTROL_STATE")
         for name, at in CONTROL_STATE_AT.items():
             self.assertEqual(control.get(name), at, name)
-        flags = {name: int(bit) for name, bit in re.findall(r"constexpr uint32_t kHudFlag(\w+) = 1U << (\d+);", cpp())}
+        flags = cpp_flags("kHudFlag")
         for name, bit in HUD_FLAG_BITS.items():
             self.assertEqual(flags.get(name), bit, name)
-        self.assertIn(f'kModelStateTopic[] = "{MODEL_STATE_TOPIC}";', cpp())
-        self.assertIn(f'kControlStateTopic[] = "{CONTROL_STATE_TOPIC}";', cpp())
+        topics = {"ModelState": MODEL_STATE_TOPIC, "ControlState": CONTROL_STATE_TOPIC,
+                  "LearnerState": LEARNER_STATE_TOPIC, "LocalizationState": LOCALIZATION_STATE_TOPIC,
+                  "RecordState": RECORD_STATE_TOPIC, "ManagerState": MANAGER_STATE_TOPIC}
+        for name, topic in topics.items():
+            self.assertEqual(cpp_string(f"k{name}Topic"), topic, name)
         layout = bev_layout()
         self.assertEqual((layout["model"]["size"], layout["control"]["size"]), (MODEL_STATE_SIZE, CONTROL_STATE_SIZE))
 

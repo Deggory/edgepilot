@@ -78,7 +78,7 @@ export function createLateralNnCard() {
   };
   const card = pollingCard(t("lateral_nn.card"), {url: "/api/lateral_nn", intervalMs: 2000, render});
 
-  onParamsChanged(() => card.redraw());
+  onParamsChanged(() => card.refresh());
   return {element: section(t("lateral_nn.section"), [card.element]), after: "torque_controller",
           start: card.start, stop: card.stop};
 }

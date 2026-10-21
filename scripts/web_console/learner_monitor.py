@@ -10,8 +10,9 @@ import time
 from typing import Any, Dict
 
 from .shm_channel import IpcReader, flag_names, freshness, struct_layout, topic_path, unpack_fields
+from .state_layout import (LEARNER_STATE_MAX_AGE_S, LEARNER_STATE_TOPIC, LOCALIZATION_STATE_MAX_AGE_S,
+                           LOCALIZATION_STATE_TOPIC)
 
-LEARNER_TOPIC = "/edgepilot_learner_state"
 LEARNER_FIELDS = (
     ("timestamp_ns", "Q"), ("flags", "I"),
     ("steer_ratio", "f"), ("stiffness_factor", "f"), ("roll_rad", "f"),
@@ -35,14 +36,12 @@ LEARNER_FLAGS = (  # ipc_messages.h kLearner* 비트 순서
 LEARNER_HISTORY_S = 600
 # 추이 행 사이의 최소 간격. 1초 스레드 말고 요청도 sample을 불러서, 새 발행마다 행을 쌓으면 10분 창이 3~5분만 남았다.
 LEARNER_TREND_STEP_S = 0.9
-LEARNER_MAX_AGE_S = 2.0  # controlsd는 약 20 Hz로 낸다
 GRAVITY = 9.81  # 편경사 롤 환산. 페이지(vehicle_view.js GRAVITY)도 같은 값과 식이다(check_web_console.py가 대조)
 # 추이 행의 열 순서: 시각(s), 조향비, 영점 평균·합계(°), 롤과 편경사 롤 환산(°), 토크 배율 원시·필터. 페이지가 같은
 # 이름(vehicle_view.js TREND_COLUMNS)으로 열을 찾는다(check_web_console.py가 대조).
 LEARNER_TREND_COLUMNS = ("time_s", "steer_ratio", "angle_offset_average_deg", "angle_offset_deg", "roll_deg",
                          "bank_roll_deg", "lat_accel_factor_raw", "lat_accel_factor")
 
-LOCALIZATION_TOPIC = "/edgepilot_localization"
 LOCALIZATION_FIELDS = (
     ("timestamp_ns", "Q"), ("flags", "I"), ("lag_status", "I"),
     ("orientation_calib", "3f"), ("orientation_std", "3f"),
@@ -56,7 +55,6 @@ LOCALIZATION_FLAGS = (  # ipc_messages.h kLocalization* 비트 순서
     "filter_valid", "inputs_ok", "sensors_ok", "posenet_ok", "calib_valid", "lag_restored",
 )
 LOCALIZATION_INPUT_FLAGS = ("accel_invalid", "gyro_invalid", "camera_invalid", "camera_guarded")
-LOCALIZATION_MAX_AGE_S = 2.0  # locationd는 약 10 Hz로 낸다
 
 
 def decode_learner_state(payload: bytes) -> Dict[str, Any]:
@@ -82,7 +80,7 @@ def learner_trend_row(state: Dict[str, Any]) -> list[float]:
 class LearnerMonitor:
     """1초마다 최신 학습 상태를 읽어 10분 추이를 남긴다. 탭을 늦게 열어도 추이가 보인다."""
 
-    def __init__(self, path: str = topic_path(LEARNER_TOPIC)):
+    def __init__(self, path: str = topic_path(LEARNER_STATE_TOPIC)):
         self.reader = IpcReader(path, LEARNER_STATE.size)
         self.lock = threading.Lock()
         self.history: collections.deque = collections.deque()  # 개수가 아니라 시각으로 자른다
@@ -123,7 +121,7 @@ class LearnerMonitor:
         상태가 없거나 낡으면(controlsd가 없거나 멈춤) 런타임 사실은 None이다. 페이지는 폴링할 때마다 runtime으로
         안내를 갱신한다."""
         latest = self.sample()
-        result: Dict[str, Any] = freshness(latest[0] if latest else None, LEARNER_MAX_AGE_S)
+        result: Dict[str, Any] = freshness(latest[0] if latest else None, LEARNER_STATE_MAX_AGE_S)
         if latest is not None:
             result.update(state=latest[1], trend_row=learner_trend_row(latest[1]))
         fresh = None if result["stale"] else result["state"]
@@ -137,12 +135,11 @@ class LearnerMonitor:
 class LocalizationReader(IpcReader):
     """locationd의 LocalizationState(자세 칼만 필터와 lagd 조향 지연)."""
 
-    def __init__(self, path: str = topic_path(LOCALIZATION_TOPIC)):
+    def __init__(self, path: str = topic_path(LOCALIZATION_STATE_TOPIC)):
         super().__init__(path, LOCALIZATION_STATE.size)
 
     def status(self) -> Dict[str, Any]:
-        latest = self.read_payload()
-        result: Dict[str, Any] = freshness(latest[1] if latest else None, LOCALIZATION_MAX_AGE_S)
-        if latest is not None:
-            result["state"] = decode_localization_state(latest[2])
+        result, payload = self.read_status(LOCALIZATION_STATE_MAX_AGE_S)
+        if payload is not None:
+            result["state"] = decode_localization_state(payload)
         return result

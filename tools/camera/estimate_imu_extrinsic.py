@@ -9,6 +9,7 @@ roll은 모델 pose의 롤 성분 오차가 커서 route마다 1° 정도 흔들
 
 사용: estimate_imu_extrinsic.py <route_dir>...
 """
+import argparse
 import math
 import sys
 from pathlib import Path
@@ -75,11 +76,10 @@ def estimate(route: Path):
     return (gr - cr + w_roll) / 2, (gp - cp + w_pitch) / 2
 
 
-def main(argv):
-    if not argv:
-        print(__doc__)
-        return 2
-    results = [estimate(Path(route)) for route in argv]
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("routes", nargs="+", type=Path)
+    results = [estimate(route) for route in parser.parse_args().routes]
     roll = np.mean([r for r, _ in results])
     pitch = np.mean([p for _, p in results])
     print(f"mean over {len(results)} route(s): roll {roll:+.2f} deg, pitch {pitch:+.2f} deg")
@@ -87,4 +87,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

@@ -22,6 +22,7 @@
       보드의 run_axmodel_assembled.py가 읽는 frame-major .npy이고, 같은 입력의 fp32 출력(ref.npy)과
       프레임 시각(t.npy)도 함께 낸다.
 """
+import argparse
 import io
 import json
 import sys
@@ -176,13 +177,24 @@ def cmd_eval(spec: dict, route: str, segs: str, t_from: float, t_to: float, out_
 
 
 def main():
-    spec = json.loads(Path(sys.argv[2]).read_text())
-    if sys.argv[1] == "calib":
-        cmd_calib(spec, Path(sys.argv[3]))
-    elif sys.argv[1] == "eval":
-        cmd_eval(spec, sys.argv[3], sys.argv[4], float(sys.argv[5]), float(sys.argv[6]), Path(sys.argv[7]))
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    calib = commands.add_parser("calib")
+    calib.add_argument("spec", type=Path)
+    calib.add_argument("out_dir", type=Path)
+    evaluate = commands.add_parser("eval")
+    evaluate.add_argument("spec", type=Path)
+    evaluate.add_argument("route")
+    evaluate.add_argument("segs", help="<seg>[,<seg>...]")
+    evaluate.add_argument("t_from", type=float, metavar="from")
+    evaluate.add_argument("t_to", type=float, metavar="to")
+    evaluate.add_argument("out_dir", type=Path)
+    args = parser.parse_args()
+    spec = json.loads(args.spec.read_text())
+    if args.command == "calib":
+        cmd_calib(spec, args.out_dir)
     else:
-        sys.exit(__doc__)
+        cmd_eval(spec, args.route, args.segs, args.t_from, args.t_to, args.out_dir)
 
 
 if __name__ == "__main__":

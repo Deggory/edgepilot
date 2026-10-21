@@ -534,7 +534,7 @@ export function createVehicleView() {
   };
 
   // 읽지 못하면 위의 알림과 함께 값과 보정 카드도 "상태 없음"으로 돌린다(옛 값이 살아 있는 것처럼 보이지 않게)
-  const failed = error => {
+  const fail = error => {
     notice.replaceChildren(el("p.group-note.warn", {text: t("vehicle.learners_failed", {error: error.message})}));
     groups.forEach(group => group.update(null));
     calibration.fail(error);
@@ -551,7 +551,7 @@ export function createVehicleView() {
       const data = await api.get("/api/learners");
       if (isCurrent()) update(data);
     } catch (error) {
-      if (isCurrent()) failed(error);
+      if (isCurrent()) fail(error);
     }
   }, 1000);
 

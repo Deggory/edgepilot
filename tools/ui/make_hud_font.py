@@ -8,7 +8,7 @@ Pillow 밖의 것이 필요 없고 결과를 커밋해도 된다. 굵은 글씨�
 바이트당 화소 두 개씩 글리프를 차례로 저장하고, C++ 쪽(hud_font.cc)이 컴파일할 때 8비트로 늘린다.
 """
 
-import sys
+import argparse
 from pathlib import Path
 from typing import NamedTuple
 
@@ -67,8 +67,10 @@ def hex_rows(data: bytes, per_row: int = 24) -> str:
 
 
 def main() -> None:
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-        Path(__file__).resolve().parents[2] / "src" / "hud" / "hud_font_data.inc"
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("out", type=Path, nargs="?",
+                        default=Path(__file__).resolve().parents[2] / "src" / "hud" / "hud_font_data.inc")
+    out = parser.parse_args().out
     parts = ["// tools/ui/make_hud_font.py가 Pillow 기본 글꼴(Aileron Regular, CC0)로 만든 파일이다.\n"
              "// 고치지 말고 스크립트를 다시 돌린다. hud_font.cc만 include한다.\n"]
     for spec in SPECS:

@@ -13,6 +13,6 @@ inline void for_each_tile_run(uint32_t tiles, Run run) {
         const int first = __builtin_ctz(tiles);
         const int end = first + __builtin_ctz(~(tiles >> first));
         run(first, end);
-        tiles &= ~((1u << end) - (1u << first));
+        tiles &= ~((1U << end) - (1U << first));
     }
 }

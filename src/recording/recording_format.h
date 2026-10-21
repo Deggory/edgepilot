@@ -12,7 +12,7 @@ constexpr uint32_t kRecordingVersion = 14;
 
 constexpr char kEventLogMagic[8] = {'E', 'D', 'G', 'E', 'L', 'O', 'G', '1'};
 constexpr char kFrameIndexMagic[8] = {'E', 'D', 'G', 'E', 'I', 'D', 'X', '1'};
-constexpr uint32_t kFrameIndexKeyframe = 1u << 0;  // FrameIndexRecord.flags: 키프레임(IDR)
+constexpr uint32_t kFrameIndexKeyframe = 1U << 0;  // FrameIndexRecord.flags: 키프레임(IDR)
 
 // 세그먼트 영상은 H.264(segments/NNN/road.h264, manifest의 video_codec "h264")다. 보드 디코더가
 // H.264를 풀어 녹화를 그대로 리허설에 쓴다.

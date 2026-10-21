@@ -24,7 +24,7 @@ except ModuleNotFoundError:
     sys.exit(77)
 
 import model_warp  # noqa: E402
-from cpp_headers import IPC, cpp_offsets, cpp_size, pinned  # noqa: E402
+from cpp_headers import IPC, cpp_flags, cpp_offsets, cpp_size, pinned  # noqa: E402
 import recording_reader as rr  # noqa: E402
 
 FORMAT = (ROOT / "src" / "recording" / "recording_format.h").read_text(encoding="utf-8")
@@ -97,8 +97,7 @@ class RecordingReaderLayout(unittest.TestCase):
         self.assertEqual(dtype_fields(rr.CALIBRATION_SOURCE_STATE), struct_fields("CalibrationSourceState", IPC))
         self.assertEqual(dtype_fields(rr.LEAD_FLOW_STATE), struct_fields("LeadFlowState", IPC))
         self.assertEqual(dtype_fields(rr.LEAD_TRACK_STATE), struct_fields("LeadTrackState", IPC))
-        bits = re.findall(r"constexpr uint32_t kLeadTrack(\w+) = 1u << (\d+);", IPC)
-        flags = {name: 1 << int(bit) for name, bit in bits}
+        flags = {name: 1 << bit for name, bit in cpp_flags("kLeadTrack").items()}
         self.assertEqual(flags, {"FlowUsed": rr.LEAD_TRACK_FLOW_USED, "FlowRejected": rr.LEAD_TRACK_FLOW_REJECTED,
                                  "DistanceRejected": rr.LEAD_TRACK_DISTANCE_REJECTED, "Started": rr.LEAD_TRACK_STARTED})
 
@@ -253,7 +252,7 @@ class LaneBenchmark(unittest.TestCase):
 
     def test_lane_change_flag_is_the_runtime_bit(self):
         import lane_benchmark as lb
-        self.assertEqual(lb.HUD_LANE_CHANGING, 1 << pinned(r"kHudFlagLaneChanging = 1U << (\d+);"))
+        self.assertEqual(lb.HUD_LANE_CHANGING, 1 << cpp_flags("kHudFlag")["LaneChanging"])
 
 class CameraIntrinsics(unittest.TestCase):
     def test_maixcam2_matches_app_config(self):

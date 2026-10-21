@@ -73,7 +73,7 @@ ReplayRoute::~ReplayRoute() {
 
 ReplayEvents::ReplayEvents(const std::string &route_dir, uint64_t from_ns, std::initializer_list<RecordType> types)
     : from_ns_(from_ns) {
-    for (const RecordType type : types) types_ |= 1u << static_cast<unsigned>(type);
+    for (const RecordType type : types) types_ |= 1U << static_cast<unsigned>(type);
     std::vector<std::string> paths = numbered_entries(route_dir + "/events", ".bin");
     // 청크는 시각 순이다. 첫 레코드가 from_ns - kLeadNs 이전인 마지막 청크부터 읽는다: 레코드는 파일에 늦어도
     // 0.5초 안에 쓰이므로 그 앞 청크에 from_ns 이후의 레코드는 없다.

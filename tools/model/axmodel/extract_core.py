@@ -13,12 +13,18 @@
 
 fp16 가중치/cast는 fp32로 올린다(Pulsar2는 fp32에서 양자화한다).
 """
+import argparse
 import sys
+
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper, utils
 
-src, dst = sys.argv[1], sys.argv[2]
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("src", help="driving_supercombo.onnx")
+parser.add_argument("dst", help="core_fp32.onnx")
+args = parser.parse_args()
+src, dst = args.src, args.dst
 tmp = dst + ".tmp.onnx"
 cut = {"_unsafe_view": "input_imgs", "_unsafe_view_1": "big_input_imgs", "transpose": "desire",
        "transpose_1": "features_buffer", "traffic_convention": "traffic_convention"}

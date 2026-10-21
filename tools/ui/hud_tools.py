@@ -41,8 +41,8 @@ def scan(route: Path) -> tuple[list[Path], dict[str, np.ndarray], dict[str, np.n
         chunk = chunk_states(path, RECORD_CONTROL_STATE, RECORD_MODEL_STATE)
         control_ts, control = chunk[RECORD_CONTROL_STATE]
         model_ts, model = chunk[RECORD_MODEL_STATE]
-        controls.append({"ts": control_ts, "state": control})
-        models.append({"ts": model_ts, "chunk": np.full(len(model), n), "row": np.arange(len(model)),
+        controls.append({"t": control_ts, "state": control})
+        models.append({"t": model_ts, "chunk": np.full(len(model), n), "row": np.arange(len(model)),
                        "frame_id": model["frame_id"].astype(np.int64),
                        "lanes": model["lane_probabilities"].astype(float),
                        "lead_valid": model["lead"]["valid"].astype(np.int64)})
@@ -61,9 +61,9 @@ def score(control: np.ndarray, lanes: np.ndarray, lead_valid: np.ndarray) -> np.
 
 def cmd_inputs(args: argparse.Namespace) -> int:
     paths, controls, models = scan(args.route)
-    if not len(controls["ts"]) or not len(models["ts"]):
+    if not len(controls["t"]) or not len(models["t"]):
         sys.exit("route has no control/model records")
-    control_ts, model_ts = controls["ts"], models["ts"]
+    control_ts, model_ts = controls["t"], models["t"]
 
     if args.time is not None:
         target = int(model_ts[0]) + int(args.time * 1e9)

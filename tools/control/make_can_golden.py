@@ -13,6 +13,7 @@ tests/gtest_car.cc가 edgepilot의 hyundai_can과 대조한다(체크섬, 비트
 - MDPS12: openpilot 0.8 커뮤니티 create_mdps12(ToiActive 0, ToiUnavail 1, MsgCount2 = frame % 256, 바이트 합 체크섬).
 - 토크 제한: opendbc apply_driver_steer_torque_limits, K7 값(params/steering.json 기본값).
 """
+import argparse
 import importlib.abc
 import importlib.machinery
 import importlib.util
@@ -149,9 +150,9 @@ def hexes(data: bytes) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        sys.exit(__doc__.split("\n\n")[1])
-    repo = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("opendbc", type=Path, help="opendbc 저장소(opendbc_repo)")
+    repo = parser.parse_args().opendbc.resolve()
     packer, lateral = load_opendbc(repo)
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True,
                             text=True).stdout.strip() or "unknown"

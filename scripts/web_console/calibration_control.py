@@ -12,9 +12,10 @@ from typing import Any, Dict
 from .files import env_path
 from .param_store import ParamStore
 from .refusal import Refusal
-from .shm_channel import IpcReader, flag_names, freshness, struct_layout, topic_path, unpack_fields
-from .state_layout import (CONTROL_MAX_AGE_S, CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, MODEL_CALIBRATION_AT,
-                           MODEL_CALIBRATION_SOURCE_AT, MODEL_FLOW_CALIBRATION_AT, MODEL_STATE_TOPIC, control_engaged)
+from .shm_channel import IpcReader, flag_names, struct_layout, topic_path, unpack_fields
+from .state_layout import (CONTROL_STATE_MAX_AGE_S, CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, MODEL_CALIBRATION_AT,
+                           MODEL_CALIBRATION_SOURCE_AT, MODEL_FLOW_CALIBRATION_AT, MODEL_STATE_MAX_AGE_S,
+                           MODEL_STATE_TOPIC, control_engaged)
 
 # modeld(calibration_service.cc)와 같은 변수로 바꿀 수 있다
 CALIBRATION_RESET_PATH = "/dev/shm/edgepilot_calibration_reset"
@@ -37,7 +38,6 @@ FLOW_STATUS = ("off", "collecting", "estimate")  # ipc_messages.h FlowCalibratio
 CALIBRATION_SOURCES = ("pose", "flow")  # ipc_messages.h CalibrationSource
 SOURCE_FLAGS = ("flow_usable", "switch_pending", "ramping")  # ipc_messages.h kCalibrationSource* 비트 순서
 SOURCE_GROUP, SOURCE_KEY = "display", "calibration_use_flow"  # 보정 출처 설정(modeld ModeldSettings가 읽는다)
-MODEL_MAX_AGE_S = 2.0  # 모델 상태는 20 Hz로 나온다
 
 
 def status_name(names: tuple, value: int) -> str:
@@ -62,7 +62,7 @@ class CalibrationControl:
 
     def engaged(self) -> bool:
         """controlsd가 살아 있고 결합 중이면 True. controlsd가 없거나 멈췄으면 조향도 없다."""
-        latest = self.control.read_fresh(CONTROL_MAX_AGE_S)
+        latest = self.control.read_fresh(CONTROL_STATE_MAX_AGE_S)
         return latest is not None and control_engaged(latest[2])
 
     def use_flow(self) -> bool:
@@ -70,16 +70,10 @@ class CalibrationControl:
         return self.store.read_group(SOURCE_GROUP)[SOURCE_KEY]
 
     def status(self) -> Dict[str, Any]:
-        latest = self.model.read_payload()
-        result: Dict[str, Any] = {
-            **freshness(latest[1] if latest else None, MODEL_MAX_AGE_S),
-            "engaged": self.engaged(),
-            "reset_pending": self.request_path.exists(),
-            "use_flow": self.use_flow(),
-        }
-        if latest is None:
+        result, payload = self.model.read_status(MODEL_STATE_MAX_AGE_S)
+        result.update(engaged=self.engaged(), reset_pending=self.request_path.exists(), use_flow=self.use_flow())
+        if payload is None:
             return result
-        payload = latest[2]
         pose = unpack_fields(CALIBRATION_STATE, CALIBRATION_FIELDS, payload, MODEL_CALIBRATION_AT)
         flow = unpack_fields(FLOW_CALIBRATION_STATE, FLOW_CALIBRATION_FIELDS, payload, MODEL_FLOW_CALIBRATION_AT)
         source = unpack_fields(CALIBRATION_SOURCE_STATE, CALIBRATION_SOURCE_FIELDS, payload,

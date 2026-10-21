@@ -97,11 +97,28 @@ clang-format --dry-run --Werror $(git ls-files '*.cc' '*.h' | grep -v '^firmware
 PEP 8 with 4-space indent and lines up to 120 columns. A module starts with a
 docstring that says what it is for.
 
+- A tool reads its command line with `argparse`. The parser takes
+  `description=__doc__` and `RawDescriptionHelpFormatter`, so `--help`
+  shows the module docstring.
+- A route loader keys a time array `<x>_t` and other columns by the C++
+  field they come from (`desired_curvature`, not `desired_curv`).
+- The web console's shared-memory topics and the age each state is trusted
+  for are `<STRUCT>_TOPIC` and `<STRUCT>_MAX_AGE_S` in `state_layout.py`. A
+  status that reports freshness reads with `IpcReader.read_status()`; a
+  check that needs a fresh state uses `read_fresh()`.
+- A test that compares Python with a C++ header reads it with
+  `tests/cpp_headers.py` (`cpp_size`, `cpp_offsets`, `cpp_constant`,
+  `cpp_string`, `cpp_flags`). C++ bit flags are written `1U << n`.
+
 ## JavaScript
 
 The web console's page is plain ES modules with no build step. It uses 2-space
 indent and `//` comments. No formatter is applied, so follow the code around
 the change. `static/three/` is vendored.
+
+A card or view is an object `{element, start, stop}`. It draws new data with
+`update()`, shows a failed read with `fail()`, and draws its last state again
+with `refresh()`.
 
 Every text on screen goes through `t(key, values)` from `static/i18n.js`, and
 lives in `static/i18n/ko.json` and `en.json` under the same key:

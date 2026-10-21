@@ -193,9 +193,9 @@ struct CalibrationSourceState {
 };
 static_assert(sizeof(CalibrationSourceState) == 32, "CalibrationSourceState is recorded as-is");
 enum class CalibrationSource : uint32_t { Pose = 0, Flow = 1 };  // 모델 포즈 보정기, 광류 보정기
-constexpr uint32_t kCalibrationSourceFlowUsable = 1u << 0;       // 광류 추정을 워프에 쓸 수 있다
-constexpr uint32_t kCalibrationSourcePending = 1u << 1;          // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
-constexpr uint32_t kCalibrationSourceRamping = 1u << 2;          // 워프가 새 목표로 천천히 옮겨 가는 중
+constexpr uint32_t kCalibrationSourceFlowUsable = 1U << 0;       // 광류 추정을 워프에 쓸 수 있다
+constexpr uint32_t kCalibrationSourcePending = 1U << 1;          // 설정이 바뀌었지만 결합 중이라 해제를 기다린다
+constexpr uint32_t kCalibrationSourceRamping = 1U << 2;          // 워프가 새 목표로 천천히 옮겨 가는 중
 
 // 앞차 확대율(녹화 v12부터, model/lead_flow). 모델 앞차 상자 안의 점을 광류로 따라가 창(약 0.5초) 동안의 크기 비를
 // 잰다. 상대 속도(거리 변화율)는 -lead_x * expansion_rate(m/s, 음수면 가까워진다),
@@ -214,10 +214,10 @@ static_assert(sizeof(LeadFlowState) == 32, "LeadFlowState is recorded as-is");
 
 // 앞차 추적(녹화 v13부터, model/lead_tracker). 모델 앞차 거리와 광류 확대율을 칼만 필터로 섞은 거리와
 // 상대 속도. 비전 크루즈가 쓴다(controls_tick observe_cruise_lead).
-constexpr uint32_t kLeadTrackFlowUsed = 1u << 0;          // 이 프레임에 확대율을 넣었다
-constexpr uint32_t kLeadTrackFlowRejected = 1u << 1;      // 확대율이 문 밖이라 버렸다
-constexpr uint32_t kLeadTrackDistanceRejected = 1u << 2;  // 모델 거리가 문 밖이라 버렸다
-constexpr uint32_t kLeadTrackStarted = 1u << 3;           // 이 프레임에 (다시) 시작했다
+constexpr uint32_t kLeadTrackFlowUsed = 1U << 0;          // 이 프레임에 확대율을 넣었다
+constexpr uint32_t kLeadTrackFlowRejected = 1U << 1;      // 확대율이 문 밖이라 버렸다
+constexpr uint32_t kLeadTrackDistanceRejected = 1U << 2;  // 모델 거리가 문 밖이라 버렸다
+constexpr uint32_t kLeadTrackStarted = 1U << 3;           // 이 프레임에 (다시) 시작했다
 struct LeadTrackState {
     uint32_t valid = 0;               // 1이면 아래 값이 있다
     uint32_t flags = 0;               // kLeadTrack*
@@ -328,8 +328,8 @@ struct IpcCanFrame {
     uint8_t data[64] = {};
 };
 // IpcCanFrame.flags(녹화된 RecordedCanFrame.flags도 같다). USB 와이어 형식(panda_can_codec)과 비트 순서가 다르다.
-constexpr uint32_t kCanFrameReturned = 1u << 0;  // Panda가 돌려준 송신 에코
-constexpr uint32_t kCanFrameRejected = 1u << 1;  // Panda safety가 거부한 송신
+constexpr uint32_t kCanFrameReturned = 1U << 0;  // Panda가 돌려준 송신 에코
+constexpr uint32_t kCanFrameRejected = 1U << 1;  // Panda safety가 거부한 송신
 
 struct CanBatch {
     uint64_t timestamp_ns = 0;

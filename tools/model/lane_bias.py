@@ -56,7 +56,7 @@ class RouteLateral:
     left_prob: np.ndarray
     right_prob: np.ndarray
     camera_offset: np.ndarray  # [N] 워프에 쓴 카메라 오프셋
-    model_ts: np.ndarray
+    model_t: np.ndarray
     control: dict[str, np.ndarray]
 
 
@@ -71,13 +71,13 @@ def read_route_lateral(route: Path) -> RouteLateral:
                        "left_prob": model["lane_probabilities"][:, 1].astype(float),
                        "right_prob": model["lane_probabilities"][:, 2].astype(float),
                        "camera_offset": model["camera_offset_m"].astype(float),
-                       "model_ts": model["capture_timestamp_ns"].copy()})
-        controls.append({"ts": control_ts.astype(np.int64),
+                       "model_t": model["capture_timestamp_ns"].copy()})
+        controls.append({"t": control_ts.astype(np.int64),
                          "active": state["active"].astype(np.int64),
                          "cluster_speed_kph": state["cluster_speed_kph"].astype(float),
                          "steer_deg": state["steering_angle_deg"].astype(float),
-                         "desired_curv": state["desired_curvature"].astype(float),
-                         "actual_curv": state["actual_curvature"].astype(float),
+                         "desired_curvature": state["desired_curvature"].astype(float),
+                         "actual_curvature": state["actual_curvature"].astype(float),
                          "driver_torque": state["driver_torque"].astype(np.int64)})
     return RouteLateral(**concat_chunks(models), control=concat_chunks(controls))
 
@@ -92,13 +92,13 @@ def route_offsets(route: Path) -> dict[str, float]:
 def analyse(route: Path) -> None:
     route = Path(route)
     data = read_route_lateral(route)
-    if not len(data.model_ts) or not len(data.control["ts"]):
+    if not len(data.model_t) or not len(data.control["t"]):
         print(f"{route.name}: no paired model/control records")
         return
 
-    idx = np.clip(np.searchsorted(data.control["ts"], data.model_ts),
-                  0, len(data.control["ts"]) - 1)
-    ctl = {k: v[idx] for k, v in data.control.items() if k != "ts"}
+    idx = np.clip(np.searchsorted(data.control["t"], data.model_t),
+                  0, len(data.control["t"]) - 1)
+    ctl = {k: v[idx] for k, v in data.control.items() if k != "t"}
 
     straight = np.abs(data.plan_y[:, STRAIGHT_PLAN_INDEX]) < STRAIGHT_PLAN_Y_M
     keep = (straight
@@ -132,8 +132,8 @@ def analyse(route: Path) -> None:
     steer = ctl["steer_deg"][keep]
     print(f"  straight-line steering angle  mean {steer.mean():+.3f} deg  "
           f"sd {steer.std():.3f}")
-    print(f"  curvature command  desired {ctl['desired_curv'][keep].mean():+.6f} 1/m"
-          f"   actual {ctl['actual_curv'][keep].mean():+.6f} 1/m")
+    print(f"  curvature command  desired {ctl['desired_curvature'][keep].mean():+.6f} 1/m"
+          f"   actual {ctl['actual_curvature'][keep].mean():+.6f} 1/m")
     if tuning.get("path_offset_m"):
         raw = intercept + tuning["path_offset_m"]
         print(f"  path_offset_m={tuning['path_offset_m']} is already applied, so the "

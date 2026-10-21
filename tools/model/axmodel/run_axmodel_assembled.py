@@ -7,7 +7,8 @@
 단일 출력 빌드와 분할 빌드를 같은 지표로 비교한다. modeld가 NPU 코어를 쥐고 있으므로
 edgepilot.service를 멈춘 채 돌린다.
 """
-import sys, time
+import argparse
+import time
 import numpy as np
 import axengine as axe
 
@@ -17,7 +18,12 @@ PARTS = [("out_meta", 0, 55), ("out_desire_pred", 55, 32), ("out_pose", 87, 12),
          ("out_hidden", 1064, 512), ("out_plan_std", 1576 + 495, 495), ("out_desire_state", 2566, 8)]
 MEAN = np.arange(495).reshape(33, 15)
 
-model, in_dir, out_path = sys.argv[1:4]
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("model", help="model.axmodel")
+parser.add_argument("input_dir")
+parser.add_argument("out", help="out.bin")
+args = parser.parse_args()
+model, in_dir, out_path = args.model, args.input_dir, args.out
 sess = axe.InferenceSession(model)
 ins = sess.get_inputs(); outs = [o.name for o in sess.get_outputs()]
 data = {i.name: np.load(f"{in_dir}/{i.name}.npy", mmap_mode="r") for i in ins}

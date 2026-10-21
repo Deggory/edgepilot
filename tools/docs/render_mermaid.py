@@ -29,7 +29,7 @@ def documents():
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default="build-docs", help="where to leave the images (relative to the repository)")
     parser.add_argument("files", nargs="*")
     args = parser.parse_args()

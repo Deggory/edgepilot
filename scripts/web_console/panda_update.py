@@ -12,7 +12,7 @@ from typing import Any, Dict
 from .files import env_path, read_json_or_none, write_text_atomic
 from .refusal import Refusal
 from .shm_channel import IpcReader, freshness, topic_path
-from .state_layout import (CONTROL_MAX_AGE_S, CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, GEAR_PARK, control_engaged,
+from .state_layout import (CONTROL_STATE_MAX_AGE_S, CONTROL_STATE_SIZE, CONTROL_STATE_TOPIC, GEAR_PARK, control_engaged,
                            control_value)
 
 PANDA_STATUS_PATH = "/dev/shm/edgepilot_panda_status.json"
@@ -74,7 +74,7 @@ def flash_blocker(control: IpcReader, bootstub: bool = False) -> str:
     """panda_firmware.cc의 panda_flash_allowed와 같은 조건. 막는 이유 코드, 없으면 빈 문자열. 판다가 bootstub에
     머물러 있으면 차 상태는 보지 않고(CAN이 없어 알 수 없다, 상류 pandad도 같다), 살아 있는 제어 상태가 결합
     중이라고 할 때만 막는다."""
-    latest = control.read_fresh(CONTROL_MAX_AGE_S)
+    latest = control.read_fresh(CONTROL_STATE_MAX_AGE_S)
     if bootstub:
         return "engaged" if latest is not None and control_engaged(latest[2]) else ""
     if latest is None:
@@ -124,7 +124,7 @@ class PandaUpdate:
             "up_to_date": bool(image["version"]) and image["version"] == version,
         }
 
-    def request(self, version: str) -> Dict[str, Any]:
+    def request_flash(self, version: str) -> Dict[str, Any]:
         status = self.status()
         image = status["image"]
         if status["stale"]:

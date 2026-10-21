@@ -30,7 +30,7 @@ def yuv6_to_y(yuv6):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Preview what the model sees from a MaixCAM2 frame.")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("frame", help="1280x720 NV21 capture")
     parser.add_argument("out", help="PNG to write")
     parser.add_argument("rpy", nargs="*", type=float, metavar="DEG",

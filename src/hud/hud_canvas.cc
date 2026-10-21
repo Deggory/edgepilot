@@ -134,12 +134,12 @@ HudPoint HudCanvas::to_buffer(HudPoint p) const { return transpose_ ? HudPoint{p
 void HudCanvas::mark(int y, int x0, int x1) {
     const uint32_t first = static_cast<uint32_t>(x0) >> tile_shift_;
     const uint32_t last = static_cast<uint32_t>(x1 - 1) >> tile_shift_;
-    damage_[y] |= (2u << last) - (1u << first);
+    damage_[y] |= (2U << last) - (1U << first);
 }
 
 // 이어진 칸은 memset 한 번으로 지운다.
 void HudCanvas::clear(bool only_damaged) {
-    const uint32_t all = (2u << ((buffer_w_ - 1) >> tile_shift_)) - 1;
+    const uint32_t all = (2U << ((buffer_w_ - 1) >> tile_shift_)) - 1;
     for (int y = 0; y < buffer_h_; ++y) {
         uint32_t *pixels = row(y);
         for_each_tile_run(only_damaged ? damage_[y] : all, [&](int first, int end) {

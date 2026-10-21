@@ -191,7 +191,7 @@ export function pollJson(url, intervalMs, onData, onError) {
 
 // 서버 상태 하나를 intervalMs마다 읽어 그리는 상태 카드(Panda 펌웨어, 학습 토크 모델). render(data)가 {badges,
 // children}을 돌려준다. 읽지 못하면 어느 카드나 같은 모양(liveCard.fail)이다. show(data)는 요청의 응답을 곧바로 그릴
-// 때, redraw()는 다른 항목이 바뀌어 마지막 상태를 다시 그릴 때 쓴다(읽지 못한 뒤에는 옛 상태로 덮지 않는다).
+// 때, refresh()는 다른 항목이 바뀌어 마지막 상태를 다시 그릴 때 쓴다(읽지 못한 뒤에는 옛 상태로 덮지 않는다).
 export function pollingCard(title, {url, intervalMs, render, actions = []}) {
   const card = liveCard(title, {actions});
   let latest = null;
@@ -204,7 +204,7 @@ export function pollingCard(title, {url, intervalMs, render, actions = []}) {
     latest = null;
     card.fail(error);
   });
-  return {element: card.element, show, redraw: () => latest && show(latest), start: polling.start, stop: polling.stop};
+  return {element: card.element, show, refresh: () => latest && show(latest), start: polling.start, stop: polling.stop};
 }
 
 // 이름마다 한 줄인 목록(학습 토크 모델, 주행 기록)을 names에 맞춘다. rows는 이름 -> make(이름)이 만든 줄({element,

@@ -8,13 +8,12 @@ import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .shm_channel import IpcReader, freshness, topic_path
+from .shm_channel import IpcReader, topic_path
+from .state_layout import MANAGER_STATE_MAX_AGE_S, MANAGER_STATE_TOPIC
 
-MANAGER_STATE_TOPIC = "/edgepilot_manager_state"
 MANAGER_STATE_HEAD = struct.Struct("<QII")  # timestamp_ns, process_count, reserved
 PROCESS_STATE = struct.Struct("<16sI")      # ProcessState 필드: name, running
 MAX_PROCESSES = 12
-MANAGER_MAX_AGE_S = 3.0  # 매니저는 1초마다 낸다
 VERSION_MARKER = b"EDGEPILOT_VERSION="  # build_version.h EDGEPILOT_VERSION_MARKER_PREFIX
 VERSION_MAX = 64                        # cmake/build_version.cmake가 자르는 길이
 VERSION_SCAN_LIMIT = 64 << 20           # 실행 파일은 1 MB도 안 된다. 엉뚱한 큰 파일을 다 읽지 않는다
@@ -98,11 +97,10 @@ class ProcessStatus:
         """{"available", "stale", "age_s", "processes": [{"name", "running", "version", "installed_version"}]}.
         매니저가 없거나 3초 넘게 멈췄으면 stale이다. 빌드 버전은 versions일 때만 읽는다(/proc 전체를 훑으므로 머리 줄의
         목록을 펼쳤을 때만, 보드에서 약 19 ms). 아니면 버전 칸은 None이다."""
-        latest = self.reader.read_payload()
-        result: Dict[str, Any] = {**freshness(latest[1] if latest else None, MANAGER_MAX_AGE_S), "processes": []}
-        if latest is None:
+        result, payload = self.reader.read_status(MANAGER_STATE_MAX_AGE_S)
+        result["processes"] = []
+        if payload is None:
             return result
-        payload = latest[2]
         _, count, _ = MANAGER_STATE_HEAD.unpack_from(payload)
         table = process_table(self.proc) if versions else None
         for index in range(min(count, MAX_PROCESSES)):

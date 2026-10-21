@@ -21,12 +21,16 @@ src/model/model_output_assembly.h가 출력을 2576 배치로 다시 맞춘다. 
 
 사용: python3 split_outputs.py core_fp32.onnx core_split.onnx
 """
-import sys
+import argparse
 import numpy as np
 import onnx
 from onnx import helper, numpy_helper
 
-src, dst = sys.argv[1], sys.argv[2]
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("src", help="core_fp32.onnx")
+parser.add_argument("dst", help="core_split.onnx")
+args = parser.parse_args()
+src, dst = args.src, args.dst
 m = onnx.load(src)
 g = m.graph
 prod = {o: n for n in g.node for o in n.output}

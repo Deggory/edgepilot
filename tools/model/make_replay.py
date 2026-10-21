@@ -33,7 +33,7 @@ def nv12_bytes(y: np.ndarray, u: np.ndarray, v: np.ndarray) -> bytes:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--route", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--frames", type=int, default=100)

@@ -83,6 +83,11 @@ class IpcReader:
             self._map = None
             return None
 
+    def read_status(self, max_age_s: float) -> tuple[Dict[str, Any], bytes | None]:
+        """(freshness 사전, payload). 아직 없거나 쓰는 중이면 payload가 None이다(available도 False)."""
+        latest = self.read_payload()
+        return freshness(latest[1] if latest else None, max_age_s), latest[2] if latest else None
+
     def read_fresh(self, max_age_s: float) -> tuple[int, int, bytes] | None:
         """read_payload 중 max_age_s 안에 발행된 것만."""
         latest = self.read_payload()

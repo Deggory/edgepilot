@@ -8,6 +8,7 @@ is_vehicle_rx_frame(src/car/vehicle_can.h)처럼 Panda가 돌려준 우리 송�
 """
 from __future__ import annotations
 
+import argparse
 import struct
 import sys
 from pathlib import Path
@@ -39,11 +40,12 @@ def export(src: Path, dst: Path) -> tuple[int, float]:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print(__doc__.strip(), file=sys.stderr)
-        return 2
-    count, duration_s = export(Path(sys.argv[1]), Path(sys.argv[2]))
-    print(f"{sys.argv[2]}: {count} frames, {duration_s:.3f} s")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("events", type=Path, help="events/NNN.bin")
+    parser.add_argument("out", type=Path, help="out.can")
+    args = parser.parse_args()
+    count, duration_s = export(args.events, args.out)
+    print(f"{args.out}: {count} frames, {duration_s:.3f} s")
     return 0
 
 

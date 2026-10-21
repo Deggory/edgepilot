@@ -20,7 +20,8 @@ from typing import Any, Dict, List
 
 from .files import env_path, read_json_or_none
 from .refusal import Refusal
-from .shm_channel import IpcReader, freshness, topic_path
+from .shm_channel import IpcReader, topic_path
+from .state_layout import RECORD_STATE_MAX_AGE_S, RECORD_STATE_TOPIC
 
 # recordd(recordd.cc)·recording_writer.cc와 같은 경로와 변수. 경로는 작업 디렉터리(설치 디렉터리) 기준이다.
 RECORD_ROOT = "recordings"
@@ -30,9 +31,7 @@ ROUTE_NAME = re.compile(r"\d{4}-\d{2}-\d{2}--\d{2}-\d{2}-\d{2}-\d{3}")
 MIN_FREE_BYTES = 5 << 30
 MIN_FREE_PERCENT = 10
 # ipc_messages.h RecordState(recordd가 0.5 s마다 낸다)와 kStorageBlocked* 값
-RECORD_STATE_TOPIC = "/edgepilot_record_state"
 RECORD_STATE = struct.Struct("<QII")  # timestamp_ns, active, storage_blocked
-RECORD_STATE_MAX_AGE_S = 2.0
 STORAGE_BLOCKED = {1: "sd_reserve", 2: "staging"}
 
 
@@ -115,11 +114,10 @@ class Recordings:
     def recording(self) -> Dict[str, Any]:
         """recordd의 녹화 상태: 신선도와 active(route를 쓰는 중), storage_blocked(공간 때문에 멈춘 이유
         코드, 없으면 "")."""
-        latest = self.state.read_payload()
-        state = {**freshness(latest[1] if latest else None, RECORD_STATE_MAX_AGE_S), "active": False,
-                 "storage_blocked": ""}
-        if latest is not None:
-            _, active, blocked = RECORD_STATE.unpack_from(latest[2])
+        state, payload = self.state.read_status(RECORD_STATE_MAX_AGE_S)
+        state.update(active=False, storage_blocked="")
+        if payload is not None:
+            _, active, blocked = RECORD_STATE.unpack_from(payload)
             reason = STORAGE_BLOCKED.get(blocked, str(blocked) if blocked else "")
             state.update(active=bool(active), storage_blocked=reason)
         return state

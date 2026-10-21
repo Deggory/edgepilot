@@ -1,12 +1,24 @@
-"""웹 콘솔이 위치로 읽는 ModelState·ControlState 필드. src/common/ipc_messages.h의 EDGEPILOT_*_AT 고정값과
-같아야 하고, check_web_console.py가 대조한다. BEV 페이지는 이 위치를 /api/bev로 받아 직접 읽는다."""
+"""웹 콘솔이 읽는 공유 메모리 토픽과 믿는 나이, 위치로 읽는 ModelState·ControlState 필드. 토픽은
+src/common/ipc_messages.h의 k<이름>Topic, 위치는 EDGEPILOT_*_AT 고정값과 같아야 하고, check_web_console.py가 대조한다.
+BEV 페이지는 이 위치를 /api/bev로 받아 직접 읽는다."""
 from __future__ import annotations
 
 import struct
 from typing import Any
 
+# 토픽(ipc_messages.h k<구조체>Topic)과 그 상태를 믿는 최대 나이(발행 주기보다 넉넉하게)
 MODEL_STATE_TOPIC = "/edgepilot_model_state"
 CONTROL_STATE_TOPIC = "/edgepilot_control_state"
+LEARNER_STATE_TOPIC = "/edgepilot_learner_state"
+LOCALIZATION_STATE_TOPIC = "/edgepilot_localization"
+RECORD_STATE_TOPIC = "/edgepilot_record_state"
+MANAGER_STATE_TOPIC = "/edgepilot_manager_state"
+MODEL_STATE_MAX_AGE_S = 2.0  # modeld는 20 Hz로 낸다
+CONTROL_STATE_MAX_AGE_S = 1.0  # panda_firmware.cc kControlMaxAgeNs와 같다(controlsd는 100 Hz로 낸다)
+LEARNER_STATE_MAX_AGE_S = 2.0  # controlsd는 약 20 Hz로 낸다
+LOCALIZATION_STATE_MAX_AGE_S = 2.0  # locationd는 약 10 Hz로 낸다
+RECORD_STATE_MAX_AGE_S = 2.0
+MANAGER_STATE_MAX_AGE_S = 3.0  # 매니저는 1초마다 낸다
 MODEL_STATE_SIZE = 2648
 CONTROL_STATE_SIZE = 240
 
@@ -30,8 +42,6 @@ CONTROL_FORMATS = {"timestamp_ns": "<Q", "gear": "<i", "cluster_speed_kph": "<f"
 # ipc_messages.h kHudFlag<이름>의 비트
 HUD_FLAG_BITS = {"Laneless": 0, "SoftDisabling": 2, "SteerPaused": 7, "BrakeLights": 9}
 GEAR_PARK = 0  # car/can_frame.h kGearPark
-# 제어 상태를 믿는 나이. panda_firmware.cc kControlMaxAgeNs와 같다(controlsd는 100 Hz로 낸다)
-CONTROL_MAX_AGE_S = 1.0
 
 
 def control_value(payload: bytes, name: str) -> Any:
