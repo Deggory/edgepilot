@@ -49,13 +49,12 @@ int main() {
         }
         uint64_t frame_id = 0;
         unsigned errors = 0;
-        uint64_t window_start = monotonic_now_ns();
-        uint64_t window_frames = 0;
+        StatsWindow window(monotonic_now_ns());
         // 센서 캡처(VI 하드웨어 PTS)부터 프레임이 링에 들어오기까지의 지연. 캡처 시각을
         // 이만큼 앞당겨 발행한다. 10초마다 분포를 남긴다.
         std::vector<uint64_t> ages_us, pop_ages_us;
         constexpr uint64_t kMaxCaptureAgeUs = 200000;  // 이보다 오래됐다고 나오면 PTS를 믿지 않는다
-        uint64_t age_window_start = window_start;
+        uint64_t age_window_start = monotonic_now_ns();
         std::fprintf(stderr, "camerad: MaixCAM2 VI %ux%u NV12, %d fps sensor, CMM ring\n", config.nv12_width,
                      config.nv12_height, kSensorFps);
 
@@ -87,16 +86,13 @@ int main() {
             frame_pub.publish(&msg, sizeof(msg));
 
             ++frame_id;
-            ++window_frames;
+            window.count();
 
             const uint64_t now = monotonic_now_ns();
-            if (now - window_start >= 1'000'000'000ULL) {
-                std::fprintf(stderr, "camerad: fps=%.2f frames=%llu errors=%u          \r",
-                             window_frames * 1e9 / (now - window_start), static_cast<unsigned long long>(frame_id),
-                             errors);
+            if (window.close_if_due(now)) {
+                std::fprintf(stderr, "camerad: fps=%.2f frames=%llu errors=%u\n", window.rate(),
+                             static_cast<unsigned long long>(frame_id), errors);
                 std::fflush(stderr);
-                window_start = now;
-                window_frames = 0;
             }
             if (now - age_window_start >= 10'000'000'000ULL && !ages_us.empty()) {
                 std::sort(ages_us.begin(), ages_us.end());
@@ -105,7 +101,7 @@ int main() {
                     return v[std::min(v.size() - 1, static_cast<size_t>(q * v.size()))] / 1000.0;
                 };
                 std::fprintf(stderr,
-                             "\ncamerad: capture latency ms (HW PTS -> ring) p50 %.1f p95 %.1f max %.1f"
+                             "camerad: capture latency ms (HW PTS -> ring) p50 %.1f p95 %.1f max %.1f"
                              " | at VI pop p50 %.1f p95 %.1f (n=%zu)\n",
                              pct(ages_us, 0.5), pct(ages_us, 0.95), pct(ages_us, 1.0), pct(pop_ages_us, 0.5),
                              pct(pop_ages_us, 0.95), ages_us.size());
@@ -114,8 +110,7 @@ int main() {
                 age_window_start = now;
             }
         }
-        std::fprintf(stderr, "\ncamerad done frames=%llu errors=%u\n", static_cast<unsigned long long>(frame_id),
-                     errors);
+        std::fprintf(stderr, "camerad done frames=%llu errors=%u\n", static_cast<unsigned long long>(frame_id), errors);
         // 소비자가 읽기 시작한 슬롯도 read_still_valid에서 걸리도록 무효로 표시한 뒤 푼다.
         for (unsigned i = 0; i < slots.size(); ++i) {
             frame_ring.begin_write(i);

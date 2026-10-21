@@ -144,7 +144,7 @@ private:
         try {
             ok = cv::imwrite(path, bgr, params);
         } catch (const cv::Exception &e) {
-            std::fprintf(stderr, "\ncamcal: imwrite: %s\n", e.what());
+            std::fprintf(stderr, "camcal: imwrite: %s\n", e.what());
         }
         if (ok)
             ok = [&] {  // 확인음은 파일이 디스크에 있을 때 낸다
@@ -159,12 +159,12 @@ private:
             ++saved;
             last_sharp = sharp;
             sound_.play(AlertSoundId::SignalChanged);
-            std::fprintf(stderr, "\ncamcal: %d saved %s sharp=%.0f write=%.0fms\n", saved.load(), path.c_str(), sharp,
+            std::fprintf(stderr, "camcal: %d saved %s sharp=%.0f write=%.0fms\n", saved.load(), path.c_str(), sharp,
                          ms);
         } else {
             ++failed;
             sound_.play(AlertSoundId::Unable);
-            std::fprintf(stderr, "\ncamcal: save failed %s\n", path.c_str());
+            std::fprintf(stderr, "camcal: save failed %s\n", path.c_str());
         }
     }
 
@@ -287,8 +287,8 @@ int main() {
         std::fprintf(stderr, "camcal: %dx%d NV12 -> %s (%s). Func/touch/Enter = shoot, q = quit\n", width, height,
                      dir.c_str(), png ? "png" : "jpg");
 
-        uint64_t frames = 0, errors = 0, window_frames = 0;
-        uint64_t window_start = monotonic_now_ns(), flash_until = 0;
+        uint64_t frames = 0, errors = 0, flash_until = 0;
+        StatsWindow window(monotonic_now_ns());
         bool redraw = true, flashing = false, was_busy = false;
         while (!g_stop) {
             CmmBlock &slot = slots[frames % kSlots];
@@ -297,7 +297,7 @@ int main() {
                 continue;
             }
             ++frames;
-            ++window_frames;
+            window.count();
             if (!display.show_video_phys(slot.phys, width, height, [] { return true; })) ++errors;
 
             bool quit = false;
@@ -307,7 +307,7 @@ int main() {
             if (presses > 0) {
                 if (saver.busy()) {
                     sound.play(AlertSoundId::Unable);
-                    std::fprintf(stderr, "\ncamcal: still saving the previous shot, ignored\n");
+                    std::fprintf(stderr, "camcal: still saving the previous shot, ignored\n");
                 } else {
                     // CMM 슬롯은 캐시하지 않는 메모리라 한 번에 복사해 두고 저장 스레드에 넘긴다.
                     Shot shot;
@@ -330,15 +330,11 @@ int main() {
                 redraw = false;
             }
 
-            if (now - window_start >= 1'000'000'000ULL) {
-                std::fprintf(stderr, "camcal: fps=%.1f saved=%d failed=%d errors=%llu          \r",
-                             window_frames * 1e9 / (now - window_start), saver.saved.load(), saver.failed.load(),
-                             static_cast<unsigned long long>(errors));
-                window_start = now;
-                window_frames = 0;
-            }
+            if (window.close_if_due(now))
+                std::fprintf(stderr, "camcal: fps=%.1f saved=%d failed=%d errors=%llu\n", window.rate(),
+                             saver.saved.load(), saver.failed.load(), static_cast<unsigned long long>(errors));
         }
-        std::fprintf(stderr, "\ncamcal: done, saved %d\n", saver.saved.load());
+        std::fprintf(stderr, "camcal: done, saved %d\n", saver.saved.load());
         for (auto &slot : slots) cmm_free(&slot);
         return 0;
     } catch (const std::exception &e) {

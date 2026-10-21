@@ -210,7 +210,7 @@ void CalibrationService::apply_selection(float dt_s) {
     if (selector_.flow_applied() != logged_flow_applied_) {
         logged_flow_applied_ = selector_.flow_applied();
         std::fprintf(stderr,
-                     "\ncalibration: warp source %s target pitch=%.3f yaw=%.3f deg (pose %.3f %.3f, flow %.3f %.3f)\n",
+                     "calibration: warp source %s target pitch=%.3f yaw=%.3f deg (pose %.3f %.3f, flow %.3f %.3f)\n",
                      logged_flow_applied_ ? "flow" : "pose",
                      rad_to_deg(logged_flow_applied_ ? flow_state_.pitch : online_rpy_[1]),
                      rad_to_deg(logged_flow_applied_ ? flow_state_.yaw : online_rpy_[2]), rad_to_deg(online_rpy_[1]),
@@ -220,7 +220,7 @@ void CalibrationService::apply_selection(float dt_s) {
     if (pending != logged_pending_) {
         logged_pending_ = pending;
         if (pending)
-            std::fprintf(stderr, "\ncalibration: switching to %s waits for disengage\n",
+            std::fprintf(stderr, "calibration: switching to %s waits for disengage\n",
                          requested_ == CalibrationSource::Flow ? "flow" : "pose");
     }
 }

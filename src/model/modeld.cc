@@ -81,30 +81,6 @@ private:
     uint32_t frames_ = 0;
 };
 
-// 1초 창 통계. 두 루프(라이브·재생)가 같은 시계로 fps를 센다. 벽시계가 아니라 monotonic_now_ns라
-// NTP가 시각을 옮겨도 창 길이와 전체 fps가 흔들리지 않는다.
-struct RateWindow {
-    uint64_t start_ns = monotonic_now_ns();
-    uint64_t last_ns = start_ns;
-    unsigned last_processed = 0;
-    unsigned last_errors = 0;
-
-    // 1초가 지났으면 창을 닫고 true. window_us는 닫힌 창의 길이.
-    bool close_if_due(uint64_t *window_us) {
-        const uint64_t now_ns = monotonic_now_ns();
-        const uint64_t elapsed_us = (now_ns - last_ns) / 1000ULL;
-        if (elapsed_us < 1'000'000ULL) return false;
-        *window_us = elapsed_us;
-        last_ns = now_ns;
-        return true;
-    }
-
-    double total_fps(unsigned processed) const {
-        const uint64_t since_start_us = (monotonic_now_ns() - start_ns) / 1000ULL;
-        return since_start_us > 0 ? processed * 1000000.0 / since_start_us : 0.0;
-    }
-};
-
 // controlsd 스냅샷에서 모델 입력용 자차 속도와 desire, 광류 보정기의 직진 조건(곡률·깜빡이), 결합 상태(보정
 // 출처 설정을 해제까지 미룬다)를 읽는다. controlsd가 아직 없으면 열릴 때까지 마지막 값을 유지한다. 스냅샷이
 // kStaleNs보다 오래되면(controlsd가 죽거나 멈춤) 차 상태를 낡은 것으로 보고 결합도 풀린 것으로 본다: 마지막
@@ -177,7 +153,7 @@ public:
 
 private:
     void log() const {
-        std::fprintf(stderr, "\nmodeld: settings camera offset=%+.3f m height=%.2f m, calibration source %s (%s)\n",
+        std::fprintf(stderr, "modeld: settings camera offset=%+.3f m height=%.2f m, calibration source %s (%s)\n",
                      settings_.camera_offset_m, settings_.camera_height_m,
                      settings_.calibration_use_flow ? "flow" : "pose", live_ ? "display.json" : "replay env");
     }
@@ -305,7 +281,7 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
     RawOutputDump raw_dump(std::getenv("EDGEPILOT_RAW_DUMP"));
     unsigned processed = 0;
     unsigned errors = 0;
-    RateWindow window;
+    StatsWindow window(monotonic_now_ns());
 
     // 프레임은 GDC 소스 CMM에 바로 읽는다
     while (!g_stop && source.read(loop.model.replay_frame())) {
@@ -321,20 +297,21 @@ int run_replay(const AppConfig &config, LatestChannel &model_pub) {
             const LeadIo lead;
             loop.publish(model_pub, parsed, processed, monotonic_now_ns(), model_ms, 0.0f, false, lead);
             ++processed;
+            window.count();
         } else {
             ++errors;
         }
 
-        uint64_t window_us = 0;
-        if (window.close_if_due(&window_us)) {
-            std::fprintf(stderr, "modeld replay: frames=%u/%u fps=%.2f errors=%u          \r", processed,
-                         source.frame_count(), window.total_fps(processed), errors);
+        const uint64_t now_ns = monotonic_now_ns();
+        if (window.close_if_due(now_ns)) {
+            std::fprintf(stderr, "modeld replay: frames=%u/%u fps=%.2f errors=%u\n", processed, source.frame_count(),
+                         window.total_rate(processed, now_ns), errors);
             std::fflush(stderr);
         }
     }
 
-    std::fprintf(stderr, "\nmodeld replay done frames=%u errors=%u fps=%.2f\n", processed, errors,
-                 window.total_fps(processed));
+    std::fprintf(stderr, "modeld replay done frames=%u errors=%u fps=%.2f\n", processed, errors,
+                 window.total_rate(processed, monotonic_now_ns()));
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 
@@ -401,9 +378,10 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
     unsigned errors = 0;
     unsigned missed = 0;
     unsigned frame_sync_failures = 0;
+    unsigned window_errors = 0;  // 지난 통계 줄까지의 errors
     uint64_t last_frame_id = 0;
     bool have_last_frame_id = false;
-    RateWindow window;
+    StatsWindow window(monotonic_now_ns());
 
     std::fprintf(stderr, "modeld: live frame ring slots=%u frame=%ux%u, every frame\n", frame_ring.slot_count(),
                  frame_ring.width(), frame_ring.height());
@@ -471,23 +449,22 @@ int run_live(const AppConfig &config, LatestChannel &model_pub, LatestChannel &r
             loop.publish(model_pub, parsed, meta.frame_id, meta.timestamp_ns, model_ms, ego.v_ego(), ego.engaged(),
                          lead);
             ++processed;
+            window.count();
         } else {
             ++errors;
         }
 
-        uint64_t window_us = 0;
-        if (window.close_if_due(&window_us)) {
-            std::fprintf(stderr, "modeld: fps=%.2f frames=%u missed=%u sync=%u errors=%u(+%u) last_ms=%.2f          \r",
-                         (processed - window.last_processed) * 1000000.0 / window_us, processed, missed,
-                         frame_sync_failures, errors, errors - window.last_errors, ok ? (t1 - t0) / 1000000.0 : 0.0);
+        if (window.close_if_due(monotonic_now_ns())) {
+            std::fprintf(stderr, "modeld: fps=%.2f frames=%u missed=%u sync=%u errors=%u(+%u) last_ms=%.2f\n",
+                         window.rate(), processed, missed, frame_sync_failures, errors, errors - window_errors,
+                         ok ? (t1 - t0) / 1000000.0 : 0.0);
             std::fflush(stderr);
-            window.last_processed = processed;
-            window.last_errors = errors;
+            window_errors = errors;
         }
     }
 
-    std::fprintf(stderr, "\nmodeld done frames=%u missed=%u sync=%u errors=%u fps=%.2f\n", processed, missed,
-                 frame_sync_failures, errors, window.total_fps(processed));
+    std::fprintf(stderr, "modeld done frames=%u missed=%u sync=%u errors=%u fps=%.2f\n", processed, missed,
+                 frame_sync_failures, errors, window.total_rate(processed, monotonic_now_ns()));
     return processed > 0 && errors == 0 ? 0 : 1;
 }
 

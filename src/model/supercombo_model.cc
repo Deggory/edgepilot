@@ -143,7 +143,7 @@ bool SupercomboModel::infer(uint64_t warp_start_ns, uint64_t warp_end_ns, std::v
         const uint64_t stamps[] = {warp_start_ns, warp_end_ns, inputs_end_ns, npu_end_ns, outputs_end_ns};
         for (int i = 0; i < 4; ++i) profile_ms_[i] += (stamps[i + 1] - stamps[i]) / 1e6;
         if (++profile_frames_ == kProfileFrames) {
-            std::fprintf(stderr, "\nprofile ms: warp %.2f inputs %.2f npu %.2f outputs %.2f\n",
+            std::fprintf(stderr, "profile ms: warp %.2f inputs %.2f npu %.2f outputs %.2f\n",
                          profile_ms_[0] / kProfileFrames, profile_ms_[1] / kProfileFrames,
                          profile_ms_[2] / kProfileFrames, profile_ms_[3] / kProfileFrames);
             profile_frames_ = 0;

@@ -108,7 +108,7 @@ void FlowWorker::run() {
             blocks_ = FlowBlocks{};
             blocks_changed_ = false;  // 저장 파일은 보정 서비스가 지운다
             ++resets_applied_;
-            std::fprintf(stderr, "\nflowcal: reset, collecting from scratch\n");
+            std::fprintf(stderr, "flowcal: reset, collecting from scratch\n");
             continue;
         }
         tracker_.update(f);
@@ -131,7 +131,7 @@ void FlowWorker::run() {
         if (s.lead_frames >= logged_lead_frames + kLeadLogFrames) {  // 앞차를 따라간 1분마다
             logged_lead_frames = s.lead_frames;
             std::fprintf(stderr,
-                         "\nleadflow: frames %llu with rate %llu (%.0f%%) | last rate %+.3f/s relative %+.2f m/s at "
+                         "leadflow: frames %llu with rate %llu (%.0f%%) | last rate %+.3f/s relative %+.2f m/s at "
                          "%.1f m, %u/%u points | %.1f ms wall %.2f ms cpu per frame\n",
                          static_cast<unsigned long long>(s.lead_frames), static_cast<unsigned long long>(s.lead_rates),
                          100.0 * static_cast<double>(s.lead_rates) / static_cast<double>(s.lead_frames),
@@ -142,12 +142,12 @@ void FlowWorker::run() {
         logged_blocks = st.blocks;
         if (st.mount_changes != logged_mount_changes) {
             logged_mount_changes = st.mount_changes;
-            std::fprintf(stderr, "\nflowcal: mount change detected (%u so far), kept the last %u blocks\n",
+            std::fprintf(stderr, "flowcal: mount change detected (%u so far), kept the last %u blocks\n",
                          st.mount_changes, st.estimate_blocks);
         }
         std::fprintf(
             stderr,
-            "\nflowcal: block %u windows %u yaw %+.3f pitch %+.3f deg (sd %.3f/%.3f, %u blocks, %s) | "
+            "flowcal: block %u windows %u yaw %+.3f pitch %+.3f deg (sd %.3f/%.3f, %u blocks, %s) | "
             "last yaw %+.3f pitch %+.3f rot %.3f deg tracks %u inliers %u parallax %.1f px | frames %llu "
             "done %llu lost %llu rejected %llu dropped %llu | %.1f ms wall %.2f ms cpu per frame, pyramid %s\n",
             st.blocks, st.windows, st.yaw * kRadToDeg, st.pitch * kRadToDeg, st.sd_yaw * kRadToDeg,

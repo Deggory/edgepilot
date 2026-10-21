@@ -89,9 +89,9 @@ ReplayEvents::ReplayEvents(const std::string &route_dir, uint64_t from_ns, std::
     paths.erase(paths.begin(), paths.begin() + static_cast<std::ptrdiff_t>(first));
     chunks_ = paths.size();
     stream_ = std::make_unique<TimeOrderedEvents>(std::move(paths));
-    // 끊긴 꼬리와 읽지 못한 청크를 알린다(진행 표시 줄이 \r로 끝나므로 새 줄에서)
+    // 끊긴 꼬리와 읽지 못한 청크를 알린다
     stream_->on_file_end = [](const std::string &path, const EventLogReader &reader) {
-        report_event_file_end(path, reader, "\nreplayd: ");
+        report_event_file_end(path, reader, "replayd: ");
     };
 }
 

@@ -44,7 +44,6 @@ constexpr uint64_t kStateFreshNs = 2'000'000'000ULL;
 constexpr uint64_t kMaxDrawIntervalNs = 100'000'000ULL;
 // 루프는 새 모델 출력을 이만큼까지 기다리고 돈다(카메라 프레임, 터치, 다른 상태).
 constexpr int kPollMs = 5;
-constexpr uint64_t kStatsWindowNs = 1'000'000'000ULL;  // fps·CPU를 재는 창(상태 줄 한 줄)
 
 struct StageStats {
     uint64_t total_ns = 0;
@@ -83,7 +82,7 @@ public:
             throw std::runtime_error("open localization ipc failed");
         if (!touch_.open()) std::fprintf(stderr, "overlayd: no touchscreen; tap toggles disabled\n");
 
-        uint64_t window_start = monotonic_now_ns();
+        StatsWindow window(monotonic_now_ns());  // fps·CPU를 재는 1초 창(상태 줄 한 줄)
         while (!g_stop) {
             const bool new_model = update_model();
             poll_states();
@@ -100,8 +99,8 @@ public:
                 draw_overlay();
             }
 
-            if (now - window_start >= kStatsWindowNs) {
-                const double seconds = (now - window_start) / 1e9;
+            if (window.close_if_due(now)) {
+                const double seconds = window.seconds();
                 hud_.preview_fps = static_cast<float>(preview_frames_ / seconds);
                 hud_.overlay_fps = static_cast<float>(overlay_frames_ / seconds);
                 hud_.model_fps = static_cast<float>(model_updates_ / seconds);
@@ -113,12 +112,11 @@ public:
                                   lag_stats_.avg_ms_and_reset());
                 std::fprintf(stderr,
                              "overlay: preview=%.2f model=%.2f overlay=%.2f%s cpu=%.1f%% mem=%.1f%% temp=%.1fC "
-                             "errors=%u          \r",
+                             "errors=%u\n",
                              hud_.preview_fps, hud_.model_fps, hud_.overlay_fps, profile_text, hud_.cpu_percent,
                              hud_.memory_percent, hud_.cpu_temp_c, errors_);
                 std::fflush(stderr);
                 preview_frames_ = overlay_frames_ = model_updates_ = 0;
-                window_start = now;
             }
         }
         return 0;
@@ -177,14 +175,14 @@ private:
         if (std::isfinite(brightness)) {
             const bool on = device_settings_.display_enabled;
             if (display_.set_backlight(on, brightness))
-                std::fprintf(stderr, "\noverlayd: backlight %s %.0f%%\n", on ? "on" : "off", brightness);
+                std::fprintf(stderr, "overlayd: backlight %s %.0f%%\n", on ? "on" : "off", brightness);
             else
-                std::fprintf(stderr, "\noverlayd: cannot set the backlight\n");
+                std::fprintf(stderr, "overlayd: cannot set the backlight\n");
         }
         const float percent = device_settings_.alert_volume_percent;
         if (sound_.enabled() && std::isfinite(percent) && std::fabs(percent - sound_.volume_percent()) > 0.5f) {
             sound_.set_volume_percent(percent);
-            std::fprintf(stderr, "\noverlayd: alert volume %.0f%%\n", sound_.volume_percent());
+            std::fprintf(stderr, "overlayd: alert volume %.0f%%\n", sound_.volume_percent());
             if (device_settings_read_) sound_.play(AlertSoundId::Engage);  // 바꾼 크기를 들려준다
         }
         device_settings_read_ = true;
@@ -215,7 +213,7 @@ private:
         int x = 0, y = 0;
         if (touch_.poll_tap(&x, &y)) {
             const char *action = hud_touch_.tap(x, y, kOutW, kOutH, now_ns, &hud_);
-            std::fprintf(stderr, "\noverlayd: tap x=%d y=%d %s\n", x, y, action);
+            std::fprintf(stderr, "overlayd: tap x=%d y=%d %s\n", x, y, action);
         }
         hud_touch_.expire(now_ns, &hud_);
     }
@@ -257,7 +255,7 @@ private:
         test_sounds_played_ = requests;
         const AlertSoundId id = kOrder[static_cast<size_t>(requests - 1) % std::size(kOrder)];
         sound_.play(id);
-        std::fprintf(stderr, "\noverlayd: test sound %s\n", alert_sound_name(id));
+        std::fprintf(stderr, "overlayd: test sound %s\n", alert_sound_name(id));
     }
 
     // 정책이 고른 알림음을 내고 로그에 남긴다. 거부는 차단 사유, 해제 예고는 그 플래그와 사유를 함께.

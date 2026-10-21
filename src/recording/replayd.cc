@@ -33,7 +33,6 @@
 namespace {
 
 volatile sig_atomic_t g_stop = 0;
-constexpr uint64_t kStatsWindowNs = 1'000'000'000ULL;   // 진행 표시 한 줄
 constexpr uint64_t kDecoderStallNs = 1'000'000'000ULL;  // 이만큼 출력이 없으면 디코더가 프레임을 삼킨 것으로 본다
 
 }  // namespace
@@ -97,7 +96,7 @@ int main(int argc, char *argv[]) {
         uint64_t frame_id = 0, sent = 0, decode_errors = 0, can_batches = 0, tx_batches = 0;
         uint64_t dropped_outputs = 0, last_output_ns = monotonic_now_ns();
         size_t next_frame = first;
-        uint64_t window = monotonic_now_ns(), window_frames = 0;
+        StatsWindow window(monotonic_now_ns());
         while (!g_stop) {
             const uint64_t now = monotonic_now_ns();
             // 영상: 녹화 간격대로 한 프레임씩 넣고, 나온 프레임을 곧바로 링에 싣는다.
@@ -135,7 +134,7 @@ int main(int argc, char *argv[]) {
                 meta.width = route.width;
                 meta.height = route.height;
                 frame_pub.publish(&meta, sizeof(meta));
-                ++window_frames;
+                window.count();
                 pending.pop_front();
             }
             // CAN·판다 상태(기록 시각 순으로 흘려 읽는다)
@@ -164,19 +163,17 @@ int main(int argc, char *argv[]) {
             }
             const bool done = (next_frame >= route.frames.size() || route.frames[next_frame].capture_ns >= t_end) &&
                               sent <= frame_id + dropped_outputs && pending.empty();
-            if (now - window >= kStatsWindowNs) {
-                std::fprintf(stderr, "replayd: fps=%.2f t=%.1fs frames=%llu errors=%llu can=%llu tx=%llu          \r",
-                             window_frames * 1e9 / (now - window), (now - base) / 1e9,
-                             static_cast<unsigned long long>(frame_id), static_cast<unsigned long long>(decode_errors),
+            if (window.close_if_due(now)) {
+                std::fprintf(stderr, "replayd: fps=%.2f t=%.1fs frames=%llu errors=%llu can=%llu tx=%llu\n",
+                             window.rate(), (now - base) / 1e9, static_cast<unsigned long long>(frame_id),
+                             static_cast<unsigned long long>(decode_errors),
                              static_cast<unsigned long long>(can_batches), static_cast<unsigned long long>(tx_batches));
                 std::fflush(stderr);
-                window = now;
-                window_frames = 0;
             }
             if (done) break;
             usleep(1000);
         }
-        std::fprintf(stderr, "\nreplayd: done frames=%llu errors=%llu can=%llu tx=%llu\n",
+        std::fprintf(stderr, "replayd: done frames=%llu errors=%llu can=%llu tx=%llu\n",
                      static_cast<unsigned long long>(frame_id), static_cast<unsigned long long>(decode_errors),
                      static_cast<unsigned long long>(can_batches), static_cast<unsigned long long>(tx_batches));
         for (unsigned i = 0; i < slots.size(); ++i) {
