@@ -129,8 +129,8 @@ int main(int argc, char **argv) {
 
     ControlParams params;
     std::string error;
-    if ((!steering_path.empty() && !load_steering_params_json(steering_path, &params.steering, &error)) ||
-        (!cruise_path.empty() && !load_adaptive_cruise_params_json(cruise_path, &params.cruise, &error))) {
+    if ((!steering_path.empty() && !load_steering_params(steering_path, &params.steering, &error)) ||
+        (!cruise_path.empty() && !load_adaptive_cruise_params(cruise_path, &params.cruise, &error))) {
         std::fprintf(stderr, "params: %s\n", error.c_str());
         return 1;
     }
@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
         localization.read_ns = tick_ns;
         tick.on_localization(localization, now_s);
         ControlState state = tick.update(now_s, tick_ns);
-        const LateralControlResult &result = tick.result();
+        const LateralControlOutput &result = tick.result();
         const bool send = result.should_send && !result.frames.empty();
         digest.add(&state, sizeof(state));
         if (send) {
@@ -283,9 +283,10 @@ int main(int argc, char **argv) {
             for (float value : tick.controller().lateral_nn_inputs()) std::fprintf(nn_inputs, ",%.6g", value);
             std::fputc('\n', nn_inputs);
         }
-        LearnerOutputs learned = tick.update_learners(now_s);
+        LearnerOutput learned = tick.update_learners(now_s);
         if (learned.learner_state) digest.add(&*learned.learner_state, sizeof(LearnerState));
-        if (learned.vehicle_json) digest.add(learned.vehicle_json->data(), learned.vehicle_json->size());
+        if (learned.vehicle_persist_data)
+            digest.add(learned.vehicle_persist_data->data(), learned.vehicle_persist_data->size());
         if (dump) {
             std::fprintf(dump,
                          "%lu eng=%u act=%u block=%s torque=%d/%d curv=%a/%a desire=%u cruise=%u/%a/%a hud=%x "

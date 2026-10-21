@@ -29,13 +29,14 @@ double interpolate(const Line &px, const Line &py, int j, double x) {
 
 }  // namespace
 
-void LaneLineFilter::update(double t_s, const float *x, const float *y, double v_mps, double curvature, float *out) {
+void LaneLineFilter::update(double t_s, const float *x, const float *y, double speed_mps, double curvature,
+                            float *out) {
     const double dt = t_s - t_s_;
     bool restart = !have_ || !(dt > 0.0) || dt > kMaxGapS || weight_ >= 1.0;
     Line predicted{};
     if (!restart) {
         // 직전 선을 지금 차체 좌표로 옮긴다. 자차는 거리 d를 곡률 k의 원호로 갔다(방향 theta = k·d).
-        const double d = std::max(0.0, v_mps) * dt;
+        const double d = std::max(0.0, speed_mps) * dt;
         const double theta = curvature * d;
         const bool straight = std::fabs(theta) < 1e-9;
         const double dx = straight ? d : d * std::sin(theta) / theta;

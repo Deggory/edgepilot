@@ -391,7 +391,7 @@ struct LateralPlanner::Impl {
     // 모델 프레임의 차선 변경 확률·차선·경계로 desire를 갱신하고, 변경 중이면 가까운 차선선을 뺀다.
     void update_desire(const ModelState &model, const VehicleCanState &vehicle, float v_ego, bool lat_active,
                        bool steering_pressed) {
-        DesireModelInputs desire_inputs;
+        DesireModelInput desire_inputs;
         desire_inputs.lane_change_prob = model.desire_state[3] + model.desire_state[4];
         for (size_t i = 0; i < desire_inputs.lane_probabilities.size(); ++i)
             desire_inputs.lane_probabilities[i] = model.lane_probabilities[i];

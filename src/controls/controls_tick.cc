@@ -66,7 +66,7 @@ VisionLead observe_cruise_lead(VisionLead lead, const LeadTrackState &track) {
     return lead;
 }
 
-DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicle, const LateralControlResult &result,
+DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicle, const LateralControlOutput &result,
                                      const ModelState &model, bool model_updated, const VisionLead &lead,
                                      float ego_speed_mps) {
     DepartureAlertInput input;
@@ -88,7 +88,7 @@ DepartureAlertInput make_alert_input(double now_s, const VehicleCanState &vehicl
 }
 
 AdaptiveCruiseInput make_adaptive_input(double now_s, bool enabled, const VehicleCanState &vehicle,
-                                        const LateralControlResult &result, const PandaGateOutput &panda,
+                                        const LateralControlOutput &result, const PandaGateOutput &panda,
                                         bool model_updated, const VisionLead &lead, float ego_speed_kph) {
     AdaptiveCruiseInput input;
     input.now_s = now_s;
@@ -123,7 +123,7 @@ void emit_if_changed(const std::string &content, std::string *saved, std::option
 // 필드 순서는 ipc_messages.h가 고정한다. timestamp_ns는 main이 찍는다.
 ControlState ControlsTick::make_control_state(const DepartureAlertOutput &departure_alert, bool radar_lead_fresh,
                                               float ego_speed_kph, double now_s) const {
-    const LateralControlResult &result = last_result_;
+    const LateralControlOutput &result = last_result_;
     const LateralTarget &target = lateral_target_;
     const VehicleCanState &vehicle = vehicle_;
     const EngageEvents &events = events_;
@@ -193,7 +193,7 @@ ControlState ControlsTick::make_control_state(const DepartureAlertOutput &depart
 
 // 결합·해제·거부 이벤트 id를 올리고 결합·활성 전이를 로그에 남긴다.
 void ControlsTick::update_events(const PathHoldOutput &held, uint64_t now_ns) {
-    const LateralControlResult &result = last_result_;
+    const LateralControlOutput &result = last_result_;
     const VehicleCanState &vehicle = vehicle_;
     const PandaGateOutput &panda = panda_;
     const PandaState &panda_state = panda_state_;
@@ -304,14 +304,14 @@ ControlsTick::ControlsTick(const ControlParams &params, bool force_engaged, cons
       controller_(LateralControllerConfig{force_engaged, params.steering}),
       learners_(params.steering, vehicle_learn_json, torque_learn_cache),
       adaptive_cruise_controller_(params.cruise),
-      saved_vehicle_json_(vehicle_learn_json),
-      saved_torque_cache_(torque_learn_cache) {}
+      saved_vehicle_data_(vehicle_learn_json),
+      saved_torque_data_(torque_learn_cache) {}
 
-void ControlsTick::apply_params(const ControlParams &params) {
+void ControlsTick::update_params(const ControlParams &params) {
     cruise_ = params.cruise;
     controller_.update_params(params.steering);
     planner_.update_params(params.steering);
-    adaptive_cruise_controller_.update_config(cruise_);
+    adaptive_cruise_controller_.update_params(cruise_);
 }
 
 bool ControlsTick::on_can_batch(const CanBatch &batch, uint64_t now_ns, double now_s) {
@@ -407,7 +407,7 @@ ControlState ControlsTick::update(double now_s, uint64_t now_ns) {
     return make_control_state(departure_alert, radar_lead_fresh, ego_speed_kph, now_s);
 }
 
-LearnerOutputs ControlsTick::update_learners(double now_s) {
+LearnerOutput ControlsTick::update_learners(double now_s) {
     // 학습기는 이번 틱에 실제로 보낸 토크로 갱신하고, 컨트롤러는 다음 틱에 쓴다. torqued 지연은
     // 컨트롤러와 같은 조향 지연(상류는 lateralDelay). 조향 여부는 상류 latActive다: MDPS 일시 고장·정차·큰 조향각
     // 요청 끔 동안의 점은 torqued가 거른다(예전에는 active를 넘겨 그 점도 들어갔다).
@@ -417,9 +417,9 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
                      last_result_.steering_pressed);
     controller_.set_live_params(learners_.live(), learners_.vehicle_valid());
     controller_.set_calibration_status(static_cast<CalibrationStatus>(model_.calibration.status));
-    LearnerOutputs out;
+    LearnerOutput out;
     if (learners_.vehicle_persist_due()) {
-        emit_if_changed(learners_.vehicle_persist_json(), &saved_vehicle_json_, &out.vehicle_json);
+        emit_if_changed(learners_.vehicle_persist_data(), &saved_vehicle_data_, &out.vehicle_persist_data);
         const VehicleParams &v = learners_.vehicle_params();
         const TorqueParams &t = learners_.torque_params();
         std::fprintf(stderr,
@@ -432,14 +432,14 @@ LearnerOutputs ControlsTick::update_learners(double now_s) {
                      t.valid ? 1 : 0);
     }
     if (learners_.torque_persist_due())
-        emit_if_changed(learners_.torque_cache(), &saved_torque_cache_, &out.torque_cache);
+        emit_if_changed(learners_.torque_persist_data(), &saved_torque_data_, &out.torque_persist_data);
     if (learners_.vehicle_published()) out.learner_state = make_learner_state();
     return out;
 }
 
-LearnerOutputs ControlsTick::final_learner_outputs() {
-    LearnerOutputs out;
-    emit_if_changed(learners_.vehicle_persist_json(), &saved_vehicle_json_, &out.vehicle_json);
-    emit_if_changed(learners_.torque_cache(), &saved_torque_cache_, &out.torque_cache);
+LearnerOutput ControlsTick::final_learner_outputs() {
+    LearnerOutput out;
+    emit_if_changed(learners_.vehicle_persist_data(), &saved_vehicle_data_, &out.vehicle_persist_data);
+    emit_if_changed(learners_.torque_persist_data(), &saved_torque_data_, &out.torque_persist_data);
     return out;
 }

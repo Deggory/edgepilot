@@ -14,8 +14,8 @@ namespace {
 constexpr float kHighwaySpeedMps = 20.0f;
 
 // 차선선 넷이 다 보이고 도로 경계는 흐린(경계 아님) 모델 프레임.
-DesireModelInputs open_road(double lane_change_prob = 0.0) {
-    DesireModelInputs model;
+DesireModelInput open_road(double lane_change_prob = 0.0) {
+    DesireModelInput model;
     model.lane_change_prob = lane_change_prob;
     model.lane_probabilities = {0.8, 0.9, 0.9, 0.8};
     model.road_edge_stds = {1.0, 1.0};
@@ -31,7 +31,7 @@ VehicleCanState with_blinker(int side, int driver_torque = 0) {
 }
 
 // 컨트롤러가 거른 운전자 조향(steering pressed)은 토크가 기준(150)을 넘는 것으로 대신한다.
-void run(DesireHelper *helper, int frames, const VehicleCanState &vehicle, const DesireModelInputs &model,
+void run(DesireHelper *helper, int frames, const VehicleCanState &vehicle, const DesireModelInput &model,
          float v_ego = kHighwaySpeedMps, bool lat_active = true) {
     for (int i = 0; i < frames; ++i)
         helper->update(vehicle, v_ego, lat_active, std::abs(vehicle.driver_torque) > 150, model);
@@ -86,7 +86,7 @@ TEST(DesireHelper, ChangeTurnsOffAfterTenSeconds) {
 
 TEST(DesireHelper, RoadEdgeBlocksUntilItClears) {
     DesireHelper helper;
-    DesireModelInputs edge = open_road();
+    DesireModelInput edge = open_road();
     edge.road_edge_stds = {1.0, 0.2};                // 오른쪽 경계가 또렷하다
     edge.lane_probabilities = {0.8, 0.9, 0.9, 0.1};  // 그 너머 차선선은 없다
     run(&helper, 10, with_blinker(1), edge);

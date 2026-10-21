@@ -350,7 +350,7 @@ void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bo
     // 파일은 그대로다.
     const bool warp_is_pose = !selector_.flow_applied() && (selector_.flags() & kCalibrationSourceRamping) == 0;
     if (warp_is_pose) {
-        const OnlineCalibrator::UpdateResult result = calibrator_.update(output.pose, v_ego);
+        const OnlineCalibrator::Output result = calibrator_.update(output.pose, v_ego);
         last_snapshot_ = result.snapshot;
         calibrator_.output_rpy(online_rpy_);
         maybe_persist(result);
@@ -358,7 +358,7 @@ void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bo
     apply_selection(dt_s);
 }
 
-void CalibrationService::maybe_persist(const OnlineCalibrator::UpdateResult &result) {
+void CalibrationService::maybe_persist(const OnlineCalibrator::Output &result) {
     if (!result.block_completed || result.snapshot.status != CalibrationStatus::Calibrated) return;
 
     const auto now = std::chrono::steady_clock::now();

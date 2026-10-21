@@ -8,9 +8,7 @@
 #include "common/utils_file.h"
 #include "controls/adaptive_cruise.h"
 
-#include <chrono>
 #include <cstdint>
-#include <optional>
 #include <string>
 
 // 기본값은 params/steering.json(K7 YG HEV 실차 검증값)과 일치시킨다. 로드 실패는
@@ -105,14 +103,14 @@ constexpr double kVehicleStateTimeoutS = 0.5;
 constexpr double kInactiveReleaseS = 3.0;
 
 // params/steering.json을 읽어 SteeringParams에 반영한다.
-bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error);
+bool load_steering_params(const std::string &path, SteeringParams *params, std::string *error);
 // steering.json에서 읽는 키 가운데 a와 b가 다른 첫 키. 같으면 빈 문자열(기본값이 파일과 같은지 보는 테스트용).
 std::string first_steering_param_difference(const SteeringParams &a, const SteeringParams &b);
 
 // controlsd의 런타임 파라미터 두 파일(steering/adaptive_cruise.json). 한꺼번에 읽고 한꺼번에 바꾼다.
 struct ControlParams {
     SteeringParams steering;
-    AdaptiveCruiseConfig cruise;
+    AdaptiveCruiseParams cruise;
 };
 
 struct ControlParamPaths {
@@ -129,18 +127,16 @@ std::string control_params_summary(const ControlParams &params);
 // 거부되면 둘 다 이전 값을 유지한다.
 class ControlParamsWatcher {
 public:
-    ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now);
+    // now_ns(monotonic_now_ns)에 시작 값을 이미 읽었다고 보고 첫 확인을 1초 뒤로 둔다.
+    ControlParamsWatcher(const ControlParamPaths &paths, uint64_t now_ns);
 
-    // 새로 적용할 값. 바뀐 게 없거나 거부됐으면(로그를 남긴다) 비어 있다.
-    std::optional<ControlParams> poll(std::chrono::steady_clock::time_point now, const ControlParams &current);
+    // 새로 적용했으면 true와 그 값. 바뀐 게 없거나 거부됐으면(로그를 남긴다) false이고 params는 그대로다.
+    bool poll(uint64_t now_ns, ControlParams *params);
     unsigned generation() const { return generation_; }
 
 private:
-    void stamp();
-
     ControlParamPaths paths_;
-    FileStamp steering_stamp_;
-    FileStamp cruise_stamp_;
-    std::chrono::steady_clock::time_point next_check_;
+    FileWatch steering_;
+    FileWatch cruise_;
     unsigned generation_ = 1;
 };

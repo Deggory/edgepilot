@@ -139,8 +139,7 @@ int main() {
             }
         } join_control{stop_control, control_thread};
         uint64_t frame_seq = 0;
-        FileStamp config_stamp;
-        uint64_t next_config_poll_ns = 0;
+        FileWatch config_watch(config_path, kConfigPollIntervalNs);
         uint64_t next_state_publish_ns = 0;
         uint64_t next_log_ns = monotonic_now_ns() + kLogIntervalNs;
         uint64_t selected_frames = 0;
@@ -152,22 +151,17 @@ int main() {
 
         while (!g_stop) {
             const uint64_t now_ns = monotonic_now_ns();
-            if (now_ns >= next_config_poll_ns) {
-                next_config_poll_ns = now_ns + kConfigPollIntervalNs;
-                const FileStamp stamp = file_stamp(config_path);
-                if (stamp != config_stamp) {
-                    config_stamp = stamp;
-                    RecordingSettings settings;
-                    std::string error;
-                    if (load_recording_settings(config_path, &settings, &error)) {
-                        if (!settings.enabled && writer.requested_enabled()) drain_encoder();
-                        writer.set_enabled(settings.enabled, now_ns);
-                    } else {
-                        std::fprintf(stderr, "recordd: config error: %s\n", error.c_str());
-                    }
+            if (config_watch.changed(now_ns)) {
+                RecordingSettings settings;
+                std::string error;
+                if (load_recording_settings(config_path, &settings, &error)) {
+                    if (!settings.enabled && writer.requested_enabled()) drain_encoder();
+                    writer.set_enabled(settings.enabled, now_ns);
+                } else {
+                    std::fprintf(stderr, "recordd: config error: %s\n", error.c_str());
                 }
-                writer.poll_storage(now_ns);
             }
+            writer.poll_storage(now_ns);
 
             if (record_state_pub.valid() && now_ns >= next_state_publish_ns) {
                 next_state_publish_ns = now_ns + kStatePublishIntervalNs;

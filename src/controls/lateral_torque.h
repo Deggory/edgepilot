@@ -29,7 +29,7 @@ struct LiveLateralParams {
 class TorqueController {
 public:
     // update의 측정과 요청(틱마다). 기본값은 학습값·편경사가 없고 운전자가 핸들을 잡지 않은 상태다.
-    struct Inputs {
+    struct Input {
         // 상류 CC.latActive. 거짓이면 토크 0을 내고 PID 상태를 지운다(상류 #24606은 적분기를 남기지만 폐루프
         // 재생에서 정차 뒤 차선 오차를 키워 지운다, update 참고). 요청 버퍼와 저크 필터는 늘 갱신한다.
         bool active = false;
@@ -60,8 +60,8 @@ public:
     };
 
     // openpilot LatControlTorque와 같은 형태로 조향 토크를 계산한다. PID는 횡가속 공간에서 돈다.
-    int update(const Inputs &in, const SteeringParams &params, const NnFeedforward &nn);
-    int update(const Inputs &in, const SteeringParams &params) { return update(in, params, NnFeedforward()); }
+    int update(const Input &in, const SteeringParams &params, const NnFeedforward &nn);
+    int update(const Input &in, const SteeringParams &params) { return update(in, params, NnFeedforward()); }
 
     // 조향각이 만드는 곡률(차량 모델: 학습 SR·강성·오프셋·롤 포함, 제어 부호). estimate_actual_curvature의
     // 각도 경로와 같은 식이고 로그용 값을 건드리지 않는다. 컨트롤러의 조향각 상한이 쓴다.

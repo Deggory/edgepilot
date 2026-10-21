@@ -20,7 +20,7 @@ public:
         uint64_t rejected_samples = 0;
     };
 
-    struct UpdateResult {
+    struct Output {
         Snapshot snapshot;
         bool accepted = false;
         bool block_completed = false;
@@ -28,7 +28,7 @@ public:
 
     OnlineCalibrator();
 
-    UpdateResult update(const PoseObservation &pose, float v_ego);
+    Output update(const PoseObservation &pose, float v_ego);
     // 저장된 보정으로 시작한다(openpilot reset). 블록 수를 그대로 써서 5 미만이면 미보정이다.
     // openpilot처럼 범위를 벗어난 rpy도 받아 Invalid로 두고, 유한하지 않으면 0에서 시작한다.
     // rpy 포인터가 있으면 true.

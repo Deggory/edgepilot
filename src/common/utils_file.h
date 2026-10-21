@@ -1,6 +1,7 @@
 #pragma once
 
-// 파일 도우미: 바뀌었는지 보는 stat 지문(FileStamp), 텍스트 읽기, 원자적 쓰기(임시 파일 + rename).
+// 파일 도우미: 바뀌었는지 보는 stat 지문(FileStamp)과 주기 감시(FileWatch), 텍스트 읽기, 원자적 쓰기(임시 파일 +
+// rename).
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -8,10 +9,12 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
 
 // 파라미터 파일이 바뀌었는지 보는 stat 지문. 웹 서버는 임시 파일 + rename으로 쓰므로 inode도
 // 본다. macOS(호스트 빌드)와 Linux의 수정 시각 필드 이름이 달라 여기서만 나눈다.
@@ -47,6 +50,34 @@ inline FileStamp file_stamp(const std::string &path) {
 #endif
     return stamp;
 }
+
+// 설정 파일 하나를 interval마다 stat으로 본다. 지문이 마지막으로 본 것과 달라진 확인에만 true다(웹 서버의 임시 파일 +
+// rename도, 손으로 고친 것도, 지워진 것도). 처음 확인은 파일이 있으면 true다. 시각은 monotonic_now_ns.
+class FileWatch {
+public:
+    FileWatch(std::string path, uint64_t interval_ns) : path_(std::move(path)), interval_ns_(interval_ns) {}
+
+    // 지금 파일을 이미 읽은 것으로 치고 다음 확인을 interval 뒤로 미룬다(시작 때 읽은 파일).
+    void mark_seen(uint64_t now_ns) {
+        stamp_ = file_stamp(path_);
+        next_check_ns_ = now_ns + interval_ns_;
+    }
+    bool changed(uint64_t now_ns) {
+        if (now_ns < next_check_ns_) return false;
+        next_check_ns_ = now_ns + interval_ns_;
+        const FileStamp stamp = file_stamp(path_);
+        if (!(stamp != stamp_)) return false;
+        stamp_ = stamp;
+        return true;
+    }
+    const std::string &path() const { return path_; }
+
+private:
+    std::string path_;
+    uint64_t interval_ns_;
+    FileStamp stamp_;
+    uint64_t next_check_ns_ = 0;
+};
 
 // 파일 전체를 문자열로 읽는다. 없거나 못 읽으면 빈 문자열이다.
 inline std::string read_text_file(const std::string &path) {

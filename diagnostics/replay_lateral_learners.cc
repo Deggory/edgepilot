@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     SteeringParams sp;
     if (!steering_path.empty()) {
         std::string error;
-        if (!load_steering_params_json(steering_path, &sp, &error)) {
+        if (!load_steering_params(steering_path, &sp, &error)) {
             std::fprintf(stderr, "%s: %s\n", steering_path.c_str(), error.c_str());
             return 1;
         }
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
         const double v_ego = speed_filter.update(vehicle_speed_kph(vehicle, now_s, kVehicleStateTimeoutS) / 3.6);
         // 녹화에는 latActive가 없다: 큰 조향각에서 요청을 끈 동안과 MDPS 일시 고장을 빼고 active로 어림한다
         const bool lat_active = cs.active != 0 && (cs.hud_flags & kHudFlagSteerPaused) == 0 && cs.steering_fault == 0;
-        // 신선도도 컨트롤러와 같은 판정이다(LateralControlResult::vehicle_fresh·esp12_fresh)
+        // 신선도도 컨트롤러와 같은 판정이다(LateralControlOutput::vehicle_fresh·esp12_fresh)
         learners.update(vehicle, now_s, vehicle_state_fresh(vehicle, now_s, kVehicleStateTimeoutS),
                         signal_time_fresh(vehicle.esp12_time_s, now_s, kVehicleStateTimeoutS), v_ego, lat_active,
                         cs.apply_torque, pressed);
@@ -203,7 +203,8 @@ int main(int argc, char **argv) {
         }
         if (learners.torque_persist_due() && !torque_cache_path.empty()) {
             std::ofstream f(torque_cache_path, std::ios::binary | std::ios::trunc);
-            f.write(learners.torque_cache().data(), static_cast<std::streamsize>(learners.torque_cache().size()));
+            f.write(learners.torque_persist_data().data(),
+                    static_cast<std::streamsize>(learners.torque_persist_data().size()));
         }
         if (learners.torque_published() && tout_file) {
             const TorqueParams &q = learners.torque_params();

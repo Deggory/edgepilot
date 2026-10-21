@@ -74,7 +74,7 @@ LiveLateralParams LateralController::live_params() const {
 }
 
 // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
-LateralControlResult LateralController::update(const LateralPath &path, const LateralTarget &target,
+LateralControlOutput LateralController::update(const LateralPath &path, const LateralTarget &target,
                                                const VehicleCanState &vehicle_state, double now_s, int frame,
                                                const PandaGateOutput &panda, uint64_t now_ns) {
     nn_evaluated_ = false;
@@ -83,7 +83,7 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     update_button_state(vehicle_state.clu_button, now_s);
     const bool logical_engaged = config_.force_engaged || engaged_;
 
-    LateralControlResult result;
+    LateralControlOutput result;
     result.engaged = logical_engaged;
     const LateralPath gated_path = debounce_path(path, now_s);
     result.path_usable = gated_path.usable_for_steering;
@@ -148,7 +148,7 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
         lateral_nn_feedforward(target, vehicle_state, speed_mps, plan_age, steering, live, hold);
 
     // 토크 제어기의 측정과 요청(조향하지 않는 틱에도 요청 버퍼와 저크 필터를 갱신한다)
-    TorqueController::Inputs torque_in;
+    TorqueController::Input torque_in;
     torque_in.speed_mps = speed_mps;
     torque_in.desired_curvature = result.desired_curvature;
     torque_in.steering_angle_deg = vehicle_state.steering_angle_deg;
@@ -223,7 +223,7 @@ void LateralController::disengage(double now_s) {
 // 이번 틱의 차단 사유(kind)와 SoftDisable 사유(soft_condition)로 해제·결합 거부·Panda 유예를 정하고, result의
 // engaged, soft_disabling, engage_rejected, active를 채운다.
 void LateralController::resolve_engagement(BlockKind kind, bool soft_condition, bool logical_engaged,
-                                           bool engage_requested, double now_s, LateralControlResult *result) {
+                                           bool engage_requested, double now_s, LateralControlOutput *result) {
     // SoftDisable: 결합 중 사유가 이어지는 동안 3초를 세며 경고하고, 그 뒤에는 Hard처럼 해제한다. 정차·경로 무효
     // 같은 앞선 사유가 끼어도 타이머는 이어 센다(상류 softDisabling). 그 사유가 첫 사유일 때만 조향을 이어 간다.
     // 결합 요청이 Panda 허가를 기다리는 동안은 세지 않는다: 허가가 오면 이 사유로 결합을 거부한다(상류 NO_ENTRY).
@@ -328,7 +328,7 @@ LateralController::CurvatureBounds LateralController::hold_angle_bounds(float sp
 }
 
 // 토크 제어기의 진단값을 결과에 옮긴다.
-void LateralController::copy_torque_state(LateralControlResult *result) const {
+void LateralController::copy_torque_state(LateralControlOutput *result) const {
     result->actual_curvature = torque_controller_.actual_curvature();
     result->actual_curvature_vm = torque_controller_.actual_curvature_vm();
     result->actual_curvature_yaw = torque_controller_.actual_curvature_yaw();
@@ -385,9 +385,9 @@ float LateralController::lateral_nn_feedforward(const LateralTarget &target, con
 }
 
 // 조향 중: 토크를 계산하고 85도 고장 회피와 Panda 한계를 적용한 뒤 포화를 본다.
-void LateralController::steer(const VehicleCanState &vehicle_state, const TorqueController::Inputs &torque_in,
+void LateralController::steer(const VehicleCanState &vehicle_state, const TorqueController::Input &torque_in,
                               double now_s, bool steering_pressed, bool curvature_limited, float plan_curvature,
-                              float nn_feedforward, LateralControlResult *result) {
+                              float nn_feedforward, LateralControlOutput *result) {
     const SteeringParams &control_params = config_.steering_params;
     const float speed_mps = torque_in.speed_mps;
     // 85도 위에서도 컨트롤러 토크를 그대로 내되, 요청을 끄는 프레임(avoid_lkas_fault_max_frames,
@@ -405,7 +405,7 @@ void LateralController::steer(const VehicleCanState &vehicle_state, const Torque
             std::min(torque_cap, kHyundaiSteerDeltaDown *
                                      std::max(0, control_params.avoid_lkas_fault_max_frames - fault_angle_frames_));
     }
-    TorqueController::Inputs in = torque_in;
+    TorqueController::Input in = torque_in;
     in.active = true;
     in.steering_pressed = steering_pressed;
     in.steer_limited_by_safety = steer_limited_by_safety_ || above_fault_angle;
@@ -429,7 +429,7 @@ void LateralController::steer(const VehicleCanState &vehicle_state, const Torque
 // 아닐 때 0.4초 누적되면 포화다. 커브에서 plan 목표 횡가속(클립 전, 상류는 모델의
 // desiredCurvature)이 실제의 1.2배를 넘고 1 m/s² 이상이며 최근 2초 안에 핸들을 잡지
 // 않았으면 경고한다.
-bool LateralController::update_saturation(const LateralControlResult &result, float plan_curvature, float speed_mps,
+bool LateralController::update_saturation(const LateralControlOutput &result, float plan_curvature, float speed_mps,
                                           double now_s, bool steering_pressed, bool curvature_limited) {
     const bool saturated_now = std::fabs(result.normalized_output) > 1.0f - 1e-3f || curvature_limited;
     if (saturated_now && speed_mps > kSatCheckMinSpeedMps && !steer_limited_by_safety_ && !steering_pressed)
@@ -621,7 +621,7 @@ BlockReason LateralController::soft_disable_reason(bool steer_fault_alert) const
 
 // 최종 송신 frame 묶음을 만든다.
 std::vector<CanFrame> LateralController::build_frames(const VehicleCanState &vehicle_state,
-                                                      const LateralControlResult &result, bool steer_req,
+                                                      const LateralControlOutput &result, bool steer_req,
                                                       bool lkas_active, int frame) {
     HyundaiLkasCommand command;
     command.apply_steer = result.apply_torque;

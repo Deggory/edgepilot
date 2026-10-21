@@ -305,7 +305,7 @@ int main(int argc, char **argv) {
     SteeringParams steering;
     if (opt.steering_path != nullptr) {
         std::string error;
-        if (!load_steering_params_json(opt.steering_path, &steering, &error)) {
+        if (!load_steering_params(opt.steering_path, &steering, &error)) {
             std::fprintf(stderr, "%s: %s\n", opt.steering_path, error.c_str());
             return 1;
         }
@@ -453,7 +453,7 @@ int main(int argc, char **argv) {
         // controlsd(ControlsTick)처럼 무효 plan 한 프레임은 PathHoldGate가 덮는다
         LateralPath path = have_model ? path_gate.update(ms_sim, path_now_ns, kModelTimeoutNs).path : LateralPath{};
 
-        const LateralControlResult r =
+        const LateralControlOutput r =
             controller.update(path, target, vehicle, sim_t, frame++, panda_allows_control(), path_now_ns);
         lat_active_prev = r.lat_active;
         steering_pressed_prev = r.steering_pressed;

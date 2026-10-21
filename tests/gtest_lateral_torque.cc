@@ -12,9 +12,9 @@
 namespace {
 
 // 토크 제어기 입력: 앞쪽 다섯과 편경사·학습값. 핸들 조작·안전 한계·요레이트는 기본값(없음)이다.
-TorqueController::Inputs torque_in(bool active, float speed_mps, float curvature, float angle_deg, float delay_s,
-                                   float bank = 0.0f, const LiveLateralParams &live = LiveLateralParams{}) {
-    TorqueController::Inputs in;
+TorqueController::Input torque_in(bool active, float speed_mps, float curvature, float angle_deg, float delay_s,
+                                  float bank = 0.0f, const LiveLateralParams &live = LiveLateralParams{}) {
+    TorqueController::Input in;
     in.active = active;
     in.speed_mps = speed_mps;
     in.desired_curvature = curvature;

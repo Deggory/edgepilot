@@ -95,14 +95,14 @@ TEST(Localization, LagdEstimatesDelayFromDriving) {
     EXPECT_NEAR(out.lateral_delay, true_lag, 0.02);
     // 저장한 추정으로 다시 시작하면 블록과 값을 이어 간다
     LateralLagEstimator again(config);
-    ASSERT_TRUE(again.restore(lag.cache_json()));
+    ASSERT_TRUE(again.restore(lag.persist_data()));
     EXPECT_EQ(again.output().valid_blocks, out.valid_blocks);
     EXPECT_NEAR(again.output().lateral_delay, out.estimate, 1e-5);
     // steer_actuator_delay(초기값)를 바꿔도 측정한 블록은 차의 지연이라 이어 쓴다(상류도 차종·버전만 본다)
     LateralLagConfig changed = config;
     changed.initial_lag = 0.42;
     LateralLagEstimator retuned(changed);
-    ASSERT_TRUE(retuned.restore(lag.cache_json()));
+    ASSERT_TRUE(retuned.restore(lag.persist_data()));
     EXPECT_EQ(retuned.output().valid_blocks, out.valid_blocks);
     EXPECT_NEAR(retuned.output().estimate, out.estimate, 1e-5);
 }

@@ -46,7 +46,7 @@ public:
     FlowCalibrationState flow_state() const { return flow_state_; }
 
 private:
-    void maybe_persist(const OnlineCalibrator::UpdateResult &result);
+    void maybe_persist(const OnlineCalibrator::Output &result);
     void poll_flow_source(std::chrono::steady_clock::time_point now);
     void maybe_persist_flow(std::chrono::steady_clock::time_point now, bool flush);
     void set_fixed_projection();

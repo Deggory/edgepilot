@@ -266,7 +266,7 @@ TEST(LateralLearners, Persistence) {
     p.steer_ratio = 15.1;
     p.stiffness_factor = 0.8;
     p.angle_offset_average_deg = -1.62;
-    const std::string saved = persist_vehicle_params(p, c, -0.0017);
+    const std::string saved = vehicle_params_persist_data(p, c, -0.0017);
     const VehicleParamsInit ok = restore_vehicle_params(saved, c);
     // 조향비·평균 오프셋·요 바이어스를 복원한다
     ASSERT_TRUE(ok.restored);
@@ -676,9 +676,9 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
             << "첫 프레임부터 240프레임마다 캐시한다(주행 중에는 늘 새 점이 있다)";
         ASSERT_EQ(published, (frame % 5 == 0)) << "5프레임마다 발행한다";
         if (!est.persist_due()) continue;
-        if (frame == 2400) calibrating_cache = est.cache();  // 120초: 계산 가능, 아직 무효
+        if (frame == 2400) calibrating_cache = est.persist_data();  // 120초: 계산 가능, 아직 무효
         if (est.params().valid && valid_cache.empty()) {
-            valid_cache = est.cache();
+            valid_cache = est.persist_data();
             valid_points = est.points();
             at_valid_persist = est.params();
         }
@@ -763,7 +763,8 @@ TEST(LateralLearners, TorqueScheduleAndCache) {
     ASSERT_NEAR(switched.params().friction, cached.friction, 1e-6);
     ASSERT_EQ(switched.params().lat_accel_offset, 0.0);
     ASSERT_EQ(switched.params().decay, 50.0);
-    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, switched.cache(), true).restore_status(), TorqueRestore::Restored)
+    ASSERT_EQ(TorqueEstimator(tuning, kTorqueLag, switched.persist_data(), true).restore_status(),
+              TorqueRestore::Restored)
         << "새 출처로 저장한 캐시는 그 출처로 복원한다";
 }
 
@@ -1034,8 +1035,8 @@ TEST(LateralLearners, LearnersGlue) {
         ASSERT_EQ(l.live().lat_accel_factor, live.lat_accel_factor);
 
         // 저장 → 복원
-        const std::string json = l.vehicle_persist_json();
-        LateralLearners restored(sp, json, l.torque_cache());
+        const std::string json = l.vehicle_persist_data();
+        LateralLearners restored(sp, json, l.torque_persist_data());
         // 두 학습기가 각자 저장값을 복원한다
         ASSERT_TRUE(restored.vehicle_restored());
         ASSERT_EQ(restored.torque_restore_status(), TorqueRestore::Restored);

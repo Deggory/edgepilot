@@ -70,6 +70,20 @@ clang-format --dry-run --Werror $(git ls-files '*.cc' '*.h' | grep -v '^firmware
   next to the enum.
 - A function called once per tick or per frame is `update()`. Functions that
   take one input as it arrives are `on_<input>()`.
+- Settings read from a file are a `<X>Params` struct, loaded by
+  `load_<x>_params()` and swapped while running by `update_params()`.
+- A daemon that re-reads a file checks it with `FileWatch`
+  (`common/utils_file.h`), and the class that owns the file has
+  `bool poll(uint64_t now_ns, T *out)`.
+- A learner hands its saved state out as `persist_data()`, says when to write
+  it with `persist_due()`, and takes it back in its constructor or
+  `restore()`.
+- What one `update()` takes and gives as a struct is `<X>Input` and
+  `<X>Output`.
+- A name that holds a quantity ends in its unit: `_m`, `_s`, `_ns`, `_rad`,
+  `_deg`, `_mps`, `_kph`, `_px` (`kHoldS` for a constant). Names kept from an
+  upstream port (`v_ego`, `curvature`) and IPC fields that mirror an upstream
+  message stay as upstream has them.
 - `// clang-format off` and `// clang-format on` are only for layouts that
   carry meaning: the row-major 3x3 matrices, the audio stub macro table in
   `maix_shim.cc`, and golden tables that a Python check reads back.

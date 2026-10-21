@@ -73,7 +73,7 @@ int main() {
 
     // 조향 지연 캐시는 바뀌었을 때만 writer 스레드에 넘긴다(SD가 바빠도 IMU 루프가 막히지 않는다).
     auto persist = [&]() {
-        const std::string json = pipeline.lag().cache_json();
+        const std::string json = pipeline.lag().persist_data();
         if (json == last_saved) return;
         writer.write(lag_path, json);
         last_saved = json;

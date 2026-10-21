@@ -95,7 +95,7 @@ struct TickStats {
     // (slow=)과 선점(nivcsw=)으로 가린다.
     void log(double window_s, unsigned long long tx_depth, unsigned long long rx_depth, unsigned param_generation,
              long switches, const ControlsTick &tick) {
-        const LateralControlResult &result = tick.result();
+        const LateralControlOutput &result = tick.result();
         const PandaGateOutput &panda = tick.panda();
         const LateralTarget &target = tick.target();
         const VehicleCanState &vehicle = tick.vehicle();
@@ -206,7 +206,7 @@ int main() {
         const auto start = Clock::now();
         auto next_tick = start;
         auto log_start = start;
-        ControlParamsWatcher param_watcher(param_paths, start);
+        ControlParamsWatcher param_watcher(param_paths, monotonic_now_ns());
         // 틱마다 0으로 채우지 않게 루프 밖에 둔다(CAN 묶음 21.5 KB: pop과 fill_send_batch는 count까지 채운다,
         // ModelState 3.7 KB: 새 스냅샷일 때만 복사한다)
         CanBatch can_batch, send_batch;
@@ -220,13 +220,13 @@ int main() {
             const double now_s = std::chrono::duration<double>(work_start - start).count();
             unsigned work = 0;  // 이번 틱이 한 일(TickWork)
 
-            if (const auto reloaded = param_watcher.poll(work_start, params)) {
-                params = *reloaded;
-                tick.apply_params(params);
+            const uint64_t poll_ns = monotonic_now_ns();
+            if (param_watcher.poll(poll_ns, &params)) {
+                tick.update_params(params);
                 work |= kWorkParams;
             }
             std::shared_ptr<const LateralNnModel> next_nn;
-            if (nn_selector.poll(work_start, &next_nn)) {
+            if (nn_selector.poll(poll_ns, &next_nn)) {
                 tick.set_lateral_nn(next_nn);
                 work |= kWorkParams;
             }
@@ -267,7 +267,7 @@ int main() {
                 ++stats.publish_errors;
             }
 
-            const LateralControlResult &result = tick.result();
+            const LateralControlOutput &result = tick.result();
             if (result.should_send && !result.frames.empty()) {
                 fill_send_batch(&send_batch, result.frames);
                 if (!sendcan_pub.push(send_batch)) {
@@ -279,9 +279,11 @@ int main() {
             }
 
             // 송신 뒤에 둬서 적합·직렬화 틱이 CAN 송신을 늦추지 않게 한다.
-            LearnerOutputs learned = tick.update_learners(now_s);
-            if (learned.vehicle_json) learner_store.write(vehicle_learn_path, std::move(*learned.vehicle_json));
-            if (learned.torque_cache) learner_store.write(torque_learn_path, std::move(*learned.torque_cache));
+            LearnerOutput learned = tick.update_learners(now_s);
+            if (learned.vehicle_persist_data)
+                learner_store.write(vehicle_learn_path, std::move(*learned.vehicle_persist_data));
+            if (learned.torque_persist_data)
+                learner_store.write(torque_learn_path, std::move(*learned.torque_persist_data));
             if (learners.torque_published()) work |= kWorkFit;
             if (learners.vehicle_persist_due() || learners.torque_persist_due()) work |= kWorkSave;
             if (learned.learner_state) {
@@ -315,9 +317,9 @@ int main() {
         }
         std::fprintf(stderr, "controlsd: stopping\n");
         // 마지막 저장 뒤 배운 것(paramsd 최대 60초, torqued 12초)을 남기고 쓰기가 끝날 때까지 기다린다
-        LearnerOutputs last = tick.final_learner_outputs();
-        if (last.vehicle_json) learner_store.write(vehicle_learn_path, std::move(*last.vehicle_json));
-        if (last.torque_cache) learner_store.write(torque_learn_path, std::move(*last.torque_cache));
+        LearnerOutput last = tick.final_learner_outputs();
+        if (last.vehicle_persist_data) learner_store.write(vehicle_learn_path, std::move(*last.vehicle_persist_data));
+        if (last.torque_persist_data) learner_store.write(torque_learn_path, std::move(*last.torque_persist_data));
         learner_store.flush();
         return 0;
     } catch (const std::exception &error) {

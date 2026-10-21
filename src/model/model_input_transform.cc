@@ -10,10 +10,10 @@ ModelInputTransform::ModelInputTransform(const AppConfig &config, ModelFrame mod
       cy_(config.input_warp_cy),
       model_frame_(model_frame) {}
 
-void ModelInputTransform::set_calibration(float roll, float pitch, float yaw) {
-    roll_ = roll;
-    pitch_ = pitch;
-    yaw_ = yaw;
+void ModelInputTransform::set_calibration(float roll_rad, float pitch_rad, float yaw_rad) {
+    roll_rad_ = roll_rad;
+    pitch_rad_ = pitch_rad;
+    yaw_rad_ = yaw_rad;
 }
 
 void ModelInputTransform::set_camera_mount(float offset_m, float height_m) {
@@ -50,7 +50,7 @@ void ModelInputTransform::projection_matrix(float *projection) const {
     };
     // clang-format on
     float rot[9];
-    rotation_from_rpy(roll_, pitch_, yaw_, rot);
+    rotation_from_rpy(roll_rad_, pitch_rad_, yaw_rad_, rot);
 
     // 가상 카메라 이동(set_camera_mount): 보정 좌표계(x 앞, y 오른쪽, z 아래)에서 가상 카메라가
     // c = (0, offset, 0)에 있으면, 높이 h 아래 도로면 점 P_v(z = h)는 실제 카메라에서

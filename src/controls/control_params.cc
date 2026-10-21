@@ -48,11 +48,11 @@ constexpr JsonFloatField<SteeringParams> kSteeringFloats[] = {
 
 // 파라미터 파일을 stat하는 간격. 웹 콘솔에서 바꾼 값도 이 확인으로 1초 안에 적용된다. 제어 스레드에서 SD를 자주
 // 보지 않게 1초로 둔다.
-constexpr int kParamPollIntervalMs = 1000;
+constexpr uint64_t kParamPollIntervalNs = 1'000'000'000ULL;
 
 }  // namespace
 
-bool load_steering_params_json(const std::string &path, SteeringParams *params, std::string *error) {
+bool load_steering_params(const std::string &path, SteeringParams *params, std::string *error) {
     return load_json_param_file(
         path,
         [params](const JsonValue &root) {
@@ -76,11 +76,11 @@ std::string first_steering_param_difference(const SteeringParams &a, const Steer
 bool load_control_params(const ControlParamPaths &paths, ControlParams *params, std::string *error) {
     ControlParams candidate = *params;
     std::string load_error;
-    if (!load_steering_params_json(paths.steering, &candidate.steering, &load_error)) {
+    if (!load_steering_params(paths.steering, &candidate.steering, &load_error)) {
         if (error) *error = "steering " + paths.steering + ": " + load_error;
         return false;
     }
-    if (!load_adaptive_cruise_params_json(paths.cruise, &candidate.cruise, &load_error)) {
+    if (!load_adaptive_cruise_params(paths.cruise, &candidate.cruise, &load_error)) {
         if (error) *error = "adaptive cruise " + paths.cruise + ": " + load_error;
         return false;
     }
@@ -96,34 +96,24 @@ std::string control_params_summary(const ControlParams &params) {
     return text;
 }
 
-ControlParamsWatcher::ControlParamsWatcher(ControlParamPaths paths, std::chrono::steady_clock::time_point now)
-    : paths_(std::move(paths)), next_check_(now + std::chrono::milliseconds(kParamPollIntervalMs)) {
-    stamp();
+ControlParamsWatcher::ControlParamsWatcher(const ControlParamPaths &paths, uint64_t now_ns)
+    : paths_(paths), steering_(paths.steering, kParamPollIntervalNs), cruise_(paths.cruise, kParamPollIntervalNs) {
+    steering_.mark_seen(now_ns);
+    cruise_.mark_seen(now_ns);
 }
 
-std::optional<ControlParams> ControlParamsWatcher::poll(std::chrono::steady_clock::time_point now,
-                                                        const ControlParams &current) {
-    if (now < next_check_) return std::nullopt;
-    next_check_ = now + std::chrono::milliseconds(kParamPollIntervalMs);
-    const FileStamp steering = file_stamp(paths_.steering);
-    const FileStamp cruise = file_stamp(paths_.cruise);
-    const bool changed = steering != steering_stamp_ || cruise != cruise_stamp_;
-    if (!changed) return std::nullopt;
-    steering_stamp_ = steering;
-    cruise_stamp_ = cruise;
-    ControlParams candidate = current;
+bool ControlParamsWatcher::poll(uint64_t now_ns, ControlParams *params) {
+    // 둘 다 본다(앞쪽이 바뀌었어도 뒤쪽 지문을 새로 적어 두어야 다음 확인에서 다시 읽지 않는다).
+    const bool steering_changed = steering_.changed(now_ns);
+    const bool cruise_changed = cruise_.changed(now_ns);
+    if (!steering_changed && !cruise_changed) return false;
     std::string error;
-    if (!load_control_params(paths_, &candidate, &error)) {
+    if (!load_control_params(paths_, params, &error)) {
         std::fprintf(stderr, "controlsd: params reload rejected: %s\n", error.c_str());
-        return std::nullopt;
+        return false;
     }
     ++generation_;
     std::fprintf(stderr, "controlsd: params reloaded generation=%u %s\n", generation_,
-                 control_params_summary(candidate).c_str());
-    return candidate;
-}
-
-void ControlParamsWatcher::stamp() {
-    steering_stamp_ = file_stamp(paths_.steering);
-    cruise_stamp_ = file_stamp(paths_.cruise);
+                 control_params_summary(*params).c_str());
+    return true;
 }

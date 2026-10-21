@@ -64,8 +64,8 @@ ScaleFit fit_similarity_scale(const float *a, const float *b, int n, double inli
 struct LeadFlowInput {
     bool valid = false;
     float probability = 0.0f;
-    float x = 0.0f;     // m, 카메라 기준
-    float y = 0.0f;     // m, 오른쪽이 +
+    float x_m = 0.0f;   // 카메라 기준
+    float y_m = 0.0f;   // 오른쪽이 +
     float rpy[3] = {};  // 워프에 쓴 보정
     float camera_height_m = 0.0f;
     float camera_offset_m = 0.0f;
@@ -73,8 +73,8 @@ struct LeadFlowInput {
 
 // 따라갈 만한 앞차인지: 있고, 확률 문턱(controlsd와 같다) 이상이고, 거리가 범위 안이다
 inline bool lead_flow_wanted(const LeadFlowInput &lead) {
-    return lead.valid && lead.probability >= kLeadProbabilityThreshold && lead.x >= kLeadMinDistanceM &&
-           lead.x <= kLeadMaxDistanceM;
+    return lead.valid && lead.probability >= kLeadProbabilityThreshold && lead.x_m >= kLeadMinDistanceM &&
+           lead.x_m <= kLeadMaxDistanceM;
 }
 
 // 앞차 점의 창. 프레임마다 begin → (점이 있으면) points를 LK에 넣고, 그 결과를 거꾸로 LK에 넣어 둘 다

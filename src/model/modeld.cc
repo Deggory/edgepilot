@@ -280,8 +280,8 @@ void ModelLoop::publish(LatestChannel &model_pub, const ParsedModelOutput &parse
     if (lead.next) {  // 광류 작업이 다음 카메라 프레임에서 따라갈 앞차
         lead.next->valid = state.lead.valid != 0;
         lead.next->probability = state.lead.probability;
-        lead.next->x = state.lead.x;
-        lead.next->y = state.lead.y;
+        lead.next->x_m = state.lead.x;
+        lead.next->y_m = state.lead.y;
         std::copy(input_rpy, input_rpy + 3, lead.next->rpy);
         lead.next->camera_height_m = mount.height_m();
         lead.next->camera_offset_m = mount.offset_m();

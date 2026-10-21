@@ -57,7 +57,7 @@ public:
 
     // speed_mps는 controlsd가 거른 vEgo(상류 paramsd·torqued도 carState.vEgo를 쓴다). 휠 속도가 낡으면
     // NaN이고 그 틱의 입력은 신선하지 않다. vehicle_fresh·esp12_fresh는 컨트롤러의 같은 틱 판정이다
-    // (LateralControlResult, kVehicleStateTimeoutS).
+    // (LateralControlOutput, kVehicleStateTimeoutS).
     void update(const VehicleCanState &vehicle, double now_s, bool vehicle_fresh, bool esp12_fresh, double speed_mps,
                 bool lat_active, int apply_torque, bool steering_pressed);
 
@@ -75,9 +75,9 @@ public:
 
     // 저장: 이번 틱에 새 내용이 생겼으면 참. 쓰기는 호출자가 제어 루프 밖에서 한다.
     bool vehicle_persist_due() const { return vehicle_persist_due_; }
-    std::string vehicle_persist_json() const;
+    std::string vehicle_persist_data() const;
     bool torque_persist_due() const { return torque_persist_due_; }
-    const std::string &torque_cache() const { return torque_.cache(); }
+    const std::string &torque_persist_data() const { return torque_.persist_data(); }
     // 상류는 복원이 거부된 paramsd 저장과 깨진 torqued 캐시를 지운다
     bool vehicle_restore_rejected() const { return vehicle_restore_rejected_; }
     TorqueRestore torque_restore_status() const { return torque_.restore_status(); }

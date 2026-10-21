@@ -15,7 +15,7 @@ LeadFlowInput lead_at(float x) {
     LeadFlowInput in;
     in.valid = true;
     in.probability = 0.9f;
-    in.x = x;
+    in.x_m = x;
     in.camera_height_m = 1.22f;
     return in;
 }

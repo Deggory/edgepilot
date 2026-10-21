@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr double kBlinkerHoldSeconds = 0.5;
+constexpr double kBlinkerHoldS = 0.5;
 // opendbc hyundai carstate의 STANDSTILL_THRESHOLD(12 × 0.03125 km/h)
 constexpr float kStandstillWheelSpeedKph = 12.0f * 0.03125f;
 // 이보다 깊으면 페달을 밟은 것이다. 2026-10-04 녹화 두 건: 제동 중 스트로크 중앙값 16 mm(하위 5%
@@ -320,15 +320,15 @@ void apply_elect_gear(VehicleCanState *state, const std::array<uint8_t, 8> &data
 }
 
 // CGW1: 앞문, 안전벨트, 깜빡이. 깜빡이는 점멸 사이에도 켜진 것으로 보도록
-// kBlinkerHoldSeconds 동안 유지한다.
+// kBlinkerHoldS 동안 유지한다.
 void apply_cgw1(VehicleCanState *state, const std::array<uint8_t, 8> &data, double now_s) {
     const Cgw1Values cgw = decode_cgw1(data);
     state->driver_door_open = cgw.driver_door_open;
     state->passenger_door_open = cgw.passenger_door_open;
     update_door_open(state);
     state->seatbelt_unlatched = cgw.seatbelt_unlatched;
-    if (cgw.left_blinker) state->left_blinker_until_s = now_s + kBlinkerHoldSeconds;
-    if (cgw.right_blinker) state->right_blinker_until_s = now_s + kBlinkerHoldSeconds;
+    if (cgw.left_blinker) state->left_blinker_until_s = now_s + kBlinkerHoldS;
+    if (cgw.right_blinker) state->right_blinker_until_s = now_s + kBlinkerHoldS;
     state->left_blinker = now_s < state->left_blinker_until_s;
     state->right_blinker = now_s < state->right_blinker_until_s;
     state->cgw1_time_s = now_s;

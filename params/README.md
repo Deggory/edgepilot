@@ -137,7 +137,7 @@ buttons that turned the stock cruise back on.
 
 The number of CLU11 frames sent for one button press (5) is a code constant, as
 in upstream and the community forks
-(`AdaptiveCruiseConfig::button_pulse_frames`).
+(`AdaptiveCruiseParams::button_pulse_frames`).
 
 The other rules of the button decision are code constants too
 (`adaptive_cruise.cc`):

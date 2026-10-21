@@ -18,8 +18,6 @@
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
-
 struct ScratchDir {
     ScratchDir() {
         char path[] = "/tmp/gtest_lateral_nn_select_XXXXXX";
@@ -32,11 +30,10 @@ struct ScratchDir {
 void write(const std::string &path, const std::string &text) { std::ofstream(path) << text; }
 
 // 읽기가 끝날 때까지(최대 5초) 1초 넘게 간격을 두고 poll한다. 새 모델을 받으면 true.
-bool poll_until_done(LateralNnSelector &selector, Clock::time_point *now,
-                     std::shared_ptr<const LateralNnModel> *model) {
-    *now += std::chrono::seconds(2);
+bool poll_until_done(LateralNnSelector &selector, uint64_t *now_ns, std::shared_ptr<const LateralNnModel> *model) {
+    *now_ns += 2'000'000'000ULL;
     for (int i = 0; i < 5000; ++i) {
-        if (selector.poll(*now, model)) return true;
+        if (selector.poll(*now_ns, model)) return true;
         if (i > 0 && !selector.loading()) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -85,15 +82,15 @@ TEST(LateralNnSelector, SwitchesKeepsAndReports) {
     EXPECT_EQ(selector.loaded_name(), "k7_hev_v3");
     EXPECT_NE(read_text_file(status).find(R"("loaded": "k7_hev_v3")"), std::string::npos);
 
-    Clock::time_point now{};
+    uint64_t now_ns = 0;
     std::shared_ptr<const LateralNnModel> next;
-    EXPECT_FALSE(poll_until_done(selector, &now, &next)) << "그대로면 다시 읽지 않는다";
+    EXPECT_FALSE(poll_until_done(selector, &now_ns, &next)) << "그대로면 다시 읽지 않는다";
 
     // 다른 모델: 같은 내용을 다른 이름의 파일로 둔다
     const std::string second = dir.root + "/second.json";
     write(second, read_text_file("models/lateral_nn/k7_hev_v3.json"));
     choice = {"second", second, ""};
-    ASSERT_TRUE(poll_until_done(selector, &now, &next)) << "고르기가 바뀌면 읽어서 넘긴다";
+    ASSERT_TRUE(poll_until_done(selector, &now_ns, &next)) << "고르기가 바뀌면 읽어서 넘긴다";
     EXPECT_NE(next, first);
     EXPECT_EQ(selector.loaded_name(), "second");
 
@@ -101,18 +98,18 @@ TEST(LateralNnSelector, SwitchesKeepsAndReports) {
     const std::string broken = dir.root + "/broken.json";
     write(broken, "{\"format\": \"edgepilot-lateral-nn\"}");
     choice = {"broken", broken, ""};
-    EXPECT_FALSE(poll_until_done(selector, &now, &next));
+    EXPECT_FALSE(poll_until_done(selector, &now_ns, &next));
     EXPECT_EQ(selector.loaded_name(), "second");
     EXPECT_FALSE(selector.last_error().empty());
     const std::string text = read_text_file(status);
     EXPECT_NE(text.find(R"("selected": "broken")"), std::string::npos) << text;
     EXPECT_NE(text.find(R"("loaded": "second")"), std::string::npos) << text;
-    EXPECT_FALSE(poll_until_done(selector, &now, &next)) << "같은 깨진 파일은 다시 시도하지 않는다";
+    EXPECT_FALSE(poll_until_done(selector, &now_ns, &next)) << "같은 깨진 파일은 다시 시도하지 않는다";
 
     // 그 파일을 고치면(파일 시각이 바뀌면) 다시 읽는다
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     write(broken, read_text_file("models/lateral_nn/k7_hev_v3.json"));
-    ASSERT_TRUE(poll_until_done(selector, &now, &next));
+    ASSERT_TRUE(poll_until_done(selector, &now_ns, &next));
     EXPECT_EQ(selector.loaded_name(), "broken");
     EXPECT_TRUE(selector.last_error().empty());
 }

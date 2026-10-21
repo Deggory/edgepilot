@@ -2,13 +2,14 @@
 
 #include "common/utils_process.h"
 
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <utility>
 
 namespace {
 
-constexpr auto kCheckInterval = std::chrono::seconds(1);
+constexpr uint64_t kCheckIntervalNs = 1'000'000'000ULL;
 
 std::string json_string(const std::string &text) {
     std::string out = "\"";
@@ -59,7 +60,7 @@ std::shared_ptr<const LateralNnModel> LateralNnSelector::load_now() {
     return attempt.model;
 }
 
-bool LateralNnSelector::poll(std::chrono::steady_clock::time_point now, std::shared_ptr<const LateralNnModel> *model) {
+bool LateralNnSelector::poll(uint64_t now_ns, std::shared_ptr<const LateralNnModel> *model) {
     if (pending_.valid()) {
         if (pending_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
         const Attempt attempt = pending_.get();
@@ -68,8 +69,8 @@ bool LateralNnSelector::poll(std::chrono::steady_clock::time_point now, std::sha
         *model = attempt.model;
         return true;
     }
-    if (now < next_check_) return false;
-    next_check_ = now + kCheckInterval;
+    if (now_ns < next_check_ns_) return false;
+    next_check_ns_ = now_ns + kCheckIntervalNs;
     LateralNnChoice choice = choose_();
     const FileStamp stamp = choice.path.empty() ? FileStamp{} : file_stamp(choice.path);
     if (same_as_wanted(choice, stamp)) return false;

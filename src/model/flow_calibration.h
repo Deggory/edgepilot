@@ -40,10 +40,10 @@ struct FlowIntrinsics {
 
 struct FlowSolution {
     bool valid = false;
-    double yaw = 0.0;       // rad, atan(m_x / m_z): calibration과 같은 규약
-    double pitch = 0.0;     // rad, -atan(m_y / m_z)
-    double rotation = 0.0;  // rad, 창 동안 카메라가 돈 각도
-    double parallax = 0.0;  // px, 점 이동량(시작→끝)의 중앙값
+    double yaw_rad = 0.0;       // atan(m_x / m_z): calibration과 같은 규약
+    double pitch_rad = 0.0;     // -atan(m_y / m_z)
+    double rotation_rad = 0.0;  // 창 동안 카메라가 돈 각도
+    double parallax_px = 0.0;   // 점 이동량(시작→끝)의 중앙값
     int inliers = 0;
     int points = 0;
 };
@@ -111,7 +111,7 @@ public:
     // 끝까지 갔지만 풀이가 맞지 않은 창. 수와 이동량을 남긴다(조건 조정용).
     void note_rejected(const FlowSolution &window) {
         ++state_.rejected_windows;
-        state_.window_parallax = static_cast<float>(window.parallax);
+        state_.window_parallax = static_cast<float>(window.parallax_px);
     }
     FlowCalibrationState state() const { return state_; }
 

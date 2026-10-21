@@ -4,7 +4,7 @@
 // 받아 보낼 CAN과 상태를 만든다. 호스트 검사와 재생 도구가 같은 코드를 돌린다.
 //
 // 한 틱의 순서(main이 지킨다):
-//   apply_params(바뀌었으면) → on_can_batch(...) → on_model(새 모델이면) → on_panda → on_localization →
+//   update_params(바뀌었으면) → on_can_batch(...) → on_model(새 모델이면) → on_panda → on_localization →
 //   update → [main: ControlState 발행, CAN 송신] → update_learners → [main: 학습 저장, LearnerState 발행]
 // - 플래너는 on_model에서 이번 틱 CAN이 반영된 차량 상태와 직전 틱의 실제 곡률·active를 받아 그 자리에서
 //   계산하고, 같은 틱의 update가 그 결과를 쓴다(평균 약 0.1 ms, MPC는 반복 없는 고정 연산; 2026-10-13 보드).
@@ -50,9 +50,9 @@ struct LocalizationRead {
 };
 
 // update_learners의 결과. 저장할 내용과 발행할 학습 상태(timestamp_ns는 main이 찍는다).
-struct LearnerOutputs {
-    std::optional<std::string> vehicle_json;
-    std::optional<std::string> torque_cache;
+struct LearnerOutput {
+    std::optional<std::string> vehicle_persist_data;
+    std::optional<std::string> torque_persist_data;
     std::optional<LearnerState> learner_state;
 };
 
@@ -64,7 +64,7 @@ public:
                  const std::string &torque_learn_cache);
 
     // 다시 읽은 파라미터를 컨트롤러·플래너·크루즈에 넘긴다.
-    void apply_params(const ControlParams &params);
+    void update_params(const ControlParams &params);
     // 학습한 토크 모델(docs/lateral-nn.md). controlsd와 재생 도구가 시작할 때 한 번 준다.
     void set_lateral_nn(std::shared_ptr<const LateralNnModel> model) { controller_.set_lateral_nn(std::move(model)); }
     // 수신 CAN 묶음. now_ns는 묶음을 큐에서 꺼낸 직후의 시각이다. 100 ms보다 오래됐거나 now_ns보다 늦은 시각의
@@ -82,11 +82,11 @@ public:
     // 송신 뒤: 학습기 갱신과 다음 틱 컨트롤러에 학습값 반영. 같은 틱의 update 다음에 부른다(컨트롤러의 신선도 판정을
     // 쓴다). 저장 주기가 됐고 내용이 마지막 저장과 다르면 저장할 내용을, 새 LearnerState가 나왔으면 그것도 담아
     // 돌려준다. 실패한 쓰기는 BackgroundWriter가 다시 쓴다.
-    LearnerOutputs update_learners(double now_s);
+    LearnerOutput update_learners(double now_s);
     // 끝낼 때: 마지막 저장 뒤 바뀐 학습값(paramsd 60초·torqued 12초 주기 사이의 것). locationd처럼 끝낼 때도 남긴다.
-    LearnerOutputs final_learner_outputs();
+    LearnerOutput final_learner_outputs();
 
-    const LateralControlResult &result() const { return last_result_; }
+    const LateralControlOutput &result() const { return last_result_; }
     const PandaGateOutput &panda() const { return panda_; }
     const LateralTarget &target() const { return lateral_target_; }
     const VehicleCanState &vehicle() const { return vehicle_; }
@@ -109,7 +109,7 @@ private:
     LearnerState make_learner_state() const;
     const SteeringParams &steering() const { return controller_.config().steering_params; }
 
-    AdaptiveCruiseConfig cruise_;
+    AdaptiveCruiseParams cruise_;
     LateralPlanner planner_;
     LateralController controller_;
     LateralLearners learners_;
@@ -123,7 +123,7 @@ private:
     PandaState panda_state_;
     LateralTarget lateral_target_;
     AdaptiveCruiseOutput adaptive_cruise_;
-    LateralControlResult last_result_;
+    LateralControlOutput last_result_;
     PandaGateOutput panda_;
     DepartureAlertInput alert_input_;
     AdaptiveCruiseInput cruise_input_;
@@ -136,6 +136,6 @@ private:
     uint64_t logged_nonfinite_ticks_ = 0;  // 로그에 남긴 토크 0(유한하지 않은 입력) 틱 수
     // 마지막으로 저장하라고 넘긴(처음에는 시작 때 읽은) 학습 파일 내용. 같은 내용은 다시 쓰지 않는다: 주차 중에도
     // torqued가 88 KB를 12초마다 SD에 다시 쓰고 있었다(상류는 주행 중에만 돈다).
-    std::string saved_vehicle_json_;
-    std::string saved_torque_cache_;
+    std::string saved_vehicle_data_;
+    std::string saved_torque_data_;
 };

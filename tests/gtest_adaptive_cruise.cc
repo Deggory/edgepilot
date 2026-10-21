@@ -325,7 +325,7 @@ TEST(AdaptiveCruise, SessionResetAndMinimumSpeed) {
 }
 
 TEST(AdaptiveCruise, RuntimeConfigUpdate) {
-    AdaptiveCruiseConfig config;
+    AdaptiveCruiseParams config;
     config.command_interval_s = 5.0f;
     AdaptiveCruiseController controller(config);
     Vehicle vehicle;
@@ -343,7 +343,7 @@ TEST(AdaptiveCruise, RuntimeConfigUpdate) {
 
     config.command_interval_s = 0.5f;
     config.button_pulse_frames = 1;
-    controller.update_config(config);
+    controller.update_params(config);
     input.now_s = 1.01;
     output = tick(&controller, input, &vehicle);
     // 런타임 설정 변경은 컨트롤러를 다시 만들지 않아도 적용된다
@@ -587,7 +587,7 @@ TEST(AdaptiveCruise, PedalOverrideIsNotAMissedCommand) {
 // 그 감속으로 원하는 차간 전에 없앨 수 있는 만큼(√(2·a·남은 거리))만 허용한다.
 TEST(AdaptiveCruise, ApproachSpeedRespectsTheCoastingDeceleration) {
     auto target_for = [](float deceleration_kph_per_s) {
-        AdaptiveCruiseConfig config;
+        AdaptiveCruiseParams config;
         config.deceleration_rate_kph_per_s = deceleration_kph_per_s;
         AdaptiveCruiseController controller(config);
         Vehicle vehicle;
@@ -674,9 +674,9 @@ TEST(AdaptiveCruise, NoisyLeadDoesNotAlternateButtons) {
 }
 
 TEST(AdaptiveCruise, RepositoryConfigLoads) {
-    AdaptiveCruiseConfig config;
+    AdaptiveCruiseParams config;
     std::string error;
-    ASSERT_TRUE(load_adaptive_cruise_params_json("params/adaptive_cruise.json", &config, &error)) << error.c_str();
+    ASSERT_TRUE(load_adaptive_cruise_params("params/adaptive_cruise.json", &config, &error)) << error.c_str();
     // 저장소 params/adaptive_cruise.json 기본값이 런타임 스키마와 같다
     ASSERT_TRUE(config.enabled);
     ASSERT_NEAR(config.following_time_s, 1.8f, 0.001f);

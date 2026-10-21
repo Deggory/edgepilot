@@ -133,13 +133,13 @@ TEST(LateralController, LargeAngleFaultAvoidance) {
         stamp_can_times(&vehicle, 1.0 + f * 0.01);  // 4초 넘게 돌리므로 CAN 신선도를 유지한다
         return controller.update(replay_path(), replay_target(), vehicle, 1.0 + f * 0.01, f);
     };
-    auto lkas = [](const LateralControlResult &r) {
+    auto lkas = [](const LateralControlOutput &r) {
         EXPECT_FALSE(r.frames.empty()) << "LKAS11을 보낸다";
         return r.frames.empty() ? HyundaiLkas11Values{} : decode_lkas11(r.frames.front().data);
     };
 
     vehicle.steering_angle_deg = 20.0f;
-    LateralControlResult result;
+    LateralControlOutput result;
     for (int i = 0; i < 100; ++i) result = step();
     // MDPS 고장 각도 아래에서는 토크가 나간다
     ASSERT_TRUE(result.active);
@@ -210,13 +210,13 @@ TEST(LateralController, UpstreamAngleCutWhenAvoidanceOff) {
     vehicle.steering_angle_deg = 100.0f;
     for (int cycle = 0; cycle < 2; ++cycle) {
         for (int since = 1; since <= sp.avoid_lkas_fault_max_frames; ++since) {
-            const LateralControlResult r = step();
+            const LateralControlOutput r = step();
             const HyundaiLkas11Values lkas = decode_lkas11(r.frames.front().data);
             ASSERT_TRUE(lkas.steer_req && !lkas.toi_fault) << cycle << " " << since;
             ASSERT_FALSE(r.large_angle_hold);
         }
         for (int cut = 0; cut < sp.avoid_lkas_fault_cut_frames; ++cut) {
-            const LateralControlResult r = step();
+            const LateralControlOutput r = step();
             const HyundaiLkas11Values lkas = decode_lkas11(r.frames.front().data);
             ASSERT_TRUE(!lkas.steer_req && lkas.toi_fault) << "2프레임 요청을 끄고 ToiFlt를 켠다 " << cut;
             ASSERT_TRUE(r.active);
@@ -247,7 +247,7 @@ TEST(LateralController, MdpsFaultPausesSteeringAndSoftDisables) {
     };
     ASSERT_TRUE(press_set(1.0).engaged);
     double t = 1.02;
-    LateralControlResult r;
+    LateralControlOutput r;
     for (; t < 3.0; t += 0.01) r = step(t);
     ASSERT_TRUE(r.active);
     ASSERT_NE(r.apply_torque, 0);
@@ -272,7 +272,7 @@ TEST(LateralController, MdpsFaultPausesSteeringAndSoftDisables) {
     }
     for (const double start = t; t < start + 0.2; t += 0.01) r = step(t);
     EXPECT_FALSE(r.engaged) << "3초 이어지면 해제한다";
-    const LateralControlResult again = press_set(t += 0.01);
+    const LateralControlOutput again = press_set(t += 0.01);
     EXPECT_TRUE(again.engage_rejected) << "고장 중에는 결합을 거부한다";
     EXPECT_EQ(again.active_block, BlockReason::SteerTempUnavailable);
 }
@@ -288,7 +288,7 @@ TEST(LateralController, MdpsFaultIsQuietAfterDriverOverride) {
     double t = 1.0;
     auto step = [&]() {
         stamp_can_times(&vehicle, t);
-        const LateralControlResult r = controller.update(replay_path(), replay_target(), vehicle, t, frame++);
+        const LateralControlOutput r = controller.update(replay_path(), replay_target(), vehicle, t, frame++);
         t += 0.01;
         return r;
     };
@@ -296,7 +296,7 @@ TEST(LateralController, MdpsFaultIsQuietAfterDriverOverride) {
     vehicle.driver_torque = 300;
     for (int i = 0; i < 20; ++i) step();
     vehicle.steer_fault_temporary = true;
-    LateralControlResult r = step();
+    LateralControlOutput r = step();
     ASSERT_TRUE(r.steering_pressed && r.steer_fault);
     EXPECT_EQ(r.active_block, BlockReason::None) << "운전자가 잡은 채 시작한 고장은 경고하지 않는다";
     EXPECT_FALSE(r.soft_disabling);
@@ -332,7 +332,7 @@ TEST(LateralController, StandstillTracksActualCurvature) {
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 3.0f;  // 0.83 m/s: 최소 조향 속도 1 m/s 아래
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 3.0f;
     vehicle.steering_angle_deg = 30.0f;
-    LateralControlResult r;
+    LateralControlOutput r;
     for (int i = 0; i < 300; ++i) {
         stamp_can_times(&vehicle, 1.0 + 0.01 * i);
         r = controller.update(replay_path(), replay_target(), vehicle, 1.0 + 0.01 * i, i);
@@ -364,13 +364,13 @@ TEST(LateralController, LargeAngleHoldCoversStopAndEngage) {
         stamp_can_times(&vehicle, 1.0 + f * 0.01);
         return controller.update(stopped_path, replay_target(), vehicle, 1.0 + f * 0.01, f);
     };
-    auto steer_req = [](const LateralControlResult &r) {
+    auto steer_req = [](const LateralControlOutput &r) {
         EXPECT_FALSE(r.frames.empty()) << "LKAS11을 보낸다";
         return !r.frames.empty() && decode_lkas11(r.frames.front().data).steer_req;
     };
 
     vehicle.steering_angle_deg = 10.0f;
-    LateralControlResult result;
+    LateralControlOutput result;
     for (int i = 0; i < 50; ++i) result = step();
     // 정차 대기는 토크 0으로 steer 요청을 유지한다
     ASSERT_EQ(result.active_block, BlockReason::Stopped);
@@ -501,7 +501,7 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
 
     // 결합 중 재보정: 경고를 띄운 채 3초 조향하고 해제한다.
     controller.set_calibration_status(CalibrationStatus::Recalibrating);
-    LateralControlResult r;
+    LateralControlOutput r;
     double t = 2.02;
     for (; t < 2.02 + 2.9; t += 0.01) {
         vehicle = ready_vehicle(t);
@@ -574,7 +574,7 @@ TEST(LateralController, SteerSaturatedWarnsWhenTurnExceedsLimit) {
     // 실제 곡률은 상류처럼 조향각(차량 모델)에서 나온다.
     auto run = [&](float steering_angle_deg) {
         LateralController controller(config);
-        LateralControlResult r;
+        LateralControlOutput r;
         bool warned = false;
         for (int tick = 0; tick < 400; ++tick) {
             const double t = 1.0 + 0.01 * tick;
@@ -610,7 +610,7 @@ TEST(LateralController, DriverTorqueDoesNotFadeRequest) {
         target.curvatures[i] = -0.004f;
         target.psis[i] = -0.004f * 17.0f * model_t_idx(i);
     }
-    LateralControlResult r;
+    LateralControlOutput r;
     for (int tick = 0; tick < 300; ++tick) {
         const double t = 1.0 + 0.01 * tick;
         VehicleCanState vehicle = ready_vehicle(t);
@@ -647,7 +647,7 @@ TEST(LateralController, FixedMaxCurvature) {
     // 첫 틱은 한계로 뛰지 않고 횡저크 한 스텝만 움직인다
     ASSERT_TRUE(first.active);
     ASSERT_NEAR(first.desired_curvature, 0.05f, 1e-6f);
-    LateralControlResult result = first;
+    LateralControlOutput result = first;
     for (int tick = 1; tick < 40; ++tick)
         result = controller.update(replay_path(), target, vehicle, 1.0 + 0.01 * tick, tick);
     ASSERT_NEAR(result.desired_curvature, 0.2f, 1e-6f) << "최대 곡률은 openpilot의 0.2 1/m 고정";
@@ -892,10 +892,10 @@ TEST(LateralController, StaleSpeedKeepsCurvature) {
         const double t = 1.0 + 0.01 * i;
         before = controller.update(replay_path(), target, ready_vehicle(t), t, i).desired_curvature;
     }
-    const LateralControlResult stale = controller.update(replay_path(), target, ready_vehicle(1.19), 1.9, 20);
+    const LateralControlOutput stale = controller.update(replay_path(), target, ready_vehicle(1.19), 1.9, 20);
     ASSERT_EQ(stale.active_block, BlockReason::VehicleStateStale) << "휠 속도가 시한보다 오래됐다";
     ASSERT_EQ(stale.desired_curvature, before) << "속도가 낡으면 마지막 목표 곡률을 유지한다";
-    const LateralControlResult back = controller.update(replay_path(), target, ready_vehicle(1.91), 1.91, 21);
+    const LateralControlOutput back = controller.update(replay_path(), target, ready_vehicle(1.91), 1.91, 21);
     const float step = kMaxLateralJerk / (60.0f / 3.6f * 60.0f / 3.6f) * kCurvatureRateWindowS;
     ASSERT_NEAR(back.desired_curvature, before, step * 1.001f) << "회복하면 멈추기 전 곡률에서 이어간다";
 }
@@ -904,7 +904,7 @@ TEST(LateralController, StaleSpeedKeepsCurvature) {
 TEST(LateralController, SteeringJsonMatchesDefaults) {
     SteeringParams json, defaults;
     std::string error;
-    ASSERT_TRUE(load_steering_params_json("params/steering.json", &json, &error)) << "steering.json 읽기";
+    ASSERT_TRUE(load_steering_params("params/steering.json", &json, &error)) << "steering.json 읽기";
     // 파일에서 읽는 모든 키가 코드 기본값과 같다
     EXPECT_EQ(first_steering_param_difference(json, defaults), "") << "steering.json과 기본값이 다른 키";
 }
@@ -936,7 +936,7 @@ TEST(LateralController, HoldAngleStaysBelowTheFaultAngle) {
     std::fclose(f);
     SteeringParams params;
     std::string error;
-    const bool loaded = load_steering_params_json(path, &params, &error);
+    const bool loaded = load_steering_params(path, &params, &error);
     std::remove(path.c_str());
     ASSERT_TRUE(loaded) << error;
     EXPECT_LT(params.avoid_lkas_fault_hold_angle_deg, params.avoid_lkas_fault_max_angle_deg);
@@ -952,7 +952,7 @@ TEST(LateralController, InactiveDesiredTracksActual) {
     const float step = kMaxLateralJerk / (v * v) * kCurvatureRateWindowS;
     LateralPath blocked = replay_path();
     blocked.usable_for_steering = false;
-    LateralControlResult r;
+    LateralControlOutput r;
     int tick = 0;
     const auto step_once = [&](const LateralPath &path) {
         const double t = 1.0 + 0.01 * tick;
@@ -992,12 +992,12 @@ TEST(LateralController, DriverTakeoverHoldsUntilCentered) {
         stamp_can_times(&vehicle, 1.0 + f * 0.01);
         return controller.update(replay_path(), replay_target(), vehicle, 1.0 + f * 0.01, f);
     };
-    auto steer_req = [](const LateralControlResult &r) {
+    auto steer_req = [](const LateralControlOutput &r) {
         EXPECT_FALSE(r.frames.empty()) << "LKAS11을 보낸다";
         return !r.frames.empty() && decode_lkas11(r.frames.front().data).steer_req;
     };
 
-    LateralControlResult result;
+    LateralControlOutput result;
     for (int i = 0; i < 100; ++i) result = step(20.0f, 0);
     ASSERT_TRUE(steer_req(result));
     for (int i = 0; i < sp.avoid_lkas_fault_max_frames + 20; ++i) result = step(150.0f, 300);
@@ -1059,7 +1059,7 @@ TEST(LateralController, DriverHoldingThePlannedCurveResumes) {
             stamp_can_times(&vehicle, 1.0 + f * 0.01);
             return controller.update(replay_path(), target, vehicle, 1.0 + f * 0.01, f);
         };
-        LateralControlResult result;
+        LateralControlOutput result;
         for (int i = 0; i < 200; ++i) result = step(-20.0f, 0);
         EXPECT_TRUE(result.lat_active);
         // 운전자가 95도까지 감아 85도 위에 머물면 요청을 끄고 운전자가 넘겨받은 정지가 된다
@@ -1071,7 +1071,7 @@ TEST(LateralController, DriverHoldingThePlannedCurveResumes) {
             EXPECT_TRUE(result.large_angle_hold) << "82도 " << i;
         }
         int resumed = -1;
-        LateralControlResult first;
+        LateralControlOutput first;
         for (int i = 0; i < 300 && resumed < 0; ++i) {
             first = step(held_angle, -300);
             if (!first.large_angle_hold) resumed = i;
@@ -1113,7 +1113,7 @@ TEST(LateralController, HoldAngleCapsOwnSteeringOnly) {
         vehicle.cluster_speed_raw = 21.0f;
         vehicle.steering_angle_deg = 30.0f;
         vehicle.driver_torque = driver_torque;
-        LateralControlResult r;
+        LateralControlOutput r;
         for (int f = 0; f < 300; ++f) {
             stamp_can_times(&vehicle, 1.0 + f * 0.01);
             r = controller.update(replay_path(), tight, vehicle, 1.0 + f * 0.01, f);
@@ -1173,8 +1173,8 @@ TEST(LateralController, LiveParamsSwitchOffIsIdentical) {
         LateralTarget target = replay_target();
         for (int i = 0; i < kLateralControlN; ++i) target.curvatures[i] = 0.002f * std::cos(0.01f * tick);
         fed.set_live_params(odd_live_params(), false);
-        const LateralControlResult a = plain.update(replay_path(), target, vehicle, t, tick);
-        const LateralControlResult b = fed.update(replay_path(), target, vehicle, t, tick);
+        const LateralControlOutput a = plain.update(replay_path(), target, vehicle, t, tick);
+        const LateralControlOutput b = fed.update(replay_path(), target, vehicle, t, tick);
         // 학습기를 끄면 막는 일이 없다
         ASSERT_EQ(a.active_block, b.active_block);
         ASSERT_EQ(a.active, b.active);
@@ -1203,7 +1203,7 @@ TEST(LateralController, ParamsdInvalidBlocksOnlyWhenUsed) {
               BlockReason::CalibrationIncomplete)
         << "보정 전에는 보정 사유가 먼저다(상류 cal_status 검사): 무효 학습값으로 막지 않는다";
     controller.set_calibration_status(CalibrationStatus::Calibrated);
-    const LateralControlResult invalid = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2);
+    const LateralControlOutput invalid = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2);
     ASSERT_EQ(invalid.active_block, BlockReason::ParamsdInvalid) << "보정 뒤 무효 학습값은 막는다";
     // 상류 paramsdTemporaryError처럼 SOFT_DISABLE: 결합 중이면 경고하며 3초 더 조향한 뒤 해제한다
     EXPECT_EQ(block_kind(BlockReason::ParamsdInvalid), BlockKind::SoftDisable);
@@ -1326,8 +1326,7 @@ TEST(LateralController, CanFixture) {
     LateralControllerConfig config;
     config.force_engaged = true;
     std::string error;
-    ASSERT_TRUE(load_steering_params_json("params/steering.json", &config.steering_params, &error))
-        << "조향 파라미터 읽기";
+    ASSERT_TRUE(load_steering_params("params/steering.json", &config.steering_params, &error)) << "조향 파라미터 읽기";
     LateralController controller(config);
     VehicleCanState vehicle;
     const LateralPath path = replay_path();
@@ -1406,7 +1405,7 @@ struct EngagedDrive {
     int frame = 0;
 
     explicit EngagedDrive(LateralControllerConfig c = {}) : config(c), controller(config) {}
-    LateralControlResult tick(const LateralPath &path, const LateralTarget &target, bool panda_allowed = true,
+    LateralControlOutput tick(const LateralPath &path, const LateralTarget &target, bool panda_allowed = true,
                               bool fresh_can = true) {
         t += 0.01;
         if (fresh_can) {
@@ -1421,7 +1420,7 @@ struct EngagedDrive {
         panda.controls_allowed = panda_allowed;
         return controller.update(path, target, vehicle, t, frame++, panda);
     }
-    LateralControlResult engage() {
+    LateralControlOutput engage() {
         vehicle.clu_button = 2;
         tick(replay_path(), replay_target());
         vehicle.clu_button = 0;
@@ -1441,7 +1440,7 @@ TEST(LateralController, LostModelWarnsThenDisengages) {
     EngagedDrive drive;
     ASSERT_TRUE(drive.engage().engaged);
     for (int i = 0; i < 100; ++i) drive.tick(replay_path(), replay_target());
-    LateralControlResult r = drive.tick(lost_model_path(), replay_target());
+    LateralControlOutput r = drive.tick(lost_model_path(), replay_target());
     EXPECT_EQ(r.active_block, BlockReason::ModelLost);
     EXPECT_TRUE(r.engaged);
     EXPECT_FALSE(r.active) << "낡은 모델로는 조향하지 않는다";
@@ -1479,7 +1478,7 @@ TEST(LateralController, StaleCarStateWarnsThenDisengages) {
     ASSERT_TRUE(drive.engage().engaged);
     // 마지막 CAN을 0.3초 전 것으로 돌려 0.2초 뒤에 kVehicleStateTimeoutS(0.5초)를 넘긴다
     stamp_can_times(&drive.vehicle, drive.t - 0.3);
-    LateralControlResult r;
+    LateralControlOutput r;
     for (int i = 0; i < 80; ++i) r = drive.tick(replay_path(), replay_target(), true, false);
     EXPECT_EQ(r.active_block, BlockReason::VehicleStateStale);
     EXPECT_TRUE(r.engaged && r.soft_disabling && !r.active);
@@ -1500,7 +1499,7 @@ TEST(LateralController, PandaRevokeWhileEngagedDisengages) {
     EngagedDrive drive;
     ASSERT_TRUE(drive.engage().engaged);
     for (int i = 0; i < 50; ++i) drive.tick(replay_path(), replay_target());
-    LateralControlResult r = drive.tick(replay_path(), replay_target(), false);
+    LateralControlOutput r = drive.tick(replay_path(), replay_target(), false);
     EXPECT_EQ(r.active_block, BlockReason::PandaControlsOff);
     EXPECT_TRUE(r.engaged && !r.active);
     // 잠깐(0.5초 안) 끊겼다 돌아오면 경고 없이 그대로 간다
@@ -1523,7 +1522,7 @@ TEST(LateralController, SoftDisableTimerKeepsCountingThroughOtherReasons) {
     drive.controller.set_calibration_status(CalibrationStatus::Invalid);
     LateralPath short_path = replay_path();
     short_path.usable_for_steering = false;
-    LateralControlResult r;
+    LateralControlOutput r;
     const double start = drive.t;
     while (drive.t < start + kSoftDisableS + 0.1) {
         // 0.5초마다 한 틱 경로가 무효다

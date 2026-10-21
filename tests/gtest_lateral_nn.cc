@@ -22,9 +22,9 @@
 namespace {
 
 // 토크 제어기 입력: 앞쪽 다섯과 편경사·학습값. 핸들 조작·안전 한계·요레이트는 기본값(없음)이다.
-TorqueController::Inputs torque_in(bool active, float speed_mps, float curvature, float angle_deg, float delay_s,
-                                   float bank = 0.0f, const LiveLateralParams &live = LiveLateralParams{}) {
-    TorqueController::Inputs in;
+TorqueController::Input torque_in(bool active, float speed_mps, float curvature, float angle_deg, float delay_s,
+                                  float bank = 0.0f, const LiveLateralParams &live = LiveLateralParams{}) {
+    TorqueController::Input in;
     in.active = active;
     in.speed_mps = speed_mps;
     in.desired_curvature = curvature;
@@ -121,14 +121,14 @@ LateralTarget curve_target(float curvature, float speed_kph = 60.0f) {
 }
 
 // 강제 결합한 횡제어기에 같은 계획을 ticks번 넣고 마지막 결과를 본다
-LateralControlResult drive(const std::shared_ptr<LateralNnModel> &model, const LateralTarget &target, float speed_kph,
+LateralControlOutput drive(const std::shared_ptr<LateralNnModel> &model, const LateralTarget &target, float speed_kph,
                            int ticks, bool switch_on = true) {
     LateralControllerConfig config;
     config.force_engaged = true;
     config.steering_params.nn_feedforward = switch_on;
     LateralController controller(config);
     if (model) controller.set_lateral_nn(model);
-    LateralControlResult result;
+    LateralControlOutput result;
     for (int i = 0; i < ticks; ++i) {
         const double t = 1.0 + 0.01 * i;
         result = controller.update(usable_path(), target, ready_vehicle(t, speed_kph), t, i);
@@ -406,7 +406,7 @@ TEST(TorqueController, NnWeightBlendsTheTwoFeedforwards) {
 
 TEST(LateralController, UsesTheModelOnlyWhenSwitchedOnAndSteering) {
     const auto model = repository_model();
-    const LateralControlResult on = drive(model, curve_target(0.003f), 60.0f, 50);
+    const LateralControlOutput on = drive(model, curve_target(0.003f), 60.0f, 50);
     ASSERT_TRUE(on.lat_active);
     EXPECT_TRUE(on.nn_feedforward_used);
     EXPECT_TRUE(std::isfinite(on.feedforward));
@@ -422,9 +422,9 @@ TEST(LateralController, ModelInputsKeepTheHoldAngleLimit) {
     const float speed_kph = 14.4f;  // 4 m/s: 횡가속 한계(0.19 1/m)보다 80도(약 0.03 1/m)가 좁다
     TorqueController vehicle_model;
     const float cap = std::fabs(vehicle_model.curvature_at_angle(speed_kph / 3.6f, 80.0f, SteeringParams{}));
-    const LateralControlResult at_cap = drive(model, curve_target(cap, speed_kph), speed_kph, 150);
-    const LateralControlResult beyond = drive(model, curve_target(3.0f * cap, speed_kph), speed_kph, 150);
-    const LateralControlResult inside = drive(model, curve_target(0.5f * cap, speed_kph), speed_kph, 150);
+    const LateralControlOutput at_cap = drive(model, curve_target(cap, speed_kph), speed_kph, 150);
+    const LateralControlOutput beyond = drive(model, curve_target(3.0f * cap, speed_kph), speed_kph, 150);
+    const LateralControlOutput inside = drive(model, curve_target(0.5f * cap, speed_kph), speed_kph, 150);
     ASSERT_TRUE(at_cap.nn_feedforward_used && beyond.nn_feedforward_used);
     EXPECT_FLOAT_EQ(beyond.feedforward, at_cap.feedforward);
     EXPECT_NE(inside.feedforward, at_cap.feedforward);
@@ -433,7 +433,7 @@ TEST(LateralController, ModelInputsKeepTheHoldAngleLimit) {
 TEST(LateralController, SlowSpeedFallsBackToLinear) {
     // 학습 데이터가 없는 3 m/s 아래(7.2 km/h = 2 m/s)에서는 1초에 걸쳐 선형 피드포워드로 돌아간다
     const auto model = repository_model();
-    const LateralControlResult slow = drive(model, curve_target(0.003f, 7.2f), 7.2f, 150);
+    const LateralControlOutput slow = drive(model, curve_target(0.003f, 7.2f), 7.2f, 150);
     ASSERT_TRUE(slow.lat_active);
     EXPECT_FALSE(slow.nn_feedforward_used);
 }
@@ -442,7 +442,7 @@ TEST(LateralController, NanPlanUsesTheLinearFeedforward) {
     const auto model = repository_model();
     LateralTarget target = curve_target(0.003f);
     target.curvatures[3] = NAN;  // 모델이 읽는 0.3 s 근처
-    const LateralControlResult result = drive(model, target, 60.0f, 50);
+    const LateralControlOutput result = drive(model, target, 60.0f, 50);
     ASSERT_TRUE(result.lat_active);
     EXPECT_FALSE(result.nn_feedforward_used);
     EXPECT_TRUE(std::isfinite(result.feedforward));
@@ -491,7 +491,7 @@ TEST(LateralController, LaneChangesAndBlinkersUseTheLinearFeedforward) {
         return controller.update(usable_path(), target, vehicle, t, i++);
     };
     for (int k = 0; k < 150; ++k) ASSERT_TRUE(tick(false, Desire::None).nn_feedforward_used || k < 2);
-    LateralControlResult r;
+    LateralControlOutput r;
     for (int k = 0; k < 150; ++k) r = tick(true, Desire::None);
     EXPECT_TRUE(r.lat_active);
     EXPECT_FALSE(r.nn_feedforward_used) << "깜빡이";
@@ -553,8 +553,8 @@ TEST(LateralController, SwappingModelsKeepsTheBlend) {
         tick(reference, i);
     }
     swapped.set_lateral_nn(other);
-    const LateralControlResult after = tick(swapped, i);
-    const LateralControlResult expected = tick(reference, i);
+    const LateralControlOutput after = tick(swapped, i);
+    const LateralControlOutput expected = tick(reference, i);
     ASSERT_TRUE(after.nn_feedforward_used);
     EXPECT_NEAR(after.feedforward, expected.feedforward, 1e-6f);
     swapped.set_lateral_nn(nullptr);
@@ -649,7 +649,7 @@ TEST(LateralController, AddsCurveFrictionByTheModelsTarget) {
         config.steering_params.use_live_torque_params = false;
         LateralController controller(config);
         controller.set_lateral_nn(model);
-        LateralControlResult result;
+        LateralControlOutput result;
         for (int i = 0; i < 150; ++i) {
             const double t = 1.0 + 0.01 * i;
             result = controller.update(usable_path(), curve_target(0.003f), ready_vehicle(t), t, i);

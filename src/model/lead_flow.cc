@@ -362,7 +362,7 @@ bool LeadFlowTracker::begin(const LeadFlowInput &lead, uint64_t frame_id, double
     if (!consecutive) drop_points();  // 이전 위치가 이 프레임 바로 앞이 아니다
     LeadBox box;
     const bool usable = y && lead_flow_wanted(lead) &&
-                        project_lead_box(k_, lead.rpy, lead.camera_height_m, lead.camera_offset_m, lead.x, lead.y,
+                        project_lead_box(k_, lead.rpy, lead.camera_height_m, lead.camera_offset_m, lead.x_m, lead.y_m,
                                          width_, height_, &box);
     if (!usable) {
         reset();
@@ -373,11 +373,11 @@ bool LeadFlowTracker::begin(const LeadFlowInput &lead, uint64_t frame_id, double
     state_.frame_id = frame_id;
     // 끼어들기·차선 변경으로 앞차가 바뀌면 거리나 옆 위치가 한 프레임에 튄다(box_는 직전 프레임의 상자다)
     if (!box_.empty() &&
-        (std::fabs(lead.x - last_x_) > std::max(4.0f, 0.15f * lead.x) || std::fabs(lead.y - last_y_) > 1.5f))
+        (std::fabs(lead.x_m - last_x_) > std::max(4.0f, 0.15f * lead.x_m) || std::fabs(lead.y_m - last_y_) > 1.5f))
         drop_points();
-    last_x_ = lead.x;
-    last_y_ = lead.y;
-    state_.lead_x = lead.x;
+    last_x_ = lead.x_m;
+    last_y_ = lead.y_m;
+    state_.lead_x = lead.x_m;
     box_ = box;
     head_ = (head_ + 1) % kSlots;
     times_[head_] = t_s;

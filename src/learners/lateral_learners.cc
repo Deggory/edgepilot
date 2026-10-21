@@ -194,6 +194,6 @@ void LateralLearners::feed(Tick tick) {
     }
 }
 
-std::string LateralLearners::vehicle_persist_json() const {
-    return persist_vehicle_params(vehicle_.params(), constants_, bias_.bias());
+std::string LateralLearners::vehicle_persist_data() const {
+    return vehicle_params_persist_data(vehicle_.params(), constants_, bias_.bias());
 }

@@ -86,7 +86,7 @@ std::pair<float, float> scale_tire_stiffness(float mass, float wheelbase, float 
 }  // namespace
 
 // openpilot LatControlTorque와 같은 형태로 조향 토크를 계산한다.
-int TorqueController::update(const Inputs &in, const SteeringParams &params, const NnFeedforward &nn) {
+int TorqueController::update(const Input &in, const SteeringParams &params, const NnFeedforward &nn) {
     const float speed_mps = in.speed_mps;
     const LiveLateralParams &live = in.live;
     nn_feedforward_used_ = false;

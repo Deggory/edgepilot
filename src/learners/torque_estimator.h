@@ -72,7 +72,7 @@ public:
     // 입력이 신선한 20 Hz 틱 240번(12초)마다, 첫 틱 포함. 상류처럼 get_msg를 한 번 더 돌린 결과라
     // 그 틱에는 필터가 두 번 갱신된다.
     bool persist_due() const { return persist_due_; }
-    const std::string &cache() const { return cache_; }
+    const std::string &persist_data() const { return persist_data_; }
     TorqueRestore restore_status() const { return restore_; }
     const TorqueTuning &tuning() const { return offline_; }
     bool localizer_source() const { return localizer_source_; }
@@ -142,6 +142,6 @@ private:
     bool persist_due_ = false;
     long new_points_ = 0;  // 마지막 저장 뒤 더한 점
     TorqueRestore restore_ = TorqueRestore::None;
-    std::string cache_;
+    std::string persist_data_;
     TorqueParams last_{};
 };

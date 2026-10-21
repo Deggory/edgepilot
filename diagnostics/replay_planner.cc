@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     std::string error;
-    if (!steering_path.empty() && !load_steering_params_json(steering_path, &steering, &error)) {
+    if (!steering_path.empty() && !load_steering_params(steering_path, &steering, &error)) {
         std::fprintf(stderr, "%s: %s\n", steering_path.c_str(), error.c_str());
         return 1;
     }

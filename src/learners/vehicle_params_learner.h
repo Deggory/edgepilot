@@ -171,4 +171,4 @@ struct VehicleParamsInit {
     double yaw_bias_rad_s = 0.0;
 };
 VehicleParamsInit restore_vehicle_params(const std::string &json, const VehicleModelConstants &c);
-std::string persist_vehicle_params(const VehicleParams &p, const VehicleModelConstants &c, double yaw_bias_rad_s);
+std::string vehicle_params_persist_data(const VehicleParams &p, const VehicleModelConstants &c, double yaw_bias_rad_s);

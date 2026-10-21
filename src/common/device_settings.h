@@ -64,28 +64,22 @@ inline bool load_device_settings(const std::string &path, DeviceSettings *out, s
 
 class DeviceSettingsFile {
 public:
-    explicit DeviceSettingsFile(std::string path = param_path("display.json")) : path_(std::move(path)) {}
+    explicit DeviceSettingsFile(std::string path = param_path("display.json"))
+        : watch_(std::move(path), 1'000'000'000ULL) {}
 
-    // 새로 읽었으면 true. 첫 호출은 파일이 있으면 항상 읽는다. 잘못된 파일은 한 번 알리고
-    // 이전 값을 그대로 둔다(다시 바뀔 때 읽는다).
+    // 새로 읽었으면 true. 첫 호출은 파일이 있으면 항상 읽는다. 잘못된 파일(지워진 것 포함)은 한 번 알리고 이전 값을
+    // 그대로 둔다(다시 바뀔 때 읽는다).
     bool poll(uint64_t now_ns, DeviceSettings *out) {
-        if (now_ns < next_check_ns_) return false;
-        next_check_ns_ = now_ns + 1'000'000'000ULL;
-        const FileStamp stamp = file_stamp(path_);
-        if (!stamp.valid || (read_once_ && !(stamp != stamp_))) return false;
-        stamp_ = stamp;
-        read_once_ = true;
+        if (!watch_.changed(now_ns)) return false;
         std::string error;
-        if (!load_device_settings(path_, out, &error)) {
-            std::fprintf(stderr, "device settings %s: %s (keeping previous values)\n", path_.c_str(), error.c_str());
+        if (!load_device_settings(watch_.path(), out, &error)) {
+            std::fprintf(stderr, "device settings %s: %s (keeping previous values)\n", watch_.path().c_str(),
+                         error.c_str());
             return false;
         }
         return true;
     }
 
 private:
-    std::string path_;
-    FileStamp stamp_;
-    bool read_once_ = false;
-    uint64_t next_check_ns_ = 0;
+    FileWatch watch_;
 };

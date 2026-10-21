@@ -343,7 +343,7 @@ VehicleParams VehicleParamsLearner::get_msg(bool inputs_ok) {
 
 // ---------------------------------------------------------------- 저장/복원
 
-std::string persist_vehicle_params(const VehicleParams &p, const VehicleModelConstants &c, double yaw_bias_rad_s) {
+std::string vehicle_params_persist_data(const VehicleParams &p, const VehicleModelConstants &c, double yaw_bias_rad_s) {
     char buf[512];
     std::snprintf(buf, sizeof(buf),
                   "{\n  \"version\": %d,\n  \"mass_kg\": %.6g,\n  \"wheelbase_m\": %.6g,\n"

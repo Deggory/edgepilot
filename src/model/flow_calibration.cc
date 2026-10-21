@@ -153,8 +153,8 @@ FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy
         std::vector<float> moved(static_cast<size_t>(n));
         for (int i = 0; i < n; ++i)
             moved[i] = std::hypot(end_xy[2 * i] - start_xy[2 * i], end_xy[2 * i + 1] - start_xy[2 * i + 1]);
-        out.parallax = median_of(std::move(moved));
-        if (!(out.parallax >= kFlowMinParallaxPx)) return out;  // 움직임이 작으면 방향이 서지 않는다
+        out.parallax_px = median_of(std::move(moved));
+        if (!(out.parallax_px >= kFlowMinParallaxPx)) return out;  // 움직임이 작으면 방향이 서지 않는다
     }
     std::vector<double> x1(2 * static_cast<size_t>(n)), x2(2 * static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
@@ -190,11 +190,12 @@ FlowSolution solve_flow_direction(const FlowIntrinsics &k, const float *start_xy
     int inliers = 0;
     for (int i = 0; i < n; ++i) inliers += std::fabs(e[i]) < 2.0 * sigma ? 1 : 0;
     out.inliers = inliers;
-    out.rotation = std::sqrt(p[2] * p[2] + p[3] * p[3] + p[4] * p[4]);
-    out.yaw = std::atan(p[0]);
-    out.pitch = -std::atan(p[1]);
-    out.valid = std::isfinite(out.yaw) && std::isfinite(out.pitch) && inliers >= kMinInliers &&
-                out.rotation < kMaxRotation && std::fabs(out.yaw) < kMaxAngle && std::fabs(out.pitch) < kMaxAngle;
+    out.rotation_rad = std::sqrt(p[2] * p[2] + p[3] * p[3] + p[4] * p[4]);
+    out.yaw_rad = std::atan(p[0]);
+    out.pitch_rad = -std::atan(p[1]);
+    out.valid = std::isfinite(out.yaw_rad) && std::isfinite(out.pitch_rad) && inliers >= kMinInliers &&
+                out.rotation_rad < kMaxRotation && std::fabs(out.yaw_rad) < kMaxAngle &&
+                std::fabs(out.pitch_rad) < kMaxAngle;
     return out;
 }
 
@@ -290,10 +291,10 @@ FlowBlocks FlowCalibrator::blocks() const {
 
 void FlowCalibrator::add(const FlowSolution &window, int tracks, uint64_t end_frame_id) {
     state_.window_frame_id = end_frame_id;
-    state_.window_yaw = static_cast<float>(window.yaw);
-    state_.window_pitch = static_cast<float>(window.pitch);
-    state_.window_rotation = static_cast<float>(window.rotation);
-    state_.window_parallax = static_cast<float>(window.parallax);
+    state_.window_yaw = static_cast<float>(window.yaw_rad);
+    state_.window_pitch = static_cast<float>(window.pitch_rad);
+    state_.window_rotation = static_cast<float>(window.rotation_rad);
+    state_.window_parallax = static_cast<float>(window.parallax_px);
     state_.window_tracks = static_cast<uint32_t>(tracks);
     state_.window_inliers = static_cast<uint32_t>(window.inliers);
     ++state_.windows;

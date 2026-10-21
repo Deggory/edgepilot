@@ -22,9 +22,9 @@ public:
     // 가중 1이면 거르지 않는다(재생 도구의 --lane-filter)
     void set_measurement_weight(double weight) { weight_ = weight; }
 
-    // x는 점의 거리(앞이 +, 증가), y는 측정 횡위치(오른쪽이 +), t_s는 촬영 시각, v_mps는 자차 속도,
+    // x는 점의 거리(앞이 +, 증가), y는 측정 횡위치(오른쪽이 +), t_s는 촬영 시각, speed_mps는 자차 속도,
     // curvature는 실측 곡률(오른쪽이 +). 거른 횡위치를 out에 쓴다(y와 같은 배열이어도 된다).
-    void update(double t_s, const float *x, const float *y, double v_mps, double curvature, float *out);
+    void update(double t_s, const float *x, const float *y, double speed_mps, double curvature, float *out);
 
 private:
     double weight_ = kLaneLineFilterWeight;

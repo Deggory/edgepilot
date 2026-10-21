@@ -67,37 +67,37 @@ bool valid_vision_lead(const AdaptiveCruiseInput &input) {
 
 namespace {
 
-constexpr JsonBoolField<AdaptiveCruiseConfig> kAdaptiveBools[] = {
-    {"enabled", &AdaptiveCruiseConfig::enabled},
+constexpr JsonBoolField<AdaptiveCruiseParams> kAdaptiveBools[] = {
+    {"enabled", &AdaptiveCruiseParams::enabled},
 };
-constexpr JsonFloatField<AdaptiveCruiseConfig> kAdaptiveFloats[] = {
-    {"standstill_gap_m", 2.0f, 20.0f, &AdaptiveCruiseConfig::standstill_gap_m},
-    {"following_time_s", 0.8f, 4.0f, &AdaptiveCruiseConfig::following_time_s},
-    {"gap_correction_gain", 0.05f, 1.0f, &AdaptiveCruiseConfig::gap_correction_gain},
-    {"max_slowdown_correction_mps", 0.5f, 10.0f, &AdaptiveCruiseConfig::max_slowdown_correction_mps},
-    {"max_speedup_correction_mps", 0.0f, 5.0f, &AdaptiveCruiseConfig::max_speedup_correction_mps},
-    {"deceleration_rate_kph_per_s", 0.2f, 5.0f, &AdaptiveCruiseConfig::deceleration_rate_kph_per_s},
-    {"lead_hold_s", 0.1f, 2.0f, &AdaptiveCruiseConfig::lead_hold_s},
-    {"lead_restore_delay_s", 1.0f, 10.0f, &AdaptiveCruiseConfig::lead_restore_delay_s},
-    {"command_interval_s", 0.5f, 5.0f, &AdaptiveCruiseConfig::command_interval_s},
+constexpr JsonFloatField<AdaptiveCruiseParams> kAdaptiveFloats[] = {
+    {"standstill_gap_m", 2.0f, 20.0f, &AdaptiveCruiseParams::standstill_gap_m},
+    {"following_time_s", 0.8f, 4.0f, &AdaptiveCruiseParams::following_time_s},
+    {"gap_correction_gain", 0.05f, 1.0f, &AdaptiveCruiseParams::gap_correction_gain},
+    {"max_slowdown_correction_mps", 0.5f, 10.0f, &AdaptiveCruiseParams::max_slowdown_correction_mps},
+    {"max_speedup_correction_mps", 0.0f, 5.0f, &AdaptiveCruiseParams::max_speedup_correction_mps},
+    {"deceleration_rate_kph_per_s", 0.2f, 5.0f, &AdaptiveCruiseParams::deceleration_rate_kph_per_s},
+    {"lead_hold_s", 0.1f, 2.0f, &AdaptiveCruiseParams::lead_hold_s},
+    {"lead_restore_delay_s", 1.0f, 10.0f, &AdaptiveCruiseParams::lead_restore_delay_s},
+    {"command_interval_s", 0.5f, 5.0f, &AdaptiveCruiseParams::command_interval_s},
 };
 
 }  // namespace
 
-bool load_adaptive_cruise_params_json(const std::string &path, AdaptiveCruiseConfig *config, std::string *error) {
-    if (!config) return false;
+bool load_adaptive_cruise_params(const std::string &path, AdaptiveCruiseParams *params, std::string *error) {
+    if (!params) return false;
     return load_json_param_file(
         path,
-        [config](const JsonValue &root) {
-            parse_json_fields(root, kAdaptiveBools, config);
-            parse_json_fields(root, kAdaptiveFloats, config);
+        [params](const JsonValue &root) {
+            parse_json_fields(root, kAdaptiveBools, params);
+            parse_json_fields(root, kAdaptiveFloats, params);
         },
         error);
 }
 
-AdaptiveCruiseController::AdaptiveCruiseController(AdaptiveCruiseConfig config) : config_(config) {}
+AdaptiveCruiseController::AdaptiveCruiseController(AdaptiveCruiseParams params) : params_(params) {}
 
-void AdaptiveCruiseController::update_config(const AdaptiveCruiseConfig &config) { config_ = config; }
+void AdaptiveCruiseController::update_params(const AdaptiveCruiseParams &params) { params_ = params; }
 
 void AdaptiveCruiseController::Session::anchor(float speed_kph, double now_s) {
     maximum_speed_kph = speed_kph;
@@ -131,10 +131,10 @@ void AdaptiveCruiseController::DisplayScale::update(const AdaptiveCruiseInput &i
 }
 
 void AdaptiveCruiseController::LeadFilter::update(const AdaptiveCruiseInput &input,
-                                                  const AdaptiveCruiseConfig &config) {
+                                                  const AdaptiveCruiseParams &params) {
     if (!input.vision_lead_updated || !valid_vision_lead(input)) return;
 
-    const bool reacquired = last_valid_s < 0.0 || input.now_s - last_valid_s > config.lead_hold_s;
+    const bool reacquired = last_valid_s < 0.0 || input.now_s - last_valid_s > params.lead_hold_s;
     if (reacquired) {
         distance_m = input.vision_lead_distance_m;
         relative_speed_mps = input.vision_lead_relative_speed_mps;
@@ -269,20 +269,20 @@ float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input, c
                                              bool *lead_valid) const {
     const Session &s = session_;
     *lead_valid = s.valid && tick.speed_valid && lead_.last_valid_s >= 0.0 && input.now_s >= lead_.last_valid_s &&
-                  input.now_s - lead_.last_valid_s <= config_.lead_hold_s;
+                  input.now_s - lead_.last_valid_s <= params_.lead_hold_s;
     float target_speed_kph = s.commanded_speed_kph;
     if (s.valid && *lead_valid && display_scale_.valid) {
         const float ego_speed_mps = std::max(0.0f, input.ego_speed_kph / 3.6f);
         const float lead_speed_mps = std::max(0.0f, ego_speed_mps + lead_.relative_speed_mps);
-        const float desired_gap_m = config_.standstill_gap_m + config_.following_time_s * ego_speed_mps;
-        const float decel_kph_per_s = std::max(0.1f, config_.deceleration_rate_kph_per_s);
+        const float desired_gap_m = params_.standstill_gap_m + params_.following_time_s * ego_speed_mps;
+        const float decel_kph_per_s = std::max(0.1f, params_.deceleration_rate_kph_per_s);
         const float slowdown_response_s = tick.step_kph / decel_kph_per_s;
-        const float prediction_horizon_s = std::min(2.0f, config_.command_interval_s + 0.5f * slowdown_response_s);
+        const float prediction_horizon_s = std::min(2.0f, params_.command_interval_s + 0.5f * slowdown_response_s);
         const float predicted_lead_distance_m =
             std::max(1.0f, lead_.distance_m + std::min(0.0f, lead_.relative_speed_mps) * prediction_horizon_s);
         float gap_correction_mps =
-            clamp_float((predicted_lead_distance_m - desired_gap_m) * config_.gap_correction_gain,
-                        -config_.max_slowdown_correction_mps, config_.max_speedup_correction_mps);
+            clamp_float((predicted_lead_distance_m - desired_gap_m) * params_.gap_correction_gain,
+                        -params_.max_slowdown_correction_mps, params_.max_speedup_correction_mps);
         // 다가가는 속도는 고정형 크루즈의 약한 감속으로 원하는 차간에 닿기 전에 없앨 수 있는 만큼만
         // 허용한다(v² = 2·a·남은 거리). 비례 보정만 쓰면 10 m 밖에서 2.5 m/s로 다가가 감속이 따라오지
         // 못하고 차간 안쪽으로 밀려 들어갔다.
@@ -297,7 +297,7 @@ float AdaptiveCruiseController::target_speed(const AdaptiveCruiseInput &input, c
         target_speed_kph = clamp_float((lead_speed_mps + gap_correction_mps) * 3.6f * display_scale_.scale,
                                        tick.minimum_kph, s.maximum_speed_kph);
     } else if (s.valid &&
-               (lead_.last_valid_s < 0.0 || input.now_s - lead_.last_valid_s >= config_.lead_restore_delay_s)) {
+               (lead_.last_valid_s < 0.0 || input.now_s - lead_.last_valid_s >= params_.lead_restore_delay_s)) {
         target_speed_kph = s.maximum_speed_kph;
     }
     return target_speed_kph;
@@ -351,7 +351,7 @@ int AdaptiveCruiseController::pace_buttons(const AdaptiveCruiseInput &input, con
         const bool wants_resume = target_speed_kph >= s.commanded_speed_kph + command_deadband_kph &&
                                   s.commanded_speed_kph < s.maximum_speed_kph - 0.1f && !set_far_above;
         const bool interval_ready =
-            s.last_command_s < 0.0 || input.now_s - s.last_command_s >= config_.command_interval_s;
+            s.last_command_s < 0.0 || input.now_s - s.last_command_s >= params_.command_interval_s;
 
         if (wants_set && interval_ready) {
             s.command_button = kCruiseButtonSet;
@@ -364,7 +364,7 @@ int AdaptiveCruiseController::pace_buttons(const AdaptiveCruiseInput &input, con
         }
         if (s.command_button != 0) {
             s.last_command_s = input.now_s;
-            s.command_frames_remaining = config_.button_pulse_frames - 1;
+            s.command_frames_remaining = params_.button_pulse_frames - 1;
             output_button = s.command_button;
             s.mismatch_since_s = -1.0;
         }
@@ -400,7 +400,7 @@ AdaptiveCruiseOutput AdaptiveCruiseController::update(const AdaptiveCruiseInput 
     begin_session_if_ready(input, tick);
     reanchor_after_driver(input, tick);
     resolve_command_mismatch(input, tick);
-    lead_.update(input, config_);
+    lead_.update(input, params_);
     bool lead_valid = false;
     const float target_speed_kph = smooth_target(tick, target_speed(input, tick, &lead_valid), dt_s);
     const bool active = input.enabled && session_.valid && input.cruise_active;

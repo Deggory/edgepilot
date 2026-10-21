@@ -47,8 +47,8 @@ void compose_rpy(const float base[3], const float observed[3], float out[3]) {
 
 OnlineCalibrator::OnlineCalibrator() { reset_to_rpy(snapshot_.rpy, 0); }
 
-OnlineCalibrator::UpdateResult OnlineCalibrator::update(const PoseObservation &pose, float v_ego) {
-    UpdateResult result;
+OnlineCalibrator::Output OnlineCalibrator::update(const PoseObservation &pose, float v_ego) {
+    Output result;
     result.snapshot = snapshot_;
     old_rpy_weight_ = std::max(0.0f, old_rpy_weight_ - 1.0f / kSmoothCycles);
 

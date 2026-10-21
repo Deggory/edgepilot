@@ -70,9 +70,9 @@ TEST(FlowSolve, RecoversDirectionAndRotation) {
     synth_tracks(-0.6 * kDeg, -1.0 * kDeg, 5.0, w, 0.05, 0.1, 300, 7, &a, &b);
     const FlowSolution s = solve_flow_direction(kK, a.data(), b.data(), 300);
     ASSERT_TRUE(s.valid);
-    EXPECT_NEAR(s.yaw / kDeg, -0.6, 0.02);
-    EXPECT_NEAR(s.pitch / kDeg, -1.0, 0.02);
-    EXPECT_NEAR(s.rotation, std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]), 1e-4);
+    EXPECT_NEAR(s.yaw_rad / kDeg, -0.6, 0.02);
+    EXPECT_NEAR(s.pitch_rad / kDeg, -1.0, 0.02);
+    EXPECT_NEAR(s.rotation_rad, std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]), 1e-4);
     EXPECT_GE(s.inliers, 250);  // 엉뚱한 30개 정도는 맞지 않는다
     EXPECT_LE(s.inliers, 285);
 }
@@ -84,8 +84,8 @@ TEST(FlowSolve, SignsFollowTheCalibrationConvention) {
     synth_tracks(0.8 * kDeg, 0.5 * kDeg, 6.0, w, 0.0, 0.0, 200, 3, &a, &b);
     const FlowSolution s = solve_flow_direction(kK, a.data(), b.data(), 200);
     ASSERT_TRUE(s.valid);
-    EXPECT_NEAR(s.yaw / kDeg, 0.8, 1e-3);
-    EXPECT_NEAR(s.pitch / kDeg, 0.5, 1e-3);
+    EXPECT_NEAR(s.yaw_rad / kDeg, 0.8, 1e-3);
+    EXPECT_NEAR(s.pitch_rad / kDeg, 0.5, 1e-3);
 }
 
 TEST(FlowSolve, StaticSceneIsRejectedByParallax) {
@@ -103,7 +103,7 @@ TEST(FlowSolve, StaticSceneIsRejectedByParallax) {
     }
     const FlowSolution s = solve_flow_direction(kK, a.data(), b.data(), 300);
     EXPECT_FALSE(s.valid);
-    EXPECT_LT(s.parallax, 0.2);
+    EXPECT_LT(s.parallax_px, 0.2);
     EXPECT_EQ(s.points, 300);
 }
 
@@ -113,8 +113,8 @@ TEST(FlowSolve, ReportsParallax) {
     synth_tracks(-0.3 * kDeg, -0.5 * kDeg, 4.4, w, 0.05, 0.0, 300, 11, &a, &b);  // 40 km/h, 0.4초
     const FlowSolution s = solve_flow_direction(kK, a.data(), b.data(), 300);
     ASSERT_TRUE(s.valid);
-    EXPECT_GT(s.parallax, kFlowMinParallaxPx);
-    EXPECT_NEAR(s.yaw / kDeg, -0.3, 0.05);
+    EXPECT_GT(s.parallax_px, kFlowMinParallaxPx);
+    EXPECT_NEAR(s.yaw_rad / kDeg, -0.3, 0.05);
 }
 
 TEST(FlowSolve, RejectsTooFewPointsAndLargeRotation) {
@@ -177,9 +177,9 @@ TEST(FlowGate, OnlyStraightAndFast) {
 FlowSolution window(double yaw_deg, double pitch_deg) {
     FlowSolution s;
     s.valid = true;
-    s.yaw = yaw_deg * kDeg;
-    s.pitch = pitch_deg * kDeg;
-    s.rotation = 0.001;
+    s.yaw_rad = yaw_deg * kDeg;
+    s.pitch_rad = pitch_deg * kDeg;
+    s.rotation_rad = 0.001;
     s.inliers = 100;
     return s;
 }
@@ -302,7 +302,7 @@ TEST(FlowCalibratorTest, MountChangeKeepsTheRecentBlocks) {
 TEST(FlowCalibratorTest, CountsRejectedWindows) {
     FlowCalibrator cal;
     FlowSolution bad;
-    bad.parallax = 0.3;
+    bad.parallax_px = 0.3;
     cal.note_rejected(bad);
     cal.note_rejected(bad);
     EXPECT_EQ(cal.state().rejected_windows, 2U);

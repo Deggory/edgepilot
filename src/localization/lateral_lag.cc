@@ -260,7 +260,7 @@ LateralLagOutput LateralLagEstimator::output() const {
     return out;
 }
 
-std::string LateralLagEstimator::cache_json() const {
+std::string LateralLagEstimator::persist_data() const {
     const LateralLagOutput o = output();
     char buf[256];
     std::snprintf(buf, sizeof(buf),

@@ -11,7 +11,7 @@
 #include "common/utils_file.h"
 #include "controls/lateral_nn.h"
 
-#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <memory>
@@ -28,7 +28,7 @@ public:
     // 시작 때: 지금 고른 모델을 이 자리에서 읽는다. 못 읽으면 nullptr(선형 피드포워드만).
     std::shared_ptr<const LateralNnModel> load_now();
     // 매 틱: 고르기를 다시 볼 때가 됐으면 보고, 바뀌었으면 읽기를 시작한다. 새 모델을 다 읽은 틱에만 true와 그 모델.
-    bool poll(std::chrono::steady_clock::time_point now, std::shared_ptr<const LateralNnModel> *model);
+    bool poll(uint64_t now_ns, std::shared_ptr<const LateralNnModel> *model);
 
     const std::string &loaded_name() const { return loaded_name_; }
     bool loading() const { return pending_.valid(); }
@@ -49,7 +49,7 @@ private:
 
     std::string status_path_;
     Choose choose_;
-    std::chrono::steady_clock::time_point next_check_{};
+    uint64_t next_check_ns_ = 0;
     std::future<Attempt> pending_;
     // 마지막으로 읽기를 시도한 고르기(성공이든 실패든 다시 시도하지 않는다; 파일이 바뀌면 다시 본다)
     std::string wanted_path_;

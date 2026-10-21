@@ -47,7 +47,7 @@ struct LateralControllerConfig {
     SteeringParams steering_params{};
 };
 
-struct LateralControlResult {
+struct LateralControlOutput {
     bool engaged = false;
     bool active = false;
     // 지금 조향 중이다(상류 CC.latActive): active이고 정차·MDPS 일시 고장·큰 조향각 요청 끔이 아니다. 거짓이면
@@ -139,7 +139,7 @@ public:
     // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다. now_ns는 plan 나이를 재는 시각
     // (monotonic_now_ns 시간축, controlsd는 공유 상태를 다 읽은 직후)이고, 0이면 나이를 0으로 본다(캡처 시각이 없는 검사).
     // panda는 이 틱의 Panda 상태 관문(PandaHealthGate)이다.
-    LateralControlResult update(const LateralPath &path, const LateralTarget &target,
+    LateralControlOutput update(const LateralPath &path, const LateralTarget &target,
                                 const VehicleCanState &vehicle_state, double now_s, int frame,
                                 const PandaGateOutput &panda = panda_allows_control(), uint64_t now_ns = 0);
 
@@ -156,7 +156,7 @@ private:
     };
     void disengage(double now_s);
     void resolve_engagement(BlockKind kind, bool soft_condition, bool logical_engaged, bool engage_requested,
-                            double now_s, LateralControlResult *result);
+                            double now_s, LateralControlOutput *result);
     // 클립 전 목표 곡률. plan_curvature에는 묶기 전의 plan 곡률(상류 modelV2.action.desiredCurvature,
     // 포화 경고가 쓴다)을 적는다.
     float requested_curvature(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
@@ -167,18 +167,18 @@ private:
     CurvatureBounds hold_angle_bounds(float speed_mps, bool steering, bool steering_pressed,
                                       const LiveLateralParams &live);
     // 조향 중인 틱의 토크. torque_in은 update가 채운 토크 제어기 입력(조향 여부·핸들 조작·안전 한계는 여기서 정한다).
-    void steer(const VehicleCanState &vehicle_state, const TorqueController::Inputs &torque_in, double now_s,
+    void steer(const VehicleCanState &vehicle_state, const TorqueController::Input &torque_in, double now_s,
                bool steering_pressed, bool curvature_limited, float plan_curvature, float nn_feedforward,
-               LateralControlResult *result);
+               LateralControlOutput *result);
     // 학습한 토크 모델의 피드포워드(토크). 이력을 쌓고 섞는 무게(nn_weight_)를 1초에 걸쳐 목표(켜짐·모델·조향 중이고
     // 학습 속도 범위이며 학습에서 뺀 순간(차선 변경·회전·깜빡이)이 아니면 1)로 옮긴다. 무게가 있고 조향 중일 때만
     // 값을, 아니면 NaN을 낸다.
     float lateral_nn_feedforward(const LateralTarget &target, const VehicleCanState &vehicle_state, float speed_mps,
                                  float plan_age_s, bool steering, const LiveLateralParams &live,
                                  const CurvatureBounds &hold);
-    bool update_saturation(const LateralControlResult &result, float plan_curvature, float speed_mps, double now_s,
+    bool update_saturation(const LateralControlOutput &result, float plan_curvature, float speed_mps, double now_s,
                            bool steering_pressed, bool curvature_limited);
-    void copy_torque_state(LateralControlResult *result) const;
+    void copy_torque_state(LateralControlOutput *result) const;
 
     // active를 막는 현재 gate reason을 계산한다. 앞선 사유가 없으면 soft_reason이다.
     BlockReason active_block_reason(const LateralPath &path, const LateralTarget &target,
@@ -210,7 +210,7 @@ private:
 
     // 최종 송신 frame 묶음을 만든다. steer_req는 보내는 요청 비트(update가 한 번 정한다), lkas_active는 활성이거나
     // 가용성 대기(MDPS 속도 스푸프)다.
-    std::vector<CanFrame> build_frames(const VehicleCanState &vehicle_state, const LateralControlResult &result,
+    std::vector<CanFrame> build_frames(const VehicleCanState &vehicle_state, const LateralControlOutput &result,
                                        bool steer_req, bool lkas_active, int frame);
 
     // LKAS11 counter를 seed frame 기준으로 openpilot 방식에 맞춰 증가시킨다.

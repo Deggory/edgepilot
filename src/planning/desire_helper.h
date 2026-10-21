@@ -17,7 +17,7 @@ struct DesireHelperParams {
 };
 
 // 모델 프레임에서 desire 판단에 쓰는 값.
-struct DesireModelInputs {
+struct DesireModelInput {
     double lane_change_prob = 0.0;               // desire_state 차선 변경(좌+우)
     std::array<double, 4> lane_probabilities{};  // 차선선 4개
     std::array<double, 2> road_edge_stds{};      // 도로 경계 2개
@@ -29,7 +29,7 @@ public:
     // lat_active: 지금 조향하는가(상류 carControl.latActive). steering_pressed: 컨트롤러가 거른 운전자 조향
     // (상류 CS.steeringPressed)으로, 변경을 취소할 때 쓴다. 변경 시작 넛지는 이 틱의 운전자 토크로 본다.
     void update(const VehicleCanState &vehicle, float v_ego, bool lat_active, bool steering_pressed,
-                const DesireModelInputs &model);
+                const DesireModelInput &model);
 
     Desire desire() const { return desire_; }
     LaneChangeState lane_change_state() const { return lane_change_state_; }

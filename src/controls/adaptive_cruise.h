@@ -5,7 +5,7 @@
 
 #include <string>
 
-struct AdaptiveCruiseConfig {
+struct AdaptiveCruiseParams {
     bool enabled = true;
     float standstill_gap_m = 5.0f;
     float following_time_s = 1.8f;
@@ -24,7 +24,7 @@ struct AdaptiveCruiseConfig {
     int button_pulse_frames = 5;
 };
 
-bool load_adaptive_cruise_params_json(const std::string &path, AdaptiveCruiseConfig *config, std::string *error);
+bool load_adaptive_cruise_params(const std::string &path, AdaptiveCruiseParams *params, std::string *error);
 
 struct AdaptiveCruiseInput {
     double now_s = 0.0;
@@ -63,9 +63,9 @@ struct AdaptiveCruiseOutput {
 
 class AdaptiveCruiseController {
 public:
-    explicit AdaptiveCruiseController(AdaptiveCruiseConfig config = AdaptiveCruiseConfig());
+    explicit AdaptiveCruiseController(AdaptiveCruiseParams params = AdaptiveCruiseParams());
 
-    void update_config(const AdaptiveCruiseConfig &config);
+    void update_params(const AdaptiveCruiseParams &params);
     AdaptiveCruiseOutput update(const AdaptiveCruiseInput &input);
 
 private:
@@ -109,7 +109,7 @@ private:
         float distance_m = 0.0f;
         float relative_speed_mps = 0.0f;
         double last_valid_s = -1.0;  // 유효한 앞차를 마지막으로 본 시각
-        void update(const AdaptiveCruiseInput &input, const AdaptiveCruiseConfig &config);
+        void update(const AdaptiveCruiseInput &input, const AdaptiveCruiseParams &params);
     };
 
     // 클러스터/휠 속도 비. 두 속도가 학습 속도 위일 때 따라가고, 허용 범위를 벗어나면 신호가 깨진
@@ -145,7 +145,7 @@ private:
     float smooth_target(const Tick &tick, float target_speed_kph, double dt_s);
     int pace_buttons(const AdaptiveCruiseInput &input, const Tick &tick, float target_speed_kph, bool active);
 
-    AdaptiveCruiseConfig config_;
+    AdaptiveCruiseParams params_;
     Session session_;
     LeadFilter lead_;
     DisplayScale display_scale_;

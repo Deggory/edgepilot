@@ -51,7 +51,7 @@ double DesireHelper::record_speed(float v_ego) {
 // 출구에서 커브 쪽으로 이어진 토크가 안정적이었는데, 잘못 시작한 차선 변경 desire가 경로를 회전 쪽으로 휘게
 // 만든 우연이었다.
 void DesireHelper::update(const VehicleCanState &vehicle, float v_ego, bool lat_active, bool steering_pressed,
-                          const DesireModelInputs &model) {
+                          const DesireModelInput &model) {
     const bool one_blinker = vehicle.left_blinker != vehicle.right_blinker;
     const bool below_speed = v_ego < params_.lane_change_min_speed_mps;
     const int blinker_direction = vehicle.left_blinker ? -1 : 1;

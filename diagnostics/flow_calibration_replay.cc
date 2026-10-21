@@ -57,8 +57,8 @@ int main(int argc, char **argv) {
             double t;
             int valid;
             LeadFlowInput in;
-            while (std::fscanf(f, "%ld %lf %d %f %f %f %f %f %f %f %f", &frame, &t, &valid, &in.probability, &in.x,
-                               &in.y, &in.rpy[0], &in.rpy[1], &in.rpy[2], &in.camera_height_m,
+            while (std::fscanf(f, "%ld %lf %d %f %f %f %f %f %f %f %f", &frame, &t, &valid, &in.probability, &in.x_m,
+                               &in.y_m, &in.rpy[0], &in.rpy[1], &in.rpy[2], &in.camera_height_m,
                                &in.camera_offset_m) == 11) {
                 in.valid = valid != 0;
                 leads[frame] = {t, in};

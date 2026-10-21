@@ -129,7 +129,7 @@ public:
             tick_.on_panda(panda_state(now_ns_, panda_allows));
             tick_.on_localization(LocalizationRead{}, now_s);
             state = tick_.update(now_s, now_ns_);
-            torque_writes_ += tick_.update_learners(now_s).torque_cache ? 1 : 0;
+            torque_writes_ += tick_.update_learners(now_s).torque_persist_data ? 1 : 0;
         }
         return state;
     }
@@ -154,7 +154,7 @@ private:
 };
 
 bool sends(const ControlsTick &tick, uint32_t address, uint8_t bus) {
-    const LateralControlResult &result = tick.result();
+    const LateralControlOutput &result = tick.result();
     if (!result.should_send) return false;
     return std::any_of(result.frames.begin(), result.frames.end(),
                        [&](const CanFrame &frame) { return frame.address == address && frame.bus == bus; });
@@ -167,9 +167,9 @@ TEST(ControlsTick, LearnerFilesAreWrittenOnlyWhenTheyChange) {
     ControlsTick off(params, false, std::string(), std::string());
     int vehicle_writes = 0, torque_writes = 0;
     for (int i = 0; i < 13000; ++i) {  // 100 Hz로 130 s: paramsd 저장 주기 2번
-        const LearnerOutputs out = off.update_learners(1.0 + i * 0.01);
-        vehicle_writes += out.vehicle_json ? 1 : 0;
-        torque_writes += out.torque_cache ? 1 : 0;
+        const LearnerOutput out = off.update_learners(1.0 + i * 0.01);
+        vehicle_writes += out.vehicle_persist_data ? 1 : 0;
+        torque_writes += out.torque_persist_data ? 1 : 0;
     }
     EXPECT_EQ(vehicle_writes, 1);
     EXPECT_EQ(torque_writes, 0);
@@ -181,7 +181,7 @@ TEST(ControlsTick, LearnerFilesAreWrittenOnlyWhenTheyChange) {
     drive.run(130.0, parked);
     EXPECT_EQ(drive.torque_writes(), 1);
     // 시작 때 읽은 내용과 같으면 첫 저장도 하지 않는다
-    Drive restarted(params, std::string(), drive.tick().learners().torque_cache());
+    Drive restarted(params, std::string(), drive.tick().learners().torque_persist_data());
     restarted.run(30.0, parked);
     EXPECT_EQ(restarted.torque_writes(), 0);
 }
@@ -229,11 +229,11 @@ TEST(ControlsTick, ControlStateCarriesTheLagdInputs) {
 // 끝낼 때는 마지막 저장 뒤 바뀐 학습값만 내놓고, 그대로면 아무것도 내놓지 않는다
 TEST(ControlsTick, FinalLearnerOutputsOnlyWhatChanged) {
     ControlsTick tick(Drive::laneless_params(), false, std::string(), std::string());
-    const LearnerOutputs first = tick.final_learner_outputs();
-    ASSERT_TRUE(first.vehicle_json.has_value()) << "시작 때 읽은 파일이 없으니 처음 것은 새 내용이다";
-    const LearnerOutputs again = tick.final_learner_outputs();
-    EXPECT_FALSE(again.vehicle_json.has_value()) << "방금 낸 것과 같다";
-    EXPECT_FALSE(again.torque_cache.has_value());
+    const LearnerOutput first = tick.final_learner_outputs();
+    ASSERT_TRUE(first.vehicle_persist_data.has_value()) << "시작 때 읽은 파일이 없으니 처음 것은 새 내용이다";
+    const LearnerOutput again = tick.final_learner_outputs();
+    EXPECT_FALSE(again.vehicle_persist_data.has_value()) << "방금 낸 것과 같다";
+    EXPECT_FALSE(again.torque_persist_data.has_value());
 }
 
 TEST(ControlsTick, PandaRefusalRejectsEngageAfterTheGrace) {
@@ -373,7 +373,7 @@ ModelState lane_model(uint64_t now_ns) {
     return model;
 }
 
-// 웹 콘솔에서 바꿔 다시 읽은 파라미터는 다음 모델 프레임부터 플래너에 들어간다(apply_params → 플래너).
+// 웹 콘솔에서 바꿔 다시 읽은 파라미터는 다음 모델 프레임부터 플래너에 들어간다(update_params → 플래너).
 TEST(ControlsTick, ReloadedParamsReachThePlanner) {
     ControlParams params;
     ControlsTick tick(params, false, std::string(), std::string());
@@ -384,7 +384,7 @@ TEST(ControlsTick, ReloadedParamsReachThePlanner) {
     }
     ASSERT_FALSE(tick.target().laneless_mode) << "차선이 자리 잡으면 Lane 모드로 계획한다";
     params.steering.laneless_mode = true;
-    tick.apply_params(params);
+    tick.update_params(params);
     tick.on_model(lane_model(now_ns));
     tick.update(static_cast<double>(now_ns) * 1e-9, now_ns);
     EXPECT_TRUE(tick.target().laneless_mode) << "다시 읽은 뒤 첫 프레임부터 Laneless로 계획한다";
@@ -402,17 +402,17 @@ TEST(ControlsTick, ParamWatcherPicksUpAnAtomicRewriteWithinASecond) {
     ControlParams params;
     std::string error;
     ASSERT_TRUE(load_control_params(paths, &params, &error)) << error;
-    const auto start = std::chrono::steady_clock::now();
-    ControlParamsWatcher watcher(paths, start);
+    const uint64_t start_ns = 10'000'000'000ULL;
+    ControlParamsWatcher watcher(paths, start_ns);
 
     ASSERT_TRUE(write_file_atomic(paths.steering, "{\"torque_kp\": 1.25}\n"));
-    EXPECT_FALSE(watcher.poll(start + std::chrono::milliseconds(500), params)) << "1초가 되기 전에는 보지 않는다";
-    const auto reloaded = watcher.poll(start + std::chrono::seconds(1), params);
-    ASSERT_TRUE(reloaded) << "rename으로 바뀐 파일을 1초 확인에서 읽는다";
-    EXPECT_FLOAT_EQ(reloaded->steering.torque_kp, 1.25f);
-    EXPECT_FLOAT_EQ(reloaded->steering.steer_ratio, params.steering.steer_ratio) << "빠진 키는 지금 값 그대로";
+    ControlParams reloaded = params;
+    EXPECT_FALSE(watcher.poll(start_ns + 500'000'000ULL, &reloaded)) << "1초가 되기 전에는 보지 않는다";
+    ASSERT_TRUE(watcher.poll(start_ns + 1'000'000'000ULL, &reloaded)) << "rename으로 바뀐 파일을 1초 확인에서 읽는다";
+    EXPECT_FLOAT_EQ(reloaded.steering.torque_kp, 1.25f);
+    EXPECT_FLOAT_EQ(reloaded.steering.steer_ratio, params.steering.steer_ratio) << "빠진 키는 지금 값 그대로";
     EXPECT_EQ(watcher.generation(), 2U);
-    EXPECT_FALSE(watcher.poll(start + std::chrono::seconds(2), *reloaded)) << "그다음 확인은 바뀐 게 없다";
+    EXPECT_FALSE(watcher.poll(start_ns + 2'000'000'000ULL, &reloaded)) << "그다음 확인은 바뀐 게 없다";
     std::filesystem::remove_all(dir);
 }
 
