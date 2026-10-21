@@ -328,8 +328,9 @@ struct LateralPlanner::Impl {
         factor2 = center_to_front * steering.mass_kg / (steering.wheelbase_m * tire_rear);
     }
 
-    LateralTarget update(const ModelState &model, const VehicleCanState &vehicle, float v_ego, float measured_curvature,
-                         bool lat_active, bool steering_pressed) {
+    LateralTarget update(const ModelState &model, const VehicleCanState &vehicle, const LateralPlannerInput &in) {
+        const float v_ego = in.v_ego, measured_curvature = in.measured_curvature;
+        const bool lat_active = in.lat_active, steering_pressed = in.steering_pressed;
         LateralTarget target;
         lane_planner.parse(model, v_ego, measured_curvature);
         update_desire(model, vehicle, v_ego, lat_active, steering_pressed);
@@ -543,7 +544,7 @@ void LateralPlanner::update_params(const SteeringParams &params) { impl_->update
 
 void LateralPlanner::set_lane_filter_weight(double weight) { impl_->lane_planner.set_filter_weight(weight); }
 
-LateralTarget LateralPlanner::update(const ModelState &model, const VehicleCanState &vehicle, float v_ego,
-                                     float measured_curvature, bool lat_active, bool steering_pressed) {
-    return impl_->update(model, vehicle, v_ego, measured_curvature, lat_active, steering_pressed);
+LateralTarget LateralPlanner::update(const ModelState &model, const VehicleCanState &vehicle,
+                                     const LateralPlannerInput &in) {
+    return impl_->update(model, vehicle, in);
 }

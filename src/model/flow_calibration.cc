@@ -257,7 +257,7 @@ void FlowCalibrator::reset() {
     med_yaw_.clear();
     med_pitch_.clear();
     state_ = FlowCalibrationState{};
-    state_.status = kFlowCalibrationCollecting;
+    state_.status = static_cast<uint32_t>(FlowCalibrationStatus::Collecting);
 }
 
 bool FlowCalibrator::restore(const FlowBlocks &blocks) {
@@ -344,7 +344,7 @@ void FlowCalibrator::detect_mount_change() {
 void FlowCalibrator::update_estimate() {
     state_.estimate_blocks = static_cast<uint32_t>(med_yaw_.size());
     if (med_yaw_.empty()) {
-        state_.status = kFlowCalibrationCollecting;
+        state_.status = static_cast<uint32_t>(FlowCalibrationStatus::Collecting);
         return;
     }
     double sy = 0.0, sp = 0.0;
@@ -364,5 +364,6 @@ void FlowCalibrator::update_estimate() {
     state_.sd_yaw = nb > 1.0 ? static_cast<float>(std::sqrt(vy / (nb - 1.0))) : 0.0f;
     state_.sd_pitch = nb > 1.0 ? static_cast<float>(std::sqrt(vp / (nb - 1.0))) : 0.0f;
     state_.status =
-        static_cast<int>(med_yaw_.size()) >= kFlowMinBlocks ? kFlowCalibrationEstimate : kFlowCalibrationCollecting;
+        static_cast<uint32_t>(static_cast<int>(med_yaw_.size()) >= kFlowMinBlocks ? FlowCalibrationStatus::Estimate
+                                                                                  : FlowCalibrationStatus::Collecting);
 }

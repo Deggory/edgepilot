@@ -139,8 +139,13 @@ int main(int argc, char **argv) {
             if (!have_cs) continue;
             ModelState ms{};
             if (!read_record(buf, &ms)) continue;
-            const float v = v_kph / 3.6f;
-            LateralTarget t = planner.update(ms, vehicle, v, measured, active, steering_pressed);
+            LateralPlannerInput planner_in;
+            planner_in.v_ego = v_kph / 3.6f;
+            planner_in.measured_curvature = measured;
+            planner_in.lat_active = active;
+            planner_in.steering_pressed = steering_pressed;
+            const float v = planner_in.v_ego;
+            LateralTarget t = planner.update(ms, vehicle, planner_in);
             // 곡률 보정은 컨트롤러와 같은 100 Hz 틱으로 돌린다. 틱당 변화율 제한이
             // 있어 모델 주기로 한 번만 부르면 5배 과하게 걸린다. plan 나이는 촬영 시각부터
             // 재어 틱마다 늘어난다.

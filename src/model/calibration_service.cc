@@ -111,12 +111,12 @@ void copy_rpy(float dst[3], const float src[3]) {
 
 }  // namespace
 
-CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
+CalibrationService::CalibrationService(const AppConfig &config, CalibrationSource requested)
     : auto_enabled_(config.calibration_auto),
       calibration_path_(param_path("calibration.json")),
       flow_path_(param_path("flow_calibration.json")),
       reset_request_path_(env_string("EDGEPILOT_CALIBRATION_RESET_PATH", "/dev/shm/edgepilot_calibration_reset")),
-      use_flow_(use_flow) {
+      requested_(requested) {
     StoredCalibration stored;
     std::string load_error;
     const bool loaded = load_stored_calibration(calibration_path_, &stored, &load_error);
@@ -166,7 +166,8 @@ CalibrationService::CalibrationService(const AppConfig &config, bool use_flow)
     const ProjectionState current = projection_;
     std::fprintf(stderr, "projection calibration deg roll=%.3f pitch=%.3f yaw=%.3f params=%s source=%s (setting %s)\n",
                  rad_to_deg(current.roll), rad_to_deg(current.pitch), rad_to_deg(current.yaw),
-                 calibration_path_.c_str(), selector_.flow_applied() ? "flow" : "pose", use_flow_ ? "flow" : "pose");
+                 calibration_path_.c_str(), selector_.flow_applied() ? "flow" : "pose",
+                 requested_ == CalibrationSource::Flow ? "flow" : "pose");
     logged_flow_applied_ = selector_.flow_applied();
 }
 
@@ -194,7 +195,7 @@ void CalibrationService::apply_selection(float dt_s) {
         applied_snapshot_ = last_snapshot_;
         return;
     }
-    selector_.update(online_rpy_, flow_state_, use_flow_, engaged_, dt_s);
+    selector_.update(online_rpy_, flow_state_, requested_, engaged_, dt_s);
     selector_.rpy(applied_rpy_);
     projection_ = make_projection_state(applied_rpy_[0], applied_rpy_[1], applied_rpy_[2]);
     applied_snapshot_ = last_snapshot_;
@@ -219,15 +220,17 @@ void CalibrationService::apply_selection(float dt_s) {
     if (pending != logged_pending_) {
         logged_pending_ = pending;
         if (pending)
-            std::fprintf(stderr, "\ncalibration: switching to %s waits for disengage\n", use_flow_ ? "flow" : "pose");
+            std::fprintf(stderr, "\ncalibration: switching to %s waits for disengage\n",
+                         requested_ == CalibrationSource::Flow ? "flow" : "pose");
     }
 }
 
 CalibrationSourceState CalibrationService::source_state() const {
     CalibrationSourceState out;
     const bool online = auto_enabled_;
-    out.source = online && selector_.flow_applied() ? kCalibrationFromFlow : kCalibrationFromPose;
-    out.requested = use_flow_ ? 1u : 0u;
+    out.source =
+        static_cast<uint32_t>(online && selector_.flow_applied() ? CalibrationSource::Flow : CalibrationSource::Pose);
+    out.requested = static_cast<uint32_t>(requested_);
     out.flags = online ? selector_.flags() : 0u;
     out.pose_status = static_cast<uint32_t>(last_snapshot_.status);
     out.pose_valid_blocks = last_snapshot_.valid_blocks;
@@ -315,7 +318,7 @@ void CalibrationService::reset_online() {
     writer_.remove(calibration_path_);
     writer_.remove(flow_path_);
     flow_state_ = FlowCalibrationState{};
-    flow_state_.status = kFlowCalibrationCollecting;
+    flow_state_.status = static_cast<uint32_t>(FlowCalibrationStatus::Collecting);
     stored_flow_ = FlowBlocks{};
     latest_flow_blocks_ = FlowBlocks{};
     flow_blocks_dirty_ = false;
@@ -327,9 +330,10 @@ void CalibrationService::reset_online() {
     std::fprintf(stderr, "calibration: reset requested, recalibrating from scratch (pose and flow)\n");
 }
 
-void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bool engaged, bool use_flow) {
+void CalibrationService::update(const ParsedModelOutput &output, float v_ego, bool engaged,
+                                CalibrationSource requested) {
     engaged_ = engaged;
-    use_flow_ = use_flow;
+    requested_ = requested;
     poll_reset_request();
     const auto now = std::chrono::steady_clock::now();
     const float dt_s =

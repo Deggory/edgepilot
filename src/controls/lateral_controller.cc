@@ -76,7 +76,7 @@ LiveLateralParams LateralController::live_params() const {
 // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다.
 LateralControlResult LateralController::update(const LateralPath &path, const LateralTarget &target,
                                                const VehicleCanState &vehicle_state, double now_s, int frame,
-                                               bool panda_ready, bool panda_controls_allowed, uint64_t now_ns) {
+                                               const PandaGateOutput &panda, uint64_t now_ns) {
     nn_evaluated_ = false;
     const bool engage_requested =
         !config_.force_engaged && !engaged_ && vehicle_state.clu_button == 0 && last_button_ == kCruiseButtonSet;
@@ -106,8 +106,8 @@ LateralControlResult LateralController::update(const LateralPath &path, const La
     const BlockReason soft_reason =
         soft_disable_reason(update_steer_fault_alert(result.steer_fault, steering_pressed, wheels_stopped));
     result.active_block =
-        active_block_reason(gated_path, target, vehicle_state, result.seeds_ready, result.vehicle_fresh, panda_ready,
-                            panda_controls_allowed, result.control_speed_kph, plan_age, soft_reason);
+        active_block_reason(gated_path, target, vehicle_state, result.seeds_ready, result.vehicle_fresh, panda,
+                            result.control_speed_kph, plan_age, soft_reason);
     const BlockKind kind = block_kind(result.active_block);
     resolve_engagement(kind, soft_reason != BlockReason::None, logical_engaged, engage_requested, now_s, &result);
     // 가용성 대기와 입력 끊김 동안에는 토크만 0으로 하고 steer_req/MDPS 속도 스푸프는
@@ -570,8 +570,8 @@ bool LateralController::plan_matches_wheel(const LateralTarget &target, float sp
 // active를 막는 현재 gate reason을 계산한다.
 BlockReason LateralController::active_block_reason(const LateralPath &path, const LateralTarget &target,
                                                    const VehicleCanState &vehicle_state, bool seeds_ready,
-                                                   bool vehicle_fresh, bool panda_ready, bool panda_controls_allowed,
-                                                   float speed_kph, float plan_age_s, BlockReason soft_reason) const {
+                                                   bool vehicle_fresh, const PandaGateOutput &panda, float speed_kph,
+                                                   float plan_age_s, BlockReason soft_reason) const {
     // 순서 규칙: 데이터 유효성 -> 차량 결함(즉시 해제) -> 핸드셰이크 ->
     // 가용성 대기. 결함이 뒤로 밀리면 앞선 일시적 사유가 결함을 가리고, 그
     // 사이 결합이 유예되어 톤만 울렸다가 해제된다.
@@ -588,8 +588,8 @@ BlockReason LateralController::active_block_reason(const LateralPath &path, cons
     // Panda 핸드셰이크는 차량 결함 뒤에 온다. 앞에 두면 시동 직후 health가
     // 도착하기 전의 결합 요청이 panda_not_ready(일시적)로 분류되어 유예되고,
     // 안전벨트/기어 같은 하드 결함이 가려진 채 결합 톤이 울린 뒤 해제된다.
-    if (!panda_ready) return BlockReason::PandaNotReady;
-    if (!panda_controls_allowed) return BlockReason::PandaControlsOff;
+    if (!panda.ready) return BlockReason::PandaNotReady;
+    if (!panda.controls_allowed) return BlockReason::PandaControlsOff;
     if (!path.usable_for_steering) {
         // 모델이 낡았거나 무효면 속도와 상관없이 입력이 끊긴 것이다(해제 예고 뒤 해제).
         if (path.model_lost) return BlockReason::ModelLost;

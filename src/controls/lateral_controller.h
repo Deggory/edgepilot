@@ -13,6 +13,7 @@
 #include "car/vehicle_can.h"
 #include "common/ipc_messages.h"  // CalibrationStatus
 #include "controls/control_block.h"
+#include "controls/control_holds.h"  // PandaGateOutput
 #include "controls/control_params.h"
 #include "controls/drive_helpers.h"
 #include "controls/lateral_nn.h"
@@ -137,9 +138,10 @@ public:
 
     // 차량 버튼/상태와 lane path를 바탕으로 LKAS 제어 결과와 CAN frame을 만든다. now_ns는 plan 나이를 재는 시각
     // (monotonic_now_ns 시간축, controlsd는 공유 상태를 다 읽은 직후)이고, 0이면 나이를 0으로 본다(캡처 시각이 없는 검사).
+    // panda는 이 틱의 Panda 상태 관문(PandaHealthGate)이다.
     LateralControlResult update(const LateralPath &path, const LateralTarget &target,
-                                const VehicleCanState &vehicle_state, double now_s, int frame, bool panda_ready = true,
-                                bool panda_controls_allowed = true, uint64_t now_ns = 0);
+                                const VehicleCanState &vehicle_state, double now_s, int frame,
+                                const PandaGateOutput &panda = panda_allows_control(), uint64_t now_ns = 0);
 
 private:
     // CLU 버튼 edge로 결합·해제 상태를 갱신한다.
@@ -181,7 +183,7 @@ private:
     // active를 막는 현재 gate reason을 계산한다. 앞선 사유가 없으면 soft_reason이다.
     BlockReason active_block_reason(const LateralPath &path, const LateralTarget &target,
                                     const VehicleCanState &vehicle_state, bool seeds_ready, bool vehicle_fresh,
-                                    bool panda_ready, bool panda_controls_allowed, float speed_kph, float plan_age_s,
+                                    const PandaGateOutput &panda, float speed_kph, float plan_age_s,
                                     BlockReason soft_reason) const;
     // SoftDisable 사유(상류 SOFT_DISABLE 이벤트). active_block_reason의 맨 끝이고, 해제 예고 타이머는 이것만 따로
     // 본다(앞선 다른 사유가 끼어도 센다).

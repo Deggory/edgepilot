@@ -30,6 +30,11 @@
 
 namespace {
 
+// 웹 기기 설정(display.json calibration_use_flow)이 고른 보정 출처
+CalibrationSource requested_calibration_source(const DeviceSettings &settings) {
+    return settings.calibration_use_flow ? CalibrationSource::Flow : CalibrationSource::Pose;
+}
+
 volatile sig_atomic_t g_stop = 0;
 
 // EDGEPILOT_RAW_DUMP: replay 중 모델 raw 출력을 SCODMP1로 남긴다.
@@ -223,7 +228,7 @@ struct ModelLoop {
     ModelLoop(const AppConfig &config, bool live)
         : model(config.axmodel_path.c_str(), config),
           settings(live),
-          calibration(config, settings.get().calibration_use_flow),
+          calibration(config, requested_calibration_source(settings.get())),
           mount(settings.get()) {}
 
     // 실행 직전. 워프 보정은 보정 서비스의 지금 값이다: 첫 프레임은 시작 값, 그 뒤는 직전 프레임 출력으로
@@ -243,7 +248,7 @@ struct ModelLoop {
 
 void ModelLoop::publish(LatestChannel &model_pub, const ParsedModelOutput &parsed, uint64_t frame_id,
                         uint64_t capture_timestamp_ns, float model_ms, float v_ego, bool engaged, const LeadIo &lead) {
-    calibration.update(parsed, v_ego, engaged, settings.get().calibration_use_flow);
+    calibration.update(parsed, v_ego, engaged, requested_calibration_source(settings.get()));
     float input_rpy[3];  // 다음 카메라 프레임의 워프 보정(광류 작업의 앞차 상자도 이것으로 투영한다)
     calibration.input_rpy(input_rpy);
 

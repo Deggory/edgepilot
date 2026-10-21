@@ -35,9 +35,9 @@ public:
     // 한계 안.
     static bool flow_usable(const FlowCalibrationState &flow, float max_spread = kMaxFlowSpreadRad);
 
-    // 모델 프레임마다. pose_rpy는 포즈 보정기 출력(rad), requested_flow는 설정, dt_s는 지난 호출부터의 시간.
+    // 모델 프레임마다. pose_rpy는 포즈 보정기 출력(rad), requested는 설정, dt_s는 지난 호출부터의 시간.
     // 첫 호출은 설정과 목표를 그대로 받는다(시작할 때는 차가 서 있다).
-    void update(const float pose_rpy[3], const FlowCalibrationState &flow, bool requested_flow, bool engaged,
+    void update(const float pose_rpy[3], const FlowCalibrationState &flow, CalibrationSource requested, bool engaged,
                 float dt_s);
     // 램프 없이 이 값으로 맞춘다(보정 초기화). 출처는 다음 update가 다시 정한다.
     void snap_to(const float rpy[3]);

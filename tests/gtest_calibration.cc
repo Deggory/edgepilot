@@ -729,7 +729,7 @@ TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn) {
     write_text(params.file("flow_calibration.json"), flow_json(-0.03f, -0.2f, 6));
     const AppConfig config = auto_calibration();
     {
-        CalibrationService pose_only(config, false);
+        CalibrationService pose_only(config, CalibrationSource::Pose);
         float rpy[3] = {};
         pose_only.input_rpy(rpy);
         EXPECT_NEAR(rpy[2], deg_to_rad(-0.5f), 1e-6) << "설정이 꺼져 있으면 포즈 보정";
@@ -738,7 +738,7 @@ TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn) {
         EXPECT_EQ(pose_only.flow_state().estimate_blocks, 6u);
         EXPECT_EQ(pose_only.snapshot().valid_blocks, 5) << "포즈 출처면 포즈 보정기의 블록 수";
     }
-    CalibrationService flow(config, true);
+    CalibrationService flow(config, CalibrationSource::Flow);
     float rpy[3] = {};
     flow.input_rpy(rpy);
     EXPECT_NEAR(rpy[1], deg_to_rad(-0.2f), 1e-6) << "첫 프레임부터 광류";
@@ -758,7 +758,7 @@ TEST(CalibrationFlowSource, StoredFlowAppliesWhenTheSettingIsOn) {
     source.current.yaw = deg_to_rad(0.3f);
     flow.attach_flow(&source);
     const ParsedModelOutput no_pose{};
-    flow.update(no_pose, 0.0f, false, true);
+    flow.update(no_pose, 0.0f, false, CalibrationSource::Flow);
     flow.input_rpy(rpy);
     EXPECT_LT(rpy[2], 0.0f) << "한 번에 옮기지 않는다";
     EXPECT_NE(flow.source_state().flags & kCalibrationSourceRamping, 0u);
@@ -772,23 +772,23 @@ TEST(CalibrationFlowSource, PoseLoopPausesWhileFlowDrivesTheWarp) {
     const float pose[3] = {0.0f, 0.0f, deg_to_rad(-0.5f)};
     seed_calibration(params.file("calibration.json"), pose, 5);
     write_text(params.file("flow_calibration.json"), flow_json(-0.5f, 0.0f, 6));
-    CalibrationService service(auto_calibration(), true);
+    CalibrationService service(auto_calibration(), CalibrationSource::Flow);
     ASSERT_EQ(service.source_state().source, 1u);
     const float bias = deg_to_rad(-0.3f);  // 모델 pose의 치우침이 남아도
     const ParsedModelOutput biased = parsed_from_pose(make_pose(20.0f, 20.0f * std::tan(bias), 0.0f));
-    for (int i = 0; i < 20 * kBlockSize; ++i) service.update(biased, 20.0f, false, true);
+    for (int i = 0; i < 20 * kBlockSize; ++i) service.update(biased, 20.0f, false, CalibrationSource::Flow);
     CalibrationSourceState src = service.source_state();
     EXPECT_EQ(src.pose_valid_blocks, 5) << "광류가 워프를 맡는 동안 포즈 보정기는 블록을 모으지 않는다";
     EXPECT_NEAR(src.pose_yaw, deg_to_rad(-0.5f), 1e-7) << "멈춘 마지막 추정 그대로";
     EXPECT_NEAR(src.pose_roll, 0.0f, 1e-7);
 
-    service.update(no_pose_output(), 0.0f, false, false);  // 포즈로 돌아간다(같은 값이라 바로)
+    service.update(no_pose_output(), 0.0f, false, CalibrationSource::Pose);  // 포즈로 돌아간다(같은 값이라 바로)
     src = service.source_state();
     EXPECT_EQ(src.source, 0u);
     EXPECT_EQ(src.flags & kCalibrationSourceRamping, 0u);
     // 복원한 보정기는 upstream reset()처럼 block_idx 0부터 덮어쓰므로 valid_blocks는 5에 머문다.
     // 추정이 움직이는지 본다.
-    for (int i = 0; i < 2 * kBlockSize; ++i) service.update(biased, 20.0f, false, false);
+    for (int i = 0; i < 2 * kBlockSize; ++i) service.update(biased, 20.0f, false, CalibrationSource::Pose);
     EXPECT_LT(service.source_state().pose_yaw, deg_to_rad(-0.55f)) << "포즈 보정기가 다시 돈다";
 }
 
@@ -802,14 +802,14 @@ TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource) {
     source.current = usable_flow_state(-0.03f, -0.2f, 6);
     source.apply_resets = false;  // 측정원이 초기화를 처리하기 전의 상태를 먼저 본다
     {
-        CalibrationService service(auto_calibration(), true);
+        CalibrationService service(auto_calibration(), CalibrationSource::Flow);
         service.attach_flow(&source);
         ASSERT_EQ(service.source_state().source, 1u);
         write_text(reset_request, "");
         for (int i = 0; i < 12 && source.resets_requested == 0; ++i) {
             struct timespec pause = {0, 100'000'000};
             nanosleep(&pause, nullptr);
-            service.update(no_pose, 0.0f, false, true);
+            service.update(no_pose, 0.0f, false, CalibrationSource::Flow);
         }
         EXPECT_EQ(source.resets_requested, 1u) << "측정원에도 알린다";
         EXPECT_EQ(service.source_state().source, 0u) << "초기화하면 포즈 0에서 다시";
@@ -819,7 +819,7 @@ TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource) {
 
         source.blocks.yaw = source.blocks.pitch = {0.0f, 0.0f, 0.0f};
         source.blocks_ready = true;
-        service.update(no_pose, 0.0f, false, true);
+        service.update(no_pose, 0.0f, false, CalibrationSource::Flow);
         EXPECT_EQ(service.source_state().source, 0u) << "처리 전의 예전 추정은 무시한다";
         EXPECT_EQ(service.flow_state().estimate_blocks, 0u);
         EXPECT_TRUE(source.blocks_ready) << "처리 전에 끝난 블록은 받지 않는다";
@@ -829,7 +829,7 @@ TEST(CalibrationFlowSource, ResetClearsBothAndTellsTheSource) {
         source.current.status = 1;
         source.current.blocks = 2;
         source.blocks_ready = false;
-        service.update(no_pose, 0.0f, false, true);
+        service.update(no_pose, 0.0f, false, CalibrationSource::Flow);
         EXPECT_EQ(service.flow_state().status, 1u) << "처리한 뒤의 상태는 받는다";
         EXPECT_EQ(service.flow_state().blocks, 2u);
         EXPECT_EQ(source.resets_requested, 1u) << "한 번만 보낸다";
@@ -845,19 +845,19 @@ TEST(CalibrationFlowSource, ResetWaitsForDisengage) {
     setenv("EDGEPILOT_CALIBRATION_RESET_PATH", reset_request.c_str(), 1);
     write_text(params.file("flow_calibration.json"), flow_json(-0.03f, -0.2f, 6));
     const ParsedModelOutput no_pose{};
-    CalibrationService service(auto_calibration(), true);
+    CalibrationService service(auto_calibration(), CalibrationSource::Flow);
     write_text(reset_request, "");
     for (int i = 0; i < 12; ++i) {
         struct timespec pause = {0, 100'000'000};
         nanosleep(&pause, nullptr);
-        service.update(no_pose, 0.0f, true, true);
+        service.update(no_pose, 0.0f, true, CalibrationSource::Flow);
     }
     EXPECT_EQ(service.source_state().source, 1u) << "결합 중에는 초기화하지 않는다";
     EXPECT_EQ(access(reset_request.c_str(), F_OK), 0) << "요청은 남겨 둔다";
     for (int i = 0; i < 12 && service.source_state().source != 0u; ++i) {
         struct timespec pause = {0, 100'000'000};
         nanosleep(&pause, nullptr);
-        service.update(no_pose, 0.0f, false, true);
+        service.update(no_pose, 0.0f, false, CalibrationSource::Flow);
     }
     EXPECT_EQ(service.source_state().source, 0u) << "해제되면 초기화한다";
     EXPECT_NE(access(reset_request.c_str(), F_OK), 0);
@@ -874,13 +874,13 @@ TEST(CalibrationFlowSource, SavesFlowBlocksFromTheSource) {
     source.blocks.windows = 60;
     source.blocks_ready = true;
     {
-        CalibrationService service(auto_calibration(), false);
+        CalibrationService service(auto_calibration(), CalibrationSource::Pose);
         service.attach_flow(&source);
-        service.update(no_pose, 0.0f, false, false);  // 첫 저장은 바로 나간다
+        service.update(no_pose, 0.0f, false, CalibrationSource::Pose);  // 첫 저장은 바로 나간다
         EXPECT_FALSE(source.blocks_ready);
         service.attach_flow(nullptr);
     }
-    CalibrationService restarted(auto_calibration(), false);
+    CalibrationService restarted(auto_calibration(), CalibrationSource::Pose);
     ASSERT_EQ(restarted.stored_flow_blocks().yaw.size(), 3u);
     EXPECT_EQ(restarted.stored_flow_blocks().windows, 60u);
     EXPECT_EQ(restarted.flow_state().status, 2u);

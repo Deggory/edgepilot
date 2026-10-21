@@ -20,8 +20,8 @@
 // 지운다(광류 측정원에도 알린다). 설정을 읽는 것은 프로세스(modeld)이고, 여기서는 인자로 받는다.
 class CalibrationService {
 public:
-    // use_flow: 시작할 때의 보정 출처 설정(display.json calibration_use_flow). 첫 프레임 워프부터 맞춘다.
-    explicit CalibrationService(const AppConfig &config, bool use_flow = false);
+    // requested: 시작할 때의 보정 출처 설정(display.json calibration_use_flow). 첫 프레임 워프부터 맞춘다.
+    explicit CalibrationService(const AppConfig &config, CalibrationSource requested = CalibrationSource::Pose);
     ~CalibrationService();
     CalibrationService(const CalibrationService &) = delete;
     CalibrationService &operator=(const CalibrationService &) = delete;
@@ -29,9 +29,10 @@ public:
     // 광류 측정원을 붙인다(nullptr이면 뗀다). 측정원은 저장해 둔 블록(stored_flow_blocks)으로 시작해야 하고,
     // 붙어 있는 동안 살아 있어야 한다. 없으면 저장해 둔 추정을 그대로 쓴다(장착의 성질이다).
     void attach_flow(FlowSource *source) { flow_source_ = source; }
-    // 모델 프레임마다. engaged는 controlsd의 결합 상태(광류로 바꾸는 것과 초기화는 해제까지 기다린다), use_flow는
+    // 모델 프레임마다. engaged는 controlsd의 결합 상태(광류로 바꾸는 것과 초기화는 해제까지 기다린다), requested는
     // 보정 출처 설정.
-    void update(const ParsedModelOutput &output, float v_ego, bool engaged = false, bool use_flow = false);
+    void update(const ParsedModelOutput &output, float v_ego, bool engaged = false,
+                CalibrationSource requested = CalibrationSource::Pose);
     ProjectionState projection() const { return projection_; }
     // 워프에 쓴 보정의 상태(ModelState.calibration). 출처가 광류면 Calibrated다.
     OnlineCalibrator::Snapshot snapshot() const { return applied_snapshot_; }
@@ -73,7 +74,7 @@ private:
     // 광류 출처
     FlowSource *flow_source_ = nullptr;
     CalibrationSourceSelector selector_;
-    bool use_flow_ = false;  // 마지막으로 받은 설정
+    CalibrationSource requested_ = CalibrationSource::Pose;  // 마지막으로 받은 설정
     bool engaged_ = false;
     bool logged_flow_applied_ = false;
     bool logged_pending_ = false;

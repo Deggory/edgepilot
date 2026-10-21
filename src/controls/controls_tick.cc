@@ -322,9 +322,12 @@ void ControlsTick::on_model(const ModelState &model) {
     model_ = model;
     model_updated_ = true;
     // 상류 플래너처럼 거른 vEgo를 준다(직전 틱 값). 휠 속도가 낡았으면 0이다. 결과는 이번 틱 step이 쓴다.
-    lateral_target_ =
-        planner_.update(model_, vehicle_, std::max(0.0f, last_result_.control_speed_kph / 3.6f),
-                        last_result_.actual_curvature, last_result_.lat_active, last_result_.steering_pressed);
+    LateralPlannerInput planner_in;
+    planner_in.v_ego = std::max(0.0f, last_result_.control_speed_kph / 3.6f);
+    planner_in.measured_curvature = last_result_.actual_curvature;
+    planner_in.lat_active = last_result_.lat_active;
+    planner_in.steering_pressed = last_result_.steering_pressed;
+    lateral_target_ = planner_.update(model_, vehicle_, planner_in);
 }
 
 void ControlsTick::on_localization(const LocalizationRead &localization, double now_s) {
@@ -361,8 +364,7 @@ ControlState ControlsTick::step(double now_s, uint64_t now_ns) {
     panda_ = panda_gate_.update(panda_state_, now_ns, controller_.config().force_engaged);
     const PathHoldOutput held = path_gate_.update(model_, now_ns, kModelTimeoutNs);
     const int frame = control_frame_++;
-    last_result_ = controller_.update(held.path, lateral_target_, vehicle_, now_s, frame, panda_.ready,
-                                      panda_.controls_allowed, now_ns);
+    last_result_ = controller_.update(held.path, lateral_target_, vehicle_, now_s, frame, panda_, now_ns);
     update_events(held, now_ns);
 
     const bool radar_lead_fresh = signal_time_fresh(vehicle_.scc11_time_s, now_s, 0.5);

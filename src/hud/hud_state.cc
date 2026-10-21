@@ -112,7 +112,7 @@ void hud_apply_model_state(const ModelState &model, bool fresh, HudState *hud) {
     hud->calibration_roll_deg = rad_to_deg(calibration.roll);
     hud->calibration_pitch_deg = rad_to_deg(calibration.pitch);
     hud->calibration_yaw_deg = rad_to_deg(calibration.yaw);
-    hud->calibration_flow = model.calibration_source.source == kCalibrationFromFlow;
+    hud->calibration_flow = model.calibration_source.source == static_cast<uint32_t>(CalibrationSource::Flow);
 }
 
 void hud_apply_record_state(const RecordState &record, bool fresh, HudState *hud) {

@@ -24,6 +24,13 @@
 
 namespace {
 
+// Panda는 준비됐지만 조향을 허락하지 않은 상태(controls_allowed 꺼짐)
+PandaGateOutput panda_without_controls() {
+    PandaGateOutput out = panda_allows_control();
+    out.controls_allowed = false;
+    return out;
+}
+
 // 컨트롤러가 보는 수신 메시지 시각을 한 번에 t로 맞춘다.
 void stamp_can_times(VehicleCanState *vehicle, double t) { stamp_received_messages(vehicle, t); }
 
@@ -230,7 +237,7 @@ TEST(LateralController, MdpsFaultPausesSteeringAndSoftDisables) {
     auto step = [&](double t) {
         stamp_can_times(&vehicle, t);
         vehicle.steering_angle_deg = 5.0f;
-        return controller.update(replay_path(), replay_target(), vehicle, t, frame++, true, true);
+        return controller.update(replay_path(), replay_target(), vehicle, t, frame++, panda_allows_control());
     };
     auto press_set = [&](double t) {
         vehicle.clu_button = 2;
@@ -431,9 +438,9 @@ TEST(LateralController, EngageAllowedWithUnavailablePath) {
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 0.0f;
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 0.0f;
     vehicle.clu_button = 2;
-    controller.update(bad, replay_target(), vehicle, 1.0, 0, true, true);
+    controller.update(bad, replay_target(), vehicle, 1.0, 0, panda_allows_control());
     vehicle.clu_button = 0;
-    const auto engaged = controller.update(bad, replay_target(), vehicle, 1.01, 1, true, true);
+    const auto engaged = controller.update(bad, replay_target(), vehicle, 1.01, 1, panda_allows_control());
     // 정차 중에는 경로가 없어도 결합을 받는다
     ASSERT_TRUE(engaged.engaged);
     ASSERT_FALSE(engaged.engage_rejected);
@@ -454,7 +461,7 @@ TEST(LateralController, EngageAllowedWithUnavailablePath) {
     vehicle = ready_vehicle(1.02);
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 60.0f;
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 60.0f;
-    const auto rolling = controller.update(bad, replay_target(), vehicle, 1.02, 2, true, true);
+    const auto rolling = controller.update(bad, replay_target(), vehicle, 1.02, 2, panda_allows_control());
     // 주행 중 쓸 수 없는 경로는 path_invalid로 알린다
     ASSERT_FALSE(rolling.active);
     ASSERT_EQ(rolling.active_block, BlockReason::PathInvalid);
@@ -463,7 +470,7 @@ TEST(LateralController, EngageAllowedWithUnavailablePath) {
     vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = 0.0f;
     vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = 0.0f;
     vehicle.door_open = true;
-    const auto door = controller.update(bad, replay_target(), vehicle, 1.03, 3, true, true);
+    const auto door = controller.update(bad, replay_target(), vehicle, 1.03, 3, panda_allows_control());
     // 고장은 사용 가능 여부보다 우선하고 정차 중에도 바로 해제한다
     ASSERT_EQ(door.active_block, BlockReason::DoorOpen);
     ASSERT_FALSE(door.engaged);
@@ -477,9 +484,9 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
     auto press_set = [&](double t) {
         vehicle = ready_vehicle(t);
         vehicle.clu_button = 2;
-        controller.update(replay_path(), replay_target(), vehicle, t, 0, true, true);
+        controller.update(replay_path(), replay_target(), vehicle, t, 0, panda_allows_control());
         vehicle = ready_vehicle(t + 0.01);
-        return controller.update(replay_path(), replay_target(), vehicle, t + 0.01, 1, true, true);
+        return controller.update(replay_path(), replay_target(), vehicle, t + 0.01, 1, panda_allows_control());
     };
 
     controller.set_calibration_status(CalibrationStatus::Uncalibrated);
@@ -498,13 +505,13 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
     double t = 2.02;
     for (; t < 2.02 + 2.9; t += 0.01) {
         vehicle = ready_vehicle(t);
-        r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+        r = controller.update(replay_path(), replay_target(), vehicle, t, 2, panda_allows_control());
         ASSERT_TRUE(r.engaged && r.active && r.soft_disabling) << "해제 예고 중에는 조향을 유지한다 t=" << t;
         ASSERT_EQ(r.active_block, BlockReason::CalibrationRecalibrating);
     }
     for (; t < 2.02 + 3.2; t += 0.01) {
         vehicle = ready_vehicle(t);
-        r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+        r = controller.update(replay_path(), replay_target(), vehicle, t, 2, panda_allows_control());
     }
     EXPECT_FALSE(r.engaged) << "3초가 지나면 해제한다";
     EXPECT_FALSE(r.active);
@@ -516,13 +523,13 @@ TEST(LateralController, CalibrationGatesEngageAndSoftDisables) {
     controller.set_calibration_status(CalibrationStatus::Invalid);
     for (t = 10.02; t < 11.5; t += 0.01) {
         vehicle = ready_vehicle(t);
-        r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+        r = controller.update(replay_path(), replay_target(), vehicle, t, 2, panda_allows_control());
     }
     EXPECT_TRUE(r.soft_disabling);
     EXPECT_EQ(r.active_block, BlockReason::CalibrationInvalid);
     controller.set_calibration_status(CalibrationStatus::Calibrated);
     vehicle = ready_vehicle(t);
-    r = controller.update(replay_path(), replay_target(), vehicle, t, 2, true, true);
+    r = controller.update(replay_path(), replay_target(), vehicle, t, 2, panda_allows_control());
     EXPECT_TRUE(r.engaged && r.active && !r.soft_disabling);
 }
 
@@ -730,11 +737,12 @@ TEST(LateralController, PandaGateAndHandoff) {
     vehicle.cluster_speed_raw = 0.0f;  // 클러스터 속도 없음
 
     vehicle.clu_button = 2;
-    const auto set_press = controller.update(replay_path(), replay_target(), vehicle, 1.0, 0, true, true);
+    const auto set_press = controller.update(replay_path(), replay_target(), vehicle, 1.0, 0, panda_allows_control());
     ASSERT_FALSE(set_press.engaged) << "SET은 떼기 전에 결합하지 않는다";
 
     vehicle.clu_button = 0;
-    const auto panda_blocked = controller.update(replay_path(), replay_target(), vehicle, 1.01, 1, true, false);
+    const auto panda_blocked =
+        controller.update(replay_path(), replay_target(), vehicle, 1.01, 1, panda_without_controls());
     // Panda controls 게이트
     ASSERT_TRUE(panda_blocked.engaged);
     ASSERT_FALSE(panda_blocked.active);
@@ -754,17 +762,17 @@ TEST(LateralController, PandaGateAndHandoff) {
     // freshness 게이트를 보게 된다.
     VehicleCanState timeout_vehicle = ready_vehicle(10.0);
     timeout_vehicle.clu_button = 2;
-    panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle, 10.0, 0, true, true);
+    panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle, 10.0, 0, panda_allows_control());
     timeout_vehicle.clu_button = 0;
-    const auto panda_waiting =
-        panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle, 10.01, 1, true, false);
+    const auto panda_waiting = panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle, 10.01,
+                                                               1, panda_without_controls());
     // Panda 핸드셰이크 유예 동안 유효한 요청을 붙잡아 둔다
     ASSERT_TRUE(panda_waiting.engaged);
     ASSERT_FALSE(panda_waiting.engage_rejected);
     // 유예(1초)를 넘기며 CAN 은 계속 신선하게 유지한다.
     VehicleCanState timeout_vehicle_later = ready_vehicle(11.0);
-    const auto panda_timeout =
-        panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle_later, 11.02, 102, true, false);
+    const auto panda_timeout = panda_timeout_controller.update(replay_path(), replay_target(), timeout_vehicle_later,
+                                                               11.02, 102, panda_without_controls());
     // Panda 불일치가 이어지면 결국 결합을 거부한다
     ASSERT_FALSE(panda_timeout.engaged);
     ASSERT_TRUE(panda_timeout.engage_rejected);
@@ -776,39 +784,44 @@ TEST(LateralController, PandaGateAndHandoff) {
     deferred_vehicle.wheel_speed_fl_kph = deferred_vehicle.wheel_speed_fr_kph = 60.0f;
     deferred_vehicle.wheel_speed_rl_kph = deferred_vehicle.wheel_speed_rr_kph = 60.0f;
     deferred_vehicle.clu_button = 2;
-    deferred_static_controller.update(replay_path(), replay_target(), deferred_vehicle, 12.0, 0, true, true);
+    deferred_static_controller.update(replay_path(), replay_target(), deferred_vehicle, 12.0, 0,
+                                      panda_allows_control());
     deferred_vehicle.clu_button = 0;
-    deferred_static_controller.update(replay_path(), replay_target(), deferred_vehicle, 12.01, 1, true, false);
+    deferred_static_controller.update(replay_path(), replay_target(), deferred_vehicle, 12.01, 1,
+                                      panda_without_controls());
     LateralTarget deferred_invalid_target = replay_target();
     deferred_invalid_target.mpc_solution_valid = false;
     const auto deferred_static = deferred_static_controller.update(replay_path(), deferred_invalid_target,
-                                                                   deferred_vehicle, 12.02, 2, true, true);
+                                                                   deferred_vehicle, 12.02, 2, panda_allows_control());
     // Panda가 회복되면 정적 결합 게이트를 다시 본다
     ASSERT_FALSE(deferred_static.engaged);
     ASSERT_TRUE(deferred_static.engage_rejected);
     ASSERT_EQ(deferred_static.active_block, BlockReason::LateralPlanInvalid);
 
-    const auto active = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2, true, true);
+    const auto active = controller.update(replay_path(), replay_target(), vehicle, 1.02, 2, panda_allows_control());
     // Panda controls가 켜지면 활성이 된다
     ASSERT_TRUE(active.engaged);
     ASSERT_TRUE(active.active);
 
     vehicle.clu_button = 4;
-    const auto cancel = controller.update(replay_path(), replay_target(), vehicle, 1.03, 3, true, false);
+    const auto cancel = controller.update(replay_path(), replay_target(), vehicle, 1.03, 3, panda_without_controls());
     // CANCEL을 누르면 토크 0 프레임 인계를 시작한다
     ASSERT_FALSE(cancel.engaged);
     ASSERT_TRUE(cancel.should_send);
-    const auto release_tail = controller.update(replay_path(), replay_target(), vehicle, 4.02, 302, true, false);
+    const auto release_tail =
+        controller.update(replay_path(), replay_target(), vehicle, 4.02, 302, panda_without_controls());
     ASSERT_TRUE(release_tail.should_send) << "인계는 3000 ms 이어진다";
-    const auto stock_handoff = controller.update(replay_path(), replay_target(), vehicle, 4.04, 304, true, false);
+    const auto stock_handoff =
+        controller.update(replay_path(), replay_target(), vehicle, 4.04, 304, panda_without_controls());
     ASSERT_FALSE(stock_handoff.should_send) << "인계는 3000 ms 뒤 멈춘다";
 
     vehicle.lkas11_seed[4] = 9U << 4;
     stamp_can_times(&vehicle, 4.05);
     vehicle.clu_button = 2;
-    controller.update(replay_path(), replay_target(), vehicle, 4.05, 305, true, true);
+    controller.update(replay_path(), replay_target(), vehicle, 4.05, 305, panda_allows_control());
     vehicle.clu_button = 0;
-    const auto reengaged = controller.update(replay_path(), replay_target(), vehicle, 4.06, 306, true, true);
+    const auto reengaged =
+        controller.update(replay_path(), replay_target(), vehicle, 4.06, 306, panda_allows_control());
     // 인계 뒤 다시 결합
     ASSERT_TRUE(reengaged.active);
     ASSERT_FALSE(reengaged.frames.empty());
@@ -818,12 +831,12 @@ TEST(LateralController, PandaGateAndHandoff) {
     LateralController rejected_controller(config);
     VehicleCanState rejected_vehicle = ready_vehicle();
     rejected_vehicle.clu_button = 2;
-    rejected_controller.update(replay_path(), replay_target(), rejected_vehicle, 1.0, 0, true, true);
+    rejected_controller.update(replay_path(), replay_target(), rejected_vehicle, 1.0, 0, panda_allows_control());
     rejected_vehicle.clu_button = 0;
     LateralTarget invalid_target = replay_target();
     invalid_target.mpc_solution_valid = false;
     const auto rejected =
-        rejected_controller.update(replay_path(), invalid_target, rejected_vehicle, 1.01, 1, true, true);
+        rejected_controller.update(replay_path(), invalid_target, rejected_vehicle, 1.01, 1, panda_allows_control());
     // 정적 결합 게이트는 결합 상태를 남기지 않고 거부한다
     ASSERT_FALSE(rejected.engaged);
     ASSERT_TRUE(rejected.engage_rejected);
@@ -840,10 +853,12 @@ TEST(LateralController, ColdStartEngageReportsHardBlock) {
         VehicleCanState vehicle = ready_vehicle();
         vehicle.seatbelt_unlatched = seatbelt_unlatched;
         vehicle.gear = gear;
+        PandaGateOutput panda;
+        panda.ready = panda.controls_allowed = panda_ready;
         vehicle.clu_button = 2;
-        controller.update(replay_path(), replay_target(), vehicle, 1.0, 0, panda_ready, panda_ready);
+        controller.update(replay_path(), replay_target(), vehicle, 1.0, 0, panda);
         vehicle.clu_button = 0;
-        return controller.update(replay_path(), replay_target(), vehicle, 1.01, 1, panda_ready, panda_ready);
+        return controller.update(replay_path(), replay_target(), vehicle, 1.01, 1, panda);
     };
 
     const auto belt = cold_start_attempt(false, true, 5);
@@ -1402,7 +1417,9 @@ struct EngagedDrive {
             vehicle.wheel_speed_fl_kph = vehicle.wheel_speed_fr_kph = wheel;
             vehicle.wheel_speed_rl_kph = vehicle.wheel_speed_rr_kph = wheel;
         }
-        return controller.update(path, target, vehicle, t, frame++, true, panda_allowed);
+        PandaGateOutput panda = panda_allows_control();
+        panda.controls_allowed = panda_allowed;
+        return controller.update(path, target, vehicle, t, frame++, panda);
     }
     LateralControlResult engage() {
         vehicle.clu_button = 2;

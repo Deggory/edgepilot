@@ -454,7 +454,7 @@ int main(int argc, char **argv) {
         LateralPath path = have_model ? path_gate.update(ms_sim, path_now_ns, kModelTimeoutNs).path : LateralPath{};
 
         const LateralControlResult r =
-            controller.update(path, target, vehicle, sim_t, frame++, true, true, path_now_ns);
+            controller.update(path, target, vehicle, sim_t, frame++, panda_allows_control(), path_now_ns);
         lat_active_prev = r.lat_active;
         steering_pressed_prev = r.steering_pressed;
 
@@ -613,8 +613,12 @@ int main(int argc, char **argv) {
             // 예전에는 빈 상태를 줘서 차선 변경·회전 desire가 한 번도 돌지 않았다.
             VehicleCanState planner_vehicle = recorded_vehicle;
             planner_vehicle.steering_angle_deg = angle_sim;
-            target =
-                planner.update(ms_sim, planner_vehicle, ex.v_kph / 3.6f, k_sim, lat_active_prev, steering_pressed_prev);
+            LateralPlannerInput planner_in;
+            planner_in.v_ego = ex.v_kph / 3.6f;
+            planner_in.measured_curvature = k_sim;
+            planner_in.lat_active = lat_active_prev;
+            planner_in.steering_pressed = steering_pressed_prev;
+            target = planner.update(ms_sim, planner_vehicle, planner_in);
         }
     }
     if (out) std::fclose(out);

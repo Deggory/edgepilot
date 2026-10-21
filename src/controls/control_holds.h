@@ -30,6 +30,13 @@ struct PandaGateOutput {
     bool controls_allowed = false;
 };
 
+// Panda가 준비됐고 조향을 허락한 상태. 재생 도구와 시험이 Panda 없이 컨트롤러를 돌릴 때 준다.
+inline PandaGateOutput panda_allows_control() {
+    PandaGateOutput out;
+    out.state_fresh = out.ready_raw = out.ready = out.controls_allowed = true;
+    return out;
+}
+
 class PandaHealthGate {
 public:
     PandaGateOutput update(const PandaState &state, uint64_t now_ns, bool force_engaged);

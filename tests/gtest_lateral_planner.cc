@@ -15,6 +15,19 @@
 
 namespace {
 
+// 조향 중(latActive)인 차의 플래너 입력(곡률 0). steering_pushed_input은 운전자가 핸들을 미는 중이다.
+LateralPlannerInput steering_input(float v_ego) {
+    LateralPlannerInput in;
+    in.v_ego = v_ego;
+    in.lat_active = true;
+    return in;
+}
+LateralPlannerInput steering_pushed_input(float v_ego) {
+    LateralPlannerInput in = steering_input(v_ego);
+    in.steering_pressed = true;
+    return in;
+}
+
 // laneless 모드는 openpilot 메인의 get_curvature_from_plan이다: 모델 plan의 yaw·yaw rate만 쓰고
 // plan 위치·경로 오프셋·MPC를 쓰지 않는다.
 TEST(LateralPlanner, LanelessUsesPlanYawLikeUpstream) {
@@ -36,14 +49,14 @@ TEST(LateralPlanner, LanelessUsesPlanYawLikeUpstream) {
     };
     VehicleCanState vehicle{};
     // 일정 곡률 plan: 2·ψ(t)/(v·t) − ψ̇/v = 2κ − κ = κ
-    LateralTarget turn = planner.update(model_for(0.002f, 0.0f), vehicle, v, 0.0f, true, false);
+    LateralTarget turn = planner.update(model_for(0.002f, 0.0f), vehicle, steering_input(v));
     ASSERT_TRUE(turn.valid);
     ASSERT_TRUE(turn.laneless_mode);
     ASSERT_TRUE(turn.mpc_solution_valid);
     EXPECT_NEAR(lag_adjusted_curvature(turn, v, 0.0f, 0.34f), 0.002f, 1e-5f) << "일정 곡률 plan은 그 곡률";
     EXPECT_NEAR(lag_adjusted_curvature(turn, v, 0.1f, 0.34f), 0.002f, 1e-5f) << "plan 나이와 무관";
     // yaw가 0이면 plan이 옆으로 0.5 m 떨어져 있고 오프셋이 −0.3이어도 목표는 직진이다
-    LateralTarget straight = planner.update(model_for(0.0f, 0.5f), vehicle, v, 0.0f, true, false);
+    LateralTarget straight = planner.update(model_for(0.0f, 0.5f), vehicle, steering_input(v));
     EXPECT_NEAR(lag_adjusted_curvature(straight, v, 0.05f, 0.34f), 0.0f, 1e-7f)
         << "위치와 경로 오프셋은 laneless 곡률에 들어가지 않는다";
 }
@@ -62,31 +75,31 @@ TEST(LateralPlanner, LaneChangeFollowsUpstreamDesireHelper) {
     }
     ms.desire_state[0] = 1.0f;
     VehicleCanState vehicle{};
-    LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    LateralTarget r = planner.update(ms, vehicle, steering_input(v));
     ASSERT_EQ(r.desire, Desire::None);
     vehicle.left_blinker = true;
-    r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    r = planner.update(ms, vehicle, steering_input(v));
     EXPECT_EQ(r.desire, Desire::None) << "깜빡이만으로는 시작하지 않는다";
     EXPECT_EQ(r.lane_change_state, LaneChangeState::PreLaneChange) << "HUD: 핸들을 밀기를 기다린다";
     EXPECT_EQ(r.lane_change_direction, -1);
     vehicle.driver_torque = 300;  // 왼쪽으로 민다(컨트롤러가 거른 운전자 조향)
-    r = planner.update(ms, vehicle, v, 0.0f, true, true);
+    r = planner.update(ms, vehicle, steering_pushed_input(v));
     EXPECT_EQ(r.desire, Desire::LaneChangeLeft) << "깜빡이 방향으로 밀면 laneChangeLeft";
     EXPECT_EQ(r.lane_change_state, LaneChangeState::Starting) << "HUD: 변경 중";
     // 모델이 차선 변경 중이라고 하는 동안(prob 높음)은 핸들을 놓아도 3초 넘게 이어진다.
     vehicle.driver_torque = 0;
     ms.desire_state[0] = 0.1f;
     ms.desire_state[3] = 0.9f;
-    for (int i = 0; i < 60; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 60; ++i) r = planner.update(ms, vehicle, steering_input(v));
     EXPECT_EQ(r.desire, Desire::LaneChangeLeft) << "출력이 커져도 취소하지 않는다(예전 출력 0.8 취소 제거)";
     // 모델이 끝났다고 하면 마무리(차선선을 0.5초에 되살림) 동안은 openpilot 0.9.4 DESIRES처럼
     // laneChangeLeft를 유지하고, 끝나면 내린다.
     ms.desire_state[0] = 1.0f;
     ms.desire_state[3] = 0.0f;
     vehicle.left_blinker = false;
-    r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    r = planner.update(ms, vehicle, steering_input(v));
     EXPECT_EQ(r.desire, Desire::LaneChangeLeft) << "마무리 단계";
-    for (int i = 0; i < 12; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 12; ++i) r = planner.update(ms, vehicle, steering_input(v));
     EXPECT_EQ(r.desire, Desire::None) << "차선선을 되살리면 끝난다";
     EXPECT_EQ(r.lane_change_state, LaneChangeState::Off);
 }
@@ -108,7 +121,7 @@ TEST(LateralPlanner, SlowBlinkerGivesNoDesire) {
     VehicleCanState vehicle{};
     vehicle.left_blinker = true;
     for (int i = 0; i < 60; ++i) {  // 3초
-        const LateralTarget r = planner.update(ms, vehicle, v, 0.0f, true, false);
+        const LateralTarget r = planner.update(ms, vehicle, steering_input(v));
         ASSERT_EQ(r.desire, Desire::None) << i;
         ASSERT_EQ(r.lane_change_state, LaneChangeState::Off) << i;
     }
@@ -116,12 +129,12 @@ TEST(LateralPlanner, SlowBlinkerGivesNoDesire) {
     LateralPlanner changing(steering);
     vehicle = VehicleCanState{};
     vehicle.left_blinker = true;
-    changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true, false);
+    changing.update(ms, vehicle, steering_input(35.0f / 3.6f));
     vehicle.driver_torque = 300;  // 왼쪽 넛지(컨트롤러가 거른 운전자 조향)
-    EXPECT_EQ(changing.update(ms, vehicle, 35.0f / 3.6f, 0.0f, true, true).desire, Desire::LaneChangeLeft)
+    EXPECT_EQ(changing.update(ms, vehicle, steering_pushed_input(35.0f / 3.6f)).desire, Desire::LaneChangeLeft)
         << "차선 변경 시작";
     vehicle.driver_torque = 0;
-    EXPECT_EQ(changing.update(ms, vehicle, 25.0f / 3.6f, 0.0f, true, false).desire, Desire::LaneChangeLeft)
+    EXPECT_EQ(changing.update(ms, vehicle, steering_input(25.0f / 3.6f)).desire, Desire::LaneChangeLeft)
         << "시작한 변경은 감속해도 이어진다";
 }
 
@@ -148,10 +161,10 @@ TEST(LateralPlanner, PathOffsetOnlyShiftsLanePath) {
     };
     VehicleCanState vehicle{};
     LateralTarget r;
-    for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.99f), vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.99f), vehicle, steering_input(v));
     ASSERT_FALSE(r.laneless_mode);
     EXPECT_NEAR(r.target_y_m, -0.3f, 0.03f) << "차선이 보이면 차선 중심에서 오프셋만큼";
-    for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.0f), vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 100; ++i) r = planner.update(model_for(0.0f), vehicle, steering_input(v));
     ASSERT_TRUE(r.laneless_mode);
     EXPECT_NEAR(r.target_y_m, 0.0f, 0.01f) << "모델 경로로 넘어가면 오프셋을 더하지 않는다";
 }
@@ -180,14 +193,14 @@ TEST(LateralPlanner, BlinkerAloneKeepsTheModelPathFallback) {
     LateralPlanner planner(steering);
     VehicleCanState vehicle{};
     LateralTarget r;
-    for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, steering_input(v));
     ASSERT_TRUE(r.laneless_mode) << "약한 차선이면 모델 경로";
     vehicle.left_blinker = true;
-    for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 40; ++i) r = planner.update(ms, vehicle, steering_input(v));
     EXPECT_EQ(r.lane_change_state, LaneChangeState::PreLaneChange);
     EXPECT_TRUE(r.laneless_mode) << "깜빡이만으로는 대체를 끄지 않는다";
     vehicle.driver_torque = 300;  // 왼쪽으로 밀어 변경을 시작한다
-    r = planner.update(ms, vehicle, v, 0.0f, true, true);
+    r = planner.update(ms, vehicle, steering_pushed_input(v));
     EXPECT_EQ(r.lane_change_state, LaneChangeState::Starting);
     EXPECT_FALSE(r.laneless_mode) << "변경 중에는 대체하지 않는다";
 }
@@ -217,18 +230,18 @@ TEST(LateralPlanner, LaneModeFallbackMatchesLaneless) {
     LateralPlanner laneless(steering);
     VehicleCanState vehicle{};
     LateralTarget r;
-    for (int i = 0; i < 60; ++i) r = lane_mode.update(model_for(0.99f), vehicle, v, 0.0f, true, false);
+    for (int i = 0; i < 60; ++i) r = lane_mode.update(model_for(0.99f), vehicle, steering_input(v));
     ASSERT_FALSE(r.laneless_mode);
     const float with_lanes = lag_adjusted_curvature(r, v, 0.0f, 0.42f);
     EXPECT_LT(std::fabs(with_lanes), 0.3f * kappa) << "차선이 보이면 차선(직진)을 따른다";
 
     std::vector<float> handoff;
     for (int i = 0; i < 40; ++i) {
-        r = lane_mode.update(model_for(0.0f), vehicle, v, 0.0f, true, false);
+        r = lane_mode.update(model_for(0.0f), vehicle, steering_input(v));
         handoff.push_back(lag_adjusted_curvature(r, v, 0.0f, 0.42f));
     }
     ASSERT_TRUE(r.laneless_mode) << "차선을 잃으면 모델 경로 구간";
-    const LateralTarget ref = laneless.update(model_for(0.0f), vehicle, v, 0.0f, true, false);
+    const LateralTarget ref = laneless.update(model_for(0.0f), vehicle, steering_input(v));
     EXPECT_NEAR(handoff.back(), lag_adjusted_curvature(ref, v, 0.0f, 0.42f), 1e-6f)
         << "자리 잡은 뒤에는 laneless 모드와 같은 목표";
     EXPECT_NEAR(handoff.back(), kappa, 1e-4f);
@@ -260,8 +273,8 @@ TEST(LateralPlanner, LaneProbabilityAdjustmentsDifferFromUpstream) {
         LateralPlanner planner{SteeringParams{}};
         LateralTarget r;
         for (int i = 0; i < 40; ++i)
-            r = planner.update(model_for(1.75f, 0.05f, 0.9f), VehicleCanState{}, v, 0.0f, true, false);
-        for (int i = 0; i < 40; ++i) r = planner.update(model, VehicleCanState{}, v, 0.0f, true, false);
+            r = planner.update(model_for(1.75f, 0.05f, 0.9f), VehicleCanState{}, steering_input(v));
+        for (int i = 0; i < 40; ++i) r = planner.update(model, VehicleCanState{}, steering_input(v));
         return !r.laneless_mode;
     };
     EXPECT_TRUE(lane_mode_after(model_for(2.4f, 0.05f, 0.9f))) << "4.8 m 폭은 차선을 따른다(상류는 0.2배라 대체)";
@@ -273,11 +286,11 @@ TEST(LateralPlanner, LaneProbabilityAdjustmentsDifferFromUpstream) {
     LateralPlanner planner{SteeringParams{}};
     LateralTarget r;
     for (int i = 0; i < 40; ++i)
-        r = planner.update(model_for(1.75f, 0.05f, 0.9f), VehicleCanState{}, v, 0.0f, true, false);
+        r = planner.update(model_for(1.75f, 0.05f, 0.9f), VehicleCanState{}, steering_input(v));
     ASSERT_FALSE(r.laneless_mode);
     int frames = 0;
     while (!r.laneless_mode && frames < 40) {
-        r = planner.update(model_for(1.75f, 0.05f, 0.0f), VehicleCanState{}, v, 0.0f, true, false);
+        r = planner.update(model_for(1.75f, 0.05f, 0.0f), VehicleCanState{}, steering_input(v));
         ++frames;
     }
     EXPECT_EQ(frames, 6) << "0.9에서 한 프레임 0.1씩: 여섯 번째 프레임에 0.3 밑";
@@ -302,17 +315,17 @@ TEST(LateralPlanner, BriefLaneStdSpikeKeepsTheLanes) {
     };
     LateralPlanner planner{SteeringParams{}};
     LateralTarget r;
-    for (int i = 0; i < 40; ++i) r = planner.update(model_for(0.05f), VehicleCanState{}, v, 0.0f, true, false);
+    for (int i = 0; i < 40; ++i) r = planner.update(model_for(0.05f), VehicleCanState{}, steering_input(v));
     ASSERT_FALSE(r.laneless_mode);
     for (int i = 0; i < 9; ++i) {
-        r = planner.update(model_for(0.6f), VehicleCanState{}, v, 0.0f, true, false);
+        r = planner.update(model_for(0.6f), VehicleCanState{}, steering_input(v));
         ASSERT_FALSE(r.laneless_mode) << "frame " << i;
     }
     EXPECT_LT(r.lane_d_prob, 0.1f) << "차선 가중치는 그 프레임의 std로 내려간다";
-    for (int i = 0; i < 20; ++i) r = planner.update(model_for(0.05f), VehicleCanState{}, v, 0.0f, true, false);
+    for (int i = 0; i < 20; ++i) r = planner.update(model_for(0.05f), VehicleCanState{}, steering_input(v));
     int frames = 0;
     while (!r.laneless_mode && frames < 40) {
-        r = planner.update(model_for(0.6f), VehicleCanState{}, v, 0.0f, true, false);
+        r = planner.update(model_for(0.6f), VehicleCanState{}, steering_input(v));
         ++frames;
     }
     EXPECT_EQ(frames, 15) << "창이 높은 std로 다 차는 10번째 프레임부터 초당 2로 내려가 15번째 프레임에 0.3 밑";
@@ -342,7 +355,7 @@ TEST(LateralPlanner, LanePathWeightStrengthensCentering) {
         LateralPlanner planner(steering);
         VehicleCanState vehicle{};
         LateralTarget r;
-        for (int i = 0; i < 40; ++i) r = planner.update(model_for(), vehicle, v, 0.0f, true, false);
+        for (int i = 0; i < 40; ++i) r = planner.update(model_for(), vehicle, steering_input(v));
         EXPECT_FALSE(r.laneless_mode);
         return lag_adjusted_curvature(r, v, 0.0f, 0.42f);
     };
